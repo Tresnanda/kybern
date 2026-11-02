@@ -34,7 +34,7 @@ export function machineStatusLine(machine: MachineLine, now = Date.now()): strin
     case "needs-update":
       return `Online${version} · Update Kybern to use it fully`;
     case "paused":
-      return "Paused";
+      return "Disconnected on this phone";
     case "unpaired":
       return machine.error ?? "Not paired with this phone";
     default: {
@@ -61,4 +61,31 @@ export function machinesSummary(statuses: readonly MachineConnectionStatus[]): s
   if (offline) parts.push(`${offline} offline`);
   if (paused) parts.push(`${paused} paused`);
   return parts.join(" · ");
+}
+
+/** A saved computer's address as people read it: `192.168.1.5:4291`, from its first direct route. */
+export function machineAddress(routes: readonly { kind: string; url: string }[]): string {
+  const route = routes.find((r) => r.kind !== "relay" && r.url);
+  if (!route) return "";
+  try {
+    return new URL(route.url).host;
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Addresses for the machines that share a name with another one (three saved "Treshnandas-Macbook.local" daemons), so
+ * their rows can be told apart. Machines with a name of their own get none.
+ */
+export function sameNameAddresses(machines: readonly { id: string; name: string; routes: readonly { kind: string; url: string }[] }[]): Map<string, string> {
+  const counts = new Map<string, number>();
+  for (const machine of machines) counts.set(machine.name.toLowerCase(), (counts.get(machine.name.toLowerCase()) ?? 0) + 1);
+  const out = new Map<string, string>();
+  for (const machine of machines) {
+    if ((counts.get(machine.name.toLowerCase()) ?? 0) < 2) continue;
+    const address = machineAddress(machine.routes);
+    if (address) out.set(machine.id, address);
+  }
+  return out;
 }

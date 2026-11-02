@@ -13,7 +13,8 @@ pub mod usage;
 
 pub(crate) use pool::Connection;
 pub use runtime::{
-    SDK_VERSION, auth_status, install, installed, login_command, node_version, npm_available, setup_command, setup_error, sign_out,
+    SDK_VERSION, auth_status, install, installed, login_command, node_version, npm_available, outdated, previous_version, setup_command,
+    setup_error, sign_out,
 };
 
 use std::path::PathBuf;
@@ -195,7 +196,7 @@ const GUIDE_OPEN: &str = "<kybern_instructions>";
 const GUIDE_CLOSE: &str = "</kybern_instructions>";
 
 /// The provider's copy of the first prompt: the guide in a tagged block, then the user's request.
-fn with_guide(guide: &str, text: &str) -> String {
+pub(crate) fn with_guide(guide: &str, text: &str) -> String {
     format!("{GUIDE_OPEN}\n{guide}\n{GUIDE_CLOSE}\n\n{text}")
 }
 
@@ -304,8 +305,6 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn only_runners_whose_conversation_lacks_the_guide_send_it_once_and_retry_it_after_rejection() {
-        use std::os::unix::fs::PermissionsExt;
-
         for (resume, enabled, lacks) in [
             (None, true, false),
             (Some("cursor-sdk:restored"), true, false),
@@ -316,7 +315,7 @@ mod tests {
             let root = tempfile::tempdir().unwrap();
             let host = root.path().join("node-fixture");
             let log = root.path().join("requests.jsonl");
-            std::fs::write(
+            kybern_protocol::process::write_executable(
                 &host,
                 r#"#!/usr/bin/env python3
 import json, sys
@@ -334,7 +333,6 @@ for line in sys.stdin:
 "#,
             )
             .unwrap();
-            std::fs::set_permissions(&host, std::fs::Permissions::from_mode(0o755)).unwrap();
             let config = SessionConfig {
                 cwd: root.path().into(),
                 model: None,

@@ -1850,7 +1850,7 @@ pub struct ComputerCheck {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ComputerStatus {
-    /// This daemon runs on macOS.
+    /// This daemon's OS and architecture have a computer-use driver.
     pub supported: bool,
     pub enabled: bool,
     pub installed: bool,
@@ -1867,6 +1867,22 @@ pub struct ComputerStatus {
     /// Agents can use computer tools now.
     pub ready: bool,
     pub checks: Vec<ComputerCheck>,
+    /// `macos`, `windows` or `linux`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
+    /// The driver in use here (the setting, or the OS default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver: Option<crate::model::ComputerDriver>,
+    /// The drivers this machine can use, the default first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub drivers: Vec<crate::model::ComputerDriver>,
+    /// macOS with agent-desktop: the app System Settings lists for
+    /// Accessibility and Screen Recording (Kybern itself).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_holder: Option<String>,
+    /// Linux: the display session, e.g. `wayland (GNOME)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
 }
 method!(ComputerStatusGet, "computer.status", Some(Scope::OrchestrationRead), Empty, ComputerStatus);
 
@@ -1919,6 +1935,10 @@ pub struct ComputerFrameParams {
 pub struct ComputerFrameResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame: Option<ComputerFrame>,
+    /// Pictures are off for now, and why (e.g. screenshot consent was
+    /// declined on Wayland). The view says "Live view paused".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused: Option<String>,
 }
 // Polling also tells the daemon someone is watching, which turns capture on.
 method!(ComputerFrameGet, "computer.frame", Some(Scope::OrchestrationRead), ComputerFrameParams, ComputerFrameResult);
@@ -1944,6 +1964,10 @@ pub struct CursorSetupStatus {
     /// The exact `@cursor/sdk` version this daemon installs and requires.
     pub sdk_version: String,
     pub installed: bool,
+    /// An earlier Kybern release's SDK, set up on this machine while `sdk_version`
+    /// is not: setup is an update, not a first install.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_version: Option<String>,
     /// The Node.js version the SDK runs on, e.g. `v24.1.0`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_version: Option<String>,
@@ -1988,7 +2012,12 @@ method!(CursorSetup, "cursor.setup", Some(Scope::AccessWrite), CursorSetupParams
 /// time they use it. Stored as Markdown under `<data dir>/computer-notes/`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ComputerNote {
+    /// The app id (see `app_id`); kept under its old name for older clients.
     pub bundle_id: String,
+    /// macOS bundle id, Windows lowercase exe name (`code.exe`), or Linux
+    /// desktop-entry id (`org.gnome.Nautilus`).
+    #[serde(default)]
+    pub app_id: String,
     pub app: String,
     pub text: String,
     pub updated_at: chrono::DateTime<chrono::Utc>,
@@ -2002,6 +2031,8 @@ method!(ComputerNotesList, "computer.notes.list", Some(Scope::OrchestrationRead)
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ComputerNoteSetParams {
+    /// The app id; `app_id` is accepted too.
+    #[serde(alias = "app_id")]
     pub bundle_id: String,
     /// The whole note. Empty deletes it.
     pub text: String,
@@ -4504,6 +4535,14 @@ method!(NetworkRename, "network.rename", Some(Scope::NetworkAdmin), NetworkRenam
 method!(NetworkMerge, "network.merge", Some(Scope::NetworkAdmin), NetworkFoundParams, NetworkStatus);
 method!(NetworkRejoin, "network.rejoin", Some(Scope::NetworkAdmin), Empty, NetworkStatus);
 method!(NetworkClientGrant, "network.client_grant", Some(Scope::NetworkRead), NetworkClientGrantParams, NetworkClientGrantResult);
+method!(
+    NetworkRelayPageOpen,
+    "network.relay_page.open",
+    Some(Scope::OrchestrationRead),
+    NetworkRelayPageOpenParams,
+    NetworkRelayPageOpenResult
+);
+method!(NetworkRelayPageClose, "network.relay_page.close", Some(Scope::OrchestrationRead), NetworkRelayPageCloseParams, Empty);
 method!(NetworkRoutes, "network.routes", Some(Scope::NetworkRead), NetworkRoutesParams, NetworkRoutesResult);
 method!(NetworkAllowSet, "network.allow.set", Some(Scope::NetworkAdmin), NetworkAllowSetParams, MachineCard);
 method!(NetworkUpdateAll, "network.update_all", Some(Scope::NetworkAdmin), Empty, NetworkUpdateAllResult);
@@ -4862,6 +4901,8 @@ registry!(
     NetworkMerge,
     NetworkRejoin,
     NetworkClientGrant,
+    NetworkRelayPageOpen,
+    NetworkRelayPageClose,
     NetworkRoutes,
     NetworkAllowSet,
     NetworkUpdateAll,

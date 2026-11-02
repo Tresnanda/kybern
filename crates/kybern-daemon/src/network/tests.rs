@@ -510,13 +510,17 @@ async fn a_live_session_is_refused_at_use_time_after_removal_or_pause() {
 
     // Removed (kept on the listener only, with no drop_machine): every call is refused. The
     // listener's periodic membership check may close the socket before this request reaches it.
+    // Then the call fails as a closed session, possibly before this side has noticed the close
+    // (the send fails first), so wait for the close itself rather than expect it already.
     let removal = listener.membership().remove(&dialer.id(), RemoveReason::User).unwrap();
     let _ = removal;
     let refused = link.call::<PeerOpsSync>(sync()).await.unwrap_err();
-    assert!(
-        refused.code == codes::FORBIDDEN || (refused.code == codes::INTERNAL_ERROR && link.is_closed()),
-        "removal must forbid the call or close its session: {refused:?}"
-    );
+    if refused.code != codes::FORBIDDEN {
+        assert_eq!(refused.code, codes::INTERNAL_ERROR, "removal must forbid the call or close its session: {refused:?}");
+        tokio::time::timeout(WAIT, link.closed())
+            .await
+            .unwrap_or_else(|_| panic!("a call refused as closed closes its session: {refused:?}"));
+    }
     // Even if the request won that race and got FORBIDDEN, the next beat closes the socket.
     eventually("the listener closes the socket", WAIT, || link.is_closed() || listener.state.network.peers.link(&dialer.id()).is_none())
         .await;

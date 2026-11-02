@@ -856,6 +856,8 @@ impl Orchestrator {
         };
         self.validate_provider_selection(parent.project_id, &provider, model.as_deref(), effort.as_deref()).await?;
         let permission_mode = resolve_child_permission(parent.permission_mode, parent.provider.kind, kind, args.permission_mode)?;
+        // Only a Full access parent can delegate to Antigravity; it never gets a stricter child mode.
+        super::antigravity_rules::require_full_access(kind, permission_mode)?;
 
         // Workspace.
         let child_id = Uuid::now_v7();

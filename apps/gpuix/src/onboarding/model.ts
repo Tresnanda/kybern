@@ -1,6 +1,7 @@
 // The first-run flow's rules, pure: when it opens, which agent is the default, what the agents status line says, what an
 // import mode asks the daemon for and what a window-material option writes. No GPUIX, no daemon: the scenes read these and
 // `model.test.ts` checks them (`.kybern-artifacts/onboarding-cinematic/SPEC.md` §3d, §4, §5, §12).
+import { ANTIGRAVITY_LOGIN_COMMAND, antigravityInstallCommand } from '../../../../packages/kybern-client/src/antigravity.ts'
 import type { AccountSummary, ProviderKind, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
 import { BLUR_MAX, DEFAULT_VARIANT_MATERIAL, defaultBlur, type VariantMaterial } from '../platform/translucency.ts'
 
@@ -45,8 +46,8 @@ export const list = (items: string[]) => new Intl.ListFormat('en-US', { style: '
 // ─── Agents ───────────────────────────────────────────────────────────────
 
 /** Provider order: it ranks the default agent and lays the tiles out clockwise from the top left. */
-export const AGENT_ORDER: readonly ProviderKind[] = ['claude-code', 'codex', 'opencode', 'cursor', 'omp', 'pi']
-export const AGENT_NAMES: Record<ProviderKind, string> = { 'claude-code': 'Claude Code', codex: 'Codex', opencode: 'OpenCode', pi: 'pi', omp: 'Oh My Pi', cursor: 'Cursor' }
+export const AGENT_ORDER: readonly ProviderKind[] = ['claude-code', 'codex', 'opencode', 'cursor', 'omp', 'pi', 'antigravity']
+export const AGENT_NAMES: Record<ProviderKind, string> = { 'claude-code': 'Claude Code', codex: 'Codex', opencode: 'OpenCode', pi: 'pi', omp: 'Oh My Pi', cursor: 'Cursor', antigravity: 'Antigravity' }
 
 export type AgentState = 'checking' | 'ready' | 'signin' | 'unknown' | 'missing' | 'waiting' | 'installing' | 'update'
 
@@ -108,7 +109,9 @@ export const continueLabel = (ready: number) => (ready === 0 ? 'Continue' : `Con
 export const POPOVER_DEFAULT = 'New chats start with this agent. Switch agents in any chat.'
 
 /** The command a terminal sheet types and never runs (the drivers' `unavailable_reason` hints; SPEC v1 §5). */
-export function agentCommand(kind: ProviderKind, mode: 'install' | 'login' | 'update'): string | null {
+export function agentCommand(kind: ProviderKind, mode: 'install' | 'login' | 'update', platform: string = process.platform): string | null {
+  // Antigravity installs and updates itself with its own script; signing in is the bare `agy`.
+  if (kind === 'antigravity') return mode === 'login' ? ANTIGRAVITY_LOGIN_COMMAND : antigravityInstallCommand(platform)
   const packages: Partial<Record<ProviderKind, string>> = {
     'claude-code': '@anthropic-ai/claude-code', codex: '@openai/codex', opencode: 'opencode-ai', pi: '@earendil-works/pi-coding-agent', omp: '@oh-my-pi/pi-coding-agent',
   }

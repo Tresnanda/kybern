@@ -35,6 +35,7 @@ pub mod plugin_sync;
 pub mod ports;
 pub mod provision;
 pub mod relay;
+pub mod relay_pages;
 pub mod removal;
 pub mod repo_identity;
 pub mod session;
@@ -95,6 +96,7 @@ pub fn routes() -> axum::Router<crate::state::AppState> {
         .route(join::MERGE_PATH, post(join::serve_merge))
         .route("/relay/{machine_id}/ws", get(relay::serve_ws))
         .route("/relay/{machine_id}/http/{*path}", any(relay::serve_http))
+        .route("/relay/{machine_id}/page/{ticket}/{*path}", any(relay::serve_page))
 }
 
 /// Tracing target for the network (§10.3). Sub-targets are `::discovery`, `::session`, `::relay`.
@@ -215,6 +217,8 @@ pub struct Network {
     pub limiter: well_known::RateLimiter,
     pub peers: peers::Peers,
     pub relays: relay::RelayHub,
+    /// Page tickets this machine minted for devices that open pages of other machines through it (ADE-99).
+    pub pages: relay_pages::RelayPages,
     /// Sends this machine is receiving (M4, U1).
     pub files: files_push::Incoming,
     /// Ports this machine forwards from other machines (M4, U3).
@@ -236,6 +240,9 @@ pub struct Network {
     self_ts: Mutex<Option<(Instant, SelfTs)>>,
     watching: Mutex<Option<Instant>>,
     nudged: Mutex<Option<Instant>>,
+    /// Features that come and go while the daemon runs (computer use is listed only while this
+    /// machine's tools are ready). Appended to [`Network::features`] after the static list.
+    dynamic_features: Mutex<std::collections::BTreeSet<&'static str>>,
     wake: Notify,
     changed: broadcast::Sender<()>,
     /// Outbox items as they change, forwarded to clients as `outbox.changed`.
@@ -276,6 +283,7 @@ impl Network {
             limiter: Default::default(),
             peers: Default::default(),
             relays: Default::default(),
+            pages: Default::default(),
             files: Default::default(),
             ports: Default::default(),
             clipboard: Default::default(),
@@ -284,6 +292,7 @@ impl Network {
             self_ts: Default::default(),
             watching: Default::default(),
             nudged: Default::default(),
+            dynamic_features: Default::default(),
             wake: Notify::new(),
             changed: broadcast::channel(16).0,
             outbox_changed: broadcast::channel(64).0,
@@ -320,10 +329,11 @@ impl Network {
         if self.membership.is_none() {
             return Vec::new();
         }
-        vec![
+        let mut list = vec![
             features::NETWORK_V1.to_string(),
             features::SPACES_SYNC_V1.to_string(),
             features::RELAY_V1.to_string(),
+            features::RELAY_PAGE_V1.to_string(),
             features::DELEGATE_REMOTE_V1.to_string(),
             features::TOOLS_FORWARD_V1.to_string(),
             features::FORK_V1.to_string(),
@@ -341,7 +351,21 @@ impl Network {
             features::PROVISION_V1.to_string(),
             features::SKILLS_SYNC_V1.to_string(),
             features::PLUGINS_SYNC_V1.to_string(),
-        ]
+        ];
+        list.extend(self.lock(&self.dynamic_features).iter().map(|feature| feature.to_string()));
+        list
+    }
+
+    /// List or drop a feature that depends on this machine's state right now. Presence carries the
+    /// change at its next heartbeat.
+    pub fn set_dynamic_feature(&self, feature: &'static str, on: bool) {
+        let changed = {
+            let mut list = self.lock(&self.dynamic_features);
+            if on { list.insert(feature) } else { list.remove(feature) }
+        };
+        if changed {
+            self.wake();
+        }
     }
 
     /// `settings.network.enabled`, as the worker last saw it.

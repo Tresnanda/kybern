@@ -102,3 +102,26 @@ function restore(item: OutboxItem) {
 onClientAttach((client) => watchOutbox(client));
 const attached = currentClient();
 if (attached) watchOutbox(attached);
+
+// ---- the Machines screen's view of every outbox (ADE-99 §2.1) ----
+import { liveMachines } from "./machineActions";
+
+/** Each live machine's outbox (the phone queues through one member, but other members hold their own sends). */
+export async function listOutboxes(): Promise<{ holder: MachineId; items: OutboxItem[] }[]> {
+  const live = liveMachines();
+  const results = await Promise.allSettled(live.map((c) => machineHub().clientFor(c.record.machineId).call("outbox.list", {})));
+  return results.flatMap((result, index) =>
+    result.status === "fulfilled" ? [{ holder: live[index]!.record.machineId, items: result.value.items }] : [],
+  );
+}
+export async function retryOutboxItem(holder: MachineId, id: string): Promise<void> {
+  await machineHub().clientFor(holder).call("outbox.retry", { id });
+}
+export async function cancelOutboxItem(holder: MachineId, id: string): Promise<void> {
+  await machineHub().clientFor(holder).call("outbox.cancel", { id });
+}
+/** Calls `fn` when any live machine's outbox changes. Returns the unsubscribe. */
+export function onOutboxesChanged(fn: () => void): () => void {
+  const stops = liveMachines().map((c) => machineHub().clientFor(c.record.machineId).onNotification("outbox.changed", fn));
+  return () => stops.forEach((stop) => stop());
+}

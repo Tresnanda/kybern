@@ -79,6 +79,7 @@ pub async fn status(state: &AppState) -> CursorSetupStatus {
     CursorSetupStatus {
         sdk_version: cursor::SDK_VERSION.into(),
         installed,
+        previous_version: if installed { None } else { cursor::previous_version(&context) },
         node_version,
         problem,
         account,

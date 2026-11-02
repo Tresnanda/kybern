@@ -12,7 +12,7 @@
 //! `crates/kybern/tests/network.rs`.
 //!
 //! Each cluster gets its own `127.<block>.0.0/24` so tests running in parallel never share an
-//! address. macOS only has `127.0.0.1` configured, so [`Cluster::new`] returns `None` there unless
+//! address, also across processes (nextest runs each test in one): see [`lease_block`]. macOS only has `127.0.0.1` configured, so [`Cluster::new`] returns `None` there unless
 //! the aliases exist (`sudo ifconfig lo0 alias 127.1.0.2`), and the test is skipped.
 
 use std::net::{IpAddr, SocketAddr};
@@ -34,7 +34,33 @@ use super::testutil::TempDir;
 use super::{Membership, Timing};
 use crate::state::AppState;
 
-static NEXT_BLOCK: AtomicU32 = AtomicU32::new(1);
+static NEXT_BLOCK: AtomicU32 = AtomicU32::new(0);
+
+/// The port a test listens on at `127.<block>.0.254` while it owns that loopback block. No node
+/// uses `.254` or this port, and two processes cannot both listen there, so the listener is a lease.
+/// `tests/network/main.rs` leases its blocks (200 and up) the same way.
+pub const BLOCK_LEASE_PORT: u16 = 4169;
+
+/// A loopback block in `blocks` that no other test, in this process or another, holds, and the
+/// listener that holds it until dropped. A process-wide counter alone is not enough: nextest runs
+/// every test in its own process, where each counter starts again at the first block. Without
+/// the `.254` alias (macOS), the next block in order is used unleased, as before.
+pub fn lease_block(blocks: std::ops::RangeInclusive<u32>) -> (u32, Option<std::net::TcpListener>) {
+    let (first, count) = (*blocks.start(), blocks.end() - blocks.start() + 1);
+    let sequence = NEXT_BLOCK.fetch_add(1, Ordering::SeqCst);
+    // Start at a different block per process so concurrent processes rarely probe the same ones.
+    let start = std::process::id().wrapping_add(sequence);
+    for offset in 0..count {
+        let block = first + start.wrapping_add(offset) % count;
+        match std::net::TcpListener::bind((format!("127.{block}.0.254").as_str(), BLOCK_LEASE_PORT)) {
+            Ok(lease) => return (block, Some(lease)),
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => continue,
+            // No `.254` alias: the blocks in order, as the aliases a Mac was given usually are.
+            Err(_) => return (first + sequence % count, None),
+        }
+    }
+    panic!("every loopback block from {first} is leased by another test")
+}
 
 pub const OWNER: &str = "owner@example.com";
 pub const TAILNET: &str = "fake.ts.net";
@@ -87,6 +113,8 @@ pub struct Cluster {
     timing: Timing,
     /// `(viewer, node)` pairs: the viewer's Tailscale lists the node offline while the node itself runs.
     seen_offline: Vec<(String, String)>,
+    /// Keeps other test processes off this cluster's loopback block ([`lease_block`]).
+    _lease: Option<std::net::TcpListener>,
 }
 
 impl Cluster {
@@ -97,7 +125,7 @@ impl Cluster {
             eprintln!("skipped: this machine has no 127.x.0.n loopback aliases (macOS: sudo ifconfig lo0 alias 127.1.0.2)");
             return None;
         }
-        let block = NEXT_BLOCK.fetch_add(1, Ordering::SeqCst);
+        let (block, lease) = lease_block(1..=199);
         let nodes = specs
             .iter()
             .enumerate()
@@ -120,6 +148,7 @@ impl Cluster {
             auto_join: false,
             timing: Timing::fast(),
             seen_offline: Vec::new(),
+            _lease: lease,
         };
         cluster.save();
         Some(cluster)

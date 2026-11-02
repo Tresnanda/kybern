@@ -11,6 +11,10 @@ const sources = {
   "expo-file-system": `export const Paths = { document: "/doc" };
     export class File { constructor() { this.exists = false; } create() {} write() {} textSync() { return ""; } }`,
   "expo-crypto": "export function getRandomValues(bytes) { bytes.fill(7); return bytes; }",
+  "expo/fetch": `export async function fetch(url, init) {
+      (globalThis.__fetches ??= []).push({ url, init });
+      return { ok: globalThis.__fetchOk !== false, json: async () => ({ id: "a1", name: "pic.png", media_type: "image/png", size: 3 }) };
+    }`,
   react: "export const useCallback = fn => fn; export const useEffect = () => {}; export const useSyncExternalStore = (...args) => globalThis.reconnectSubscribe?.(...args) ?? args[1]();",
 };
 export const nativeModuleSource = (specifier) => sources[specifier] ?? null;

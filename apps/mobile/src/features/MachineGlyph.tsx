@@ -6,9 +6,9 @@ import { T } from "../ui/primitives";
 import { radius, useTheme } from "../ui/theme";
 
 /**
- * The machine's monogram: its first letter on a colour taken from its id, the
- * same on every client. Shown on a thread only when more than one machine is
- * known and the thread is not on the machine the phone is at.
+ * The machine's monogram: its first letter, tinted from its id so it is the same on every client. Quiet like the
+ * desktop's badge (a pale tint with the letter in the machine's colour), so it reads as a label, not an app icon or an
+ * unread count. Thread lists name the machine in words instead (`threadMachineWord`).
  */
 export function MachineGlyph({ glyph, size = 16 }: { glyph: Glyph; size?: number }) {
   const { dark } = useTheme();
@@ -21,10 +21,10 @@ export function MachineGlyph({ glyph, size = 16 }: { glyph: Glyph; size?: number
         borderRadius: radius.xs,
         alignItems: "center",
         justifyContent: "center",
-        backgroundColor: `hsl(${glyph.hue}, 48%, ${dark ? 40 : 44}%)`,
+        backgroundColor: `hsl(${glyph.hue}, ${dark ? 22 : 40}%, ${dark ? 26 : 91}%)`,
       }}
     >
-      <T variant="caption" allowFontScaling={false} style={{ color: "#FFFFFF", fontWeight: "700", fontSize: Math.round(size * (glyph.letter.length > 1 ? 0.46 : 0.62)), lineHeight: Math.round(size * 0.8) }}>
+      <T variant="caption" allowFontScaling={false} style={{ color: `hsl(${glyph.hue}, ${dark ? 55 : 50}%, ${dark ? 78 : 38}%)`, fontWeight: "600", fontSize: Math.round(size * (glyph.letter.length > 1 ? 0.48 : 0.64)), lineHeight: Math.round(size * 0.8) }}>
         {glyph.letter}
       </T>
     </View>

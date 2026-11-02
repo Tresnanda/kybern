@@ -507,11 +507,10 @@ mod tests {
 
     #[cfg(unix)]
     fn fake_cli_running(dir: &Path, body: &str) -> (PathBuf, ProbeContext, PathBuf) {
-        use std::os::unix::fs::PermissionsExt;
         let binary = dir.join("claude");
         let launches = dir.join("launches");
-        std::fs::write(&binary, format!("#!/bin/sh\necho launch >> \"$KYBERN_TEST_LAUNCHES\"\n{body}")).unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        kybern_protocol::process::write_executable(&binary, format!("#!/bin/sh\necho launch >> \"$KYBERN_TEST_LAUNCHES\"\n{body}"))
+            .unwrap();
         let context = ProbeContext {
             binary: Some(binary.clone()),
             cwd: Some(dir.to_path_buf()),

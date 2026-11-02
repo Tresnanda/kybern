@@ -51,9 +51,11 @@ fn inventory_covers_six_harnesses_without_credentials_or_cli() {
     seed(&ctx);
     let inv = inventory::read(&ctx);
     assert_eq!(inv.warnings.len(), 1, "{:?}", inv.warnings);
-    for provider in ProviderKind::ALL {
+    // Kybern reads nobody's Antigravity plugins (it never touches `agy`'s setup).
+    for provider in ProviderKind::ALL.into_iter().filter(|provider| *provider != ProviderKind::Antigravity) {
         assert!(inv.plugins.iter().any(|p| p.provider == provider), "{provider:?}");
     }
+    assert!(inv.plugins.iter().all(|p| p.provider != ProviderKind::Antigravity));
     let cc = inv.plugins.iter().find(|p| p.provider == ProviderKind::ClaudeCode && p.kind == PluginKind::Plugin).unwrap();
     assert_eq!(cc.version.as_deref(), Some("1"));
     assert_eq!(cc.enabled, Some(false));
@@ -164,12 +166,11 @@ async fn replacement_preserves_unknown_target_options_and_their_credentials() {
 #[cfg(unix)]
 #[tokio::test]
 async fn fake_installers_receive_only_the_target_environment_and_report_failures() {
-    use std::os::unix::fs::PermissionsExt;
     let dir = TempDir::new("plugins-fake");
     let state = state(&dir);
     let home = dir.path().join("home");
     let fake = dir.path().join("fake.py");
-    std::fs::write(
+    kybern_protocol::process::write_executable(
         &fake,
         r#"#!/usr/bin/python3
 import os,sys,json
@@ -187,7 +188,6 @@ sys.exit(7)
 "#,
     )
     .unwrap();
-    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
     let src = TempDir::new("plugins-fake-source");
     let ctx = context(&src);
     seed(&ctx);
@@ -223,7 +223,6 @@ async fn unconfigured_test_state_never_reads_real_harness_data() {
 #[cfg(unix)]
 #[tokio::test]
 async fn fake_installers_install_then_disable_and_repeated_requests_do_not_execute_again() {
-    use std::os::unix::fs::PermissionsExt;
     for provider in [ProviderKind::ClaudeCode, ProviderKind::Codex, ProviderKind::Pi, ProviderKind::Omp] {
         let src = TempDir::new("plugin-success-source");
         let ctx = context(&src);
@@ -261,7 +260,7 @@ async fn fake_installers_install_then_disable_and_repeated_requests_do_not_execu
         let count = steps.len();
         put(&home, "steps.json", &json!(steps).to_string());
         let fake = dst.path().join("fake-success.py");
-        std::fs::write(
+        kybern_protocol::process::write_executable(
             &fake,
             r#"#!/usr/bin/python3
 import os,sys,json
@@ -279,7 +278,6 @@ with (h/'calls').open('a') as log:log.write('called\n')
 "#,
         )
         .unwrap();
-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
         state.plugin_runtime.binaries.write().unwrap().insert(provider, fake);
         let request = PluginInstallRequest { operation_id: uuid::Uuid::now_v7(), plugin: plugin.clone(), replaces: None };
         let result = install(&state, "source", request.clone()).await.unwrap();

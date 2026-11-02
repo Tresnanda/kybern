@@ -65,6 +65,10 @@ pub(crate) struct Installation {
 
 impl Installation {
     pub(crate) fn find() -> Option<Self> {
+        // CuaDriver.app is a macOS app; nothing else is looked for elsewhere.
+        if !cfg!(target_os = "macos") {
+            return None;
+        }
         let mut candidates = Vec::new();
         if let Some(app) = std::env::var_os("KYBERN_CUA_DRIVER_APP") {
             candidates.push(PathBuf::from(app));
@@ -119,6 +123,9 @@ impl Signature {
 }
 
 pub(crate) async fn read_signature(app: &Path) -> Signature {
+    if !cfg!(target_os = "macos") {
+        return Signature::default();
+    }
     let valid = Command::new("/usr/bin/codesign")
         .args(["--verify", "--strict"])
         .arg(app)
@@ -219,7 +226,7 @@ pub(crate) struct CallResult {
 }
 
 impl CallResult {
-    fn from_value(value: &Value) -> Self {
+    pub(super) fn from_value(value: &Value) -> Self {
         let mut text = Vec::new();
         let mut images = Vec::new();
         for item in value.get("content").and_then(Value::as_array).into_iter().flatten() {

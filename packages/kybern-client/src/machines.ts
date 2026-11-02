@@ -142,9 +142,17 @@ export async function fetchProbe(url: string, options: { timeoutMs: number }): P
 }
 
 const B64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-export function randomNonce(): string {
-  const bytes = new Uint8Array(32);
+/** Fills `bytes` with cryptographically random values. */
+export type RandomFill = (bytes: Uint8Array<ArrayBuffer>) => void;
+const webCryptoFill: RandomFill = (bytes) => {
+  // Hermes (React Native) has no Web Crypto: a phone passes its own `fill` (expo-crypto) instead.
+  if (!globalThis.crypto?.getRandomValues) throw new Error("This runtime has no secure random source");
   globalThis.crypto.getRandomValues(bytes);
+};
+/** 32 random bytes, base64url: the identity check's nonce. `fill` defaults to Web Crypto. */
+export function randomNonce(fill: RandomFill = webCryptoFill): string {
+  const bytes = new Uint8Array(32);
+  fill(bytes);
   let out = "";
   for (let at = 0; at < bytes.length; at += 3) {
     const n = (bytes[at]! << 16) | ((bytes[at + 1] ?? 0) << 8) | (bytes[at + 2] ?? 0);
@@ -1156,8 +1164,12 @@ export class MachineSet {
         }
         if (result.kind === "open") this.adopt(slot, result.opened);
         else this.goOffline(slot, result.kind === "unpaired" ? "unpaired" : "offline", result.error);
-      } catch {
-        if (gen === slot.gen) this.goOffline(slot, "offline");
+      } catch (error) {
+        // Never offline without a reason: the row shows what went wrong, so a broken attempt is not a silent "Offline".
+        if (gen === slot.gen) {
+          const detail = error instanceof Error && error.message ? error.message : String(error);
+          this.goOffline(slot, "offline", { code: "unreachable", message: `Unable to connect to ${slot.record.name}: ${detail}` });
+        }
       }
     })().finally(() => {
       if (slot.attempt === attempt) slot.attempt = undefined;
@@ -1485,6 +1497,17 @@ export class MachineSet {
 
   // ---- the network: members, tokens ----
 
+  /**
+   * A live saved computer that speaks the network protocol though it is not (yet) known as a member: what the set asks
+   * when the machine the user is at is down, so one dead computer does not hide the whole network.
+   */
+  private networkSpeaker(): Slot | undefined {
+    return [...this.slots.values()]
+      // A connection the app owns is the machine the user is at (asked first, above), never a fallback.
+      .filter((slot) => slot.inner && !slot.external && !slot.record.paused && LIVE.has(slot.status) && slot.inner.info?.features?.includes(NETWORK_FEATURES.network))
+      .sort((a, b) => (a.latencyMs ?? Infinity) - (b.latencyMs ?? Infinity))[0];
+  }
+
   /** The connected member to ask: the local machine, else the nearest. */
   private bestMember(except?: Slot): Slot | undefined {
     return [...this.slots.values()]
@@ -1556,8 +1579,11 @@ export class MachineSet {
     // every saved record says member:false; only its answer can promote those records.
     const local = this.localId ? this.slots.get(this.localId) : undefined;
     const source = local?.inner && LIVE.has(local.status) && local.inner.info?.features?.includes(NETWORK_FEATURES.network)
-      ? local : this.bestMember();
+      ? local : this.bestMember() ?? this.networkSpeaker();
     if (!source?.inner) return;
+    // Only the machine the user is at, or one already known to be in the network, may forget machines. A saved
+    // computer asked because the local one is down may belong to another network: it adds and updates, never removes.
+    const authoritative = source === local || source.record.member;
     const inner = source.inner;
     const gen = source.gen;
     const localId = this.localId;
@@ -1627,7 +1653,7 @@ export class MachineSet {
         if (changed) this.touch(slot, "records");
       }
     }
-    for (const slot of [...this.slots.values()])
+    for (const slot of authoritative ? [...this.slots.values()] : [])
       if (slot.record.member && !ids.has(slot.record.machineId)) {
         await this.removeMachine(slot.record.machineId);
         if (!current() || this.syncAgain) return;

@@ -153,7 +153,9 @@ export function Tap({
   const highlight = mode === "highlight" && active && !disabled;
   return (
     <Pressable
-      style={{ flex: flat.flex, alignSelf: flat.alignSelf }}
+      // The Pressable is what sits in the parent's row, so it takes the sizing the caller asked of the Tap: a chip
+      // with `flexShrink` shrinks (and truncates its text) instead of running past the row and under its neighbour.
+      style={{ flex: flat.flex, alignSelf: flat.alignSelf, flexShrink: flat.flexShrink, minWidth: flat.minWidth }}
       accessibilityRole="button"
       accessibilityLabel={label}
       accessibilityHint={hint}

@@ -51,9 +51,16 @@ pub mod features {
     /// and takes skill copies.
     pub const PLUGINS_SYNC_V1: &str = "plugins.sync.v1";
     pub const SKILLS_SYNC_V1: &str = "skills.sync.v1";
+    /// `network.relay_page.open`: this machine, as a relay member, serves ticket pages of another machine to a web
+    /// view that cannot send `X-Kybern-Relay-Auth`, under `/relay/{machine_id}/page/{ticket}/…`.
+    pub const RELAY_PAGE_V1: &str = "relay.page.v1";
+    /// This machine's `kybern_computer_*` tools are set up and ready, so another machine's agents may
+    /// pass `machine` to use apps here. Listed in presence only while that is true, so it is not part
+    /// of [`ALL`].
+    pub const COMPUTER_USE_V1: &str = "computer.use.v1";
 
     /// Every feature the network design names, in design order.
-    pub const ALL: [&str; 20] = [
+    pub const ALL: [&str; 21] = [
         NETWORK_V1,
         SPACES_SYNC_V1,
         RELAY_V1,
@@ -74,6 +81,7 @@ pub mod features {
         PROVISION_V1,
         SKILLS_SYNC_V1,
         PLUGINS_SYNC_V1,
+        RELAY_PAGE_V1,
     ];
 }
 
@@ -536,6 +544,31 @@ pub struct NetworkPauseParams {
 pub struct NetworkRenameParams {
     pub machine_id: MachineId,
     pub name: String,
+}
+
+/// `network.relay_page.open`: mint a short-lived address on this relay member for one ticket page of `machine_id`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NetworkRelayPageOpenParams {
+    /// The machine the page is on. Never the relay member itself.
+    pub machine_id: MachineId,
+    /// `/preview-proxy/<id>/…` or `/preview-files/<id>/…` (the whole ticket subtree), or `/visual-frame/<id>` /
+    /// `/artifact-preview/<id>` with an optional query (that one document).
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NetworkRelayPageOpenResult {
+    /// The relay page ticket; give it back with `network.relay_page.close`.
+    pub ticket: String,
+    /// `/relay/<machine_id>/page/<ticket>` followed by the requested path.
+    pub path: String,
+    /// The ticket root on this member the page stays under. Ends with `/` for a subtree.
+    pub scope: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NetworkRelayPageCloseParams {
+    pub ticket: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

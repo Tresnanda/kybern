@@ -111,7 +111,8 @@ expression: schema_for!(PluginInstallRequest)
         "opencode",
         "pi",
         "omp",
-        "cursor"
+        "cursor",
+        "antigravity"
       ]
     },
     "PluginKind": {

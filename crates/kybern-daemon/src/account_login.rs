@@ -170,9 +170,29 @@ impl AccountLogins {
             params.mode != AccountLoginMode::Terminal || kind != ProviderKind::Cursor,
             "Cursor signs in through its browser page. Choose Continue."
         );
+        // Antigravity has one login per machine and no way to isolate a second. This is the one
+        // harness where Kybern signs in the machine's own CLI login, in a visible terminal.
+        let antigravity = kind == ProviderKind::Antigravity;
+        if antigravity {
+            ensure!(
+                params.mode == AccountLoginMode::Terminal,
+                "Antigravity signs in from a terminal. Choose Terminal, then finish Google's sign-in there."
+            );
+            ensure!(
+                params.directory.is_none() && params.instance.as_deref().is_none_or(|instance| instance == "default"),
+                "{}",
+                crate::provider_accounts::ANTIGRAVITY_ONE_ACCOUNT
+            );
+        }
 
         // Where the sign-in lands.
         let (directory, created, env_instance, reauth) = match (&params.instance, &params.directory) {
+            _ if antigravity => {
+                // `agy` runs in its own empty folder, so it asks nothing about a project.
+                let scratch = data_dir.join("run").join("antigravity-login");
+                std::fs::create_dir_all(&scratch)?;
+                (scratch, false, "default".to_string(), true)
+            }
             (Some(instance), _) => {
                 ensure!(
                     instance != "default",
@@ -265,7 +285,7 @@ impl AccountLogins {
             env,
             shim,
             url_file: url_file.clone(),
-            cwd: data_dir.clone(),
+            cwd: if antigravity { directory.clone() } else { data_dir.clone() },
             // Claude's paste prompt is a terminal prompt; a hidden pseudo-terminal
             // is the interface it is known to accept a code through.
             hidden_pty: kind == ProviderKind::ClaudeCode && params.mode == AccountLoginMode::Paste,
@@ -284,7 +304,8 @@ impl AccountLogins {
         let public = AccountLogin {
             id: id.clone(),
             kind,
-            instance: params.instance.clone(),
+            // Signing in again is how the one default account is told apart from adding a new one.
+            instance: if antigravity { Some("default".into()) } else { params.instance.clone() },
             mode: params.mode,
             phase: if params.mode == AccountLoginMode::Terminal { AccountLoginPhase::Waiting } else { AccountLoginPhase::Starting },
             url: None,
@@ -671,6 +692,20 @@ impl AccountLogins {
         });
     }
 
+    /// A working Antigravity sign-in adds Kybern's `kybern` MCP entry right away when
+    /// Kybern's tools are on (the default); someone who turned them off keeps them off.
+    /// Sessions add the entry too, so a failure here only waits for the next one.
+    /// Never fails the sign-in.
+    async fn offer_kybern_tools(&self, state: &AppState) {
+        let settings = state.settings.get();
+        if !settings.antigravity.kybern_tools {
+            return;
+        }
+        if let Err(error) = crate::antigravity_mcp::turn_on(&settings).await {
+            tracing::warn!(%error, "could not add Kybern's Antigravity MCP entry after sign-in");
+        }
+    }
+
     /// The harness finished: read the folder's identity, detect duplicates and
     /// suggest a name and color.
     async fn verify(&self, state: &AppState, id: &str, spec: &Spec) {
@@ -683,7 +718,19 @@ impl AccountLogins {
         let settings = state.settings.get();
         let provider = settings.providers.get(&public.kind).cloned().unwrap_or_default();
         let context = ProbeContext { binary: provider.binary.clone().map(Into::into), cwd: Some(spec.cwd.clone()), env: spec.env.clone() };
-        let (status, identity) = crate::account_identity::probe_context(public.kind, &context).await;
+        let (mut status, identity) = crate::account_identity::probe_context(public.kind, &context).await;
+        if public.kind == ProviderKind::Antigravity && status == AccountStatus::SignedIn {
+            // `agy models` only works signed in, so it confirms what the stored login says.
+            let working = match kybern_drivers::binary::resolve(public.kind, context.binary.as_ref()) {
+                Ok(binary) => kybern_drivers::antigravity::signed_in_by_models(&binary, &context).await,
+                Err(_) => false,
+            };
+            if !working {
+                status = AccountStatus::NeedsSignIn;
+            } else {
+                self.offer_kybern_tools(state).await;
+            }
+        }
         if status != AccountStatus::SignedIn {
             let sentence = if spec.mode == AccountLoginMode::Terminal {
                 format!("{} didn't save a sign-in. Try again, or check the agent's output above.", public.kind.display_name())

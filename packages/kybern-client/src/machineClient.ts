@@ -8,6 +8,7 @@ import {
   KybernClient,
   type ConnectionStatus,
   type DaemonPage,
+  type DaemonRequest,
   type EventHandler,
   type PageOptions,
   type ReplayState,
@@ -18,7 +19,7 @@ import type { EventsSubscribeParams, MethodName, ParamsOf, ResultOf } from "./ty
 /** What the machine set needs from a connection; `KybernClient` is one. */
 export type MachineClient = Pick<
   KybernClient,
-  "connect" | "close" | "status" | "failure" | "info" | "endpoint" | "onStatus" | "onNotification" | "call" | "callRaw" | "fetch" | "openPage" | "subscribeEvents" | "checkConnection"
+  "connect" | "close" | "status" | "failure" | "info" | "endpoint" | "onStatus" | "onNotification" | "call" | "callRaw" | "fetch" | "request" | "openPage" | "subscribeEvents" | "checkConnection"
 >;
 
 /** The machine cannot be reached now. `cached` says whether its last lists are still available. */
@@ -49,7 +50,8 @@ type StatusHandler = (status: ConnectionStatus, detail?: string) => void;
  * A `KybernClient` that delegates to whichever connection the machine set has
  * open for one machine. Its `endpoint` carries no address and no token, so
  * nothing that holds it can read a credential; `fetch` and `openPage` reach the machine's
- * HTTP routes through the connection instead. `connect` and `close` do
+ * HTTP routes through the connection instead, and `request` hands a native loader the one
+ * request it makes. `connect` and `close` do
  * nothing: the machine set owns the lifecycle.
  */
 export class MachineClientProxy extends KybernClient {
@@ -146,6 +148,17 @@ export class MachineClientProxy extends KybernClient {
       this.requests.delete(controller);
       outer?.removeEventListener("abort", forward);
     }
+  }
+
+  /**
+   * `KybernClient.request` on the attached connection: the URL and headers a native loader (an image,
+   * a download) needs for the route in use now. Throws `OfflineError` while the machine is offline.
+   * Ask again after a route change; a stale one may point at a route that is gone.
+   */
+  override request(path: string): DaemonRequest {
+    const inner = this.inner;
+    if (!inner) throw this.offline();
+    return inner.request(path);
   }
 
   /** `KybernClient.openPage` on the attached connection; rejects with `OfflineError` while the machine is offline. */

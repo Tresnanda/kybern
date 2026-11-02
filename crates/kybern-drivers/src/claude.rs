@@ -33,6 +33,20 @@ use crate::{
 
 const MIN_VERSION: (u64, u64, u64) = (2, 1, 0);
 
+/// Claude Code labels its API requests with this variable. Headless runs default to `sdk-cli` (or
+/// inherit `sdk-*` from a parent Claude process), and measurements in anthropics/claude-code#97074
+/// show those labels drawing the 5-hour window about 1.8× faster per token than any other label.
+/// Anthropic has not confirmed this, so the fix is only to name Kybern honestly.
+pub(crate) const ENTRYPOINT_ENV: &str = "CLAUDE_CODE_ENTRYPOINT";
+pub(crate) const KYBERN_ENTRYPOINT: &str = "kybern";
+
+/// The label for a Claude process: a value set in the session's own environment wins; anything
+/// inherited from the daemon's environment is replaced, so Kybern never runs as `sdk-*` or as
+/// another client's label (`cli`, `claude-vscode`).
+pub(crate) fn entrypoint(session_value: Option<&String>) -> String {
+    session_value.map(|value| value.trim()).filter(|value| !value.is_empty()).unwrap_or(KYBERN_ENTRYPOINT).to_string()
+}
+
 #[derive(Default)]
 pub struct ClaudeDriver {
     catalog: Arc<ModelCatalog>,
@@ -101,6 +115,7 @@ impl AgentDriver for ClaudeDriver {
                     ])
                     .arg(prompt)
                     .envs(env)
+                    .env(ENTRYPOINT_ENV, entrypoint(env.get(ENTRYPOINT_ENV)))
                     .env_remove("NODE_OPTIONS")
                     .stdin(std::process::Stdio::null()),
             ),
@@ -213,6 +228,7 @@ impl AgentDriver for ClaudeDriver {
         for (k, v) in config.env.iter().filter(|(k, _)| k.as_str() != crate::login_lend::BORROW_ENV) {
             cmd.env(k, v);
         }
+        cmd.env(ENTRYPOINT_ENV, entrypoint(config.env.get(ENTRYPOINT_ENV)));
         // A login another machine lent (design §9.4): the access token rides in this process' environment
         // only. A named account blanks `CLAUDE_CODE_OAUTH_TOKEN`, so this comes after the loop.
         let lent = crate::login_lend::source_of(&config.env);
@@ -605,7 +621,7 @@ pub(crate) fn contextual_command(binary: &std::path::Path, context: &ProbeContex
     if let Some(cwd) = context.cwd.as_deref() {
         command.current_dir(cwd);
     }
-    command.env_remove("NODE_OPTIONS").envs(&context.env);
+    command.env_remove("NODE_OPTIONS").envs(&context.env).env(ENTRYPOINT_ENV, entrypoint(context.env.get(ENTRYPOINT_ENV)));
     command
 }
 
@@ -2408,11 +2424,10 @@ mod tests {
     #[tokio::test]
     async fn one_shot_keeps_the_prompt_out_of_variadic_tool_rules() {
         use crate::AgentDriver;
-        use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().unwrap();
         let binary = root.path().join("claude-fixture");
-        std::fs::write(&binary, "#!/usr/bin/env python3\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n").unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        kybern_protocol::process::write_executable(&binary, "#!/usr/bin/env python3\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n")
+            .unwrap();
         let out =
             super::ClaudeDriver::default().one_shot(root.path(), "Name this session", Some(&binary), &Default::default()).await.unwrap();
         let args: Vec<String> = serde_json::from_str(&out).unwrap();
@@ -2673,7 +2688,15 @@ mod tests {
             spawned.session.close().await.unwrap();
             assert_eq!(seen["CLAUDE_CODE_ARTIFACT"], expected);
             assert_eq!(seen["CLAUDE_CODE_ARTIFACT_AUTO_OPEN"], "0");
+            assert_eq!(seen["CLAUDE_CODE_ENTRYPOINT"], "kybern");
         }
+    }
+
+    #[test]
+    fn claude_is_labelled_as_kybern_unless_the_session_names_a_label() {
+        assert_eq!(super::entrypoint(None), "kybern");
+        assert_eq!(super::entrypoint(Some(&"  ".to_string())), "kybern");
+        assert_eq!(super::entrypoint(Some(&"my-label".to_string())), "my-label");
     }
 
     #[test]
@@ -2797,11 +2820,10 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn the_usage_read_lets_claude_finish_saving_a_refreshed_login() {
-        use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir().unwrap();
         let (binary, saved, launches) = (temp.path().join("claude"), temp.path().join("saved-login"), temp.path().join("launches"));
         let result = r#"{"type":"result","result":"Current session: 7% used · resets Sep 16 at 7:30pm (UTC)"}"#;
-        std::fs::write(
+        kybern_protocol::process::write_executable(
             &binary,
             format!(
                 "#!/bin/sh\necho launch >> '{}'\nread message\necho '{result}'\nwhile read line; do :; done\nsleep 0.3\necho rotated > '{}'\n",
@@ -2810,7 +2832,6 @@ mod tests {
             ),
         )
         .unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
         let config = temp.path().join("config");
         let env = std::collections::BTreeMap::from([("CLAUDE_CONFIG_DIR".to_string(), config.to_string_lossy().into_owned())]);
 

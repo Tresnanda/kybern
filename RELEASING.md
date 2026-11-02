@@ -62,7 +62,7 @@ stable tag needs the full gate below.
 
 The tag-triggered release workflow requires successful main CI for the exact
 tagged commit, including all six jobs `scripts/check-release-ci.mjs` lists
-(`requiredJobs`: rustfmt, clippy + test on Linux and macOS, Windows cargo check,
+(`requiredJobs`: rustfmt, clippy and test on Linux and macOS, Windows cargo check,
 release checks, and gpuix); a dev tag (`vX.Y.Z-dev.N`) needs only that run's success.
 A push that changes `[workspace.package].version` to a stable version runs the full suite
 automatically. For a release candidate without a version change, run
@@ -70,7 +70,10 @@ automatically. For a release candidate without a version change, run
 wait for it to pass before tagging. A manual run qualifies only for its exact
 commit on `main`; a later commit's checks never qualify an older tag.
 The gate waits for an in-progress run and blocks
-publication on failures, skipped jobs, missing results, or timeout. Publication
+publication on failures, skipped jobs, missing results, or timeout. A test that
+failed once and passed on nextest's retry is quarantined (AGENTS.md, "Tests and
+checks"): its job succeeds, so it does not block a release, and its `flaky`
+issue tracks the fix. A test that fails both attempts still blocks. Publication
 also requires both macOS GPUIX bundles to succeed (the Linux and Windows
 bundles are betas whose failure only leaves their `latest.json` entry out). Only the publishing `host` job
 waits for that gate; the daemon archives and desktop bundles build while CI
@@ -79,7 +82,10 @@ and its test in the same change.
 
 Pull requests and ordinary pushes to `main` run only the CI jobs their files
 can affect (`scripts/ci-paths.mjs` lists the paths): a GPUIX-only change skips
-the Rust jobs, and a docs-only change skips all test jobs. Main compares both
+the Rust jobs, and a docs-only change skips all test jobs. In a pull request, a
+root `Cargo.toml` or `Cargo.lock` change that only moves the workspace version
+counts as no change, so a version-bump PR runs only the jobs its other files
+need, and the full suite runs once, on the bump's push to `main`. Main compares both
 ends of the whole push, including deleted and renamed files. Version bumps on
 main, manual runs, changes to CI selection/setup, and unavailable or incomplete
 change lists run the full suite. A new push to a pull request cancels its running

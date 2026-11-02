@@ -10,6 +10,7 @@ const subscribe = (listener: () => void) => { listeners.add(listener); return ()
 const emit = (patch: Partial<typeof state>) => { state = { ...state, ...patch }; for (const listener of listeners) listener() }
 let revision = 0
 export const latestSettings = () => state.settings
+export const latestError = () => state.error
 
 /** One in-flight write: controls disable until the daemon confirms the full document. */
 export async function updateSettings(patch: Partial<Settings>) {

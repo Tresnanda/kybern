@@ -37,7 +37,7 @@ export const SKILL_HOME_DETAILS: Record<SkillHome, SkillHomeDetail> = {
   omp: { home: "omp", path: "~/.omp/agent/skills", readers: ["omp"], universal: false },
 };
 
-const READER_NAME: Record<ProviderKind, string> = { "claude-code": "Claude Code", codex: "Codex", opencode: "OpenCode", pi: "pi", omp: "Oh My Pi", cursor: "Cursor" };
+const READER_NAME: Record<ProviderKind, string> = { "claude-code": "Claude Code", codex: "Codex", opencode: "OpenCode", pi: "pi", omp: "Oh My Pi", cursor: "Cursor", antigravity: "Antigravity" };
 
 const list = (items: readonly string[]) => new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(items);
 
@@ -48,6 +48,7 @@ export function readersText(home: SkillHome): string {
 
 /** The harnesses that load a skill from any of these homes, deduplicated in a stable order. */
 export function harnessesOf(homes: readonly SkillHome[]): ProviderKind[] {
+  // Antigravity reads no skill folder Kybern syncs, so it is left out on purpose.
   const all: ProviderKind[] = ["claude-code", "codex", "cursor", "opencode", "pi", "omp"];
   return all.filter((reader) => homes.some((home) => SKILL_HOME_DETAILS[home].readers.includes(reader)));
 }

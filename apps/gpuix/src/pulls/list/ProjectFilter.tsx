@@ -1,5 +1,7 @@
 import { N } from '../../nav/glyphs.ts'
 import { Icon } from '../../icons.tsx'
+import { IconButton } from '../../kit/IconButton.tsx'
+import { FOLDER } from '../PullsTabs.tsx'
 import { Menu, MenuItem, MenuLabel, MenuSeparator } from '../../nav/overlay.tsx'
 import { PickerChip } from '../../kit/PickerChip.tsx'
 import { Label, useTheme } from '../../ui.tsx'
@@ -22,14 +24,16 @@ function Lead({ on, children }: { on: boolean; children?: React.ReactNode }) {
  * the single projects. `counts` are the open pull requests already loaded, by project id or `id/repo`; a number is
  * shown only where it is known.
  */
-export function ProjectFilter({ projects, scope, remembered, onChange, counts }: { projects: readonly Project[]; scope: Scope; remembered: Record<string, string[]>; onChange: (scope: Scope) => void; counts: ReadonlyMap<string, number> }) {
+export function ProjectFilter({ projects, scope, remembered, onChange, counts, compact = false }: { projects: readonly Project[]; scope: Scope; remembered: Record<string, string[]>; onChange: (scope: Scope) => void; counts: ReadonlyMap<string, number>; /** A folder glyph instead of the name, when the header is too narrow to read it. */ compact?: boolean }) {
   const t = useTheme()
   const groups = projects.filter(isGroup)
   const singles = projects.filter(p => !isGroup(p))
   const current = projects.find(p => p.id === scope.project)
   const label = current ? current.name : 'All projects'
   const count = (key: string) => counts.get(key)
-  return <Menu testId="pr-project-filter" align="start" width={264} trigger={open => <PickerChip size="sm" open={open} truncate maxWidth={150} label={`Project: ${label}`}>{label}</PickerChip>}>
+  return <Menu testId="pr-project-filter" align="start" width={264} {...(compact ? { rootStyle: { flexShrink: 0 } } : {})} trigger={open => compact
+    ? <IconButton icon={FOLDER} label={`Project: ${label}`} active={open || !!current} />
+    : <PickerChip size="sm" open={open} truncate maxWidth={150} label={`Project: ${label}`}>{label}</PickerChip>}>
     <MenuItem id="all" iconNode={<Lead on={!scope.project} />} label="All projects" onSelect={() => onChange(pickProject(null))} />
     {groups.length > 0 && <>
       <MenuSeparator />

@@ -40,6 +40,7 @@ use tokio_tungstenite::tungstenite::http::{HeaderName as TName, HeaderValue as T
 use tokio_util::sync::CancellationToken;
 
 use super::peers::{Direction, PeerLink};
+use super::relay_pages::{self, MAX_STREAMS_PER_PAGE, PageGrant};
 use crate::auth::Principal;
 use crate::state::AppState;
 
@@ -255,10 +256,13 @@ impl Drop for Slot {
 impl RelayHub {
     /// A place for a stream of `client`, or `None` over a limit.
     pub fn acquire(&self, client: &str) -> Option<Slot> {
+        self.acquire_within(client, MAX_STREAMS_PER_CLIENT)
+    }
+
+    /// A place for a stream of `client` under its own `limit` (a page ticket's, say), or `None` over it.
+    pub fn acquire_within(&self, client: &str, limit: usize) -> Option<Slot> {
         let mut clients = self.per_client.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if self.total.load(Ordering::SeqCst) >= MAX_STREAMS_PER_DAEMON
-            || clients.get(client).copied().unwrap_or(0) >= MAX_STREAMS_PER_CLIENT
-        {
+        if self.total.load(Ordering::SeqCst) >= MAX_STREAMS_PER_DAEMON || clients.get(client).copied().unwrap_or(0) >= limit {
             return None;
         }
         self.total.fetch_add(1, Ordering::SeqCst);
@@ -364,10 +368,13 @@ fn hop_by_hop(name: &str) -> bool {
         || name == RELAY_AUTH_HEADER
 }
 
+/// The client's headers to carry: never the per-hop ones, and never the page headers only M and B set
+/// (a client that sent them could otherwise choose the prefix B writes into a page's policy).
 fn forwarded_headers(headers: &HeaderMap) -> Vec<(String, String)> {
     headers
         .iter()
         .filter(|(name, _)| !hop_by_hop(name.as_str()))
+        .filter(|(name, _)| name.as_str() != relay_pages::PREFIX_HEADER && name.as_str() != relay_pages::LOCAL_MARK_HEADER)
         .filter_map(|(name, value)| Some((name.as_str().to_string(), value.to_str().ok()?.to_string())))
         .collect()
 }
@@ -412,7 +419,7 @@ fn local_url(scheme: &str, addr: std::net::SocketAddr, path: &str) -> Option<req
 }
 
 /// `text` with each `%XX` replaced by its byte; anything else is kept as it is.
-fn percent_decoded(text: &str) -> String {
+pub(super) fn percent_decoded(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut at = 0;
@@ -456,23 +463,28 @@ fn caller(state: &AppState, headers: &HeaderMap) -> Result<Principal, Response> 
     Err(refuse(StatusCode::UNAUTHORIZED, "the relay needs a device token for this machine in X-Kybern-Relay-Auth"))
 }
 
+/// The link to the target, or the status and message to refuse with.
+pub(super) fn route_check(state: &AppState, target: &str) -> Result<Arc<PeerLink>, (StatusCode, &'static str)> {
+    let network = &state.network;
+    let Some(membership) = network.membership() else {
+        return Err((StatusCode::SERVICE_UNAVAILABLE, "the machine network is unavailable"));
+    };
+    if !network.is_enabled() {
+        return Err((StatusCode::NOT_FOUND, "the machine network is turned off on this machine"));
+    }
+    if target == membership.machine_id() {
+        return Err((StatusCode::BAD_REQUEST, "this is the machine you are talking to; connect to it directly"));
+    }
+    if !membership.is_member(target) {
+        return Err((StatusCode::NOT_FOUND, "that machine is not in this network"));
+    }
+    network.peers.link(target).ok_or((StatusCode::BAD_GATEWAY, "this machine has no open session to that machine"))
+}
+
 /// The link to the target, or the refusal to send.
 #[allow(clippy::result_large_err)]
 fn route(state: &AppState, target: &str) -> Result<Arc<PeerLink>, Response> {
-    let network = &state.network;
-    let Some(membership) = network.membership() else {
-        return Err(refuse(StatusCode::SERVICE_UNAVAILABLE, "the machine network is unavailable"));
-    };
-    if !network.is_enabled() {
-        return Err(refuse(StatusCode::NOT_FOUND, "the machine network is turned off on this machine"));
-    }
-    if target == membership.machine_id() {
-        return Err(refuse(StatusCode::BAD_REQUEST, "this is the machine you are talking to; connect to it directly"));
-    }
-    if !membership.is_member(target) {
-        return Err(refuse(StatusCode::NOT_FOUND, "that machine is not in this network"));
-    }
-    network.peers.link(target).ok_or_else(|| refuse(StatusCode::BAD_GATEWAY, "this machine has no open session to that machine"))
+    route_check(state, target).map_err(|(status, message)| refuse(status, message))
 }
 
 fn open_error(error: RpcError) -> Response {
@@ -535,14 +547,64 @@ async fn relay_ws(state: &AppState, target: &str, headers: &HeaderMap, path: Str
         Ok(link) => link,
         Err(response) => return response,
     };
-    let Some(slot) = state.network.relays.acquire(&principal.token_id.to_string()) else {
+    open_ws(state, Limits::device(&principal.token_id.to_string()), link, headers, forwarded_headers(headers), path, ws).await
+}
+
+/// What ends a page's stream besides the stream itself: its ticket's cancellation and hard cap.
+#[derive(Clone)]
+struct PageStop {
+    cancel: CancellationToken,
+    deadline: Instant,
+}
+
+/// The stream-limit key, limit and stop of a request: a device's own (`None`), or a page ticket's.
+struct Limits<'a> {
+    client: &'a str,
+    limit: usize,
+    stop: Option<PageStop>,
+}
+
+impl<'a> Limits<'a> {
+    fn device(client: &'a str) -> Self {
+        Self { client, limit: MAX_STREAMS_PER_CLIENT, stop: None }
+    }
+}
+
+/// End `stream` when the page it serves is closed, revoked, evicted or past its hard cap.
+fn stop_with(link: &Arc<PeerLink>, stream: &Arc<Stream>, stop: Option<PageStop>) {
+    let Some(stop) = stop else { return };
+    let link = link.clone();
+    let stream = stream.clone();
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = stop.cancel.cancelled() => {}
+            _ = tokio::time::sleep_until(stop.deadline.into()) => {}
+            _ = stream.cancel.cancelled() => return,
+        }
+        tracing::debug!(target: TARGET, machine = %link.machine_id, stream = stream.id, "a page's ticket ended; closing its stream");
+        send_close(&link, stream.id, Some("the page was closed")).await;
+        link.relays.remove(stream.id);
+    });
+}
+
+/// Relay a WebSocket over `link`: `forwarded` are the request headers to pass on, `limits` the stream-limit key.
+async fn open_ws(
+    state: &AppState,
+    limits: Limits<'_>,
+    link: Arc<PeerLink>,
+    headers: &HeaderMap,
+    mut forwarded: Vec<(String, String)>,
+    path: String,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let Some(slot) = state.network.relays.acquire_within(limits.client, limits.limit) else {
         return refuse(StatusCode::TOO_MANY_REQUESTS, "too many relayed connections");
     };
     let Some((stream, incoming)) = link.relays.create(None, StreamKind::Relay, None) else {
         return refuse(StatusCode::INTERNAL_SERVER_ERROR, "stream id clash");
     };
+    stop_with(&link, &stream, limits.stop);
     let protocols = requested_protocols(headers);
-    let mut forwarded = forwarded_headers(headers);
     if !protocols.is_empty() {
         forwarded.push((PROTOCOLS_HEADER.to_string(), protocols.join(", ")));
     }
@@ -559,7 +621,7 @@ async fn relay_ws(state: &AppState, target: &str, headers: &HeaderMap, path: Str
             return refuse(StatusCode::GATEWAY_TIMEOUT, "the machine did not open the relayed connection in time");
         }
     }
-    tracing::debug!(target: TARGET, machine = %target, stream = stream.id, "relaying a WebSocket");
+    tracing::debug!(target: TARGET, machine = %link.machine_id, stream = stream.id, "relaying a WebSocket");
     ws.protocols(protocols).on_upgrade(move |socket| async move {
         pump_client_ws(link, stream, incoming, socket).await;
         drop(slot);
@@ -634,23 +696,41 @@ pub async fn serve_http(State(state): State<AppState>, Path((target, path)): Pat
     if path_refused(&path) {
         return refuse(StatusCode::FORBIDDEN, "the relay does not carry this path");
     }
-    let Some(slot) = state.network.relays.acquire(&principal.token_id.to_string()) else {
+    let target_path = match parts.uri.query() {
+        Some(query) => format!("{path}?{query}"),
+        None => path,
+    };
+    forward_http(
+        &state,
+        Limits::device(&principal.token_id.to_string()),
+        link,
+        parts.method.to_string(),
+        forwarded_headers(&parts.headers),
+        target_path,
+        body,
+    )
+    .await
+}
+
+/// Carry one HTTP request over `link` and stream the answer back. `client` is the stream-limit key, `target_path`
+/// the origin-relative path and query on the target, already checked.
+async fn forward_http(
+    state: &AppState,
+    limits: Limits<'_>,
+    link: Arc<PeerLink>,
+    method: String,
+    headers: Vec<(String, String)>,
+    target_path: String,
+    body: Body,
+) -> Response {
+    let Some(slot) = state.network.relays.acquire_within(limits.client, limits.limit) else {
         return refuse(StatusCode::TOO_MANY_REQUESTS, "too many relayed connections");
     };
     let Some((stream, mut incoming)) = link.relays.create(None, StreamKind::Relay, None) else {
         return refuse(StatusCode::INTERNAL_SERVER_ERROR, "stream id clash");
     };
-    let target_path = match parts.uri.query() {
-        Some(query) => format!("{path}?{query}"),
-        None => path,
-    };
-    let open = PeerRelayOpenParams {
-        stream_id: stream.id,
-        kind: RelayStreamKind::Http,
-        path: target_path,
-        method: Some(parts.method.to_string()),
-        headers: forwarded_headers(&parts.headers),
-    };
+    stop_with(&link, &stream, limits.stop);
+    let open = PeerRelayOpenParams { stream_id: stream.id, kind: RelayStreamKind::Http, path: target_path, method: Some(method), headers };
     match tokio::time::timeout(OPEN_TIMEOUT, link.call::<PeerRelayOpen>(open)).await {
         Ok(Ok(_)) => {}
         Ok(Err(error)) => {
@@ -737,6 +817,154 @@ pub async fn serve_http(State(state): State<AppState>, Path((target, path)): Pat
     response
 }
 
+/// Request headers for a page request: the usual relay rules, but never an `Authorization` header and no cookie whose
+/// value is a Kybern credential (the web view has none; this keeps a page from replaying one). A `Referer` loses the
+/// page's ticket prefix (one from another page is dropped), so the ticket never reaches B's dev server, and B is told
+/// the prefix (`prefix`, `/relay/<machine>/page/<ticket>`) for the policy it writes.
+fn page_headers(state: &AppState, headers: &HeaderMap, prefix: &str) -> Vec<(String, String)> {
+    let is_secret = |value: &str| crate::previews::proxy::is_kybern_credential(state, value);
+    let mut out = Vec::new();
+    for (name, value) in forwarded_headers(headers) {
+        match name.as_str() {
+            "authorization" => {}
+            "cookie" => {
+                if let Some(cookie) = crate::previews::proxy::filter_cookie(&value, &is_secret) {
+                    out.push((name, cookie));
+                }
+            }
+            "referer" => {
+                if let Some(referer) = unprefixed_referer(&value, prefix) {
+                    out.push((name, referer));
+                }
+            }
+            _ => out.push((name, value)),
+        }
+    }
+    out.push((relay_pages::PREFIX_HEADER.to_string(), prefix.to_string()));
+    out
+}
+
+/// `referer` with the page's own ticket prefix taken out of its path, or `None` when it is not this page's address.
+fn unprefixed_referer(referer: &str, prefix: &str) -> Option<String> {
+    let mut url = reqwest::Url::parse(referer).ok()?;
+    let rest = url.path().strip_prefix(prefix).filter(|rest| rest.is_empty() || rest.starts_with('/'))?;
+    let rest = if rest.is_empty() { "/".to_string() } else { rest.to_string() };
+    url.set_path(&rest);
+    Some(url.to_string())
+}
+
+/// A page's `Set-Cookie` confined to its own ticket: `Domain` is dropped, and `Path` becomes the page's address on this
+/// machine. A page's cookie therefore never reaches another page relayed through this machine, another machine's dev
+/// server included. `scope` is the ticket's outside path (`/relay/<machine>/page/<ticket><bound>`); for a subtree the
+/// cookie's own path is kept under it.
+fn scoped_set_cookie(cookie: &str, scope: &str, document: bool) -> String {
+    let mut parts = cookie.split(';');
+    let pair = parts.next().unwrap_or_default().trim();
+    let mut own_path = None;
+    let mut kept = Vec::new();
+    for attribute in parts {
+        let attribute = attribute.trim();
+        let name = attribute.split('=').next().unwrap_or_default().trim().to_ascii_lowercase();
+        match name.as_str() {
+            "domain" => {}
+            "path" => own_path = attribute.split_once('=').map(|(_, value)| value.trim().to_string()),
+            _ if attribute.is_empty() => {}
+            _ => kept.push(attribute.to_string()),
+        }
+    }
+    let path = if document {
+        scope.to_string()
+    } else {
+        let base = scope.trim_end_matches('/');
+        match own_path.filter(|path| path.starts_with('/') && path.bytes().all(|b| b.is_ascii_graphic() && b != b';' && b != b',')) {
+            Some(path) if path != "/" => format!("{base}{path}"),
+            _ => format!("{base}/"),
+        }
+    };
+    let mut out = pair.to_string();
+    for attribute in kept {
+        out.push_str("; ");
+        out.push_str(&attribute);
+    }
+    out.push_str("; Path=");
+    out.push_str(&path);
+    out
+}
+
+/// `ANY /relay/{machine_id}/page/{ticket}/{*path}`: a page of another machine, opened with a relay page ticket
+/// (`network.relay_page.open`) instead of the relay header. The path is read from the raw URI below, not from the
+/// decoded parameter, so it is checked as the page wrote it.
+pub async fn serve_page(
+    State(state): State<AppState>,
+    Path((target, ticket, _path)): Path<(String, String, String)>,
+    request: Request,
+) -> Response {
+    let (mut parts, body) = request.into_parts();
+    let Some(PageGrant { info: page, cancel, deadline }) = state.network.pages.lookup(&ticket) else {
+        return refuse(StatusCode::NOT_FOUND, "this page address has expired");
+    };
+    if page.target != target {
+        return refuse(StatusCode::NOT_FOUND, "this page address has expired");
+    }
+    if !state.store.token_is_active(page.token_id).unwrap_or(false) {
+        return refuse(StatusCode::UNAUTHORIZED, "the device that opened this page was revoked");
+    }
+    let link = match route(&state, &target) {
+        Ok(link) => link,
+        Err(response) => return response,
+    };
+    // The raw path keeps percent-encoding as the page wrote it; it is normalized and bound-checked below.
+    let base = format!("/relay/{target}/page/{ticket}");
+    let Some(rest) = parts.uri.path().strip_prefix(base.as_str()).filter(|rest| rest.is_empty() || rest.starts_with('/')) else {
+        return refuse(StatusCode::NOT_FOUND, "this page address has expired");
+    };
+    let requested = match parts.uri.query() {
+        Some(query) => format!("{rest}?{query}"),
+        None => rest.to_string(),
+    };
+    let Some(url) = local_url("http", std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 1)), &requested) else {
+        return refuse(StatusCode::FORBIDDEN, "the relay does not carry this path");
+    };
+    if !page.admits(url.path()) {
+        return refuse(StatusCode::FORBIDDEN, "this address is outside the page that was opened");
+    }
+    let target_path = match url.query() {
+        Some(query) => format!("{}?{query}", url.path()),
+        None => url.path().to_string(),
+    };
+    // The page's streams count under its own ticket, with their own small cap, and stop with it.
+    let client = format!("page:{ticket}");
+    let limits = Limits { client: &client, limit: MAX_STREAMS_PER_PAGE, stop: Some(PageStop { cancel, deadline }) };
+    if is_websocket_upgrade(&parts.headers) {
+        if page.document {
+            return refuse(StatusCode::FORBIDDEN, "this page address does not open connections");
+        }
+        let ws = match WebSocketUpgrade::from_request_parts(&mut parts, &state).await {
+            Ok(ws) => ws,
+            Err(rejection) => return rejection.into_response(),
+        };
+        let forwarded = page_headers(&state, &parts.headers, &base);
+        return open_ws(&state, limits, link, &parts.headers, forwarded, target_path, ws).await;
+    }
+    let headers = page_headers(&state, &parts.headers, &base);
+    let mut response = forward_http(&state, limits, link, parts.method.to_string(), headers, target_path, body).await;
+    let scope = format!("{base}{}", page.bound);
+    let cookies: Vec<String> = response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .map(|cookie| scoped_set_cookie(cookie, &scope, page.document))
+        .collect();
+    response.headers_mut().remove(header::SET_COOKIE);
+    for cookie in cookies {
+        if let Ok(value) = HeaderValue::from_str(&cookie) {
+            response.headers_mut().append(header::SET_COOKIE, value);
+        }
+    }
+    response
+}
+
 fn tokio_stream_from(
     mut rx: mpsc::Receiver<Result<Vec<u8>, std::io::Error>>,
 ) -> impl futures::Stream<Item = Result<Vec<u8>, std::io::Error>> {
@@ -765,6 +993,10 @@ pub async fn handle_open(state: &AppState, link: &Arc<PeerLink>, params: PeerRel
     let Some(url) = local_url(scheme, addr, &params.path) else {
         return Err(RpcError::new(codes::FORBIDDEN, "the relay does not carry this path"));
     };
+    let mut params = params;
+    // Only this process can mark its own request as relayed; a mark the other machine sent is not kept.
+    params.headers.retain(|(name, _)| !name.eq_ignore_ascii_case(relay_pages::LOCAL_MARK_HEADER));
+    params.headers.push((relay_pages::LOCAL_MARK_HEADER.to_string(), state.network.pages.local_mark().to_string()));
     let slot = state
         .network
         .relays
@@ -958,6 +1190,58 @@ async fn open_local_http(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pages_cookies_are_confined_to_its_own_address() {
+        let scope = "/relay/b/page/t/preview-proxy/x/";
+        assert_eq!(scoped_set_cookie("sid=1; Path=/; HttpOnly", scope, false), "sid=1; HttpOnly; Path=/relay/b/page/t/preview-proxy/x/");
+        assert_eq!(
+            scoped_set_cookie("a=2; Domain=example.com; path=/api; Secure", scope, false),
+            "a=2; Secure; Path=/relay/b/page/t/preview-proxy/x/api"
+        );
+        assert_eq!(scoped_set_cookie("a=3", scope, false), "a=3; Path=/relay/b/page/t/preview-proxy/x/", "no path is the page's root");
+        assert_eq!(
+            scoped_set_cookie("a=4; Path=api", scope, false),
+            "a=4; Path=/relay/b/page/t/preview-proxy/x/",
+            "a relative path is not kept"
+        );
+        assert_eq!(scoped_set_cookie("a=5; Path=/x;y", scope, false), "a=5; y; Path=/relay/b/page/t/preview-proxy/x/x");
+        let document = "/relay/b/page/t/visual-frame/v";
+        assert_eq!(scoped_set_cookie("a=6; Path=/anything", document, true), "a=6; Path=/relay/b/page/t/visual-frame/v");
+    }
+
+    #[test]
+    fn a_referer_loses_its_page_prefix_and_another_pages_is_dropped() {
+        let prefix = "/relay/b/page/t";
+        assert_eq!(
+            unprefixed_referer("http://m:4173/relay/b/page/t/preview-proxy/x/app?q=1", prefix).as_deref(),
+            Some("http://m:4173/preview-proxy/x/app?q=1")
+        );
+        assert_eq!(unprefixed_referer("http://m:4173/relay/b/page/t", prefix).as_deref(), Some("http://m:4173/"));
+        assert_eq!(unprefixed_referer("http://m:4173/relay/b/page/other/preview-proxy/x/", prefix), None);
+        assert_eq!(unprefixed_referer("http://m:4173/relay/b/page/tt/x", prefix), None);
+        assert_eq!(unprefixed_referer("not a url", prefix), None);
+    }
+
+    #[test]
+    fn page_streams_count_under_their_own_cap() {
+        let hub = RelayHub::default();
+        let page: Vec<_> = (0..MAX_STREAMS_PER_PAGE).map(|_| hub.acquire_within("page:t", MAX_STREAMS_PER_PAGE).unwrap()).collect();
+        assert!(hub.acquire_within("page:t", MAX_STREAMS_PER_PAGE).is_none(), "the page is at its cap");
+        assert!(hub.acquire("device").is_some(), "the device's own streams are not the page's");
+        drop(page);
+        assert!(hub.acquire_within("page:t", MAX_STREAMS_PER_PAGE).is_some());
+    }
+
+    #[test]
+    fn page_headers_never_carry_the_daemons_page_headers_a_client_sent() {
+        let mut headers = HeaderMap::new();
+        headers.insert(relay_pages::PREFIX_HEADER, HeaderValue::from_static("/relay/x/page/y"));
+        headers.insert(relay_pages::LOCAL_MARK_HEADER, HeaderValue::from_static("forged"));
+        headers.insert("accept", HeaderValue::from_static("text/html"));
+        let forwarded = forwarded_headers(&headers);
+        assert_eq!(forwarded, vec![("accept".to_string(), "text/html".to_string())]);
+    }
 
     #[test]
     fn hop_by_hop_headers_and_the_relay_header_never_cross() {

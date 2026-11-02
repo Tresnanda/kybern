@@ -117,6 +117,15 @@ fn roots(cwd: &Path, provider: ProviderKind, env: &BTreeMap<String, String>, hom
                 add(home.join(".agents/skills"), SkillScope::User, MAX_DEPTH);
             }
         }
+        ProviderKind::Antigravity => {
+            // `<workspace>/.agents/skills/<name>/SKILL.md` is in `agy`'s own help; its per-user
+            // folder was seen on disk (`~/.gemini/antigravity-cli/skills`).
+            add(cwd.join(".agents/skills"), SkillScope::Project, MAX_DEPTH);
+            if let Some(home) = home {
+                add(home.join(".agents/skills"), SkillScope::User, MAX_DEPTH);
+                add(home.join(".gemini/antigravity-cli/skills"), SkillScope::User, MAX_DEPTH);
+            }
+        }
         ProviderKind::Opencode => {
             for relative in [".opencode/skills", ".claude/skills", ".agents/skills"] {
                 add(cwd.join(relative), SkillScope::Project, MAX_DEPTH);
@@ -409,6 +418,7 @@ mod tests {
             ProviderKind::Pi,
             ProviderKind::Omp,
             ProviderKind::Cursor,
+            ProviderKind::Antigravity,
         ] {
             assert!(!roots(&cwd, provider, &BTreeMap::new(), Some(&home)).is_empty(), "{provider} has no skill roots");
         }

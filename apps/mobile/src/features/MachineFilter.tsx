@@ -5,7 +5,8 @@
 import { router } from "expo-router";
 import { View } from "react-native";
 import { setMachineFilter, useMachineFilter } from "../state/machineFilter";
-import { connect, useApp, useMachineView } from "../state/runtime";
+import { connect, machineHub, useApp, useMachineView } from "../state/runtime";
+import { sameNameAddresses } from "../machines/labels";
 import { MenuButton } from "../ui/ActionMenu";
 import { Brand } from "../ui/Brand";
 import type { MenuItem } from "../ui/menuModel";
@@ -21,6 +22,18 @@ export function useMachineMenuItems(): MenuItem[] {
   const chosen = useMachineFilter();
   if (view.machines.length < 2) return [];
   const offline = app.status === "failed" || app.status === "closed" || app.status === "idle";
+  const connections = machineHub().connections();
+  const addresses = sameNameAddresses(connections.map((c) => ({ id: c.record.machineId, name: c.record.name, routes: c.record.routes })));
+  const withAddress = (id: string, line: string) => (addresses.has(id) ? `${addresses.get(id)} · ${line}` : line);
+  // The way off a computer that stopped answering: another saved computer that is up.
+  const switchTo = offline
+    ? connections.filter(
+        (c) =>
+          c.record.machineId !== app.activeId &&
+          (c.status === "online" || c.status === "relaying" || c.status === "needs-update") &&
+          app.environments.some((e) => e.id === c.record.machineId),
+      )
+    : [];
   return [
     {
       title: "Show threads from",
@@ -29,10 +42,12 @@ export function useMachineMenuItems(): MenuItem[] {
         { title: "All machines", checked: chosen === null, onPress: () => setMachineFilter(null) },
         ...view.machines.map<MenuItem>((machine) => ({
           title: machine.name,
-          subtitle:
+          subtitle: withAddress(
+            machine.machineId,
             machine.status === "online" || machine.status === "needs-update"
-              ? machine.isLocal ? "Online · this phone is here" : "Online"
+              ? machine.isLocal ? "Online · Paired with this phone" : "Online"
               : machine.status === "relaying" ? "Relaying" : machine.status === "paused" ? "Paused" : "Offline",
+          ),
           checked: chosen === machine.machineId,
           onPress: () => setMachineFilter(machine.machineId),
         })),
@@ -43,6 +58,12 @@ export function useMachineMenuItems(): MenuItem[] {
       inline: true,
       children: [
         ...(offline && app.activeId ? [{ title: "Reconnect", icon: "arrow.clockwise" as const, onPress: () => connect(app.activeId) }] : []),
+        ...switchTo.map((c) => ({
+          title: `Connect through ${c.record.name}`,
+          ...(addresses.has(c.record.machineId) ? { subtitle: addresses.get(c.record.machineId) } : {}),
+          icon: "arrow.triangle.swap" as const,
+          onPress: () => connect(c.record.machineId),
+        })),
         { title: "Add a machine…", icon: "plus", onPress: () => router.push("/machines") },
         { title: "Manage machines…", icon: "laptopcomputer", onPress: () => router.push("/machines") },
       ],

@@ -232,7 +232,8 @@ expression: schema_for!(TaskItem)
         "opencode",
         "pi",
         "omp",
-        "cursor"
+        "cursor",
+        "antigravity"
       ]
     },
     "TaskRunState": {

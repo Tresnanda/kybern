@@ -9,11 +9,16 @@
 //   mints through a member) and keeps the machine's lists, offline cache included.
 // - The primary's lists reach the set from `runtime.ts` (it already reads them), once
 //   per burst of changes, and only while a second machine or a subscriber could use them.
-import { KybernClient, type ClientOptions } from "../../../../packages/kybern-client/src/client";
-import { normalizeDaemonUrl } from "../../../../packages/kybern-client/src/address";
+import { KybernClient, type ClientOptions, type DaemonPage, type PageRelay } from "../../../../packages/kybern-client/src/client";
+import { httpBase, normalizeDaemonUrl } from "../../../../packages/kybern-client/src/address";
 import { MachineCache } from "../../../../packages/kybern-client/src/machineCache";
 import {
   MachineSet,
+  probeAuth,
+  randomNonce,
+  type RandomFill,
+  relayHeadersFor,
+  routeHttp,
   UnknownMachineError,
   type Clock,
   type CredentialStore,
@@ -25,7 +30,7 @@ import {
   type MergedView,
   type SocketFactory,
 } from "../../../../packages/kybern-client/src/machines";
-import { NETWORK_FEATURES, type MachineId, type Project, type Thread, type ThreadActivitySummary } from "../../../../packages/kybern-client/src/types";
+import { NETWORK_FEATURES, type MachineId, type Route, type Project, type Thread, type ThreadActivitySummary } from "../../../../packages/kybern-client/src/types";
 import { verifyMachineProof } from "./proof";
 import { isLegacyMachineId, routeUrl } from "./records";
 
@@ -50,6 +55,11 @@ export interface MachineHubOptions {
   cache?: MachineCache;
   /** This device's id for `network.client_grant`. */
   deviceId: string;
+  /**
+   * The phone's secure random source (expo-crypto). Hermes has no `globalThis.crypto`, so without it the identity
+   * check's nonce cannot be made and no machine but the paired one ever connects.
+   */
+  randomFill?: RandomFill;
   /** The socket other machines open (the native one on a phone). */
   socket?: SocketFactory;
   /** Replaces the sockets of non-primary machines (tests). */
@@ -72,6 +82,79 @@ interface Primary {
 
 const LIVE = new Set(["online", "relaying", "needs-update"]);
 
+/** A page of another machine: what the WebView loads, the prefix that stays in it, and how to give it back. */
+export type MachinePage = DaemonPage & {
+  /** Set for a relayed page: the ticket root on the relay member. A direct page's scope is its own ticket root. */
+  scope?: string;
+};
+
+/** The relay member a page of a relayed machine goes through. */
+export interface RelayPageHost {
+  name: string;
+  /** The member announces `relay.page.v1`. */
+  hasRelayPages: boolean;
+  /** The member's client; throws `OfflineError` while it is offline. */
+  client(): KybernClient;
+}
+
+export interface MachineClientDeps {
+  /** The native socket (it takes the relay headers as a third argument). */
+  socket?: SocketFactory;
+  /** The relay member of a relay route, by machine id. */
+  relayPages?(viaId: MachineId): RelayPageHost | undefined;
+}
+
+/**
+ * The client of a machine this phone is not at, for the route the set chose. A relay route sends the
+ * relay member's token beside the machine's own on the socket and on HTTP, and opens pages through a
+ * ticket on the member, because a WebView cannot send that header.
+ */
+export function createMachineClient(
+  args: { record: MachineRecord; route: Route; token: string; relayToken?: string },
+  deps: MachineClientDeps = {},
+): KybernClient {
+  const { record, route, token, relayToken } = args;
+  const legacy = isLegacyMachineId(record.machineId);
+  const relay = route.kind === "relay";
+  const relayHeaders = relay ? relayHeadersFor(relayToken) : undefined;
+  if (relay && (!relayHeaders || !deps.socket)) throw new Error("A relay route needs the relay member's token and a native socket");
+  const socket: SocketFactory | undefined =
+    deps.socket && relayHeaders ? (url, bearer) => deps.socket!(url, bearer, relayHeaders) : deps.socket;
+  const url = normalizeDaemonUrl(route.url);
+  const http = routeHttp(route, relayToken);
+  const options: ClientOptions = {
+    ...(legacy ? {} : { expectedEnvironmentId: record.machineId }),
+    http,
+    ...(socket ? { createSocket: socket, probeAuth: () => probeAuth(url, token, relayHeaders, relay) } : {}),
+    ...(relay ? { pageRelay: relayPageOpener(record, route, http.base, deps) } : {}),
+  };
+  return new KybernClient({ url, token, ...(legacy ? {} : { environmentId: record.machineId }) }, options);
+}
+
+function relayPageOpener(record: MachineRecord, route: Route, base: string, deps: MachineClientDeps): PageRelay {
+  return async (upstream) => {
+    const host = route.via ? deps.relayPages?.(route.via) : undefined;
+    if (!host) throw new Error(`Unable to open this page through your network. Reconnect ${record.name}, then try again.`);
+    if (!host.hasRelayPages) throw new Error(`Update Kybern on ${host.name} to open pages from ${record.name} through it.`);
+    if (!upstream.startsWith(base)) throw new Error("Unable to open this page. Try again.");
+    const path = upstream.slice(base.length);
+    const via = host.client();
+    const opened = await via.call("network.relay_page.open", { machine_id: record.machineId, path });
+    // The relay base is `<member>/relay/<id>`: the page lives on the member itself.
+    const memberBase = httpBase(route.url).replace(/\/relay\/[^/]+$/, "");
+    const page: MachinePage = {
+      url: `${memberBase}${opened.path}`,
+      scope: `${memberBase}${opened.scope}`,
+      close() {
+        void via.call("network.relay_page.close", { ticket: opened.ticket }).catch(() => {});
+      },
+    };
+    return page;
+  };
+}
+
+
+
 export class MachineHub {
   readonly set: MachineSet;
   private readonly options: MachineHubOptions;
@@ -93,7 +176,11 @@ export class MachineHub {
       verifyProof: verifyMachineProof,
       cache: options.cache ?? new MachineCache(),
       ...(options.socket ? { socket: options.socket } : {}),
-      transport: { ...options.transport, createClient: (args) => this.createClient(args) },
+      transport: {
+        ...options.transport,
+        ...(!options.transport?.nonce && options.randomFill ? { nonce: () => randomNonce(options.randomFill) } : {}),
+        createClient: (args) => this.createClient(args),
+      },
       ...(options.clock ? { clock: options.clock } : {}),
     });
     this.set.onChange((event) => this.onSetChange(event));
@@ -255,6 +342,13 @@ export class MachineHub {
   /** A machine's client (throws `OfflineError` while it cannot be reached). */
   clientFor(machineId: MachineId): KybernClient { return this.set.clientFor(machineId); }
 
+  /** A machine's client while it can be reached, else null (nothing to build a request or open a page on). */
+  liveClientFor(machineId: MachineId): KybernClient | null {
+    const connection = this.set.connection(machineId);
+    if (!connection || !LIVE.has(connection.status)) return null;
+    return this.set.clientFor(machineId);
+  }
+
   /**
    * The client of the machine that owns a thread. Thread ids are unique per
    * machine only, so pass `machineId` when the caller has it; an unlisted thread
@@ -344,16 +438,14 @@ export class MachineHub {
 
   private createClient(args: Parameters<MachineTransport["createClient"]>[0]) {
     if (this.options.transport?.createClient) return this.options.transport.createClient(args);
-    const { record, route, token } = args;
-    const legacy = isLegacyMachineId(record.machineId);
-    const base: ClientOptions = {
-      ...(this.options.socket ? { createSocket: this.options.socket } : {}),
-      ...(legacy ? {} : { expectedEnvironmentId: record.machineId }),
-    };
-    return new KybernClient(
-      { url: normalizeDaemonUrl(route.url), token, ...(legacy ? {} : { environmentId: record.machineId }) },
-      base,
-    );
+    return createMachineClient(args, {
+      ...(this.options.socket ? { socket: this.options.socket } : {}),
+      relayPages: (viaId) => {
+        const via = this.set.connection(viaId);
+        if (!via) return undefined;
+        return { name: via.record.name, hasRelayPages: via.features.has(NETWORK_FEATURES.relayPage), client: () => this.set.clientFor(viaId) };
+      },
+    });
   }
 
   private onSetChange(event: MachineSetEvent) {

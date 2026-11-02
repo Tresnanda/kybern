@@ -8,7 +8,6 @@
 #![cfg(unix)]
 
 use std::collections::HashMap;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -66,8 +65,7 @@ impl LoginSource for Scripted {
 
 fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
     let path = dir.join(name);
-    std::fs::write(&path, body).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    kybern_protocol::process::write_executable(&path, body).unwrap();
     path
 }
 
@@ -150,7 +148,11 @@ async fn claude_runs_on_the_lent_token_and_a_rejected_one_fails_the_turn() {
     session.send_message("m1", &UserMessage::text("hello")).await.unwrap();
     assert!(matches!(next_turn_end(&mut events).await, DriverEvent::TurnCompleted { .. }));
     assert_eq!(read(&out, "token"), "tok-A", "the harness got the lent token");
-    assert_eq!(read(&out, "other"), "unset|unset|unset", "the handle never reaches the harness, and the hot swap is off by default");
+    assert_eq!(
+        read(&out, "other"),
+        "unset|unset|kybern",
+        "the handle never reaches the harness, the hot swap is off by default, and requests are labelled as Kybern"
+    );
 
     // The broker rotated: the token the process holds is no longer valid, and the turn fails with Claude's words.
     std::fs::write(out.join("valid"), "tok-B").unwrap();

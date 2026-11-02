@@ -55,11 +55,9 @@ exit 0
 const REVOKED: &str = "Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator.";
 
 fn write_fake_claude(dir: &Path) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
     std::fs::create_dir_all(dir).unwrap();
     let path = dir.join("claude");
-    std::fs::write(&path, FAKE_CLAUDE).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    kybern_protocol::process::write_executable(&path, FAKE_CLAUDE).unwrap();
     path
 }
 
@@ -846,11 +844,9 @@ async fn codex_is_lent_as_an_access_token_without_its_refresh_token() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn omp_is_pointed_at_the_brokers_own_broker_and_fallback_unsets_both_variables() {
-    use std::os::unix::fs::PermissionsExt;
     let Some(l) = lending().await else { return };
     let omp = l.cluster.dir.path().join("bin").join("omp");
-    std::fs::write(&omp, FAKE_OMP).unwrap();
-    std::fs::set_permissions(&omp, std::fs::Permissions::from_mode(0o755)).unwrap();
+    kybern_protocol::process::write_executable(&omp, FAKE_OMP).unwrap();
     let mut settings = l.c.state.settings.get();
     let provider = settings.providers.entry(ProviderKind::Omp).or_default();
     provider.binary = Some(omp.to_string_lossy().into_owned());

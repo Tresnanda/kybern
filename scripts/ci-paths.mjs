@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 const all = { rust: true, release: true, gpuix: true }
 const self = /^(\.github\/(workflows\/ci\.yml|actions\/setup-pnpm-apps\/)|scripts\/ci-paths\.(mjs|test\.mjs)$)/
 const paths = {
-  rust: /^(crates\/|fixtures\/|Cargo\.(toml|lock)$|rust(-toolchain|fmt)\.toml$|\.cargo\/)/,
+  rust: /^(crates\/|fixtures\/|Cargo\.(toml|lock)$|rust(-toolchain|fmt)\.toml$|\.cargo\/|\.config\/nextest\.toml$|scripts\/report-flaky-tests\.mjs$)/,
   release: /^(scripts\/|\.github\/|dist-workspace\.toml$|Cargo\.toml$|crates\/kybern\/dist\.toml$|crates\/kybern-drivers\/src\/cursor\/sdk\/)/,
   gpuix: /^(apps\/gpuix\/|packages\/|assets\/release-background\.png$|fixtures\/|crates\/kybern-daemon\/src\/visuals\/)/,
 }
@@ -14,6 +14,22 @@ const paths = {
 export function affectedJobs(files) {
   if (files.some(file => self.test(file))) return { ...all }
   return Object.fromEntries(Object.entries(paths).map(([job, pattern]) => [job, files.some(file => pattern.test(file))]))
+}
+
+// Root Cargo.toml with its `[workspace.package]` version blanked, and Cargo.lock without the
+// versions of the workspace's own packages (the ones with no `source`). Equal results mean a
+// change only bumped the workspace version, as scripts/release.sh does.
+export function withoutWorkspaceVersion(file, text) {
+  if (file === 'Cargo.toml') {
+    workspaceVersion(text)
+    return text.replace(/(^\[workspace\.package\][ \t]*\r?\n(?:(?!\[)[^\n]*\n)*?)version\s*=\s*"[^"]+"/m, '$1version = ""')
+  }
+  if (file === 'Cargo.lock') {
+    return text.split(/(?=^\[\[package\]\]$)/m)
+      .map(block => block.startsWith('[[package]]') && !/^source = /m.test(block) ? block.replace(/^version = "[^"]+"$/m, 'version = ""') : block)
+      .join('')
+  }
+  throw new Error(`Not a workspace manifest: ${file}`)
 }
 
 export function workspaceVersion(manifest) {
@@ -27,6 +43,20 @@ const command = (bin, args) => execFileSync(bin, args, {
   encoding: 'utf8', timeout: 60_000, maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
 })
 
+// Whether a pull request changes `file` (root Cargo.toml or Cargo.lock) only in the workspace version,
+// comparing the base branch's tip with the pull request's head. Anything unclear counts as a change.
+function versionOnly(file, event, repository, run) {
+  if (!['Cargo.toml', 'Cargo.lock'].includes(file)) return false
+  const shas = [event.pull_request?.base?.sha, event.pull_request?.head?.sha]
+  if (!shas.every(sha => /^[0-9a-f]{40}$/.test(sha ?? ''))) return false
+  try {
+    const [base, head] = shas.map(sha => run('gh', ['api', '-H', 'Accept: application/vnd.github.raw', `repos/${repository}/contents/${file}?ref=${sha}`]))
+    return base !== head && withoutWorkspaceVersion(file, base) === withoutWorkspaceVersion(file, head)
+  } catch {
+    return false
+  }
+}
+
 export function selectJobs(eventName, event, repository, run = command) {
   if (eventName === 'workflow_dispatch') return { ...all }
   try {
@@ -38,7 +68,10 @@ export function selectJobs(eventName, event, repository, run = command) {
         `repos/${repository}/pulls/${event.number}/files?per_page=100`])).flat()
       // GitHub caps this endpoint at 3,000 files. Never filter a truncated list.
       if (files.length >= 3000) return { ...all }
-      return affectedJobs(files.flatMap(file => [file.filename, file.previous_filename].filter(Boolean)))
+      const names = files.flatMap(file => [file.filename, file.previous_filename].filter(Boolean))
+      // A version bump needs no jobs of its own here: its push to main runs the full suite that the
+      // release gate requires (below). Everything else in the pull request is filtered as usual.
+      return affectedJobs(names.filter(name => !versionOnly(name, event, repository, run)))
     }
     if (eventName !== 'push' || event.ref !== 'refs/heads/main') throw new Error('Unexpected CI event')
     const { before, after } = event

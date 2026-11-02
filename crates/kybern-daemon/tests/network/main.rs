@@ -21,13 +21,27 @@ use kybern_protocol::NetworkClientGrantParams;
 use kybern_protocol::methods::{DaemonInfoMethod, Empty, NetworkClientGrant, NetworkStatusMethod};
 use serde_json::{Value, json};
 
-/// Second octet of this test run's loopback block; tests in one process never share one.
 static NEXT_BLOCK: AtomicU32 = AtomicU32::new(0);
 
-fn block() -> u32 {
-    // A different block per test binary run keeps stray daemons from an earlier run apart.
-    let base = 20 + (std::process::id() % 200);
-    base + NEXT_BLOCK.fetch_add(1, Ordering::SeqCst) % 30
+/// The second octet of a loopback block no other test holds, and the listener on
+/// `127.<block>.0.254` that holds it until dropped: nextest runs every test in its own process, so
+/// a counter alone would give each the same block. The same lease as `lease_block` in
+/// `src/network/harness.rs`, on blocks 200 and up, which the in-process clusters never use.
+fn block() -> (u32, Option<std::net::TcpListener>) {
+    const LEASE_PORT: u16 = 4169;
+    const BLOCKS: u32 = 55;
+    // A different start per process keeps stray daemons from an earlier run apart too.
+    let start = std::process::id().wrapping_add(NEXT_BLOCK.fetch_add(1, Ordering::SeqCst));
+    for offset in 0..BLOCKS {
+        let block = 200 + start.wrapping_add(offset) % BLOCKS;
+        match std::net::TcpListener::bind((format!("127.{block}.0.254").as_str(), LEASE_PORT)) {
+            Ok(lease) => return (block, Some(lease)),
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => continue,
+            // No `.254` alias (macOS): unleased, and skipped below unless `.2` is aliased.
+            Err(_) => return (200 + start % BLOCKS, None),
+        }
+    }
+    panic!("every loopback block from 200 is leased by another test")
 }
 
 fn aliases_available(block: u32) -> bool {
@@ -185,7 +199,7 @@ async fn well_known(base: &str) -> Value {
 
 #[tokio::test]
 async fn a_started_daemon_lists_the_network_features_and_proves_its_identity_on_the_tailnet_address() {
-    let block = block();
+    let (block, _lease) = block();
     if !aliases_available(block) {
         eprintln!("skipped: no 127.{block}.0.2 loopback alias");
         return;
@@ -214,7 +228,7 @@ async fn a_started_daemon_lists_the_network_features_and_proves_its_identity_on_
 
 #[tokio::test]
 async fn the_network_listener_coexists_with_a_loopback_daemon_on_the_same_port_number() {
-    let block = block();
+    let (block, _lease) = block();
     if !aliases_available(block) {
         eprintln!("skipped: no 127.{block}.0.2 loopback alias");
         return;
@@ -250,7 +264,7 @@ async fn the_network_listener_coexists_with_a_loopback_daemon_on_the_same_port_n
 
 #[tokio::test]
 async fn a_second_daemon_on_the_same_computer_says_why_it_is_not_on_the_network() {
-    let block = block();
+    let (block, _lease) = block();
     if !aliases_available(block) {
         eprintln!("skipped: no 127.{block}.0.2 loopback alias");
         return;
@@ -309,7 +323,7 @@ fn machines_cli(dir: &Path, args: &[&str]) -> (bool, String) {
 
 #[tokio::test]
 async fn two_started_daemons_of_one_user_join_and_the_cli_lists_checks_and_removes_them() {
-    let block = block();
+    let (block, _lease) = block();
     if !aliases_available(block) {
         eprintln!("skipped: no 127.{block}.0.2 loopback alias");
         return;

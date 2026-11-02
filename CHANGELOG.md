@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.21.1
+
+<!-- kybern-release-title: Clearer model picker and agent settings -->
+<!-- kybern-release-summary: Antigravity's Gemini models get an effort slider, the model picker fits every agent, and Settings says what each agent actually needs. -->
+
+- Antigravity lists Gemini 3.8 Flash once, with a Low, Medium and High effort slider, instead of one model per level. Threads that picked a level before keep working and follow the slider.
+- The model picker fits every agent beside a selected account's name, so the Antigravity tab no longer slides under the reload button. With more agents than fit, the strip scrolls.
+- Choosing an agent that isn't set up in the model picker opens its setup in Settings, and an account that needs signing in opens the sign-in sheet. Before, nothing happened.
+- Settings → Agent providers says what is true for each agent: where it runs from, when its update was last checked, or why it can't run. Cursor shows an older installed SDK as an update with an Update SDK button, rather than as not installed. "Update now" is now "Check for updates", and appears only where Kybern can run the agent's updater. The list follows a running update on its own, so the Refresh row is gone.
+- Kybern tools for Antigravity are on by default for new installs. Turning them off still removes Kybern's entry from Antigravity's MCP servers.
+
+## 0.21.0
+
+<!-- kybern-release-title: Antigravity, and computer use on Windows and Linux -->
+<!-- kybern-release-summary: Run Google's Antigravity as an agent, let agents use apps on Windows and Linux, and reach every machine in your network from the mobile app. -->
+
+- Antigravity joins Kybern as an agent. Kybern runs Google's `agy` CLI, streams its replies and tool calls, resumes conversations, lists its models and shows its usage limits. Antigravity runs only in Full access, and the composer says so. Sign in with a Gemini API key, or with Google after a notice: Google says using Antigravity through other apps on a personal plan may get the account suspended. Turn on Kybern tools in Settings → Agent providers → Antigravity to give its conversations notes, tasks, delegation and computer use. Onboarding offers it with the official install command.
+- Agents can use apps on Windows and Linux through agent-desktop, which Kybern installs and checks for you. On a Mac, agent-desktop is an alternative to CuaDriver: choose it in Settings → Computer use → Driver. Linux supports GNOME on X11 and Wayland; KDE and other desktops are best effort and need assistive technologies turned on. Conversations on a machine without computer use can use the apps on another machine in your network. Codex gets Kybern's computer tools on Linux, where OpenAI's plugin isn't available.
+- Claude Code conversations identify as Kybern, instead of using the label that others measured using up the 5-hour limit about twice as fast for the same tokens.
+- The mobile app reaches every machine in your network. Machines that are only reachable through a relay now connect, along with their images, attachments, uploads, previews, visuals and artifacts. The mobile update needs your machines on 0.21.0.
+- On mobile, Settings → Machines can rename and pause machines, check the network, update all machines, retry or cancel queued messages, and show each machine's specs and agents. Threads say which machine they run on, and offer Fork to and Continue on another machine, including setting up the project there.
+- The mobile app connects to machines other than the one it's paired with. Since 0.20.0 it couldn't: those machines always showed as offline. If the paired computer isn't answering, another of your saved computers can show your network instead.
+- The iPad sidebar is compact again, with smaller rows, filter chips and Settings in the footer.
+
+## 0.20.6
+
+<!-- kybern-release-title: A tidier Pull requests header -->
+<!-- kybern-release-summary: The Pull requests and Actions headers keep their tabs readable in a narrow list, and Kybern's release builds move to GitHub's macOS 15 machines. -->
+
+- In a narrow list column, the project and repository pickers no longer cover the Actions tab. Below the default width they become a folder button that opens the same menu, sized and spaced like the buttons beside it, and the list column's minimum width is now 304 pt.
+- The run-workflow button's triangle is balanced with the icons beside it.
+- Kybern's Apple Silicon builds use GitHub's macOS 15 machines, ahead of macOS 14's retirement.
+- An Indonesian README with a language switcher, thanks to @gianabif14. The Android APK links in both READMEs point to the GitHub release.
+
 ## 0.20.5
 
 <!-- kybern-release-title: GitHub Actions in Kybern -->

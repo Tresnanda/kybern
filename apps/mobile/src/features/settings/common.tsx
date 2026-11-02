@@ -55,6 +55,7 @@ export function ToggleRow({
     <ListRow
       title={title}
       subtitle={subtitle}
+      subtitleLines={3}
       leading={leading}
       label={`${title}, ${value ? "on" : "off"}`}
       trailing={

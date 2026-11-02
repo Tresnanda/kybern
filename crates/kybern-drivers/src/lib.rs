@@ -6,6 +6,7 @@
 //! and turns [`DriverEvent`]s into persisted thread events.
 
 pub mod account_auth;
+pub mod antigravity;
 pub mod binary;
 #[cfg(test)]
 mod test_process;
@@ -72,7 +73,7 @@ use tokio::sync::mpsc;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DriverError {
-    #[error("provider binary not found: {0}")]
+    #[error("{0} isn’t installed or isn’t on PATH")]
     BinaryNotFound(String),
     #[error("provider version {found} is older than required {required}")]
     VersionTooOld { found: String, required: String },
@@ -579,7 +580,7 @@ pub fn summarize_tool_call(name: &str, input: &Value) -> String {
 #[cfg(all(test, unix))]
 mod lifecycle_tests {
     use super::*;
-    use std::{os::unix::fs::PermissionsExt, time::Duration};
+    use std::time::Duration;
 
     #[test]
     fn native_bridge_debug_redacts_session_capability() {
@@ -632,17 +633,16 @@ mod lifecycle_tests {
             // A live descendant announces readiness and cannot expire during
             // the assertion. Cleanup is tested directly, not against a touch
             // racing an 80 ms startup timeout on a loaded CI runner.
-            std::fs::write(
-                &binary,
-                "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 0.80.5; exit 0; fi\nsleep 300 &\nchild=$!\nprintf '%s %s' \"$$\" \"$child\" > ready.tmp\nmv ready.tmp ready\ncat >/dev/null\nwait\n",
-            )
-            .unwrap();
-            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+            kybern_protocol::process::write_executable(&binary, "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 0.80.5; exit 0; fi\nsleep 300 &\nchild=$!\nprintf '%s %s' \"$$\" \"$child\" > ready.tmp\nmv ready.tmp ready\ncat >/dev/null\nwait\n").unwrap();
             let config = SessionConfig {
                 cwd: root.path().into(),
                 model: None,
                 effort: None,
-                permission_mode: if kind == ProviderKind::Cursor { PermissionMode::Auto } else { PermissionMode::Supervised },
+                permission_mode: match kind {
+                    ProviderKind::Cursor => PermissionMode::Auto,
+                    ProviderKind::Antigravity => PermissionMode::FullAccess,
+                    _ => PermissionMode::Supervised,
+                },
                 native_tool_bridge: None,
                 resume_session_id: None,
                 resume_lacks_instructions: false,
@@ -656,16 +656,39 @@ mod lifecycle_tests {
                 },
             };
             let driver = registry.get(kind).unwrap();
-            let mut startup = Box::pin(driver.spawn(config));
+            let mut startup = Box::pin(driver.spawn(config.clone()));
             let mut session = None;
             let ready = root.path().join("ready");
+            // Linux refuses to run a file that another test's freshly forked child still holds open
+            // for writing (ETXTBSY) until that child execs, so a busy fixture starts again.
+            let mut busy_retries = 0;
             tokio::time::timeout(Duration::from_secs(10), async {
                 while !ready.exists() {
+                    let mut busy = false;
                     tokio::select! {
                         result = &mut startup, if session.is_none() => {
-                            session = Some(result.unwrap_or_else(|error| panic!("{kind} fixture startup failed: {error}")));
+                            let spawned = match result {
+                                Err(DriverError::Io(error)) if error.kind() == std::io::ErrorKind::ExecutableFileBusy && busy_retries < 50 => {
+                                    busy = true;
+                                    None
+                                }
+                                result => Some(result.unwrap_or_else(|error| panic!("{kind} fixture startup failed: {error}"))),
+                            };
+                            if let Some(spawned) = spawned {
+                                // Antigravity starts one process per turn, so its session is
+                                // lazy: a message starts the process this test then drops.
+                                if kind == ProviderKind::Antigravity {
+                                    spawned.session.send_message("fixture", &UserMessage::text("hello")).await.unwrap();
+                                }
+                                session = Some(spawned);
+                            }
                         }
                         _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+                    }
+                    if busy {
+                        busy_retries += 1;
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                        startup = Box::pin(driver.spawn(config.clone()));
                     }
                 }
             })

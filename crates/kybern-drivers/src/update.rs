@@ -42,7 +42,9 @@ fn brew_package(kind: ProviderKind, path: &Path) -> Option<(PathBuf, String, boo
 
 pub async fn plan(kind: ProviderKind, binary: &Path, env: &BTreeMap<String, String>, cwd: &Path) -> Result<UpdateCommand> {
     if kind == ProviderKind::Cursor {
-        bail!("Cursor SDK is pinned to this Kybern release. Update Kybern, then run `kybern cursor install`.");
+        bail!(
+            "Each Kybern release uses its own Cursor SDK version. Install or update it under Cursor SDK in Settings → Agent providers, or run `kybern cursor install`."
+        );
     }
     let canonical = std::fs::canonicalize(binary)?;
     let paths = format!("{} {}", binary.display(), canonical.display());
@@ -149,15 +151,13 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn native_updater_uses_arguments_and_reports_failure_without_installing_other_tools() {
-        use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().unwrap();
         let binary = root.path().join("fixture with spaces");
-        std::fs::write(
+        kybern_protocol::process::write_executable(
             &binary,
             "#!/bin/sh\ncase \"$1\" in\n--help) echo '  update  Update the CLI' >&2;;\nupdate) printf done > updated;;\nesac\n",
         )
         .unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
         let env = BTreeMap::new();
         let command = unbusy(|| plan(ProviderKind::Codex, &binary, &env, root.path())).await.unwrap();
         unbusy(|| run(&command, &env, root.path())).await.unwrap();
@@ -184,11 +184,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn timeout_stops_the_launcher_and_its_background_children() {
-        use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().unwrap();
         let binary = root.path().join("updater");
-        std::fs::write(&binary, "#!/bin/sh\n(sleep 0.2; touch escaped) &\nwait\n").unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        kybern_protocol::process::write_executable(&binary, "#!/bin/sh\n(sleep 0.2; touch escaped) &\nwait\n").unwrap();
         let command = UpdateCommand { program: binary, args: vec![] };
         assert!(
             run_with_timeout(&command, &BTreeMap::new(), root.path(), Duration::from_millis(30))

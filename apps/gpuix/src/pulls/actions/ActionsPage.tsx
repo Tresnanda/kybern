@@ -30,7 +30,7 @@ import { prCall } from '../client.ts'
 import { hasPullRequests, isGroup, listableMembers } from '../list/model.ts'
 import { load, save } from '../persist.ts'
 import { PrLoading, Problem } from '../PrStates.tsx'
-import { PullsHeader } from '../PullsTabs.tsx'
+import { FOLDER, HEADER_COMPACT_ACTIONS, PullsHeader } from '../PullsTabs.tsx'
 import { PR_SCROLL_LAYOUT } from '../scroll-layout.ts'
 import { Dispatch } from './Dispatch.tsx'
 import { BEAD_PITCH } from './Beads.tsx'
@@ -47,6 +47,10 @@ const PAGE = 100
 const MAX_RUNS = 300
 const REPO_KEY = 'pulls.actions.repo'
 const PLAY = glyph(PlayIcon)
+/** The triangle fills less of its box than the folder and refresh glyphs beside it; 18 pt matches their visual weight. */
+const PLAY_SIZE = 18
+/** A triangle's visual centre sits left of its box: 1 pt toward its point. */
+const PLAY_NUDGE = { paddingLeft: 2 }
 
 interface Choice extends ActionsRepo { name: string; project: Project }
 
@@ -99,7 +103,7 @@ function ActionsTab() {
   const [dispatching, setDispatching] = useState(false)
   const [selectedActive, setSelectedActive] = useState(false)
   const visible = useWindowVisible()
-  const list = useResize({ initial: 352, min: 288, max: 512, side: 'left', storageKey: 'kybern.pulls.listWidth' })
+  const list = useResize({ initial: 352, min: 304, max: 512, side: 'left', storageKey: 'kybern.pulls.listWidth' })
   const [windowWidth, setWindowWidth] = useState(() => renderer?.getWindowSize?.().width ?? 1280)
   const measure = () => { const size = renderer?.getWindowSize?.(); setWindowWidth(size?.width ?? 1280); if (size?.height) setWindowHeight(size.height) }
   const available = windowWidth - 60 - (peek ? 256 : 0)
@@ -192,8 +196,8 @@ function ActionsTab() {
   return <div {...PR_SCROLL_LAYOUT} testId="page-actions" onMouseMove={measure} style={{ display: 'flex', flexGrow: 1, minHeight: 0, minWidth: 0 }}>
     {showList && <div style={{ ...column, width: wide ? list.width : '100%', flexShrink: 0, position: 'relative', borderRightWidth: wide ? 1 : 0, borderColor: t.border }}>
       <PullsHeader>
-        <RepoPicker choices={choices} current={choice} onPick={pick} />
-        <IconButton testId="actions-dispatch-open" icon={PLAY} label="Run workflow" active={dispatching} onClick={() => { setDispatching(true); setSelected(null) }} />
+        <RepoPicker choices={choices} current={choice} onPick={pick} compact={listWidth < HEADER_COMPACT_ACTIONS} />
+        <IconButton testId="actions-dispatch-open" icon={PLAY} glyph={PLAY_SIZE} style={PLAY_NUDGE} label="Run workflow" active={dispatching} onClick={() => { setDispatching(true); setSelected(null) }} />
         <IconButton testId="actions-refresh" icon={N.refresh} label="Refresh" disabled={pending} onClick={() => refresh(n => n + 1)}><SwapOnChange kind="icon" active={pending ? 'busy' : 'idle'} style={{ width: 16, height: 16 }}>{pending ? <SpinIcon source={N.refresh} size={16} color={t.iconSecondary} /> : <Icon source={N.refresh} size={16} color={t.iconSecondary} />}</SwapOnChange></IconButton>
       </PullsHeader>
       <div style={{ ...column, gap: 8, paddingLeft: 12, paddingRight: 12, paddingTop: 2, paddingBottom: 10 }}>
@@ -239,10 +243,12 @@ function ActionsTab() {
   </div>
 }
 
-function RepoPicker({ choices, current, onPick }: { choices: Choice[]; current: Choice; onPick: (c: ActionsRepo) => void }) {
+function RepoPicker({ choices, current, onPick, compact = false }: { choices: Choice[]; current: Choice; onPick: (c: ActionsRepo) => void; compact?: boolean }) {
   const t = useTheme()
   const groups = [...new Set(choices.filter(c => c.repo).map(c => c.projectId))]
-  return <Menu testId="actions-repo" align="end" width={264} trigger={open => <PickerChip size="sm" open={open} truncate maxWidth={150} label={`Repository: ${current.name}`}>{current.repo ? current.name.split(' / ').pop()! : current.name}</PickerChip>}>
+  return <Menu testId="actions-repo" align="end" width={264} {...(compact ? { rootStyle: { flexShrink: 0 } } : {})} trigger={open => compact
+    ? <IconButton icon={FOLDER} label={`Repository: ${current.name}`} active={open} />
+    : <PickerChip size="sm" open={open} truncate maxWidth={150} label={`Repository: ${current.name}`}>{current.repo ? current.name.split(' / ').pop()! : current.name}</PickerChip>}>
     {choices.filter(c => !c.repo).map(c => <MenuItem key={repoKey(c)} id={repoKey(c)} testId={`actions-repo-${c.projectId}`} label={c.name} iconNode={<Lead on={repoKey(c) === repoKey(current)} color={t.link} />} onSelect={() => onPick(c)} />)}
     {groups.map(id => <div key={id} style={column}>
       <MenuSeparator />

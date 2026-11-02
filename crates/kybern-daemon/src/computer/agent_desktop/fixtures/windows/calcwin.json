@@ -1,0 +1,1 @@
+{"version":"2.5","ok":true,"command":"list-windows","data":[{"accessible":true,"app_name":"CalculatorApp.exe","bounds":{"height":914.0,"width":500.0,"x":1048.0,"y":89.0},"id":"w-4590050","is_focused":true,"minimized":false,"pid":10984,"process_instance":"windows-proc-v1:13437993605:4496544","title":"Calculator","visible":true}]}

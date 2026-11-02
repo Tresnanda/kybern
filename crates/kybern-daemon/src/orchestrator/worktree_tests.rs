@@ -394,7 +394,6 @@ fn worktree_labels_are_valid_folder_names_on_every_platform() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_worktree_that_fails_half_way_can_be_created_again_with_the_same_id() {
-    use std::os::unix::fs::PermissionsExt;
     let mut fixture = Fixture::new();
     init_project_repo(&fixture.root);
     fixture.project.is_git = true;
@@ -402,8 +401,7 @@ async fn a_worktree_that_fails_half_way_can_be_created_again_with_the_same_id() 
     // A failing post-checkout hook: git has made the branch and the folder when it reports the error.
     let hooks = fixture.root.join("hooks");
     std::fs::create_dir_all(&hooks).unwrap();
-    std::fs::write(hooks.join("post-checkout"), "#!/bin/sh\nexit 1\n").unwrap();
-    std::fs::set_permissions(hooks.join("post-checkout"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    kybern_protocol::process::write_executable(&hooks.join("post-checkout"), "#!/bin/sh\nexit 1\n").unwrap();
     run_git(&fixture.root, &["config", "core.hooksPath", &hooks.to_string_lossy()]);
     let thread = fixture.thread(ThreadStatus::Idle);
     assert!(fixture.orchestrator.create_worktree(&fixture.project, thread.id, None).await.is_err());

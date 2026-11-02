@@ -40,7 +40,7 @@ use tokio::sync::broadcast;
 use crate::settings::SettingsStore;
 
 /// Providers with a turn-free way to read the account's limits.
-const LIVE: [ProviderKind; 3] = [ProviderKind::ClaudeCode, ProviderKind::Codex, ProviderKind::Cursor];
+const LIVE: [ProviderKind; 4] = [ProviderKind::ClaudeCode, ProviderKind::Codex, ProviderKind::Cursor, ProviderKind::Antigravity];
 /// Forced reads closer together than this share one result.
 const MIN_SPACING: Duration = Duration::from_secs(10);
 /// A turn ending refreshes its provider only if a client asked this recently.
@@ -692,6 +692,12 @@ impl UsageMonitor {
                 .flatten()
                 .map(|usage| (usage.limits, usage.plan))
                 .ok_or_else(|| unavailable("Cursor reported no usage")),
+            // Read with the token `agy` already refreshed; an expired one reads as stale (`LoginRefresh`).
+            ProviderKind::Antigravity => {
+                tokio::time::timeout(Duration::from_secs(12), kybern_drivers::antigravity::read_account_usage(home, binary.as_ref(), env))
+                    .await
+                    .unwrap_or_else(|_| Err(unavailable("the read timed out")))
+            }
             _ => Err(unavailable("no account limits to read")),
         };
         tracing::debug!(provider = %kind, ok = read.is_ok(), elapsed_ms = started.elapsed().as_millis() as u64, "read account limits");

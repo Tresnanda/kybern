@@ -316,14 +316,9 @@ mod tests {
 
     #[cfg(unix)]
     fn executable_script(contents: &str) -> (tempfile::TempDir, std::path::PathBuf) {
-        use std::os::unix::fs::PermissionsExt;
-
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("fake-pi");
-        std::fs::write(&path, contents).unwrap();
-        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
-        permissions.set_mode(0o700);
-        std::fs::set_permissions(&path, permissions).unwrap();
+        kybern_protocol::process::write_executable(&path, contents).unwrap();
         (directory, path)
     }
 

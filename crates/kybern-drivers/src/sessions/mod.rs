@@ -34,6 +34,11 @@ pub struct SessionHistory {
     pub events: Vec<ThreadEvent>,
 }
 
+/// Antigravity's conversations live in its own store; reading them is a follow-up.
+fn no_saved_sessions() -> DriverError {
+    DriverError::Unsupported("saved Antigravity conversations can't be imported yet".into())
+}
+
 pub async fn list(kind: ProviderKind, context: &ProbeContext, cursor: Option<&str>, query: &str) -> Result<SessionsListResult> {
     match kind {
         ProviderKind::ClaudeCode => claude::list(context, cursor, query).await,
@@ -41,6 +46,7 @@ pub async fn list(kind: ProviderKind, context: &ProbeContext, cursor: Option<&st
         ProviderKind::Opencode => opencode::list(context, cursor, query).await,
         ProviderKind::Pi | ProviderKind::Omp => pi::list(kind, context, cursor, query).await,
         ProviderKind::Cursor => cursor::list(context, cursor, query).await,
+        ProviderKind::Antigravity => Err(no_saved_sessions()),
     }
 }
 
@@ -54,6 +60,7 @@ pub async fn read(kind: ProviderKind, context: &ProbeContext, id: &str) -> Resul
         ProviderKind::Opencode => opencode::read(context, id).await,
         ProviderKind::Pi | ProviderKind::Omp => pi::read(kind, context, id).await,
         ProviderKind::Cursor => cursor::read(context, id).await,
+        ProviderKind::Antigravity => Err(no_saved_sessions()),
     }
 }
 
@@ -78,6 +85,7 @@ pub async fn reader(kind: ProviderKind, context: &ProbeContext) -> Result<Box<dy
         ProviderKind::Codex => Box::new(codex::Reader { rpc: codex::connect(context).await?, context: context.clone() }),
         ProviderKind::Opencode => Box::new(opencode::Reader::start(context).await?),
         ProviderKind::Cursor => Box::new(cursor::Reader::new(context)),
+        ProviderKind::Antigravity => return Err(no_saved_sessions()),
     })
 }
 

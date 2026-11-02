@@ -1,0 +1,1 @@
+{"version":"2.5","ok":false,"command":"press","error":{"code":"APP_NOT_FOUND","message":"Application 'CalculatorApp.exe' was not found with exact process identity","suggestion":"Application name as reported by list-apps","disposition":{"delivery":"not_delivered","retry":"safe"}}}
