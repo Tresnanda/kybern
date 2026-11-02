@@ -4,8 +4,9 @@
  *
  *   KYBERN_DATA_DIR=<scratch daemon> KYBERN_STAR_GH=<dir> bun src/shell/verify.star-prompt.ts [--light]
  *
- * The scratch daemon runs with a fake `gh` first on its PATH that logs to `<dir>/gh.log` and answers per `<dir>/gh.mode`
- * (`notstarred` | `unauth`). Nothing reaches GitHub. `KYBERN_VERIFY_OUTPUT=<dir>` saves screenshots.
+ * `<dir>/gh` is a fake `gh` that logs to `<dir>/gh.log` and answers per `<dir>/gh.mode` (`notstarred` | `unauth`). It
+ * leads the app's PATH, so a daemon the app starts finds it; a scratch daemon already running must have it first on its
+ * own PATH. Nothing reaches GitHub. `KYBERN_VERIFY_OUTPUT=<dir>` saves screenshots.
  */
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -38,10 +39,10 @@ async function session(ghMode: 'notstarred' | 'unauth', drive: (s: { a: Awaited<
   rmSync(path.join(gh, 'gh.log'), { force: true })
   rmSync(config, { recursive: true, force: true })
   mkdirSync(config, { recursive: true })
-  const f = await launchFixture(path.join(import.meta.dir, '../main.tsx'), { KYBERN_WINDOW_SIZE: '1120x760', KYBERN_APPEARANCE: mode, KYBERN_STAR_PROMPT: 'force', KYBERN_CLIENT_CONFIG_DIR: config, KYBERN_OPEN_URL_LOG: opened, KYBERN_URL: '' })
+  const f = await launchFixture(path.join(import.meta.dir, '../main.tsx'), { KYBERN_WINDOW_SIZE: '1120x760', KYBERN_APPEARANCE: mode, KYBERN_STAR_PROMPT: 'force', KYBERN_CLIENT_CONFIG_DIR: config, KYBERN_OPEN_URL_LOG: opened, KYBERN_URL: '', PATH: `${gh}${path.delimiter}${process.env.PATH ?? ''}` })
   const a = f.app
   const painted = async () => (await a.call('getPaintedText', {})).text.join('\n')
-  const until = async (re: RegExp) => { const end = Date.now() + 10000; while (Date.now() < end) { if (re.test(await painted())) return; await Bun.sleep(150) } assert.fail(`never painted ${re}`) }
+  const until = async (re: RegExp) => { const end = Date.now() + 10000; while (Date.now() < end) { if (re.test(await painted())) return; await Bun.sleep(150) } assert.fail(`never painted ${re}: ${(await painted()).slice(-400)}`) }
   const shot = async (name: string) => { if (out) await a.screenshot({ path: path.join(out, `${name}-${mode}.png`) }) }
   try {
     await a.getByTestId('app-ready').waitFor({ timeoutMs: 60000 })
