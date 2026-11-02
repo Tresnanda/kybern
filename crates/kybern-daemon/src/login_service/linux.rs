@@ -71,16 +71,16 @@ fn drop_ins(unit: &Path) -> Vec<String> {
 /// The units of Kybern's own that start `data_dir`'s daemon and need the OOM drop-in. Units of other
 /// data folders are left to their own daemons.
 fn units_missing_oom_policy(data_dir: &Path) -> Vec<PathBuf> {
-    let dir = data_dir.to_string_lossy();
-    let Ok(dir) = units_dir() else { return Vec::new() };
-    let Ok(entries) = std::fs::read_dir(&dir) else { return Vec::new() };
+    let data_dir = data_dir.to_string_lossy();
+    let Ok(units) = units_dir() else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(&units) else { return Vec::new() };
     entries
         .flatten()
         .map(|entry| entry.path())
         .filter(|path| path.extension().is_some_and(|ext| ext == "service"))
         .filter(|path| {
             std::fs::read_to_string(path)
-                .is_ok_and(|unit| files::starts_data_dir(&unit, &dir) && files::needs_oom_drop_in(&unit, &drop_ins(path)))
+                .is_ok_and(|unit| files::starts_data_dir(&unit, &data_dir) && files::needs_oom_drop_in(&unit, &drop_ins(path)))
         })
         .collect()
 }
