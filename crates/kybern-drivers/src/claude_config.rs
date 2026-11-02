@@ -133,7 +133,24 @@ fn config_dir(context: &ProbeContext) -> Option<PathBuf> {
 /// the Keychain. Windows Credential Manager logins (behind a Claude Code flag)
 /// are not read and count as not due.
 pub(crate) async fn login_needs_refresh(context: &ProbeContext) -> bool {
-    let Some(expires_at) = stored_login(context).await.as_deref().and_then(login_expiry) else { return false };
+    stored_login(context).await.as_deref().and_then(login_expiry).is_some_and(refresh_due)
+}
+
+/// Claude Code's stored OAuth login (`claudeAiOauth`) when starting Claude
+/// Code would redeem its refresh token: the login is due for a refresh and
+/// holds one. `claude auth status` can redeem it and exit before saving the
+/// replacement, which loses the login (#107), so informational probes read
+/// this instead of running Claude Code.
+pub(crate) async fn login_due_for_refresh(context: &ProbeContext) -> Option<Value> {
+    let login = decode_login(&stored_login(context).await?)?;
+    let oauth = login.get("claudeAiOauth")?;
+    let due = oauth.get("expiresAt").and_then(Value::as_u64).is_some_and(refresh_due);
+    (due && non_empty_string(oauth.get("refreshToken")).is_some()).then(|| oauth.clone())
+}
+
+/// Whether an access token expiring at `expires_at` (Unix milliseconds) is
+/// inside Claude Code's five-minute refresh margin.
+fn refresh_due(expires_at: u64) -> bool {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |now| now.as_millis() as u64);
     now + 5 * 60 * 1000 >= expires_at
 }
@@ -236,6 +253,10 @@ fn managed_settings_path(context: &ProbeContext) -> Option<PathBuf> {
 }
 
 async fn account_default_model(context: &ProbeContext, binary: &Path) -> Option<String> {
+    // The stored login carries the plan, so a login that is due never runs `auth status`.
+    if let Some(oauth) = login_due_for_refresh(context).await {
+        return account_default_from_status(&oauth);
+    }
     let mut command = Command::new(binary).no_window();
     command.args(["auth", "status", "--json"]).env_remove("NODE_OPTIONS");
     if let Some(cwd) = context.cwd.as_deref() {
@@ -350,6 +371,37 @@ mod tests {
         assert!(login_needs_refresh(&context).await);
         std::fs::write(&credentials, "{").unwrap();
         assert!(!login_needs_refresh(&context).await, "unreadable credentials");
+    }
+
+    #[tokio::test]
+    async fn a_login_due_for_refresh_infers_the_default_model_without_running_claude() {
+        let temp = tempfile::tempdir().unwrap();
+        let context = ProbeContext {
+            binary: None,
+            cwd: None,
+            env: [("CLAUDE_CONFIG_DIR".to_string(), temp.path().to_string_lossy().into_owned())].into(),
+        };
+        // Not a program: running it fails, so a default can only come from the stored login.
+        let binary = temp.path().join("claude.txt");
+        std::fs::write(&binary, "not a program").unwrap();
+        let credentials = temp.path().join(".credentials.json");
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+        let write = |oauth: Value| std::fs::write(&credentials, serde_json::json!({ "claudeAiOauth": oauth }).to_string()).unwrap();
+
+        write(serde_json::json!({ "accessToken": "a", "refreshToken": "r", "expiresAt": now - 1, "subscriptionType": "max" }));
+        assert_eq!(login_due_for_refresh(&context).await.unwrap()["subscriptionType"], "max");
+        assert_eq!(account_default_model(&context, &binary).await.as_deref(), Some("opus"));
+
+        write(serde_json::json!({ "accessToken": "a", "refreshToken": "r", "expiresAt": now + 60 * 1000, "subscriptionType": "pro" }));
+        assert_eq!(account_default_model(&context, &binary).await.as_deref(), Some("sonnet"), "inside the refresh margin");
+
+        let later = now + 8 * 60 * 60 * 1000;
+        write(serde_json::json!({ "accessToken": "a", "refreshToken": "r", "expiresAt": later, "subscriptionType": "max" }));
+        assert!(login_due_for_refresh(&context).await.is_none());
+        assert_eq!(account_default_model(&context, &binary).await, None, "a login that is not due still asks Claude Code");
+
+        write(serde_json::json!({ "accessToken": "a", "expiresAt": now - 1, "subscriptionType": "max" }));
+        assert!(login_due_for_refresh(&context).await.is_none(), "no refresh token to lose");
     }
 
     #[test]
