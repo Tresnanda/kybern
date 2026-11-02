@@ -1673,7 +1673,10 @@ impl Orchestrator {
             model: session.model,
             effort: None,
             provider: ProviderInstance { kind: session.provider, instance: instance.clone() },
-            permission_mode: if session.id.starts_with("cursor-sdk:") {
+            permission_mode: if session.provider == ProviderKind::Antigravity {
+                // Antigravity only runs in Full access; resuming in another mode is refused.
+                PermissionMode::FullAccess
+            } else if session.id.starts_with("cursor-sdk:") {
                 default_provider_permission(session.provider, settings.default_permission_mode)
             } else {
                 settings.default_permission_mode
