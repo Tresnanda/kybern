@@ -391,7 +391,7 @@ export function stoppableDescendants<T extends LineageThread>(rows: readonly Lin
 export function launchState(
   thread: LineageThread | undefined,
   call: { complete: boolean; isError: boolean },
-  record?: Pick<RemoteChild, "state" | "stop_requested" | "info" | "updated_at"> | null,
+  record?: Pick<RemoteChild, "state" | "stop_requested" | "info" | "updated_at" | "completed_at_from_target"> | null,
 ): { phase: ChildPhase; word: string } {
   if (record && remoteRecordWins(thread, record)) return remoteChildState(record);
   if (thread) return childState(thread);
@@ -443,18 +443,23 @@ export function remoteChildState(record: Pick<RemoteChild, "state" | "stop_reque
 /**
  * Whether the record decides over the thread. The delegating machine follows its child itself and keeps following it
  * whatever this app saw, so a record that says the child ended beats a copy of the other machine's list that still
- * says it works and was taken before the end (that copy is stale: its machine went offline here, its events were
- * missed, the app restarted). A copy changed after the end is a child woken again by a message, which the record does
- * not follow: the copy wins, like a copy that says it ended (the record may not have caught up yet). Both times come
- * from the child's machine (`completed_at` is its delegation's).
+ * says it works (that copy is stale: its machine went offline here, its events were missed, the app restarted). A copy
+ * that says it ended wins too (the record may not have caught up yet).
+ *
+ * One exception needs the two clocks to agree: a copy changed after the end is a child woken again by a message, which
+ * the record does not follow, and the copy wins. That comparison is made only when the record's end time is the
+ * child's machine's own (`completed_at_from_target`: it was followed to its end), like the copy's `updated_at`. An end
+ * the delegating machine recorded by its own clock (cancelled before delivery, unreachable, delivery failed) cannot be
+ * compared with the other machine's times, and the settled record wins.
  */
 export function remoteRecordWins(
   thread: LineageThread | undefined,
-  record: Pick<RemoteChild, "state" | "updated_at"> & { info?: Pick<DelegationInfo, "completed_at"> | null },
+  record: Pick<RemoteChild, "state" | "completed_at_from_target"> & { info?: Pick<DelegationInfo, "completed_at"> | null },
 ): boolean {
   if (!thread) return true;
   if (!isRemoteChildSettled(record) || !isChildWorking(thread)) return false;
-  const ended = timeOf(record.info?.completed_at ?? record.updated_at);
+  if (!record.completed_at_from_target) return true;
+  const ended = timeOf(record.info?.completed_at);
   const copied = timeOf(thread.updated_at);
   return !ended || !copied || copied <= ended;
 }

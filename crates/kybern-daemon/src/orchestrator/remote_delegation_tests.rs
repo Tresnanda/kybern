@@ -535,6 +535,9 @@ async fn a_stop_before_the_task_was_sent_removes_it_from_the_outbox_for_good() {
     tokio::time::sleep(Duration::from_millis(600)).await;
     assert_eq!(p.children_on_b(), 0);
     assert_eq!(p.row(task_id).state, RemoteChildState::Cancelled);
+    // Ended here, by this machine's clock: clients must not compare it with the target's.
+    assert!(p.row(task_id).info.completed_at.is_some());
+    assert!(!p.row(task_id).completed_at_from_target);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -819,5 +822,8 @@ async fn clients_see_a_remote_childs_record_and_hear_it_settle() {
     .await
     .expect("the completion is announced");
     assert!(settled.info.completed_at.is_some());
-    assert_eq!(p.a.state.orchestrator.remote_children_list(p.parent.id).unwrap()[0].state, RemoteChildState::Completed);
+    // Followed to its end: the end time is the target's own, comparable with its copy of the thread.
+    assert!(settled.completed_at_from_target, "the end time came from the target");
+    let listed = p.a.state.orchestrator.remote_children_list(p.parent.id).unwrap();
+    assert_eq!((listed[0].state, listed[0].completed_at_from_target), (RemoteChildState::Completed, true));
 }

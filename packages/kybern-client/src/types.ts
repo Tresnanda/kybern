@@ -4268,6 +4268,11 @@ export interface RemoteChild {
   provider?: ProviderKind | null;
   model?: string | null;
   info: DelegationInfo;
+  /**
+   * `info.completed_at` is the target's own time (the child was followed to its end). Otherwise an end time is the
+   * delegating machine's (a cancel before delivery, an unreachable target, a failed delivery).
+   */
+  completed_at_from_target?: boolean;
   created_at: DateTime;
   updated_at: DateTime;
 }

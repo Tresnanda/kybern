@@ -400,6 +400,7 @@ impl Orchestrator {
                 completed_at: None,
                 parent_notified: true,
             },
+            completed_at_from_target: false,
             created_at: now,
             updated_at: now,
         };
@@ -958,6 +959,7 @@ impl Orchestrator {
                     child.info.status = DelegationStatus::Running;
                     child.info.error = None;
                     child.info.completed_at = None;
+                    child.completed_at_from_target = false;
                     child.info.parent_notified = true;
                     true
                 })
@@ -1144,6 +1146,7 @@ impl Orchestrator {
             // Keep the target's own word ("interrupted by a restart") rather than the generic status.
             child.info.status = status;
             child.info.completed_at = view.completed_at.or_else(|| Some(Utc::now()));
+            child.completed_at_from_target = view.completed_at.is_some();
         });
         if let Err(error) = settled {
             tracing::warn!(task_id = %child.task_id, %error, "could not record a remote agent's result");
