@@ -74,6 +74,10 @@ expression: scopes
   - "orchestration:operate"
 - - daemon_update.run
   - "orchestration:operate"
+- - app_updater.attach
+  - "orchestration:operate"
+- - app_updater.report
+  - "orchestration:operate"
 - - projects.list
   - "orchestration:read"
 - - projects.browse

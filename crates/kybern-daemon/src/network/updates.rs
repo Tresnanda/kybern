@@ -57,15 +57,16 @@ pub enum Updater {
 }
 
 /// The pure part of the answer: whether a machine at `current` on `track` starts for a request that wants `wanted`.
-/// A version off its track counts as no version: the machine checks its own feed. A machine already there says so
-/// before anything else.
+/// A version off its track counts as no version: the machine checks its own feed. A daemon that cannot replace itself
+/// says so first, as before; a desktop app's machine already on the version says that first, so a deb or rpm install
+/// is not told to install what it runs.
 pub fn decide(updater: &Updater, current: &str, wanted: Option<&str>, track: UpdateTrack) -> Decision {
     let wanted = wanted.filter(|wanted| on_track(track, wanted));
-    if wanted.is_some_and(|wanted| !newer(wanted, current)) {
-        return Decision::Skip(ALREADY_CURRENT.into());
-    }
+    let current_already = wanted.is_some_and(|wanted| !newer(wanted, current));
     match updater {
-        Updater::Daemon { unsupported: Some(reason) } | Updater::App { blocked: Some(reason) } => Decision::Skip(reason.clone()),
+        Updater::Daemon { unsupported: Some(reason) } => Decision::Skip(reason.clone()),
+        _ if current_already => Decision::Skip(ALREADY_CURRENT.into()),
+        Updater::App { blocked: Some(reason) } => Decision::Skip(reason.clone()),
         Updater::Daemon { unsupported: None } | Updater::App { blocked: None } => Decision::Start,
     }
 }
@@ -337,6 +338,8 @@ mod tests {
         assert_eq!(decide(&daemon(None), "0.19.0", Some("0.20.0"), stable), Decision::Start);
         // Without a target version the machine looks at the release feed itself.
         assert_eq!(decide(&daemon(None), "0.19.0", None, stable), Decision::Start);
+        // A daemon that cannot replace itself says so even when it is on the version.
+        assert_eq!(decide(&daemon(Some("x")), "0.20.0", Some("0.20.0"), stable), Decision::Skip("x".into()));
     }
 
     #[test]

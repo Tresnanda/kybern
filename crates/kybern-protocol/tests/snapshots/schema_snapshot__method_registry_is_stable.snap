@@ -38,6 +38,8 @@ expression: names
 - daemon_update.status
 - daemon_update.check
 - daemon_update.run
+- app_updater.attach
+- app_updater.report
 - projects.list
 - projects.browse
 - projects.add
