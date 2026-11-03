@@ -361,7 +361,7 @@ const FAILURE_DELAYS_MS = [2_000, 4_000, 8_000, 16_000, 32_000, 64_000, 128_000,
  * so an attempt this old is stuck, and waiting on it would keep the machine offline until the app restarts.
  */
 const ATTEMPT_STALE_MS = 120_000;
-/** How often a sync may dial a member the daemon reports online, out of its backoff. */
+/** How often a sync may dial a member the daemon saw come back, out of its backoff. */
 const REDIAL_MS = 30_000;
 const LIVE: ReadonlySet<MachineConnectionStatus> = new Set(["online", "relaying", "needs-update"]);
 
@@ -410,8 +410,10 @@ interface Slot {
   retryTimer?: unknown;
   /** When the attempt in `attempt` started (clock ms). */
   attemptAt?: number;
-  /** When a sync last dialed it because the daemon saw it online (clock ms). */
+  /** When a sync last dialed it because the daemon saw it come back (clock ms). */
   redialAt?: number;
+  /** Its status in the last member list the daemon reported (`syncMembers`); `undefined` before the first. */
+  daemonSaw?: MachineCard["status"];
   graceTimer?: unknown;
   lists?: { projects: Project[]; threads: MachineThread[]; activity?: ThreadActivitySummary[] };
   view?: MachineConnection;
@@ -1681,18 +1683,26 @@ export class MachineSet {
         // Routes are refreshed on the next sync.
       }
     }
-    // The machine the user is at sees these members online: one that is offline here (waiting out its backoff, or
-    // with routes learned while it was away) is dialed now, so it comes back without an app restart. Not awaited:
-    // a dial that hangs must not hold up the next sync.
+    // The machine the user is at saw these members come back (offline at the last sync, online now): one that is
+    // offline here (waiting out its backoff, or with routes learned while it was away) is dialed now, so it comes back
+    // without an app restart. A member the daemon has reported online all along and this device cannot reach (a phone
+    // off the tailnet) keeps its backoff; only an attempt of its that is stuck is replaced (`connectSlot`). Not
+    // awaited: a dial that hangs must not hold up the next sync.
     const redial: Slot[] = [];
     for (const card of members) {
       const slot = this.slots.get(card.machine_id);
-      if (!slot || slot === source || card.status !== "online" || !wantsDial(slot) || fresh.includes(slot)) continue;
-      // At most every REDIAL_MS: a machine the daemon reaches and this device cannot keeps its backoff otherwise.
-      if (slot.redialAt !== undefined && this.clock.now() - slot.redialAt < REDIAL_MS) continue;
-      slot.redialAt = this.clock.now();
-      slot.failures = 0;
-      this.clock.clearTimeout(slot.retryTimer);
+      if (!slot) continue;
+      const cameBack = card.status === "online" && slot.daemonSaw !== undefined && slot.daemonSaw !== "online";
+      slot.daemonSaw = card.status;
+      const stuck = card.status === "online" && slot.attempt !== undefined && this.clock.now() - (slot.attemptAt ?? 0) >= ATTEMPT_STALE_MS;
+      if (!(cameBack || stuck) || slot === source || !wantsDial(slot) || fresh.includes(slot)) continue;
+      // At most every REDIAL_MS, however often it flaps.
+      if (cameBack && slot.redialAt !== undefined && this.clock.now() - slot.redialAt < REDIAL_MS) continue;
+      if (cameBack) {
+        slot.redialAt = this.clock.now();
+        slot.failures = 0;
+        this.clock.clearTimeout(slot.retryTimer);
+      }
       redial.push(slot);
     }
     this.persist();
