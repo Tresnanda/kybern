@@ -35,7 +35,7 @@ use super::super::{
 use crate::state::AppState;
 
 const TARGET: &str = "kybern::network::ports";
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
+pub(super) const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
 /// How long a source address stays verified for one forward once `whois` named the member's node. Tailscale addresses
 /// belong to a node for its lifetime; the per-forward token is checked on every connection regardless.
 const VERIFIED_FOR: Duration = Duration::from_secs(10 * 60);
@@ -49,13 +49,19 @@ const WARM_SOCKETS: usize = 4;
 const WARM_WHILE_ACTIVE: Duration = Duration::from_secs(10 * 60);
 /// Connections one forward's listener checks at once (token, `whois`, at most [`HANDSHAKE_TIMEOUT`] each); more are
 /// dropped unanswered.
-const MAX_HANDSHAKES: usize = 32;
+pub(super) const MAX_HANDSHAKES: usize = 32;
 /// How long a connection waits for a place under the stream limits before it is refused.
 pub(super) const QUEUE_WAIT: Duration = Duration::from_secs(10);
 
 pub const MODE_RAW: u8 = b'R';
 pub const MODE_HTTP2: u8 = b'H';
-const ACK: u8 = 1;
+/// A timed throughput probe (`ports.route.v1`): the target sends filler bytes until the caller closes the socket, for at
+/// most [`PROBE_LIMIT`] bytes or [`PROBE_TIME`].
+pub const MODE_PROBE: u8 = b'P';
+pub(super) const ACK: u8 = 1;
+/// What one probe sends at most, and for how long.
+const PROBE_LIMIT: usize = 24 * 1024 * 1024;
+const PROBE_TIME: Duration = Duration::from_secs(8);
 
 struct Serving {
     id: Uuid,
@@ -64,6 +70,8 @@ struct Serving {
     version: u8,
     /// Source addresses `whois` already named as the member's node, and when.
     verified: Mutex<HashMap<IpAddr, Instant>>,
+    /// Nodes of the members this forward's connections may also be relayed through (`peer.ports.via`).
+    via_nodes: Mutex<Vec<String>>,
 }
 
 #[derive(Default)]
@@ -86,6 +94,23 @@ impl Listeners {
         });
     }
 
+    /// Let `machine`'s forward `id` also arrive relayed by the member whose Tailscale node is `node`.
+    pub fn allow_via(&self, machine: &str, id: Uuid, node: String) -> bool {
+        let held = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(serving) = held.iter().find(|s| s.link.machine_id == machine && s.id == id && !s.cancel.is_cancelled()) else {
+            return false;
+        };
+        let mut nodes = serving.via_nodes.lock().unwrap_or_else(|p| p.into_inner());
+        if !nodes.contains(&node) {
+            // A forward tries a few members at most; the list stays small.
+            if nodes.len() >= 8 {
+                nodes.remove(0);
+            }
+            nodes.push(node);
+        }
+        true
+    }
+
     pub fn close_unpermitted(&self, network: &Network) {
         self.0.lock().unwrap_or_else(|p| p.into_inner()).retain(|s| {
             let keep = authorized(network, &s.link);
@@ -97,7 +122,7 @@ impl Listeners {
     }
 }
 
-fn authorized(network: &Network, link: &PeerLink) -> bool {
+pub(super) fn authorized(network: &Network, link: &PeerLink) -> bool {
     network.is_enabled()
         && !link.is_closed()
         && link.grant_id.is_none_or(|id| network.grants.is_active(id))
@@ -146,6 +171,7 @@ pub async fn prepare(state: &AppState, link: &Arc<PeerLink>, request: PeerPortsP
         cancel: CancellationToken::new(),
         version,
         verified: Mutex::default(),
+        via_nodes: Mutex::default(),
     });
     {
         let mut held = network.ports.direct.0.lock().unwrap_or_else(|p| p.into_inner());
@@ -206,7 +232,7 @@ async fn verify_source(state: &AppState, serving: &Serving, source: IpAddr, node
         return true;
     }
     let Ok(who) = state.network.tailscale.whois(source).await else { return false };
-    if who.node_id != node {
+    if who.node_id != node && !serving.via_nodes.lock().unwrap_or_else(|p| p.into_inner()).contains(&who.node_id) {
         return false;
     }
     serving.verified.lock().unwrap_or_else(|p| p.into_inner()).insert(source, Instant::now());
@@ -306,6 +332,12 @@ async fn transfer(
                 _ = &mut ended => {},
             }
         }
+        MODE_PROBE => {
+            tokio::select! {
+                _ = send_probe(&mut socket) => {},
+                _ = &mut ended => {},
+            }
+        }
         _ => {}
     }
 }
@@ -363,7 +395,13 @@ async fn serve_http2(socket: TcpStream, port: u16) {
         .build(connector);
     let service = hyper::service::service_fn(move |request: Request<Incoming>| {
         let client = client.clone();
-        async move { Ok::<_, Infallible>(to_dev_server(&client, upstream, request).await) }
+        async move {
+            // Only the viewing machine speaks on this connection, and it never passes a page's own `x-kybern-*` headers on.
+            if request.headers().contains_key(super::cache::REVALIDATE_HEADER) {
+                return Ok::<_, Infallible>(super::cache::serve_revalidate(upstream, request).await);
+            }
+            Ok::<_, Infallible>(to_dev_server(&client, upstream, request).await)
+        }
     });
     let mut builder = hyper::server::conn::http2::Builder::new(TokioExecutor::new());
     builder
@@ -379,13 +417,34 @@ async fn serve_http2(socket: TcpStream, port: u16) {
     }
 }
 
-/// One request of the HTTP/2 connection, sent to the dev server over HTTP/1.1. `Host` is the address the browser used
-/// (`localhost:<port>`), so host checks such as Vite's `allowedHosts` see what they would see locally.
-async fn to_dev_server(
-    client: &hyper_util::client::legacy::Client<hyper_util::client::legacy::connect::HttpConnector, Incoming>,
-    upstream: SocketAddr,
-    request: Request<Incoming>,
-) -> Response<ProxyBody> {
+pub(super) type DevClient = hyper_util::client::legacy::Client<hyper_util::client::legacy::connect::HttpConnector, Incoming>;
+
+/// Removes the `x-kybern-*` headers of a request and says whether the viewing machine keeps a cache of this forward's
+/// responses (`x-kybern-cache`): it then wants the dev server's own `ETag` beside a weakened one.
+pub(super) fn take_kybern_headers(headers: &mut hyper::HeaderMap) -> bool {
+    let caching = headers.contains_key(super::cache::CACHE_HEADER);
+    let named: Vec<hyper::header::HeaderName> = headers.keys().filter(|name| name.as_str().starts_with("x-kybern-")).cloned().collect();
+    for name in named {
+        headers.remove(name);
+    }
+    caching
+}
+
+/// The `Host` a request to the dev server carries: the address the browser used (`localhost:<port>`), so host checks
+/// such as Vite's `allowedHosts` see what they would see locally.
+pub(super) fn set_dev_host(headers: &mut hyper::HeaderMap, authority: Option<&str>) {
+    if !headers.contains_key(hyper::header::HOST)
+        && let Some(host) = authority.and_then(|host| hyper::header::HeaderValue::from_str(host).ok())
+    {
+        headers.insert(hyper::header::HOST, host);
+    }
+    if !headers.contains_key("x-forwarded-proto") {
+        headers.insert("x-forwarded-proto", hyper::header::HeaderValue::from_static("https"));
+    }
+}
+
+/// One request of the HTTP/2 connection, sent to the dev server over HTTP/1.1.
+async fn to_dev_server(client: &DevClient, upstream: SocketAddr, request: Request<Incoming>) -> Response<ProxyBody> {
     let (mut parts, body) = request.into_parts();
     let authority = parts.uri.authority().map(|authority| authority.to_string());
     let path = parts.uri.path_and_query().map(|pq| pq.as_str().to_string()).unwrap_or_else(|| "/".into());
@@ -393,14 +452,8 @@ async fn to_dev_server(
         return status_response(StatusCode::BAD_REQUEST);
     };
     strip_hop_headers(&mut parts.headers);
-    if !parts.headers.contains_key(hyper::header::HOST)
-        && let Some(host) = authority.as_deref().and_then(|host| hyper::header::HeaderValue::from_str(host).ok())
-    {
-        parts.headers.insert(hyper::header::HOST, host);
-    }
-    if !parts.headers.contains_key("x-forwarded-proto") {
-        parts.headers.insert("x-forwarded-proto", hyper::header::HeaderValue::from_static("https"));
-    }
+    let caching = take_kybern_headers(&mut parts.headers);
+    set_dev_host(&mut parts.headers, authority.as_deref());
     parts.uri = uri;
     parts.version = hyper::Version::HTTP_11;
     let gzip_ok = accepts_gzip(&parts.headers) && parts.method != hyper::Method::HEAD;
@@ -410,7 +463,7 @@ async fn to_dev_server(
             strip_hop_headers(&mut parts.headers);
             parts.version = hyper::Version::HTTP_2;
             if gzip_ok && compressible(&parts) {
-                mark_gzipped(&mut parts.headers);
+                mark_gzipped(&mut parts.headers, caching);
                 return Response::from_parts(parts, GzipBody::new(body).boxed());
             }
             Response::from_parts(parts, body.boxed())
@@ -430,7 +483,7 @@ async fn to_dev_server(
 // responses keep streaming; the browser decompresses as from any server. Event streams and encoded bodies pass as they are.
 
 /// The request lists `gzip` in `Accept-Encoding` with a quality above zero.
-fn accepts_gzip(headers: &hyper::HeaderMap) -> bool {
+pub(super) fn accepts_gzip(headers: &hyper::HeaderMap) -> bool {
     headers.get_all(hyper::header::ACCEPT_ENCODING).iter().filter_map(|value| value.to_str().ok()).flat_map(|value| value.split(',')).any(
         |coding| {
             let mut parts = coding.split(';');
@@ -446,7 +499,7 @@ fn accepts_gzip(headers: &hyper::HeaderMap) -> bool {
 
 /// Only a whole `200` body is gzipped: a `206` or any `Content-Range` describes the uncompressed bytes, and
 /// `Cache-Control: no-transform` forbids it (RFC 9111 §5.2.2.6).
-fn compressible(parts: &hyper::http::response::Parts) -> bool {
+pub(super) fn compressible(parts: &hyper::http::response::Parts) -> bool {
     if parts.headers.contains_key(hyper::header::CONTENT_ENCODING)
         || parts.status != StatusCode::OK
         || parts.headers.contains_key(hyper::header::CONTENT_RANGE)
@@ -489,16 +542,29 @@ fn compressible(parts: &hyper::http::response::Parts) -> bool {
 
 /// The headers of a response whose body is gzipped on the way: no length, the encoding, `Vary`, and a weak `ETag`, since
 /// the bytes are no longer the ones a strong tag names (RFC 9110 §8.8.3). The browser's `If-None-Match` still matches the
-/// dev server's tag, which compares weakly.
-fn mark_gzipped(headers: &mut hyper::HeaderMap) {
+/// dev server's tag, which compares weakly. With `keep_original` (the viewing machine caches this forward's responses) the
+/// dev server's own tag travels beside it in [`super::cache::ORIGINAL_ETAG_HEADER`], so its revalidations send exactly that.
+pub(super) fn mark_gzipped(headers: &mut hyper::HeaderMap, keep_original: bool) {
     headers.remove(hyper::header::CONTENT_LENGTH);
     headers.insert(hyper::header::CONTENT_ENCODING, hyper::header::HeaderValue::from_static("gzip"));
     headers.append(hyper::header::VARY, hyper::header::HeaderValue::from_static("accept-encoding"));
-    let strong =
-        headers.get(hyper::header::ETAG).and_then(|tag| tag.to_str().ok()).filter(|tag| !tag.starts_with("W/")).map(str::to_string);
-    if let Some(weak) = strong.and_then(|tag| hyper::header::HeaderValue::from_str(&format!("W/{tag}")).ok()) {
+    let strong = headers.get(hyper::header::ETAG).filter(|tag| !tag.as_bytes().starts_with(b"W/")).cloned();
+    if let Some(strong) = strong
+        && let Ok(weak) = hyper::header::HeaderValue::from_bytes(&[b"W/", strong.as_bytes()].concat())
+    {
         headers.insert(hyper::header::ETAG, weak);
+        if keep_original {
+            headers.insert(super::cache::ORIGINAL_ETAG_HEADER, strong);
+        }
     }
+}
+
+/// A whole body gzipped at once (a batched revalidation sends complete bodies).
+pub(super) fn gzip_all(bytes: &[u8]) -> Option<Vec<u8>> {
+    use std::io::Write;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::with_capacity(bytes.len() / 4), flate2::Compression::fast());
+    encoder.write_all(bytes).ok()?;
+    encoder.finish().ok()
 }
 
 /// A response body gzipped as it streams.
@@ -551,21 +617,58 @@ impl hyper::body::Body for GzipBody {
     }
 }
 
+/// Mode `P`: filler bytes until the caller has measured enough and closes, within [`PROBE_LIMIT`] and [`PROBE_TIME`].
+async fn send_probe(socket: &mut TcpStream) {
+    let filler = vec![0x5au8; 64 * 1024];
+    let deadline = Instant::now() + PROBE_TIME;
+    let mut sent = 0;
+    while sent < PROBE_LIMIT && Instant::now() < deadline {
+        match tokio::time::timeout_at(deadline.into(), socket.write_all(&filler)).await {
+            Ok(Ok(())) => sent += filler.len(),
+            _ => break,
+        }
+    }
+    let _ = socket.shutdown().await;
+}
+
 // ---- the caller ----
 
-/// Dial a forward's listener and authorize: for version 2 the socket is then ready and waits for a mode.
-async fn dial(network: &Network, address: SocketAddr, endpoint: &PeerPortsDirect) -> Option<(TcpStream, Duration)> {
+/// A member that relays a route's connections (`peer.ports.hop`): its listener and token.
+#[derive(Clone, Debug)]
+pub struct Hop {
+    pub machine_id: String,
+    pub machine_name: String,
+    pub address: SocketAddr,
+    pub token: String,
+}
+
+/// A TCP connection from this machine's Tailscale address (the fake binds a loopback source).
+pub(super) async fn connect_from_tailnet(network: &Network, address: SocketAddr) -> Option<TcpStream> {
+    let socket = if address.is_ipv4() { TcpSocket::new_v4() } else { TcpSocket::new_v6() }.ok()?;
+    if let Some(source) = network.tailscale.dial_source() {
+        socket.bind(SocketAddr::new(source, 0)).ok()?;
+    }
+    let socket = socket.connect(address).await.ok()?;
+    socket.set_nodelay(true).ok()?;
+    Some(socket)
+}
+
+/// Dial a forward's listener (through `hop` when given) and authorize: for version 2 the socket is then ready and waits for
+/// a mode. Through a hop, the member checks its own token, connects the target and answers one byte; the target's
+/// handshake then runs end to end.
+async fn dial(network: &Network, address: SocketAddr, endpoint: &PeerPortsDirect, hop: Option<&Hop>) -> Option<(TcpStream, Duration)> {
     let connect = async {
-        let socket = if address.is_ipv4() { TcpSocket::new_v4() } else { TcpSocket::new_v6() }.ok()?;
-        if let Some(source) = network.tailscale.dial_source() {
-            socket.bind(SocketAddr::new(source, 0)).ok()?;
+        if endpoint.token.len() != 64 || hop.is_some_and(|hop| hop.token.len() != 64) {
+            return None;
         }
         let started = Instant::now();
-        let mut socket = socket.connect(address).await.ok()?;
+        let mut socket = connect_from_tailnet(network, hop.map_or(address, |hop| hop.address)).await?;
         let round_trip = started.elapsed();
-        socket.set_nodelay(true).ok()?;
-        if endpoint.token.len() != 64 {
-            return None;
+        if let Some(hop) = hop {
+            socket.write_all(hop.token.as_bytes()).await.ok()?;
+            if socket.read_u8().await.ok()? != ACK {
+                return None;
+            }
         }
         socket.write_all(endpoint.token.as_bytes()).await.ok()?;
         if endpoint.version.unwrap_or(1) >= 2 && socket.read_u8().await.ok()? != ACK {
@@ -573,12 +676,12 @@ async fn dial(network: &Network, address: SocketAddr, endpoint: &PeerPortsDirect
         }
         Some((socket, round_trip))
     };
-    tokio::time::timeout(HANDSHAKE_TIMEOUT, connect).await.ok().flatten()
+    tokio::time::timeout(HANDSHAKE_TIMEOUT * if hop.is_some() { 2 } else { 1 }, connect).await.ok().flatten()
 }
 
 /// A socket that carries raw bytes to the forwarded port.
 pub async fn connect(network: &Network, address: SocketAddr, endpoint: &PeerPortsDirect) -> Option<TcpStream> {
-    let (mut socket, _) = dial(network, address, endpoint).await?;
+    let (mut socket, _) = dial(network, address, endpoint, None).await?;
     if endpoint.version.unwrap_or(1) >= 2 {
         socket.write_all(&[MODE_RAW]).await.ok()?;
     } else if tokio::time::timeout(HANDSHAKE_TIMEOUT, socket.read_u8()).await.ok()?.ok()? != ACK {
@@ -591,6 +694,8 @@ pub async fn connect(network: &Network, address: SocketAddr, endpoint: &PeerPort
 pub struct Route {
     pub address: SocketAddr,
     pub endpoint: PeerPortsDirect,
+    /// The member this route's connections travel through, if any.
+    pub hop: Option<Hop>,
     warm: Mutex<VecDeque<(Instant, TcpStream)>>,
     wanted: Notify,
     last_used: Mutex<Instant>,
@@ -600,7 +705,35 @@ pub struct Route {
 
 impl Route {
     pub fn new(address: SocketAddr, endpoint: PeerPortsDirect, cancel: CancellationToken) -> Self {
-        Self { address, endpoint, warm: Mutex::default(), wanted: Notify::new(), last_used: Mutex::new(Instant::now()), cancel }
+        Self::through(address, endpoint, None, cancel)
+    }
+
+    pub fn through(address: SocketAddr, endpoint: PeerPortsDirect, hop: Option<Hop>, cancel: CancellationToken) -> Self {
+        Self { address, endpoint, hop, warm: Mutex::default(), wanted: Notify::new(), last_used: Mutex::new(Instant::now()), cancel }
+    }
+
+    /// Download speed to this machine over this route, in bytes per second: a fresh socket in mode `P`, read for `time`
+    /// after the first byte arrives (the first round trip and TCP's first windows are left out as far as they fit in it).
+    /// Only for a target that lists `ports.route.v1`.
+    pub async fn probe(&self, network: &Network, time: Duration) -> Option<u64> {
+        let (mut socket, _) = dial(network, self.address, &self.endpoint, self.hop.as_ref()).await?;
+        socket.write_all(&[MODE_PROBE]).await.ok()?;
+        let mut buffer = vec![0u8; 64 * 1024];
+        let first = tokio::time::timeout(HANDSHAKE_TIMEOUT * 2, socket.read(&mut buffer)).await.ok()?.ok()?;
+        if first == 0 {
+            return None;
+        }
+        let started = Instant::now();
+        let deadline = started + time;
+        let mut bytes = 0u64;
+        while let Ok(Ok(read)) = tokio::time::timeout_at(deadline.into(), socket.read(&mut buffer)).await {
+            if read == 0 {
+                break;
+            }
+            bytes += read as u64;
+        }
+        let elapsed = started.elapsed().as_secs_f64().max(0.05);
+        Some((bytes as f64 / elapsed) as u64)
     }
 
     /// This route is replaced: drop its ready sockets.
@@ -634,11 +767,11 @@ impl Route {
     pub async fn open(&self, network: &Network, mode: u8) -> Option<TcpStream> {
         *self.last_used.lock().unwrap_or_else(|p| p.into_inner()) = Instant::now();
         if !self.ready_sockets() {
-            return if mode == MODE_RAW { connect(network, self.address, &self.endpoint).await } else { None };
+            return if mode == MODE_RAW && self.hop.is_none() { connect(network, self.address, &self.endpoint).await } else { None };
         }
         let socket = match self.take_ready() {
             Some(socket) => Some(socket),
-            None => dial(network, self.address, &self.endpoint).await.map(|(socket, _)| socket),
+            None => dial(network, self.address, &self.endpoint, self.hop.as_ref()).await.map(|(socket, _)| socket),
         };
         self.wanted.notify_one();
         let mut socket = socket?;
@@ -651,7 +784,7 @@ impl Route {
         if !self.ready_sockets() {
             return None;
         }
-        let (socket, round_trip) = dial(network, self.address, &self.endpoint).await?;
+        let (socket, round_trip) = dial(network, self.address, &self.endpoint, self.hop.as_ref()).await?;
         self.warm.lock().unwrap_or_else(|p| p.into_inner()).push_back((Instant::now(), socket));
         Some(round_trip)
     }
@@ -737,12 +870,17 @@ mod tests {
     #[test]
     fn a_gzipped_body_gets_a_weak_etag_and_no_length() {
         let mut parts = response(200, &[("etag", "\"abc\""), ("content-length", "4000")]);
-        mark_gzipped(&mut parts.headers);
+        mark_gzipped(&mut parts.headers, false);
         assert_eq!(parts.headers[hyper::header::ETAG], "W/\"abc\"");
         assert!(!parts.headers.contains_key(hyper::header::CONTENT_LENGTH));
         assert_eq!(parts.headers[hyper::header::CONTENT_ENCODING], "gzip");
+        assert!(!parts.headers.contains_key(super::super::cache::ORIGINAL_ETAG_HEADER), "only a caching viewer asks for it");
         let mut weak = response(200, &[("etag", "W/\"abc\"")]);
-        mark_gzipped(&mut weak.headers);
+        mark_gzipped(&mut weak.headers, true);
         assert_eq!(weak.headers[hyper::header::ETAG], "W/\"abc\"", "a weak tag stays as it is");
+        assert!(!weak.headers.contains_key(super::super::cache::ORIGINAL_ETAG_HEADER));
+        let mut cached = response(200, &[("etag", "\"abc\"")]);
+        mark_gzipped(&mut cached.headers, true);
+        assert_eq!(cached.headers[super::super::cache::ORIGINAL_ETAG_HEADER], "\"abc\"", "the dev server's own tag, for revalidation");
     }
 }

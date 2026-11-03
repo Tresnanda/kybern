@@ -359,6 +359,8 @@ fn main() {
     method::<PeerPortsPrepare>(&mut methods);
     method::<PeerPortsRelease>(&mut methods);
     method::<PeerPortsOpen>(&mut methods);
+    method::<PeerPortsVia>(&mut methods);
+    method::<PeerPortsHop>(&mut methods);
     method::<PeerPortsData>(&mut methods);
     method::<PeerPortsClose>(&mut methods);
     method::<PluginsInventory>(&mut methods);

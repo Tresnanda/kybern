@@ -288,6 +288,8 @@ expression: names
 - peer.ports.prepare
 - peer.ports.release
 - peer.ports.open
+- peer.ports.via
+- peer.ports.hop
 - peer.ports.data
 - peer.ports.close
 - plugins.inventory

@@ -574,6 +574,10 @@ expression: scopes
   - "machine:peer"
 - - peer.ports.open
   - "machine:ports"
+- - peer.ports.via
+  - "machine:ports"
+- - peer.ports.hop
+  - "machine:relay"
 - - peer.ports.data
   - "machine:peer"
 - - peer.ports.close

@@ -154,3 +154,48 @@ Measure with real browsers: the fixtures kept with the ADE-116 report (`.kybern-
 drive headless Chrome over CDP (`--ignore-certificate-errors-spki-list` pins the same leaf) and
 read WKWebView timings from a beacon the test app posts. A dev server's own speed matters: a
 2-core VPS serves the 365 requests of that page in 0.8 s on its own loopback.
+
+## Slow links (ADE-126)
+
+Measured 2026-11-03: a TanStack Start page in Vite dev mode on instabox makes 212 requests for about 31 MB of
+unminified JavaScript (one prebundled icon package is 21.4 MB) and hides its content until it hydrates. The Mac in Bali
+reached instabox over a direct Tailscale path at 86 KB/s, so the page showed only its footer for minutes, while
+instabox → kdi-vps ran at 778 KB/s and kdi-vps → the Mac at about 2.5 MB/s.
+
+- **HTTP on the plain listener** (`ports/http.rs`): on a `ports.direct.v2` route, a browser connection whose first bytes
+  are an HTTP/1.x request line is served by hyper here, and each request goes over the forward's one HTTP/2 connection
+  to the target (mode `H`, as in Fast mode). Anything else stays a byte-for-byte socket: a connection whose first bytes
+  are not a request line (TLS, SSH, Postgres, HTTP/2 prior knowledge, `CONNECT`), and one where the server speaks first.
+  When the browser has sent nothing for 250 ms the raw socket to the target is opened too, and whichever side speaks
+  first decides. WebSocket upgrades get their own raw socket. The plain listener sends `X-Forwarded-Proto: http`.
+- **Compression everywhere Kybern parses HTTP**: the target gzips text for the plain listener as it did for Fast mode
+  (whole `200` bodies only, never with `Content-Range` or `no-transform`, a strong `ETag` weakened, `Accept-Encoding`
+  q-values honoured, images and other binary types left alone). The WebSocket stream transport (`peer.ports.open`) and
+  raw sockets carry bytes Kybern does not parse; compressing them would need the stream to be parsed on both ends (or a
+  general-purpose stream compressor, which gains little on already-compressed traffic and costs CPU on every byte), so
+  they stay as they are.
+- **Load progress** (`ports/load.rs`): each response's bytes are counted as they arrive. `PortForward.loading` carries
+  the load while requests are open (received and cached bytes, the previous load's total as an estimate, the rate over
+  3 s); `ports.changed` repeats it once a second, only after 2 s. The Browser shows "Loading over a slow connection —
+  4.2 of 31 MB · 90 KB/s" under its chrome after 3 s with bytes arriving (`apps/gpuix/src/preview/slow.ts`).
+- **Viewing-side cache** (`ports/cache.rs`, `ports.cache.v1`): whole `200` answers to plain `GET`s with an `ETag` or
+  `Last-Modified` are kept per forward, keyed by host, path and the request headers they `Vary` on; never with
+  `Set-Cookie`, `private`, `no-store`, `Vary: *`, a range, `Authorization` or an event stream. A navigation request
+  starts one batched revalidation (`x-kybern-revalidate` on the HTTP/2 connection): the target asks its dev server
+  about every kept response over loopback, 16 at a time, and answers fresh, changed (with the new body, compressed) or
+  gone. The page's requests wait for the batch rather than crossing the network. A response validated in the last 20 s
+  is answered locally; an older one is revalidated on its own. A data message on the forward's WebSocket after the
+  first (Vite's `connected`) marks everything stale. Bounds: 32 MiB per response, 96 MiB per forward, 256 MiB for all,
+  least recently used first out; in memory only, gone with the forward. The target keeps the dev server's own tag
+  beside a weakened one (`x-kybern-etag`, only for a viewing machine that sent `x-kybern-cache`), and strips every
+  `x-kybern-*` request header before the dev server; the viewing side strips a page's own.
+- **Routes through a member** (`ports/hop.rs`, `ports.route.v1`): `peer.ports.hop` makes a member M relay the caller's
+  connections for one forward to the target's forward listener (M checks its own token and the caller's node, needs
+  `machine:relay`, resolves the target from membership); `peer.ports.via` lets the target accept that forward's
+  connections from M's node (the forward's own token is still checked end to end). After a forward opens, the viewing
+  machine probes the direct route and up to three candidate members (mode `P`: the target sends filler, the caller
+  reads for 2.5 s), twice, one at a time; it takes a member only when every round is at least twice as fast and above
+  64 KB/s. New connections and the next HTTP/2 connection use it; open ones finish where they are. Candidates have a
+  session open, list `ports.route.v1` and are not paused; the target must list it too. The choice is kept per target
+  for 15 minutes. A member that stops answering sends the forward back to the direct route. The Browser shows
+  "on instabox via kdi-vps".

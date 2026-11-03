@@ -1,0 +1,465 @@
+//! Port routes through another member (ADE-126, `ports.route.v1`).
+//!
+//! A tailnet's direct path between two machines can be far slower than a path through a third: measured on 2026-11-03,
+//! instabox reached a Mac in Bali at 86 KB/s directly, while instabox → kdi-vps ran at 778 KB/s and kdi-vps → the Mac at
+//! about 2.5 MB/s. Tailscale keeps a direct path once it has one, so Kybern picks the route itself.
+//!
+//! * **The member (M)**, `peer.ports.hop`: binds a listener on its Tailscale address for one forward of the caller (V)
+//!   and a random token. Each connection sends the token; M checks it and that the connection comes from V's node
+//!   (`whois`), connects the target's (T's) forward listener (resolved from membership, never from V) and answers one
+//!   byte, then copies bytes. M needs `machine:relay` from V's grants and policy, as for any relay.
+//! * **The target (T)**, `peer.ports.via`: V's forward may also arrive from M's node. T still checks the forward's own
+//!   token on every connection, end to end through M, and its ports permission for V. M is refused when it is not a
+//!   current, unpaused member.
+//! * **The viewing machine (V)**, [`choose`]: after a forward opens on a direct ready-socket route, it measures the
+//!   direct route and each candidate member with timed probes (mode `P`, about [`PROBE_TIME`] each, twice). A member is
+//!   used only when both rounds show at least [`GAIN`] times the direct speed. New connections (and the forward's next
+//!   HTTP/2 connection) take the new route; open ones finish where they are. The choice is kept per target for
+//!   [`BOOK_FOR`], so the next forward to it takes the route at once. A route through a member that stops answering
+//!   falls back to the direct one.
+//! * Candidates are members with a session open now that list `ports.route.v1` (and so does the target), and that are not
+//!   paused. Older members are never asked.
+
+use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use kybern_protocol::methods::*;
+use kybern_protocol::*;
+use serde_json::json;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
+
+use super::Forward;
+use super::direct::{self, ACK, HANDSHAKE_TIMEOUT, Hop, MAX_HANDSHAKES, QUEUE_WAIT, Route};
+use crate::network::Network;
+use crate::network::peers::{self, PeerLink};
+use crate::network::tailscale;
+use crate::state::AppState;
+
+const TARGET: &str = "kybern::network::ports";
+/// How long one probe reads.
+pub const PROBE_TIME: Duration = Duration::from_millis(if cfg!(test) { 150 } else { 2500 });
+/// How much faster a member's route must be, in every probe round, to be used.
+pub const GAIN: f64 = 2.0;
+/// Below this a route is not worth taking whatever the ratio (bytes per second).
+const MIN_RATE: u64 = 64 * 1024;
+const ROUNDS: usize = 2;
+/// Members tried at most.
+const MAX_CANDIDATES: usize = 3;
+/// A choice for a target is reused for this long.
+pub const BOOK_FOR: Duration = Duration::from_secs(15 * 60);
+
+// ---- the member: peer.ports.hop ----
+
+struct Relaying {
+    caller: Arc<PeerLink>,
+    forward_id: Uuid,
+    cancel: CancellationToken,
+    /// Connections relayed so far.
+    relayed: std::sync::atomic::AtomicU64,
+}
+
+/// The hops this machine relays.
+#[derive(Default)]
+pub struct Hops(Mutex<Vec<Arc<Relaying>>>);
+
+impl Hops {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Arc<Relaying>>> {
+        self.0.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    pub fn close_all(&self) {
+        for hop in self.lock().drain(..) {
+            hop.cancel.cancel();
+        }
+    }
+
+    pub fn release(&self, machine: &str, id: Uuid) {
+        self.lock().retain(|hop| {
+            let keep = hop.caller.machine_id != machine || hop.forward_id != id;
+            if !keep {
+                hop.cancel.cancel();
+            }
+            keep
+        });
+    }
+
+    /// Connections relayed so far by the hops open now.
+    pub fn relayed(&self) -> u64 {
+        self.lock().iter().map(|hop| hop.relayed.load(std::sync::atomic::Ordering::Relaxed)).sum()
+    }
+
+    pub fn close_unpermitted(&self, network: &Network) {
+        self.lock().retain(|hop| {
+            let keep = relay_allowed(network, &hop.caller);
+            if !keep {
+                hop.cancel.cancel();
+            }
+            keep
+        });
+    }
+}
+
+fn relay_allowed(network: &Network, link: &PeerLink) -> bool {
+    network.is_enabled()
+        && !link.is_closed()
+        && link.grant_id.is_none_or(|id| network.grants.is_active(id))
+        && peers::effective_scopes(network, link).contains(&Scope::MachineRelay)
+}
+
+/// A current member that is not paused, and its Tailscale node.
+fn live_member_node(network: &Network, machine: &str) -> Option<String> {
+    let membership = network.membership()?;
+    let projection = membership.projection();
+    let entry = projection.entry(machine)?;
+    if entry.removed.is_some() || entry.paused {
+        return None;
+    }
+    entry.descriptor.ts_node_id.clone()
+}
+
+/// `peer.ports.hop`.
+pub async fn handle_hop(state: &AppState, link: &Arc<PeerLink>, params: PeerPortsHopParams) -> Result<PeerPortsHopResult, RpcError> {
+    let network = &state.network;
+    if !relay_allowed(network, link) {
+        return Err(RpcError::new(codes::FORBIDDEN, "This machine does not relay for that machine."));
+    }
+    if params.target == link.machine_id || network.machine_id().as_deref() == Some(params.target.as_str()) || params.port == 0 {
+        return Err(RpcError::invalid_params("A hop leads to a third machine's forward listener."));
+    }
+    let caller_node = live_member_node(network, &link.machine_id)
+        .ok_or_else(|| RpcError::new(codes::NOT_AVAILABLE, "no Tailscale node for the caller"))?;
+    if live_member_node(network, &params.target).is_none() {
+        return Err(RpcError::new(codes::NOT_FOUND, "That machine is not a current member."));
+    }
+    let destination = direct::destination(network, &params.target, params.port)
+        .await
+        .ok_or_else(|| RpcError::new(codes::NOT_AVAILABLE, "This machine cannot reach that machine over the tailnet."))?;
+    let ip = network
+        .tailscale
+        .listen_ip()
+        .await
+        .filter(|ip| tailscale::plain_http_allowed(*ip, network.tailscale.is_fake()))
+        .ok_or_else(|| RpcError::new(codes::NOT_AVAILABLE, "This machine has no tailnet address to relay on."))?;
+    let listener = TcpListener::bind(SocketAddr::new(ip, 0)).await.map_err(RpcError::internal)?;
+    let port = listener.local_addr().map_err(RpcError::internal)?.port();
+    let token = crate::auth::hash(&crate::auth::generate());
+    let token_hash = crate::auth::hash(&token);
+    let hop = Arc::new(Relaying {
+        caller: link.clone(),
+        forward_id: params.forward_id,
+        cancel: CancellationToken::new(),
+        relayed: Default::default(),
+    });
+    {
+        let mut held = network.ports.hops.lock();
+        held.retain(|hop| !hop.cancel.is_cancelled() && !hop.caller.is_closed());
+        if held.iter().filter(|hop| hop.caller.machine_id == link.machine_id).count() >= MAX_PORT_FORWARDS {
+            return Err(RpcError::new(codes::CONFLICT, "Too many relayed forwards for that machine."));
+        }
+        if let Some(old) = held.iter().find(|old| old.caller.machine_id == link.machine_id && old.forward_id == params.forward_id) {
+            old.cancel.cancel();
+        }
+        held.retain(|old| !(old.caller.machine_id == link.machine_id && old.forward_id == params.forward_id));
+        held.push(hop.clone());
+    }
+    let state = state.clone();
+    tokio::spawn(async move {
+        let handshakes = Arc::new(tokio::sync::Semaphore::new(MAX_HANDSHAKES));
+        let verified: Arc<Mutex<HashMap<IpAddr, Instant>>> = Arc::default();
+        let active = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let idle_limit = state.network.timing.ports_idle;
+        let tick = (idle_limit / 4).clamp(Duration::from_millis(50), Duration::from_secs(30));
+        let mut idle_since = Instant::now();
+        loop {
+            tokio::select! {
+                _ = hop.cancel.cancelled() => break,
+                _ = hop.caller.closed() => break,
+                _ = state.shutdown.cancelled() => break,
+                _ = tokio::time::sleep(tick) => {
+                    if !relay_allowed(&state.network, &hop.caller) { break; }
+                    if active.load(std::sync::atomic::Ordering::Relaxed) > 0 { idle_since = Instant::now(); }
+                    else if idle_since.elapsed() >= idle_limit { break; }
+                }
+                accepted = listener.accept() => {
+                    let Ok((socket, source)) = accepted else { continue };
+                    let Ok(handshake) = handshakes.clone().try_acquire_owned() else { continue };
+                    let _ = socket.set_nodelay(true);
+                    idle_since = Instant::now();
+                    let (state, hop, caller_node, token_hash, verified, active) =
+                        (state.clone(), hop.clone(), caller_node.clone(), token_hash.clone(), verified.clone(), active.clone());
+                    tokio::spawn(async move {
+                        active.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        relay_one(&state, &hop, socket, source.ip(), &caller_node, &token_hash, destination, &verified, handshake).await;
+                        active.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                    });
+                }
+            }
+        }
+        hop.cancel.cancel();
+        state.network.ports.hops.lock().retain(|held| !Arc::ptr_eq(held, &hop));
+    });
+    tracing::info!(target: TARGET, caller = %link.machine_id, target_machine = %params.target, "relaying a forward for another machine");
+    Ok(PeerPortsHopResult { port, token })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn relay_one(
+    state: &AppState,
+    hop: &Relaying,
+    mut socket: TcpStream,
+    source: IpAddr,
+    caller_node: &str,
+    token_hash: &str,
+    destination: SocketAddr,
+    verified: &Mutex<HashMap<IpAddr, Instant>>,
+    handshake: tokio::sync::OwnedSemaphorePermit,
+) {
+    let network = &state.network;
+    let authorize = async {
+        let mut token = [0u8; 64];
+        socket.read_exact(&mut token).await.ok()?;
+        if crate::auth::hash(std::str::from_utf8(&token).ok()?) != token_hash {
+            return None;
+        }
+        let known =
+            verified.lock().unwrap_or_else(|p| p.into_inner()).get(&source).is_some_and(|at| at.elapsed() < Duration::from_secs(600));
+        if !known {
+            let who = network.tailscale.whois(source).await.ok()?;
+            if who.node_id != caller_node {
+                return None;
+            }
+            verified.lock().unwrap_or_else(|p| p.into_inner()).insert(source, Instant::now());
+        }
+        relay_allowed(network, &hop.caller).then_some(())
+    };
+    let authorized = tokio::select! {
+        _ = hop.cancel.cancelled() => return,
+        result = tokio::time::timeout(HANDSHAKE_TIMEOUT, authorize) => matches!(result, Ok(Some(()))),
+    };
+    if !authorized {
+        return;
+    }
+    drop(handshake);
+    let key = format!("hop:{}", hop.caller.machine_id);
+    let Some(_slot) = network.relays.acquire_wait(&key, crate::network::relay::MAX_INBOUND_PER_MEMBER, QUEUE_WAIT, &hop.cancel).await
+    else {
+        return;
+    };
+    let Ok(Some(mut upstream)) = tokio::time::timeout(HANDSHAKE_TIMEOUT, direct::connect_from_tailnet(network, destination)).await else {
+        return;
+    };
+    if socket.write_all(&[ACK]).await.is_err() {
+        return;
+    }
+    hop.relayed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    tokio::select! {
+        _ = tokio::io::copy_bidirectional(&mut socket, &mut upstream) => {},
+        _ = hop.cancel.cancelled() => { let _ = socket.set_zero_linger(); },
+        _ = hop.caller.closed() => { let _ = socket.set_zero_linger(); },
+    }
+}
+
+// ---- the target: peer.ports.via ----
+
+/// `peer.ports.via`.
+pub fn handle_via(state: &AppState, link: &Arc<PeerLink>, params: PeerPortsViaParams) -> Result<Empty, RpcError> {
+    let network = &state.network;
+    if !direct::authorized(network, link) {
+        return Err(RpcError::new(codes::FORBIDDEN, "This machine no longer permits port forwarding."));
+    }
+    if params.via == link.machine_id || network.machine_id().as_deref() == Some(params.via.as_str()) {
+        return Err(RpcError::invalid_params("A forward is relayed by a third member."));
+    }
+    let node =
+        live_member_node(network, &params.via).ok_or_else(|| RpcError::new(codes::NOT_FOUND, "That machine is not a current member."))?;
+    if !network.ports.direct.allow_via(&link.machine_id, params.forward_id, node) {
+        return Err(RpcError::new(codes::NOT_FOUND, "That forward is not open on this machine."));
+    }
+    Ok(Empty {})
+}
+
+// ---- the viewing machine: choosing a route ----
+
+/// What was chosen for a target, and when.
+#[derive(Clone)]
+pub struct Choice {
+    at: Instant,
+    via: Option<String>,
+}
+
+/// Route choices per target.
+#[derive(Default)]
+pub struct Book(Mutex<HashMap<String, Choice>>);
+
+impl Book {
+    pub(super) fn get(&self, target: &str) -> Option<Choice> {
+        self.0.lock().unwrap_or_else(|p| p.into_inner()).get(target).filter(|choice| choice.at.elapsed() < BOOK_FOR).cloned()
+    }
+
+    pub(super) fn set(&self, target: &str, via: Option<String>) {
+        self.0.lock().unwrap_or_else(|p| p.into_inner()).insert(target.to_string(), Choice { at: Instant::now(), via });
+    }
+}
+
+fn lists(network: &Network, machine: &str, feature: &str) -> bool {
+    network.peers.status(machine).presence.is_some_and(|presence| presence.features.iter().any(|f| f == feature))
+}
+
+/// Members that could relay to `target`: a session open now, `ports.route.v1`, not paused.
+fn candidates(network: &Network, target: &str) -> Vec<(String, String)> {
+    let me = network.machine_id();
+    let Some(membership) = network.membership() else { return Vec::new() };
+    let projection = membership.projection();
+    network
+        .peers
+        .links()
+        .into_iter()
+        .filter(|link| link.machine_id != target && Some(&link.machine_id) != me.as_ref() && !link.is_closed())
+        .filter(|link| lists(network, &link.machine_id, features::PORTS_ROUTE_V1))
+        .filter(|link| live_member_node(network, &link.machine_id).is_some())
+        .filter_map(|link| {
+            let name = projection.entry(&link.machine_id)?.descriptor.name.clone();
+            Some((link.machine_id.clone(), name))
+        })
+        .take(MAX_CANDIDATES)
+        .collect()
+}
+
+/// Set up a route for `forward` through `via`: T accepts it, M relays it.
+pub(super) async fn through(network: &Arc<Network>, forward: &Forward, direct: &Route, via: &str, via_name: &str) -> Option<Arc<Route>> {
+    let target = network.peers.link(&forward.machine_id)?;
+    let member = network.peers.link(via)?;
+    if let Err(error) = target.call::<PeerPortsVia>(PeerPortsViaParams { forward_id: forward.id, via: via.to_string() }).await {
+        tracing::debug!(target: TARGET, via, error = %error.message, "the target did not accept a relayed route");
+        return None;
+    }
+    let params = PeerPortsHopParams { forward_id: forward.id, target: forward.machine_id.clone(), port: direct.endpoint.port };
+    let hop = match member.call::<PeerPortsHop>(params).await {
+        Ok(hop) => hop,
+        Err(error) => {
+            tracing::debug!(target: TARGET, via, error = %error.message, "a member did not relay a route");
+            return None;
+        }
+    };
+    let address = direct::destination(network, via, hop.port).await?;
+    let hop = Hop { machine_id: via.to_string(), machine_name: via_name.to_string(), address, token: hop.token };
+    Some(Arc::new(Route::through(direct.address, direct.endpoint.clone(), Some(hop), forward.cancel.child_token())))
+}
+
+fn release_hop(network: &Network, via: &str, forward_id: Uuid) {
+    if let Some(link) = network.peers.link(via) {
+        tokio::spawn(async move {
+            let _ = link.notify(PeerPortsRelease::NAME, json!({ "forward_id": forward_id })).await;
+        });
+    }
+}
+
+/// Measure the routes of a forward that runs on a direct ready-socket route, and take a member's route when it is
+/// [`GAIN`] times faster in every round. Runs in the background; the forward works on the direct route meanwhile.
+pub(super) async fn choose(network: Arc<Network>, forward: Arc<Forward>) {
+    let Some(direct) = forward.route_now().filter(|route| route.ready_sockets() && route.hop.is_none()) else { return };
+    if !lists(&network, &forward.machine_id, features::PORTS_ROUTE_V1) {
+        return;
+    }
+    if let Some(choice) = network.ports.book.get(&forward.machine_id) {
+        let Some(via) = choice.via else { return };
+        let name = network.membership().and_then(|m| m.projection().entry(&via).map(|e| e.descriptor.name.clone())).unwrap_or_default();
+        if let Some(route) = through(&network, &forward, &direct, &via, &name).await {
+            super::take_route(&network, &forward, &direct, route);
+            return;
+        }
+    }
+    let candidates = candidates(&network, &forward.machine_id);
+    if candidates.is_empty() {
+        return;
+    }
+    let mut routes = Vec::new();
+    for (via, name) in &candidates {
+        if let Some(route) = through(&network, &forward, &direct, via, name).await {
+            routes.push(route);
+        }
+    }
+    if routes.is_empty() {
+        network.ports.book.set(&forward.machine_id, None);
+        return;
+    }
+    // Each round measures the direct route, then each member's, one at a time so they do not share the link.
+    let mut direct_rates = Vec::new();
+    let mut rates = vec![Vec::new(); routes.len()];
+    for _ in 0..ROUNDS {
+        if forward.cancel.is_cancelled() {
+            return;
+        }
+        direct_rates.push(direct.probe(&network, PROBE_TIME).await.unwrap_or(0));
+        for (i, route) in routes.iter().enumerate() {
+            rates[i].push(route.probe(&network, PROBE_TIME).await.unwrap_or(0));
+        }
+    }
+    let best = pick(&direct_rates, &rates);
+    tracing::info!(
+        target: TARGET,
+        machine = %forward.machine_id,
+        direct = ?direct_rates,
+        members = ?routes.iter().zip(&rates).map(|(route, rates)| (route.hop.as_ref().map(|hop| hop.machine_name.clone()), rates.clone())).collect::<Vec<_>>(),
+        chosen = ?best.map(|i| routes[i].hop.as_ref().map(|hop| hop.machine_name.clone())),
+        "measured a forward's routes"
+    );
+    for (i, route) in routes.iter().enumerate() {
+        if Some(i) != best {
+            route.stop();
+            if let Some(hop) = &route.hop {
+                release_hop(&network, &hop.machine_id, forward.id);
+            }
+        }
+    }
+    let Some(best) = best else {
+        network.ports.book.set(&forward.machine_id, None);
+        return;
+    };
+    let route = routes.swap_remove(best);
+    network.ports.book.set(&forward.machine_id, route.hop.as_ref().map(|hop| hop.machine_id.clone()));
+    super::take_route(&network, &forward, &direct, route);
+}
+
+/// The member route to take: the one whose slowest round is fastest, among those at least [`GAIN`] times the direct
+/// route in every round and above [`MIN_RATE`].
+pub fn pick(direct: &[u64], members: &[Vec<u64>]) -> Option<usize> {
+    members
+        .iter()
+        .enumerate()
+        .filter(|(_, rates)| {
+            rates.len() == direct.len()
+                && !rates.is_empty()
+                && rates.iter().zip(direct).all(|(rate, direct)| *rate >= MIN_RATE && *rate as f64 >= GAIN * (*direct).max(1) as f64)
+        })
+        .max_by_key(|(_, rates)| rates.iter().min().copied().unwrap_or(0))
+        .map(|(i, _)| i)
+}
+
+/// Forget a member's route when it stops answering; `ports::fall_back` puts the direct one back.
+pub fn forget(network: &Network, target: &str) {
+    network.ports.book.set(target, None);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_member_route_is_taken_only_when_it_is_much_faster_every_time() {
+        let kb = 1024;
+        // instabox → Mac directly about 90 KB/s; through kdi-vps about 700 KB/s.
+        assert_eq!(pick(&[90 * kb, 95 * kb], &[vec![700 * kb, 650 * kb]]), Some(0));
+        assert_eq!(pick(&[90 * kb, 95 * kb], &[vec![700 * kb, 150 * kb]]), None, "one slow round is not sustained");
+        assert_eq!(pick(&[400 * kb, 400 * kb], &[vec![700 * kb, 750 * kb]]), None, "less than twice as fast");
+        assert_eq!(pick(&[0, 0], &[vec![30 * kb, 30 * kb]]), None, "too slow to be worth it whatever the ratio");
+        assert_eq!(pick(&[0, 0], &[vec![100 * kb, 100 * kb]]), Some(0), "a direct route that carries nothing");
+        assert_eq!(pick(&[90 * kb, 90 * kb], &[vec![500 * kb, 600 * kb], vec![900 * kb, 800 * kb]]), Some(1), "the faster member");
+        assert_eq!(pick(&[90 * kb], &[vec![]]), None);
+    }
+}

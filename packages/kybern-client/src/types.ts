@@ -4186,11 +4186,21 @@ export interface PortForward {
   https_certificate?: string;
   /** Its SHA-256 fingerprint, lowercase hex of the DER. */
   https_certificate_sha256?: string;
+  /** The member new connections travel through when it reaches the machine much faster than the direct route. */
+  route_via?: PortRouteVia;
+  /** A page load in progress over this forward, while it is still fetching. */
+  loading?: PortLoad;
 }
+export interface PortRouteVia { machine_id: MachineId; machine_name: string }
+/** What a forward has fetched for the page loading now; `expected_bytes` is what its previous complete load transferred. */
+export interface PortLoad { received_bytes: number; cached_bytes?: number; expected_bytes?: number; bytes_per_second: number; open_requests: number; elapsed_ms: number }
 export interface PortsListResult { forwards: PortForward[] }
 export interface PeerPortsPrepareParams { forward_id: string; port: number; direct_version?: number }
 export interface PeerPortsDirect { port: number; token: string; version?: number }
 export interface PeerPortsPrepareResult { direct?: PeerPortsDirect }
+export interface PeerPortsViaParams { forward_id: string; via: MachineId }
+export interface PeerPortsHopParams { forward_id: string; target: MachineId; port: number }
+export interface PeerPortsHopResult { port: number; token: string }
 export interface PeerPortsReleaseParams { forward_id: string }
 export interface PeerPortsOpenParams { stream_id: number; port: number }
 
@@ -4856,6 +4866,8 @@ export interface Methods {
   "peer.ports.prepare": [PeerPortsPrepareParams, PeerPortsPrepareResult];
   "peer.ports.release": [PeerPortsReleaseParams, Empty];
   "peer.ports.open": [PeerPortsOpenParams, Empty];
+  "peer.ports.via": [PeerPortsViaParams, Empty];
+  "peer.ports.hop": [PeerPortsHopParams, PeerPortsHopResult];
   "peer.ports.data": [PeerRelayDataParams, Empty];
   "peer.ports.close": [PeerRelayCloseParams, Empty];
 }

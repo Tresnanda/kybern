@@ -377,6 +377,8 @@ impl Network {
             features::PORTS_V1.to_string(),
             features::PORTS_DIRECT_V1.to_string(),
             features::PORTS_DIRECT_V2.to_string(),
+            features::PORTS_CACHE_V1.to_string(),
+            features::PORTS_ROUTE_V1.to_string(),
             features::RELAY_FRAMES_V2.to_string(),
             features::CLIPBOARD_V1.to_string(),
             features::GROUP_V1.to_string(),

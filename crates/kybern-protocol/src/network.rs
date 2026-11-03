@@ -40,6 +40,14 @@ pub mod features {
     /// sockets ready before the browser asks (pre-warmed), and one socket can carry an HTTP/2 connection that the
     /// target spreads over pooled HTTP/1.1 connections to its dev server (the Fast mode of a preview).
     pub const PORTS_DIRECT_V2: &str = "ports.direct.v2";
+    /// A forward's HTTP/2 connection (mode `H`) also takes one batched revalidation request: the viewing machine
+    /// sends the validators of the responses it keeps, this machine checks each against its dev server over
+    /// loopback, and only changed bodies come back (ADE-126).
+    pub const PORTS_CACHE_V1: &str = "ports.cache.v1";
+    /// Port routes through another member (ADE-126): `peer.ports.hop` (this machine relays a member's forward
+    /// connections to a third machine), `peer.ports.via` (this machine accepts a forward's connections relayed by
+    /// a named member), and a timed throughput probe (mode `P`) on ready sockets.
+    pub const PORTS_ROUTE_V1: &str = "ports.route.v1";
     /// Relay and port stream data travels as binary WebSocket frames, without base64 or JSON, and a stream's
     /// credit window is [`crate::RELAY_WINDOW_V2`] instead of 256 KiB.
     pub const RELAY_FRAMES_V2: &str = "relay.frames.v2";
@@ -74,7 +82,7 @@ pub mod features {
     pub const REMOVAL_PROOF_V1: &str = "removal.proof.v1";
 
     /// Every feature the network design names, in design order.
-    pub const ALL: [&str; 25] = [
+    pub const ALL: [&str; 27] = [
         NETWORK_V1,
         SPACES_SYNC_V1,
         RELAY_V1,
@@ -87,6 +95,8 @@ pub mod features {
         PORTS_V1,
         PORTS_DIRECT_V1,
         PORTS_DIRECT_V2,
+        PORTS_CACHE_V1,
+        PORTS_ROUTE_V1,
         RELAY_FRAMES_V2,
         SETTINGS_FANOUT_V1,
         NOTES_FEDERATED_V1,
