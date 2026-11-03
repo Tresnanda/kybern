@@ -245,7 +245,7 @@ async fn send(
 
 /// Revalidate everything the cache keeps, in one request, while the page's own requests wait for it.
 fn start_batch(network: &Arc<Network>, forward: &Arc<Forward>, route: &Arc<Route>, host: &str) {
-    let Some((entries, done)) = forward.cache.begin_batch() else { return };
+    let Some((entries, done)) = forward.cache.begin_batch(host) else { return };
     let (network, forward, route, host) = (network.clone(), forward.clone(), route.clone(), host.to_string());
     tokio::spawn(async move {
         let started = std::time::Instant::now();

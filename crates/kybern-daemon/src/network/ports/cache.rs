@@ -353,14 +353,21 @@ impl Cache {
         self.lock().size
     }
 
-    /// Start a batch for a page load: the kept responses to revalidate, or `None` when there are none or a batch runs or
-    /// just ran. The returned sender ends the batch.
-    pub fn begin_batch(&self) -> Option<(Vec<Arc<Entry>>, tokio::sync::watch::Sender<bool>)> {
+    /// Start a batch for a page load on `host`: the kept responses of that host to revalidate, or `None` when there are
+    /// none or a batch runs or just ran. The returned sender ends the batch.
+    pub fn begin_batch(&self, host: &str) -> Option<(Vec<Arc<Entry>>, tokio::sync::watch::Sender<bool>)> {
         let mut state = self.lock();
         if state.batch.is_some() || state.last_batch.is_some_and(|at| at.elapsed() < BATCH_SPACING) {
             return None;
         }
-        let mut entries: Vec<Arc<Entry>> = state.entries.values().flatten().cloned().collect();
+        // The plain and the Fast listener are different hosts with their own entries; a page loads from one of them.
+        let mut entries: Vec<Arc<Entry>> = state
+            .entries
+            .values()
+            .flatten()
+            .filter(|entry| entry.key.strip_prefix(host).is_some_and(|path| path.starts_with('/')))
+            .cloned()
+            .collect();
         if entries.is_empty() {
             return None;
         }
@@ -764,9 +771,12 @@ mod tests {
         for name in ["/same", "/new", "/gone", "/silent"] {
             keep(&cache, &format!("h{name}"), &[("host", "h")], &[("etag", "\"1\"")], name);
         }
+        keep(&cache, "other/x", &[("host", "other")], &[("etag", "\"1\"")], "x");
         cache.invalidate();
-        let (entries, done) = cache.begin_batch().unwrap();
-        assert!(cache.begin_batch().is_none(), "one batch at a time");
+        assert!(cache.begin_batch("nothing-here").is_none(), "no entries of that host");
+        let (entries, done) = cache.begin_batch("h").unwrap();
+        assert_eq!(entries.len(), 4, "only the page's own host");
+        assert!(cache.begin_batch("h").is_none(), "one batch at a time");
         let index = |key: &str| entries.iter().position(|entry| entry.key == key).unwrap();
         assert_eq!(path_of(&entries[index("h/new")]), "/new");
         let mut wire = Vec::new();
@@ -785,6 +795,8 @@ mod tests {
         assert_eq!((&new.body[..], new.etag.as_deref()), (&b"fresh body"[..], Some("\"2\"")));
         assert!(matches!(cache.lookup("h/gone", &headers), Lookup::Miss));
         assert!(matches!(cache.lookup("h/silent", &headers), Lookup::Miss), "an entry the answer left out is dropped");
+        assert!(matches!(cache.lookup("other/x", &request(&[("host", "other")])), Lookup::Stale(_)), "another host's entry is left alone");
+        assert!(matches!(cache.lookup("other/x", &request(&[("host", "other")])), Lookup::Stale(_)), "another host's entry is left alone");
         assert!(parse_batch(&[0, 0, 0, 9, b'{']).is_none(), "a cut answer is refused");
     }
 
