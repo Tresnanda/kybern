@@ -38,7 +38,26 @@ without asking. The app's own executable can change freely.
 - Keep the source minimal for the same reason. Logic belongs in the app (`combinedKeychain.ts`).
 - To rebuild on purpose: set up the signing identity (`eval "$(scripts/macos-signing.sh setup)"`
   with the .p12 secrets), run `./build.sh`, commit the binary and the new `pin.json`, and say in the
-  release notes that macOS asks once for the keychain password.
+  release notes that macOS asks once for the keychain password. The checks below must still pass.
+
+## Checks
+
+A change cannot swap the binary on its own:
+
+- `reproduce.sh` rebuilds the helper from `kybern-keychain.c` (`build.sh --unsigned`) and compares it with the
+  committed binary, both with their code signatures removed: every byte of every architecture except `LC_UUID`,
+  which the linker derives from temporary object file paths, and the `__LINKEDIT` vmsize, which still counts the
+  removed signature (`macho_normalize.py`). It needs the Xcode the helper was linked with (27.0; it checks the SDK
+  and linker version first). CI runs it on the `xcode-27` runner for every change under `apps/gpuix`, and the
+  Desktop workflow before it packages macOS.
+- `verify-signer.sh` checks that the helper is signed as `dev.kybern.keychain` by the release certificate: the
+  SHA-1 of its leaf certificate must equal the repository variable `MACOS_KEYCHAIN_HELPER_CERT_SHA1`, which a
+  pull request cannot change. The Desktop workflow runs it before packaging; packaging fails on a mismatch.
+- `.github/CODEOWNERS` asks for the owner's review of anything in this folder.
+
+After rebuilding with Xcode other than 27.0, update the Xcode in `reproduce.sh`'s callers (`ci.yml`, `desktop.yml`).
+After rotating the certificate, set the variable to the new certificate's SHA-1
+(`gh variable set MACOS_KEYCHAIN_HELPER_CERT_SHA1 --body <sha1>`).
 
 ## First update to a release with the helper
 
