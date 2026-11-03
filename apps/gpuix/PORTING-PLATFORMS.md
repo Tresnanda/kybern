@@ -139,6 +139,27 @@ Evidence:
    invalidated with `window.refresh()`, which turns every cached island off; it
    now takes the macOS island path (`KYBERN_FULL_INVALIDATE=1` restores the
    refresh for A/B runs).
+   **Typing (0.21.5 Windows reports, fork `key-detach`):** an answer that
+   streams keeps the UI thread drawing back to back (about 120 draws/s, 8 ms
+   each, on a Ryzen 7 5800H), so every waited call costs about one frame. Typing
+   into the composer of a 24-turn thread made 10.6 waited calls per key
+   (`getInputSelection` ×4.7, `subscribeAnimationFrames`, `getFocusedElementId`,
+   `getElementBounds`, `setInputDecorations`, `updateMarkdownDocument`): about
+   110 ms of blocked JS per key there, and several times that on slower PCs,
+   where keys queued for seconds. The intercepted key's answer
+   (`resolveKeyEvent`) was one of them and threw "Timed out after 2 seconds
+   waiting for a window update" into the app whenever the UI thread stayed busy
+   that long. Now `resolveKeyEvent`, `subscribeAnimationFrames` and
+   `setInputDecorations` are queued, `getElementBounds` answers with the last
+   painted bounds without `window.refresh()` (GPUI runs next-frame callbacks
+   before it draws, so the old frame wait returned the same bounds), the
+   document registries are kept on the renderer, and the composer reads its
+   selection once per event, its card width only with the completion menu
+   open and the focused element last: 2.3 waited calls (all
+   `getInputSelection`) and about 22 ms per key, key-to-paint p90 from about
+   105 to 55 ms. `platform-smoke.ts` measures it and checks that a key
+   answered across a 4.5 s UI-thread stall (`stallUiThread`) lands without an
+   error.
 4. **Option 2 has real costs that option 1 does not.** Main-thread pumping
    needs an embedded mode in `gpui_linux` (X11 and Wayland calloop dispatch
    from a Bun-polled fd) and `gpui_windows` (a `PeekMessage` pump, with

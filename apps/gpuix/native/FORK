@@ -29,7 +29,10 @@ repo=https://github.com/Tresnanda/gpuix.git
 # main-queue turn instead of inside a draw that holds the window lock (0.20.4 deadlocked in
 # resetCursorRects), AppKit display-cycle callbacks that defer instead of waiting on that lock, and
 # the kick-reentry/flush-in-draw faults, until merged into `kybern`.
-commit=9fd7417117bb70c713cc2a44ee46bd521422c51f
+# `key-detach`: that plus no UI-thread waits per keystroke off macOS (resolveKeyEvent, subscribeAnimationFrames and
+# setInputDecorations queued; getElementBounds answers with the last painted bounds without window.refresh(); the
+# Markdown and syntax document registries kept on the renderer) and stallUiThread for the checks; no zed change.
+commit=c68a519217231213018e0dd24bf036437e35af5e
 # The zed submodule commit `commit` records; update.sh refuses a checkout that differs.
 zed=a2275d84c575f48d149e8f1768248c843fc66040
 # The upstream tag `commit` is based on. It must be `@gpuix/native@<VERSION>`.
