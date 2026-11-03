@@ -1,13 +1,13 @@
 import { expect, test } from 'bun:test'
 import type { PortForward, PortLoad } from '../../../../packages/kybern-client/src/types.ts'
-import { amount, forwardOf, rate, routeText, slowLoadText } from './slow.ts'
+import { amount, forwardOf, looksSlow, rate, routeText, slowLoadDetail, slowLoadText } from './slow.ts'
 
 const load = (patch: Partial<PortLoad> = {}): PortLoad => ({ received_bytes: 4_200_000, bytes_per_second: 90_000, open_requests: 12, elapsed_ms: 4000, ...patch })
 
 test('a page that is still fetching after three seconds says how far it got', () => {
   expect(slowLoadText(load({ expected_bytes: 31_000_000 }))).toBe('Loading over a slow connection — 4.2 of 31 MB · 90 KB/s')
   expect(slowLoadText(load())).toBe('Loading over a slow connection — 4.2 MB · 90 KB/s')
-  expect(slowLoadText(load({ received_bytes: 300_000, cached_bytes: 500_000, bytes_per_second: 2_400_000 }))).toBe('Loading over a slow connection — 800 KB · 2.4 MB/s')
+  expect(slowLoadText(load({ received_bytes: 300_000, cached_bytes: 500_000, bytes_per_second: 2_400_000, elapsed_ms: 12_000 }))).toBe('Loading over a slow connection — 800 KB · 2.4 MB/s')
 })
 
 test('a fast, finished or stalled-before-any-bytes load shows nothing', () => {
@@ -15,6 +15,20 @@ test('a fast, finished or stalled-before-any-bytes load shows nothing', () => {
   expect(slowLoadText(load({ elapsed_ms: 2500 }))).toBeNull()
   expect(slowLoadText(load({ open_requests: 0 }))).toBeNull()
   expect(slowLoadText(load({ received_bytes: 0 }))).toBeNull()
+})
+
+test('a load on a fast link shows nothing, unless much is left or it runs long', () => {
+  expect(slowLoadText(load({ bytes_per_second: 5_000_000, expected_bytes: 31_000_000 }))).toBeNull()
+  expect(slowLoadText(load({ bytes_per_second: 2_000_000 }))).toBeNull()
+  expect(looksSlow(load({ bytes_per_second: 1_000_000, expected_bytes: 31_000_000 }))).toBe(true)
+  expect(looksSlow(load({ bytes_per_second: 2_000_000, elapsed_ms: 12_000 }))).toBe(true)
+  expect(looksSlow(load({ bytes_per_second: 90_000 }))).toBe(true)
+})
+
+test('only the figures change while the strip stays up', () => {
+  expect(slowLoadDetail(load({ expected_bytes: 31_000_000 }))).toBe('4.2 of 31 MB · 90 KB/s')
+  expect(slowLoadDetail(load({ received_bytes: 8_400_000, expected_bytes: 31_000_000, bytes_per_second: 120_000 }))).toBe('8.4 of 31 MB · 120 KB/s')
+  expect(slowLoadDetail(undefined)).toBeNull()
 })
 
 test('amounts and rates read plainly', () => {

@@ -871,7 +871,7 @@ async fn run_plain_http() {
         .route(
             "/slow",
             get(|| async {
-                let chunks = futures::stream::iter(0..6).then(|i| async move {
+                let chunks = futures::stream::iter(0..8).then(|i| async move {
                     tokio::time::sleep(Duration::from_millis(500)).await;
                     Ok::<_, std::convert::Infallible>(format!("chunk {i} {}\n", "x".repeat(4000)))
                 });
@@ -918,7 +918,8 @@ async fn run_plain_http() {
     let forward =
         client.call::<PortsForward>(PortsForwardParams { machine: b.id(), remote_port, local_port: None, https: false }).await.unwrap();
     let port = forward.local_port;
-    let gzip = [("accept-encoding", "gzip, deflate, br")];
+    // What a page's module script sends: only such subresources are answered from what a page load's batch confirmed.
+    let gzip = [("accept-encoding", "gzip, deflate, br"), ("sec-fetch-dest", "script")];
 
     // Text is compressed on the target for a plain forward too; Kybern's own header never reaches the browser.
     let (status, headers, body) = plain_get(port, "/m/1", &gzip).await;
@@ -957,9 +958,15 @@ async fn run_plain_http() {
     assert_eq!(full.load(Ordering::SeqCst), 21, "only the changed module's body crossed again");
     assert_eq!(unchanged.load(Ordering::SeqCst), 2 + 19, "the other 19 kept modules were confirmed by the batch");
     // The browser's own conditional request is answered here.
-    let (status, _, _) = plain_get(port, "/m/4", &[("accept-encoding", "gzip, deflate, br"), ("if-none-match", "W/\"4-1\"")]).await;
+    let (status, _, _) =
+        plain_get(port, "/m/4", &[("accept-encoding", "gzip, deflate, br"), ("sec-fetch-dest", "script"), ("if-none-match", "W/\"4-1\"")])
+            .await;
     assert_eq!(status, 304);
     assert_eq!(unchanged.load(Ordering::SeqCst), 21, "answered here");
+    // The same module fetched as data (a `fetch`, destination empty) is asked about: the target confirms it with a 304.
+    let (status, _, _) = plain_get(port, "/m/4", &[("accept-encoding", "gzip, deflate, br"), ("sec-fetch-dest", "empty")]).await;
+    assert_eq!(status, 200);
+    assert_eq!(unchanged.load(Ordering::SeqCst), 22, "a fetch is never answered without asking");
 
     // Hot reload works through the forward, and an update makes kept responses ask again.
     let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/hmr")).await.unwrap();
@@ -970,7 +977,7 @@ async fn run_plain_http() {
     let (status, _, body) = plain_get(port, "/m/5", &gzip).await;
     assert_eq!(status, 200);
     assert!(gunzip(&body).starts_with("export const m5 = 1"));
-    assert_eq!(unchanged.load(Ordering::SeqCst), 22, "revalidated after the hot update, with no body");
+    assert_eq!(unchanged.load(Ordering::SeqCst), 23, "revalidated after the hot update, with no body");
     assert_eq!(full.load(Ordering::SeqCst), 21);
 
     // A slow response shows as a load in progress, then goes away.
@@ -980,7 +987,7 @@ async fn run_plain_http() {
         views().loading.is_some_and(|load| load.received_bytes > 0 && load.open_requests == 1)
     })
     .await;
-    assert_eq!(slow.await.unwrap().2.len(), 6 * 4009);
+    assert_eq!(slow.await.unwrap().2.len(), 8 * 4009);
     crate::network::harness::eventually("the load ends", Duration::from_secs(5), || views().loading.is_none()).await;
 
     // Nothing went over the session's WebSocket.
@@ -1000,6 +1007,92 @@ async fn run_plain_http() {
     assert_eq!(&echo, b"GET / HTTP/1.1\r\n\r\n", "after the server spoke first, even HTTP-looking bytes pass as they are");
     dev.abort();
     greeting.abort();
+}
+
+#[test]
+fn a_cached_api_answer_never_hides_a_write() {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .thread_stack_size(crate::RUNTIME_THREAD_STACK)
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(run_api_after_write());
+}
+
+/// One request with a body on a new connection to a forward's plain listener.
+async fn plain_send(port: u16, method: &str, path: &str, headers: &[(&str, &str)], body: &str) -> (hyper::StatusCode, hyper::body::Bytes) {
+    use http_body_util::{BodyExt, Full};
+    let socket = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    let (mut sender, connection) = hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(socket)).await.unwrap();
+    tokio::spawn(connection);
+    let mut request = hyper::Request::builder().method(method).uri(path).header("host", format!("127.0.0.1:{port}"));
+    for (name, value) in headers {
+        request = request.header(*name, *value);
+    }
+    let response = sender.send_request(request.body(Full::new(hyper::body::Bytes::from(body.to_string()))).unwrap()).await.unwrap();
+    let (parts, body) = response.into_parts();
+    (parts.status, body.collect().await.unwrap().to_bytes())
+}
+
+/// Express's default for `res.json()`: a weak ETag of the body and no `Cache-Control`. A list read, written and read
+/// again through the forward must show the write, during a page load whose batch confirmed the old list as well.
+async fn run_api_after_write() {
+    use std::sync::Mutex;
+    let (a, b) = direct_pair().await;
+    let items = Arc::new(Mutex::new(vec!["one".to_string()]));
+    let list = {
+        let items = items.clone();
+        move |headers: axum::http::HeaderMap| {
+            let items = items.clone();
+            async move {
+                let body = serde_json::to_string(&*items.lock().unwrap()).unwrap();
+                let tag = format!("W/\"{}-{}\"", body.len(), body.bytes().map(u32::from).sum::<u32>());
+                if headers.get("if-none-match").and_then(|h| h.to_str().ok()) == Some(tag.as_str()) {
+                    return axum::http::Response::builder().status(304).header("etag", tag).body(axum::body::Body::empty()).unwrap();
+                }
+                axum::http::Response::builder()
+                    .header("content-type", "application/json; charset=utf-8")
+                    .header("etag", tag)
+                    .body(axum::body::Body::from(body))
+                    .unwrap()
+            }
+        }
+    };
+    let add = {
+        let items = items.clone();
+        move |body: String| {
+            let items = items.clone();
+            async move {
+                items.lock().unwrap().push(body);
+                axum::http::StatusCode::CREATED
+            }
+        }
+    };
+    let app = Router::new()
+        .route("/", get(|| async { ([("content-type", "text/html")], "<script type=module src=/app.js></script>") }))
+        .route("/api/items", get(list).post(add));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let remote_port = listener.local_addr().unwrap().port();
+    let dev = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let (client, _) = a.client(&Scope::ALL).await;
+    let forward =
+        client.call::<PortsForward>(PortsForwardParams { machine: b.id(), remote_port, local_port: None, https: false }).await.unwrap();
+    let port = forward.local_port;
+    let fetch = [("sec-fetch-dest", "empty"), ("sec-fetch-mode", "cors"), ("accept", "application/json")];
+    let navigate = [("sec-fetch-mode", "navigate"), ("sec-fetch-dest", "document")];
+
+    assert_eq!(&plain_get(port, "/api/items", &fetch).await.2[..], br#"["one"]"#);
+    // A page load: its batch confirms the kept list.
+    assert_eq!(plain_get(port, "/", &navigate).await.0, 200);
+    assert_eq!(&plain_get(port, "/api/items", &fetch).await.2[..], br#"["one"]"#);
+    let (status, _) = plain_send(port, "POST", "/api/items", &[("content-type", "text/plain")], "two").await;
+    assert_eq!(status, 201);
+    assert_eq!(&plain_get(port, "/api/items", &fetch).await.2[..], br#"["one","two"]"#, "the write shows at once");
+    // Written behind the forward's back (another client of the dev server): still seen, since data is always asked about.
+    items.lock().unwrap().push("three".into());
+    assert_eq!(&plain_get(port, "/api/items", &fetch).await.2[..], br#"["one","two","three"]"#);
+    dev.abort();
 }
 
 /// A three-machine tailnet where each node has its own loopback address (Linux and Windows route all of 127/8).
@@ -1121,5 +1214,20 @@ async fn run_hop() {
         !t.state.network.ports.direct.relays_through(&v.id(), forward.id, straight.endpoint.port, &m.id())
     })
     .await;
+
+    // Dropping the member at the target ends a connection it relays at once, not when the browser lets go. The route
+    // works only because the target proved itself through the member (a signed nonce), which `open` checks.
+    let route = hop::through(&v.state.network, &forward, &straight, &m.id(), "m").await.expect("a second route through m");
+    let mut relayed = route.open(&v.state.network, crate::network::ports::direct::MODE_RAW).await.expect("a relayed socket");
+    tokio::io::AsyncWriteExt::write_all(&mut relayed, b"GET / HTTP/1.1\r\nhost: x\r\n\r\n").await.unwrap();
+    let mut answer = [0u8; 12];
+    tokio::io::AsyncReadExt::read_exact(&mut relayed, &mut answer).await.unwrap();
+    assert_eq!(&answer, b"HTTP/1.1 200");
+    t.state.network.ports.direct.drop_via(&v.id(), forward.id, &m.id());
+    let mut rest = Vec::new();
+    let ended = tokio::time::timeout(Duration::from_secs(3), tokio::io::AsyncReadExt::read_to_end(&mut relayed, &mut rest)).await;
+    assert!(ended.is_ok(), "the relayed connection ended when the member was dropped");
+    assert!(route.open(&v.state.network, crate::network::ports::direct::MODE_RAW).await.is_none(), "and no new one is let in");
+    route.stop();
     dev.abort();
 }

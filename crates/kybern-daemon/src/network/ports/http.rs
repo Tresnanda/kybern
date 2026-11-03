@@ -15,7 +15,7 @@ use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
 
-use http_body_util::{BodyExt, Limited};
+use http_body_util::BodyExt;
 use hyper::body::{Bytes, Incoming};
 use hyper::header::{HeaderMap, HeaderValue};
 use hyper::{Request, Response, StatusCode};
@@ -32,8 +32,10 @@ const TARGET: &str = "kybern::network::ports";
 /// How long the plain listener waits for the browser's first bytes before it asks the target too (a server-first
 /// protocol speaks then).
 const SNIFF_WAIT: Duration = Duration::from_millis(250);
-/// A batch may take this long before its page's requests ask on their own.
+/// A batch may take this long before the requests it has not answered yet ask on their own.
 const BATCH_TIMEOUT: Duration = Duration::from_secs(30);
+/// What one batch answer may bring at most.
+const MAX_BATCH_ANSWER: usize = 96 * 1024 * 1024;
 
 /// What the first bytes of a connection say.
 pub(super) enum Sniffed {
@@ -159,10 +161,22 @@ pub(super) async fn exchange(
     if let Ok(value) = HeaderValue::from_str(&host) {
         browser.insert(hyper::header::HOST, value);
     }
+    let navigation = cache::is_navigation(&parts.method, &browser);
+    if navigation {
+        // A new page: its load counts from here, and the old page's requests no longer keep a load open.
+        forward.load.navigated();
+    }
     let meter = Metering::begin(network, forward);
     let caching = forward.caches();
-    if caching && cache::is_navigation(&parts.method, &browser) {
+    if caching && navigation {
         start_batch(network, forward, &route, &host);
+    }
+    // A write may change what the server answers for anything of its host (RFC 9111 §4.4): before it leaves and again
+    // when its answer arrives, so a read that crossed it is not kept as current either.
+    let writes =
+        caching && !matches!(parts.method, hyper::Method::GET | hyper::Method::HEAD | hyper::Method::OPTIONS | hyper::Method::TRACE);
+    if writes {
+        forward.cache.written(&host);
     }
     let key = caching.then(|| cache::request_key(&parts.method, &browser, &path)).flatten();
     let mut stale = None;
@@ -202,6 +216,9 @@ pub(super) async fn exchange(
         Some(response) => response,
         None => return status_response(StatusCode::BAD_GATEWAY),
     };
+    if writes {
+        forward.cache.written(&host);
+    }
     let (mut parts, body) = response.into_parts();
     strip_hop_headers(&mut parts.headers);
     if let Some(entry) = stale {
@@ -256,44 +273,61 @@ async fn send(
     }
 }
 
-/// Revalidate everything the cache keeps, in one request, while the page's own requests wait for it.
+/// Revalidate everything the cache keeps for `host`, in one request. Each record of the answer is applied as it arrives,
+/// letting the page's requests that wait for that entry go on; a timeout keeps what already arrived.
 fn start_batch(network: &Arc<Network>, forward: &Arc<Forward>, route: &Arc<Route>, host: &str) {
-    let Some((entries, done)) = forward.cache.begin_batch(host) else { return };
+    let Some(mut run) = forward.cache.begin_batch(host) else { return };
     let (network, forward, route, host) = (network.clone(), forward.clone(), route.clone(), host.to_string());
     tokio::spawn(async move {
         let started = std::time::Instant::now();
         let meter = Metering::begin(&network, &forward);
-        let run = async {
-            let request = cache::batch_request(&entries, &host)?;
+        let budget = cache::batch_budget(forward.load.last_rate());
+        let mut answered = 0usize;
+        let read = async {
+            let request = cache::batch_request(&run.entries, &host, budget)?;
             let response = send(&network, &forward, &route, request).await?;
             if response.status() != StatusCode::OK {
                 return None;
             }
-            let body = Limited::new(response.into_body(), 96 * 1024 * 1024).collect().await.ok()?.to_bytes();
-            meter.received(body.len());
-            cache::parse_batch(&body)
+            let mut body = response.into_body();
+            let mut reader = cache::BatchReader::default();
+            let mut size = 0usize;
+            while let Some(frame) = body.frame().await {
+                let Ok(data) = frame.ok()?.into_data() else { continue };
+                size += data.len();
+                if size > MAX_BATCH_ANSWER {
+                    return None;
+                }
+                meter.received(data.len());
+                for outcome in reader.feed(&data)? {
+                    answered += 1;
+                    forward.cache.apply(&mut run, outcome);
+                }
+            }
+            Some(reader.finished())
         };
-        let outcome = tokio::time::timeout(BATCH_TIMEOUT, run).await.ok().flatten();
-        let answered = outcome.as_ref().map(Vec::len);
-        forward.cache.finish_batch(&entries, outcome, done, started);
-        tracing::info!(target: TARGET, machine = %forward.machine_id, entries = entries.len(), answered, ms = started.elapsed().as_millis() as u64, "revalidated a forward's cache in one batch");
+        let complete = tokio::time::timeout(BATCH_TIMEOUT, read).await.ok().flatten().unwrap_or(false);
+        let entries = run.entries.len();
+        forward.cache.end_batch(run, complete);
+        tracing::info!(target: TARGET, machine = %forward.machine_id, entries, answered, complete, budget, ms = started.elapsed().as_millis() as u64, "revalidated a forward's cache in one batch");
     });
 }
 
 /// A request counted in the forward's load, ended when dropped.
 struct Metering {
     forward: Arc<Forward>,
+    id: u64,
 }
 
 impl Metering {
     fn begin(network: &Arc<Network>, forward: &Arc<Forward>) -> Self {
-        forward.load.begin();
+        let id = forward.load.begin();
         super::watch_load(network, forward);
-        Self { forward: forward.clone() }
+        Self { forward: forward.clone(), id }
     }
 
     fn received(&self, bytes: usize) {
-        self.forward.load.received(bytes);
+        self.forward.load.received(self.id, bytes);
     }
 
     fn cached(&self, bytes: usize) {
@@ -303,7 +337,7 @@ impl Metering {
 
 impl Drop for Metering {
     fn drop(&mut self) {
-        self.forward.load.end();
+        self.forward.load.end(self.id);
     }
 }
 
