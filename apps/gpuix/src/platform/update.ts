@@ -309,13 +309,29 @@ export async function download(url: string, onProgress: (progress: number | null
   return Buffer.concat(chunks)
 }
 
+/** What the `.app` in a macOS update must be: the release the feed offered, newer than `current`, on `track`. */
+export interface BundleExpectation { version: string; current: string; track: UpdateTrack }
+
+/**
+ * The macOS archive's signature names the same file in every release, so the unpacked bundle's own version
+ * (`CFBundleShortVersionString`, set by `scripts/package-app.ts`) must be the release's, newer than this one, and
+ * one this machine's track takes (Stable never takes a prerelease). An older signed archive is refused.
+ */
+export function assertBundleVersion(found: string, expected: BundleExpectation) {
+  const version = found.trim()
+  if (version !== expected.version) throw Error(`The update contains Kybern ${version || 'of an unknown version'}, not ${expected.version}. Download it from the release page.`)
+  if (compareVersions(version, expected.current) <= 0) throw Error('The update is not newer than this version. Download it from the release page.')
+  if (expected.track === 'stable' && version.includes('-')) throw Error('The update is a Dev build, and this machine takes Stable releases. Download it from the release page.')
+}
+
 /**
  * Replace `bundle` with the `.app` inside a verified `.app.tar.gz`. Everything
  * is staged beside the bundle (same volume, so both renames are atomic) and the
  * old bundle comes back if the swap fails. The new bundle must keep this app's
- * identifier, so a mislabelled artifact can never replace Kybern GPUIX.
+ * identifier, so a mislabelled artifact can never replace Kybern GPUIX, and be
+ * the expected release (`assertBundleVersion`), so an older one never does either.
  */
-export async function replaceBundle(bundle: string, archive: Uint8Array, identifier = 'dev.kybern.gpuix') {
+export async function replaceBundle(bundle: string, archive: Uint8Array, expected: BundleExpectation, identifier = 'dev.kybern.gpuix') {
   const parent = path.dirname(bundle)
   const staging = await mkdtemp(path.join(parent, '.kybern-update-'))
   try {
@@ -329,6 +345,8 @@ export async function replaceBundle(bundle: string, archive: Uint8Array, identif
     const next = path.join(unpacked, apps[0]!)
     const { stdout } = await run('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleIdentifier', path.join(next, 'Contents/Info.plist')])
     if (stdout.trim() !== identifier) throw Error(`The update is for ${stdout.trim() || 'another app'}, not this one`)
+    const found = await run('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleShortVersionString', path.join(next, 'Contents/Info.plist')]).then(({ stdout }) => stdout, () => '')
+    assertBundleVersion(found, expected)
     const backup = path.join(staging, 'previous.app')
     await rename(bundle, backup)
     try { await rename(next, bundle) } catch (error) { await rename(backup, bundle); throw error }
@@ -396,8 +414,9 @@ async function prepareInstall(update: Pending, onProgress: (progress: number | n
     assertWindowsInstaller(trustedComment, update.version, desktopVersion())
     return () => runWindowsInstaller(archive, bundle)
   }
+  const expected: BundleExpectation = { version: update.version, current: desktopVersion(), track: await currentTrack() }
   return async () => {
-    await replaceBundle(bundle, archive)
+    await replaceBundle(bundle, archive, expected)
     await relaunch(bundle)
   }
 }
@@ -420,7 +439,7 @@ export const signedFile = (trustedComment: string) => trustedComment.split('\t')
  * The trusted comment is covered by the signature, so it binds the download to a file name. The updater key also
  * signs Tauri's own `-setup.exe` and `.AppImage` and older GPUIX releases, so a swapped feed entry would otherwise
  * install a validly signed build of the wrong app or version. Windows and the Linux AppImage check it; the macOS
- * archive is checked by its bundle identifier instead (`replaceBundle`).
+ * archive is checked by its bundle identifier and version instead (`replaceBundle`, `assertBundleVersion`).
  */
 export function assertSignedRelease(trustedComment: string, expected: string, version: string, current: string) {
   if (signedFile(trustedComment) !== expected) throw Error('The update is not the build for this release. Download it from the release page.')

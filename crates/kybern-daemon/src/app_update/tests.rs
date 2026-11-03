@@ -269,7 +269,7 @@ fn fake_bundle(dir: &Path, identifier: &str, version: &str) -> PathBuf {
     std::fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
     std::fs::write(
         app.join("Contents/Info.plist"),
-        format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>{identifier}</string></dict></plist>\n"),
+        format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>{identifier}</string><key>CFBundleShortVersionString</key><string>{version}</string></dict></plist>\n"),
     )
     .unwrap();
     std::fs::write(app.join("Contents/MacOS/kybernd"), version).unwrap();
@@ -298,21 +298,59 @@ fn the_app_bundle_is_swapped_in_place_and_only_for_kybern() {
     let next = tar_gz(&fake_bundle(&root.join("next"), "dev.kybern.gpuix", "0.21.4"), &root.join("next.tar.gz"));
     let wrong = tar_gz(&fake_bundle(&root.join("wrong"), "dev.kybern.desktop", "9.0.0"), &root.join("wrong.tar.gz"));
 
-    assert!(install::replace_bundle(&installed, &wrong).unwrap_err().to_string().contains("dev.kybern.desktop"));
+    let expected = install::BundleCheck { version: "0.21.4", current: "0.21.3", track: UpdateTrack::Stable };
+    assert!(install::replace_bundle(&installed, &wrong, &expected).unwrap_err().to_string().contains("dev.kybern.desktop"));
     assert_eq!(
         std::fs::read_to_string(installed.join("Contents/MacOS/kybernd")).unwrap(),
         "0.21.3",
         "a refused update leaves the app alone"
     );
-    install::replace_bundle(&installed, &next).unwrap();
+    // An older signed build, or one that is not the release the feed named, is refused and leaves the app alone.
+    let older = tar_gz(&fake_bundle(&root.join("older"), "dev.kybern.gpuix", "0.21.2"), &root.join("older.tar.gz"));
+    let older_expected = install::BundleCheck { version: "0.21.2", ..expected };
+    assert!(install::replace_bundle(&installed, &older, &older_expected).unwrap_err().to_string().contains("not newer"));
+    assert!(install::replace_bundle(&installed, &older, &expected).unwrap_err().to_string().contains("contains Kybern 0.21.2, not 0.21.4"));
+    assert_eq!(std::fs::read_to_string(installed.join("Contents/MacOS/kybernd")).unwrap(), "0.21.3");
+    install::replace_bundle(&installed, &next, &expected).unwrap();
     assert_eq!(std::fs::read_to_string(installed.join("Contents/MacOS/kybernd")).unwrap(), "0.21.4");
     let left: Vec<_> = std::fs::read_dir(root.join("Applications")).unwrap().flatten().map(|entry| entry.file_name()).collect();
     assert_eq!(left, vec![std::ffi::OsString::from("Kybern GPUIX.app")], "the staging folder is gone");
 
     // Something that is not Kybern GPUIX is never replaced.
     let other = fake_bundle(&root.join("Other"), "com.example.other", "1");
-    assert!(install::replace_bundle(&other, &next).is_err());
+    assert!(install::replace_bundle(&other, &next, &expected).is_err());
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_macos_bundle_must_be_the_release_newer_than_this_one_and_on_this_track() {
+    let stable = install::BundleCheck { version: "0.21.4", current: "0.21.3", track: UpdateTrack::Stable };
+    assert!(install::check_bundle_version("0.21.4\n", &stable).is_ok());
+    assert!(install::check_bundle_version("0.21.5", &stable).unwrap_err().to_string().contains("not 0.21.4"));
+    assert!(install::check_bundle_version("", &stable).unwrap_err().to_string().contains("unknown version"));
+    let same = install::BundleCheck { current: "0.21.4", ..stable };
+    assert!(install::check_bundle_version("0.21.4", &same).unwrap_err().to_string().contains("not newer"));
+    let older = install::BundleCheck { version: "0.21.2", ..stable };
+    assert!(install::check_bundle_version("0.21.2", &older).unwrap_err().to_string().contains("not newer"));
+    let dev_build = install::BundleCheck { version: "0.21.5-dev.1", ..stable };
+    assert!(install::check_bundle_version("0.21.5-dev.1", &dev_build).unwrap_err().to_string().contains("Stable"));
+    let on_dev = install::BundleCheck { track: UpdateTrack::Dev, ..dev_build };
+    assert!(install::check_bundle_version("0.21.5-dev.1", &on_dev).is_ok());
+}
+
+#[test]
+fn an_appimage_is_swapped_only_over_an_appimage() {
+    let dir = scratch("appimage-target");
+    let image = dir.join("Kybern.AppImage");
+    std::fs::write(&image, appimage_header(62)).unwrap();
+    assert!(install::check_installed_appimage(&image, "x86_64").is_ok());
+    assert!(install::check_installed_appimage(&image, "aarch64").is_err(), "an image for another machine");
+    std::fs::write(&image, "#!/bin/sh\necho not an image\n").unwrap();
+    assert!(install::check_installed_appimage(&image, "x86_64").unwrap_err().to_string().contains("is not a Kybern AppImage"));
+    std::fs::write(&image, "").unwrap();
+    assert!(install::check_installed_appimage(&image, "x86_64").is_err(), "an empty file");
+    assert!(install::check_installed_appimage(&dir.join("missing"), "x86_64").is_err());
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

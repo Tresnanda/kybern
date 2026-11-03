@@ -12,7 +12,7 @@ use kybern_protocol::UpdateTrack;
 use kybern_protocol::process::NoWindow;
 use serde_json::Value;
 
-use crate::self_update::newer;
+use crate::self_update::{newer, on_track};
 
 /// The app's bundle identifier; nothing else is ever replaced.
 pub const BUNDLE_ID: &str = "dev.kybern.gpuix";
@@ -319,6 +319,10 @@ pub fn appimage_name(version: &str, arch: &str) -> String {
 pub struct Prepared {
     pub version: String,
     pub data: Vec<u8>,
+    /// The update track it was read for and the version it replaces, which the macOS bundle is checked against once
+    /// it is unpacked.
+    pub track: UpdateTrack,
+    pub current: String,
 }
 
 /// Read the feed of `track` and, when it has a newer release for this platform, download and verify it.
@@ -344,7 +348,7 @@ pub async fn prepare(install: &DesktopInstall, track: UpdateTrack, current: &str
         DesktopInstall::MacApp { .. } => {}
         DesktopInstall::Package(_) => bail!("A package install is updated with its package manager"),
     }
-    Ok(Some(Prepared { version: release.version, data }))
+    Ok(Some(Prepared { version: release.version, data, track, current: current.to_string() }))
 }
 
 /// Install a verified download. Returns the daemon binary to restart on, or `None` when the daemon cannot restart on
@@ -353,7 +357,8 @@ pub async fn apply(install: &DesktopInstall, prepared: Prepared) -> Result<Optio
     let install = install.clone();
     tokio::task::spawn_blocking(move || match install {
         DesktopInstall::MacApp { bundle } => {
-            replace_bundle(&bundle, &prepared.data)?;
+            let expected = BundleCheck { version: &prepared.version, current: &prepared.current, track: prepared.track };
+            replace_bundle(&bundle, &prepared.data, &expected)?;
             Ok(Some(bundle.join("Contents").join("MacOS").join("kybernd")))
         }
         DesktopInstall::Windows { dir } => {
@@ -362,6 +367,7 @@ pub async fn apply(install: &DesktopInstall, prepared: Prepared) -> Result<Optio
         }
         DesktopInstall::AppImage { image, bin } => {
             check_appimage(&prepared.data, std::env::consts::ARCH)?;
+            check_installed_appimage(&image, std::env::consts::ARCH)?;
             replace_appimage(&image, &prepared.data)?;
             match stage_appimage_commands(&image, &bin) {
                 Ok(()) => Ok(Some(bin.join("kybernd"))),
@@ -394,10 +400,49 @@ fn bundle_identifier(app: &Path) -> Result<String> {
     run(command, "PlistBuddy")
 }
 
+/// `CFBundleShortVersionString` of an `.app`: the release version it was packaged as (`scripts/package-app.ts`).
+fn bundle_version(app: &Path) -> Result<String> {
+    let mut command = std::process::Command::new("/usr/libexec/PlistBuddy");
+    command.args(["-c", "Print :CFBundleShortVersionString"]).arg(app.join("Contents").join("Info.plist"));
+    run(command, "PlistBuddy")
+}
+
+/// What the `.app` in a macOS update must be. The archive's signature does not name a version (its file name is the
+/// same in every release), so an older signed archive would otherwise install over a newer app.
+#[derive(Debug, Clone, Copy)]
+pub struct BundleCheck<'a> {
+    /// The release the feed offered.
+    pub version: &'a str,
+    /// The version that runs now.
+    pub current: &'a str,
+    /// This machine's update track.
+    pub track: UpdateTrack,
+}
+
+/// The unpacked bundle's version must be the release's, newer than what runs, and one this machine's track takes.
+pub fn check_bundle_version(found: &str, expected: &BundleCheck) -> Result<()> {
+    let found = found.trim();
+    if found != expected.version {
+        bail!(
+            "The update contains Kybern {}, not {}. Download it from the release page.",
+            if found.is_empty() { "of an unknown version" } else { found },
+            expected.version
+        );
+    }
+    if !newer(found, expected.current) {
+        bail!("The update is not newer than this version. Download it from the release page.");
+    }
+    if !on_track(expected.track, found) {
+        bail!("The update is a Dev build, and this machine takes Stable releases. Download it from the release page.");
+    }
+    Ok(())
+}
+
 /// Replace `bundle` with the `.app` inside a verified `.app.tar.gz`. Everything is staged beside the bundle (same
 /// volume, so both renames are atomic) and the old bundle comes back if the swap fails. Both the installed and the new
-/// bundle must be Kybern GPUIX, so a mislabelled artifact never replaces it, and nothing else is ever replaced.
-pub fn replace_bundle(bundle: &Path, archive: &[u8]) -> Result<()> {
+/// bundle must be Kybern GPUIX, so a mislabelled artifact never replaces it, and nothing else is ever replaced. The new
+/// bundle must also be the expected release ([`check_bundle_version`]), so an older signed build never replaces it.
+pub fn replace_bundle(bundle: &Path, archive: &[u8], expected: &BundleCheck) -> Result<()> {
     let parent = bundle.parent().context("The app has no parent folder")?;
     if bundle_identifier(bundle)? != BUNDLE_ID {
         bail!("{} is not Kybern GPUIX", bundle.display());
@@ -422,6 +467,7 @@ pub fn replace_bundle(bundle: &Path, archive: &[u8]) -> Result<()> {
         if identifier != BUNDLE_ID {
             bail!("The update is for {}, not this app", if identifier.is_empty() { "another app" } else { &identifier });
         }
+        check_bundle_version(&bundle_version(next).unwrap_or_default(), expected)?;
         let previous = staging.join("previous.app");
         std::fs::rename(bundle, &previous).with_context(|| format!("move {} aside", bundle.display()))?;
         if let Err(error) = std::fs::rename(next, bundle) {
@@ -519,6 +565,19 @@ pub fn check_appimage(data: &[u8], arch: &str) -> Result<()> {
         bail!("The update is not an AppImage for {}", if arch == "aarch64" { "arm64" } else { "x86-64" });
     }
     Ok(())
+}
+
+/// The file the swap replaces must be an AppImage for this machine too: `bin/appimage` names it, and nothing else is
+/// ever renamed over.
+pub fn check_installed_appimage(image: &Path, arch: &str) -> Result<()> {
+    use std::io::Read;
+    let mut header = Vec::with_capacity(20);
+    std::fs::File::open(image)
+        .and_then(|file| file.take(20).read_to_end(&mut header))
+        .with_context(|| format!("read {}", image.display()))?;
+    check_appimage(&header, arch).map_err(|_| {
+        anyhow!("{} is not a Kybern AppImage, so it is not replaced. Download the update from the release page.", image.display())
+    })
 }
 
 /// Write the new image beside `image` (created exclusively, with its mode) and rename it over, so a copy that runs
