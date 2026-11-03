@@ -11,7 +11,7 @@
 // here), and once per connection for a parent that has children at work (`active_children`, which counts remote
 // ones), has a listed remote child that still says it works, or is opened. Changes after that arrive as
 // notifications. A record whose child appeared or ended asks for a fresh read of its machine's lists.
-import { DELEGATIONS_REMOTE_CHANGED_NOTIFICATION, type MachineId, type RemoteChild, type Thread, type ThreadId } from '../../../../packages/kybern-client/src/types.ts'
+import { DELEGATIONS_REMOTE_CHANGED_NOTIFICATION, DELEGATIONS_REMOTE_RESYNC_NOTIFICATION, type MachineId, type RemoteChild, type Thread, type ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 import { remoteChildStandIn, withRemoteRecord } from '../../../../packages/kybern-client/src/delegations.ts'
 
 export class RemoteDelegationStore {
@@ -165,12 +165,17 @@ export class RemoteDelegations {
   constructor(private readonly store: RemoteDelegationStore, private readonly deps: RemoteDelegationDeps) {}
 
   start() {
-    this.stop = this.deps.onNotification(DELEGATIONS_REMOTE_CHANGED_NOTIFICATION, (params) => {
-      const record = params as RemoteChild
-      if (!record?.task_id || !record.parent_thread_id) return
-      const put = this.store.put(record)
-      if (put && needsListRead(put.previous, record)) this.deps.refreshMachine(record.target)
-    })
+    const stops = [
+      this.deps.onNotification(DELEGATIONS_REMOTE_CHANGED_NOTIFICATION, (params) => {
+        const record = params as RemoteChild
+        if (!record?.task_id || !record.parent_thread_id) return
+        const put = this.store.put(record)
+        if (put && needsListRead(put.previous, record)) this.deps.refreshMachine(record.target)
+      }),
+      // The daemon dropped changes this connection was too slow to take: what it records is read again.
+      this.deps.onNotification(DELEGATIONS_REMOTE_RESYNC_NOTIFICATION, () => { if (!this.disposed) void this.reread() }),
+    ]
+    this.stop = () => { for (const stop of stops) stop() }
   }
 
   dispose() {

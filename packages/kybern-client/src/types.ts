@@ -1899,6 +1899,12 @@ export interface DelegationsRemoteListResult {
  */
 export const DELEGATIONS_REMOTE_CHANGED_NOTIFICATION = "delegations.remote_changed";
 
+/**
+ * Sent instead of `delegations.remote_changed` notifications a client was too slow to take: some records changed
+ * unseen, and the client reads `delegations.remote_list` again for the parents it shows. Params: `{}`.
+ */
+export const DELEGATIONS_REMOTE_RESYNC_NOTIFICATION = "delegations.remote_resync";
+
 export interface ThreadsListResult {
   threads: Thread[];
   activity?: ThreadActivitySummary[];

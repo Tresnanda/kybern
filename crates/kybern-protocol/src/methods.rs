@@ -1483,6 +1483,9 @@ method!(
 /// child on another machine changes (created, acknowledged, followed, settled). Params are the
 /// whole [`crate::RemoteChild`]; a client that missed one reads `delegations.remote_list` again.
 pub const DELEGATIONS_REMOTE_CHANGED_NOTIFICATION: &str = "delegations.remote_changed";
+/// Sent instead of [`DELEGATIONS_REMOTE_CHANGED_NOTIFICATION`]s a client was too slow to take: some records changed
+/// unseen, and the client reads `delegations.remote_list` again for the parents it shows. Params are an empty object.
+pub const DELEGATIONS_REMOTE_RESYNC_NOTIFICATION: &str = "delegations.remote_resync";
 
 // ---- project coordinator (the lead thread) ----
 

@@ -705,8 +705,10 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
             } => {
                 match child {
                     Ok(child) => { let _ = ctx.out.notify(kybern_protocol::methods::DELEGATIONS_REMOTE_CHANGED_NOTIFICATION, child).await; }
-                    // Clients read `delegations.remote_list` again when they reconnect; a missed record is caught up then.
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    // Records were missed: the client is told to read `delegations.remote_list` again.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        let _ = ctx.out.notify(kybern_protocol::methods::DELEGATIONS_REMOTE_RESYNC_NOTIFICATION, serde_json::json!({})).await;
+                    }
                     Err(_) => remote_children = None,
                 }
             }

@@ -1,7 +1,7 @@
 // ADE-121: children on other machines follow the delegating daemon's own record, not this app's copy of their machine's list.
 import { expect, test } from 'bun:test'
 import { childState, launchState } from '../../../../packages/kybern-client/src/delegations.ts'
-import { DELEGATIONS_REMOTE_CHANGED_NOTIFICATION, type RemoteChild, type Thread } from '../../../../packages/kybern-client/src/types.ts'
+import { DELEGATIONS_REMOTE_CHANGED_NOTIFICATION, DELEGATIONS_REMOTE_RESYNC_NOTIFICATION, type RemoteChild, type Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { RemoteDelegationStore, RemoteDelegations, RemoteRecordOverlay, needsListRead } from './remoteDelegations.ts'
 
 const PARENT = 'parent-1'
@@ -40,7 +40,7 @@ function follower() {
     refreshMachine: (id) => { refreshed.push(id) },
   })
   delegations.start()
-  return { store, delegations, refreshed, calls, notify: (params: RemoteChild) => handlers.get(DELEGATIONS_REMOTE_CHANGED_NOTIFICATION)?.(params), answer: (next: RemoteChild[]) => { answer = next } }
+  return { store, delegations, refreshed, calls, handlers, notify: (params: RemoteChild) => handlers.get(DELEGATIONS_REMOTE_CHANGED_NOTIFICATION)?.(params), answer: (next: RemoteChild[]) => { answer = next } }
 }
 
 test('a launch row of an unknown remote child whose record is completed says Done, not Working', () => {
@@ -151,7 +151,7 @@ test('a record a notification wrote while a read was on its way is not dropped b
   let notify: (params: unknown) => void = () => {}
   const delegations = new RemoteDelegations(store, {
     call: () => new Promise((resolve) => { answer = resolve }),
-    onNotification: (_method, handler) => { notify = handler; return () => {} },
+    onNotification: (method, handler) => { if (method === DELEGATIONS_REMOTE_CHANGED_NOTIFICATION) notify = handler; return () => {} },
     refreshMachine: () => {},
   })
   delegations.start()
@@ -175,4 +175,19 @@ test('a parent is read once per connection; a reconnect reads it again', async (
 test('a child not yet acknowledged on its machine gets no row to open', () => {
   const overlay = new RemoteRecordOverlay()
   expect(overlay.apply([], [record('p', 'pending', '2026-11-02T15:42:00Z', { remote_thread_id: null })], parents)).toEqual([])
+})
+
+// A connection too slow for the daemon's notifications misses records; the daemon says so and they are read again.
+test('a resync hint reads every known parent again', async () => {
+  const { store, delegations, calls, handlers, answer } = follower()
+  answer([record('a', 'running', '2026-11-02T16:00:00Z')])
+  await delegations.load(PARENT)
+  expect(calls).toEqual([PARENT])
+  answer([record('a', 'completed', '2026-11-02T18:06:00Z')])
+  handlers.get(DELEGATIONS_REMOTE_RESYNC_NOTIFICATION)?.({})
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(calls).toEqual([PARENT, PARENT])
+  expect(store.list()[0]?.state).toBe('completed')
+  delegations.dispose()
+  expect(handlers.size).toBe(0)
 })
