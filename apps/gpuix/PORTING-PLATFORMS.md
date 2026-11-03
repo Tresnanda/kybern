@@ -150,10 +150,13 @@ Evidence:
    (`resolveKeyEvent`) was one of them and threw "Timed out after 2 seconds
    waiting for a window update" into the app whenever the UI thread stayed busy
    that long. Now `resolveKeyEvent`, `subscribeAnimationFrames` and
-   `setInputDecorations` are queued, `getElementBounds` answers with the last
+   `setInputDecorations` are queued (malformed decorations still throw at the
+   call; a stale value or range is now logged instead, so `decoration-check`'s
+   `bad-range` and `stale` cases hold on macOS only), `getElementBounds` answers with the last
    painted bounds without `window.refresh()` (GPUI runs next-frame callbacks
    before it draws, so the old frame wait returned the same bounds), the
-   document registries are kept on the renderer, and the composer reads its
+   Markdown and syntax documents go through a registry handle kept on the
+   renderer (release included, so it stays in order with create), and the composer reads its
    selection once per event, its card width only with the completion menu
    open and the focused element last: 2.3 waited calls (all
    `getInputSelection`) and about 22 ms per key, key-to-paint p90 from about
