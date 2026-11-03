@@ -119,7 +119,8 @@ pub fn detect(exe: &Path, os: &str, probe: &Probe) -> Detected {
             }
             // The AppImage stages its daemon here and names the image it came from (`linuxPackage.ts`).
             match (probe.read)(&dir.join("appimage")).map(|text| PathBuf::from(text.trim())) {
-                Some(image) if image.is_absolute() && (probe.exists)(&image) => {
+                // `has_root`, not `is_absolute`: the same on Linux, and the tests run these paths everywhere.
+                Some(image) if image.has_root() && (probe.exists)(&image) => {
                     Detected::Install(DesktopInstall::AppImage { image, bin: dir.to_path_buf() })
                 }
                 _ => Detected::NotInstalled(NOT_INSTALLED.into()),
