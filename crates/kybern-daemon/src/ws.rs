@@ -464,7 +464,7 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     let mut request_progress = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.requests().subscribe());
     let mut remote_children = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_remote_children());
     // Only the local desktop app attaches as the updater of this machine's app (ADE-125); the notice names one connection.
-    let mut app_update_notices = (ctx.principal.label == "bootstrap").then(|| state.app_updates.subscribe());
+    let mut app_update_notices = crate::auth::is_bootstrap(&state, &ctx.principal).then(|| state.app_updates.subscribe());
     if !principal_is_active(&state, &ctx.principal) {
         return;
     }

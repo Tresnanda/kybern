@@ -72,6 +72,9 @@ pub struct Inner {
     pub advertised_urls: std::sync::RwLock<Vec<String>>,
     pub port: std::sync::atomic::AtomicU16,
     pub bootstrap_token: String,
+    /// The bootstrap token's id in the store: how the local desktop app is recognized
+    /// (`auth::is_bootstrap`).
+    pub bootstrap_token_id: uuid::Uuid,
     pub environment_id: String,
     pub started_at: DateTime<Utc>,
     pub shutdown: CancellationToken,
@@ -141,7 +144,8 @@ impl AppState {
         drivers: DriverRegistry,
         store: Store,
     ) -> Result<Self> {
-        let bootstrap_token = crate::auth::ensure_bootstrap(&store, &paths.token_file)?;
+        let crate::auth::Bootstrap { token: bootstrap_token, id: bootstrap_token_id } =
+            crate::auth::ensure_bootstrap(&store, &paths.token_file)?;
         let environment_id = match store.meta_get("environment_id")? {
             Some(id) => id,
             None => {
@@ -223,6 +227,7 @@ impl AppState {
                 advertised_urls: std::sync::RwLock::new(vec![]),
                 port: std::sync::atomic::AtomicU16::new(0),
                 bootstrap_token,
+                bootstrap_token_id,
                 environment_id,
                 started_at: Utc::now(),
                 shutdown,

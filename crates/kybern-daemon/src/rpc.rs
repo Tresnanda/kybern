@@ -85,7 +85,7 @@ async fn dispatch_part_1(state: &AppState, ctx: &ConnectionCtx, method: &str, sl
         }
         DaemonActivityMethod::NAME => ok(crate::maintenance::activity(state).await.map_err(internal)?),
         DaemonShutdown::NAME => {
-            if ctx.principal.label != "bootstrap" {
+            if !crate::auth::is_bootstrap(state, &ctx.principal) {
                 return Err(RpcError::new(codes::FORBIDDEN, "daemon shutdown requires the local bootstrap client"));
             }
             let shutdown = state.shutdown.clone();
@@ -239,7 +239,7 @@ async fn dispatch_part_3(state: &AppState, ctx: &ConnectionCtx, method: &str, sl
             ok(record)
         }
         AppUpdaterAttach::NAME => {
-            if ctx.principal.label != "bootstrap" {
+            if !crate::auth::is_bootstrap(state, &ctx.principal) {
                 return Err(RpcError::new(codes::FORBIDDEN, "Only the Kybern app on this machine can update it"));
             }
             let p: AppUpdaterAttachParams = parse(params)?;
@@ -252,7 +252,7 @@ async fn dispatch_part_3(state: &AppState, ctx: &ConnectionCtx, method: &str, sl
             ok(Empty {})
         }
         AppUpdaterReport::NAME => {
-            if ctx.principal.label != "bootstrap" {
+            if !crate::auth::is_bootstrap(state, &ctx.principal) {
                 return Err(RpcError::new(codes::FORBIDDEN, "Only the Kybern app on this machine can update it"));
             }
             let p: AppUpdaterReportParams = parse(params)?;
