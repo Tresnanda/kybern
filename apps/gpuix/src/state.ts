@@ -1,5 +1,6 @@
 import { activeEnvironment, environmentEndpoint } from './shell/environment.ts'
 import { machineHub } from './machines/index.ts'
+import { openOwner } from './machines/openOwner.ts'
 import { ListMerger, byPinnedThenNewest, type StateThread } from './machines/merged.ts'
 import { scopedKey } from '../../../packages/kybern-client/src/machineMerge.ts'
 import { createGpuixSocket } from './machines/socket.ts'
@@ -616,14 +617,28 @@ export async function selectPaneThread(paneId: string, id: ThreadId | null, keep
   releaseUnused()
   if (!id || !client) return
   if (existing) { await existing.ready; return }
-  let owner: KybernClient
-  try { owner = machine ? machineHub().clientFor(machine) : client } catch (error) {
-    // The machine is not reachable: its cached copy of the thread shows, and the transcript waits for it.
-    const cached = state.threads.find(t => t.id === id && t.machineId === machine)
-    if (cached) setPane(paneId, { open: { ...emptyThreadState(), thread: cached, loaded: true } })
-    notifyOffline(error)
+  // Another machine that is not connected is dialed now and the open waits for it (ADE-124); its cached copy shows
+  // meanwhile, and stays (with a notice) when it cannot be reached.
+  const cached = () => state.threads.find(t => t.id === id && t.machineId === machine)
+  const stillOpen = () => { const now = panes.get(paneId); return !!now && now.generation === generation && now.selectedId === id && now.machineId === machine }
+  const pending = openOwner(machine, client, {
+    clientFor: (target) => machineHub().clientFor(target),
+    reach: (target) => machineHub().reachMachine(target),
+    wanted: stillOpen,
+    waiting: () => { const thread = cached(); if (thread) setPane(paneId, { open: { ...emptyThreadState(), thread } }) },
+  })
+  // Synchronous unless the machine must connect first, so an ordinary open keeps its timing.
+  const opened = pending instanceof Promise ? await pending : pending
+  if (opened.kind === 'gone') return
+  if (opened.kind === 'offline') {
+    const thread = cached()
+    if (thread) setPane(paneId, { open: { ...emptyThreadState(), thread, loaded: true } })
+    notifyOffline(opened.error)
     return
   }
+  const owner = opened.owner
+  // Another selection may have opened this thread while it waited.
+  if (pending instanceof Promise && sessions.has(key)) { await sessions.get(key)!.ready; return }
   const session: Session = { threadId: id, ...(machine ? { machineId: machine } : {}), open: emptyThreadState(), history: new HistoryPrefetch() }
   const discardHistory = () => { clearTimeout(session.historyTimer); session.history.clear() }
   session.stop = discardHistory
