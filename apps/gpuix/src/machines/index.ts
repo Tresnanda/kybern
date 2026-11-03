@@ -72,6 +72,8 @@ export interface MachineRow {
   relayVia?: string
   version?: string
   error?: string
+  /** This app is connecting to it now. */
+  connecting?: boolean
 }
 const LIVE = new Set<MachineConnectionStatus>(['online', 'relaying', 'needs-update'])
 
@@ -97,6 +99,7 @@ export function machineRows(h: MachineHub): MachineRow[] {
       ...(connection.relayVia ? { relayVia: connection.relayVia } : {}),
       ...(connection.info?.version ? { version: connection.info.version } : {}),
       ...(connection.error ? { error: connection.error.message } : {}),
+      ...(connection.connecting ? { connecting: true } : {}),
     }
   })
 }

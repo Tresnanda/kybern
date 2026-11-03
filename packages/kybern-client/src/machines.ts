@@ -364,6 +364,13 @@ const FAILURE_DELAYS_MS = [2_000, 4_000, 8_000, 16_000, 32_000, 64_000, 128_000,
 const ATTEMPT_STALE_MS = 120_000;
 /** How often a sync may dial a member the daemon saw come back, out of its backoff. */
 const REDIAL_MS = 30_000;
+/**
+ * The longest wait between attempts at a member the daemon the user is at reports online. It answers there, so this
+ * device should keep trying, but not with a full route search every sync (a phone off the tailnet, ADE-121).
+ */
+const ONLINE_RETRY_MAX_MS = 120_000;
+/** How long `reach` waits for a machine to connect before it gives up (default). */
+const REACH_TIMEOUT_MS = 20_000;
 const LIVE: ReadonlySet<MachineConnectionStatus> = new Set(["online", "relaying", "needs-update"]);
 
 interface Opened {
@@ -409,6 +416,8 @@ interface Slot {
   tried?: Set<string>;
   failures: number;
   retryTimer?: unknown;
+  /** When `retryTimer` fires (clock ms). */
+  retryAt?: number;
   /** When the attempt in `attempt` started (clock ms). */
   attemptAt?: number;
   /** When a sync last dialed it because the daemon saw it come back (clock ms). */
@@ -795,11 +804,44 @@ export class MachineSet {
   async networkChanged(): Promise<void> {
     for (const slot of this.slots.values()) {
       slot.failures = 0;
-      this.clock.clearTimeout(slot.retryTimer);
+      this.cancelRetry(slot);
     }
     await Promise.all(
       [...this.slots.values()].map((slot) => (LIVE.has(slot.status) ? this.probeBetter(slot) : this.connectSlot(slot))),
     );
+  }
+
+  /**
+   * Connect to a machine now, out of its backoff, and wait until it is up: what the app does when the user opens
+   * something that lives there. Resolves true when the machine is connected (at once if it already is), false when
+   * it is paused, opened by the app itself, or still not connected after `timeoutMs`.
+   */
+  async reach(machineId: MachineId, timeoutMs = REACH_TIMEOUT_MS): Promise<boolean> {
+    await this.load();
+    const slot = this.slots.get(machineId);
+    if (!slot) throw new UnknownMachineError(machineId);
+    const live = () => !!slot.inner && LIVE.has(slot.status) && this.slots.get(slot.record.machineId) === slot;
+    if (live()) return true;
+    if (slot.external || slot.record.paused || this.disposed) return false;
+    let timer: unknown;
+    let timedOut = false;
+    const waited = new Promise<void>((resolve) => {
+      timer = this.clock.setTimeout(() => {
+        timedOut = true;
+        resolve();
+      }, timeoutMs);
+    });
+    try {
+      // The attempt under way (or a new one), then one more if that one failed: the first can be an attempt that
+      // started before the machine came back. A machine that is up sooner ends the wait at once.
+      for (let round = 0; round < 2 && !live() && !timedOut && !this.disposed && !slot.record.paused; round++) {
+        slot.failures = 0;
+        await Promise.race([this.connectSlot(slot), waited]);
+      }
+    } finally {
+      this.clock.clearTimeout(timer);
+    }
+    return live();
   }
 
   /** Close every connection and stop every timer. The set cannot be used afterwards. */
@@ -1072,7 +1114,7 @@ export class MachineSet {
 
   private dropSlot(slot: Slot) {
     slot.gen++;
-    this.clock.clearTimeout(slot.retryTimer);
+    this.cancelRetry(slot);
     this.clock.clearTimeout(slot.graceTimer);
     slot.offInner?.();
     slot.offInner = undefined;
@@ -1170,7 +1212,7 @@ export class MachineSet {
     if (slot.external) return Promise.resolve();
     if (slot.attempt && this.clock.now() - (slot.attemptAt ?? 0) < ATTEMPT_STALE_MS) return slot.attempt;
     // A stuck attempt is superseded: the new generation makes whatever it still finds close itself.
-    this.clock.clearTimeout(slot.retryTimer);
+    this.cancelRetry(slot);
     const gen = ++slot.gen;
     slot.attemptAt = this.clock.now();
     const attempt = (async () => {
@@ -1382,7 +1424,7 @@ export class MachineSet {
     const live = opened.owned !== false || opened.inner.status === "open";
     slot.offInner?.();
     this.clock.clearTimeout(slot.graceTimer);
-    this.clock.clearTimeout(slot.retryTimer);
+    this.cancelRetry(slot);
     slot.inner = opened.inner;
     slot.route = opened.route;
     slot.latencyMs = opened.latencyMs ?? slot.latencyMs;
@@ -1447,7 +1489,7 @@ export class MachineSet {
   private goOffline(slot: Slot, status: "offline" | "unpaired" | "paused", error?: MachineError) {
     if (status === "paused") slot.gen++;
     this.clock.clearTimeout(slot.graceTimer);
-    this.clock.clearTimeout(slot.retryTimer);
+    this.cancelRetry(slot);
     const inner = slot.inner;
     if (inner) slot.lastSeenAt ??= this.clock.now();
     slot.offInner?.();
@@ -1460,8 +1502,25 @@ export class MachineSet {
     slot.error = slot.record.paused ? undefined : error;
     this.touch(slot, "status");
     if (slot.record.paused || slot.external || this.disposed) return;
-    const delay = FAILURE_DELAYS_MS[Math.min(slot.failures++, FAILURE_DELAYS_MS.length - 1)]!;
-    slot.retryTimer = this.clock.setTimeout(() => void this.connectSlot(slot), delay);
+    let delay = FAILURE_DELAYS_MS[Math.min(slot.failures++, FAILURE_DELAYS_MS.length - 1)]!;
+    // The daemon the user is at reaches it: keep trying more often than for a machine nobody sees.
+    if (slot.daemonSaw === "online") delay = Math.min(delay, ONLINE_RETRY_MAX_MS);
+    this.retryIn(slot, delay);
+  }
+
+  private cancelRetry(slot: Slot) {
+    this.clock.clearTimeout(slot.retryTimer);
+    slot.retryTimer = undefined;
+    slot.retryAt = undefined;
+  }
+
+  private retryIn(slot: Slot, delay: number) {
+    this.cancelRetry(slot);
+    slot.retryAt = this.clock.now() + delay;
+    slot.retryTimer = this.clock.setTimeout(() => {
+      slot.retryAt = undefined;
+      void this.connectSlot(slot);
+    }, delay);
   }
 
   // ---- routes: better ones, learned ones ----
@@ -1701,6 +1760,11 @@ export class MachineSet {
       if (!slot) continue;
       const cameBack = card.status === "online" && slot.daemonSaw !== undefined && slot.daemonSaw !== "online";
       slot.daemonSaw = card.status;
+      // Reported online while this device has it offline and waiting longer than the online cap (it failed before the
+      // daemon's first answer, at launch say): its next attempt moves up to the cap. Never sooner, so a member this
+      // device cannot reach is not searched every sync.
+      if (card.status === "online" && slot !== source && wantsDial(slot) && !slot.attempt && slot.retryAt !== undefined &&
+        slot.retryAt - this.clock.now() > ONLINE_RETRY_MAX_MS) this.retryIn(slot, ONLINE_RETRY_MAX_MS);
       const stuck = card.status === "online" && slot.attempt !== undefined && this.clock.now() - (slot.attemptAt ?? 0) >= ATTEMPT_STALE_MS;
       if (!(cameBack || stuck) || slot === source || !wantsDial(slot) || fresh.includes(slot)) continue;
       // At most every REDIAL_MS, however often it flaps.
@@ -1708,7 +1772,7 @@ export class MachineSet {
       if (cameBack) {
         slot.redialAt = this.clock.now();
         slot.failures = 0;
-        this.clock.clearTimeout(slot.retryTimer);
+        this.cancelRetry(slot);
       }
       redial.push(slot);
     }

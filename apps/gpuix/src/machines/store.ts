@@ -131,6 +131,12 @@ export async function migrateEnvironments(deps: MigrationDeps): Promise<Migratio
   return { records, migrated: true }
 }
 
+/** A read that found no token: `CredentialMissingError`, or a missing-file error from a test store. */
+function isMissing(error: unknown): boolean {
+  const e = error as { name?: string; code?: string } | null
+  return e?.name === 'CredentialMissingError' || e?.code === 'ENOENT'
+}
+
 export interface CredentialDeps {
   read: (id: string) => Promise<string>
   write: (id: string, token: string) => Promise<void>
@@ -148,11 +154,14 @@ export function machineCredentials(deps: CredentialDeps): CredentialStore {
   // Machines whose token was rejected: the profile copy is the same dead token, so `get` must not hand it back.
   const rejected = new Set<string>()
   return {
+    // Only "no such token" is a missing token. A store that fails (a locked Keychain, a dismissed keyring prompt) throws,
+    // so the set does not mint a replacement: minting revokes the saved token on that machine, and a replacement the
+    // locked store then cannot keep leaves this device with no working token at all (ADE-124).
     get: async (machineId) => {
-      try { return await deps.read(machineCredentialId(machineId)) } catch { /* not moved yet */ }
+      try { return await deps.read(machineCredentialId(machineId)) } catch (error) { if (!isMissing(error)) throw error }
       const profile = deps.legacyProfileOf(machineId)
       if (!profile || rejected.has(machineId)) return undefined
-      try { return await deps.read(profile) } catch { return undefined }
+      try { return await deps.read(profile) } catch (error) { if (!isMissing(error)) throw error; return undefined }
     },
     set: async (machineId, token) => {
       await deps.write(machineCredentialId(machineId), token)

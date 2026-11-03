@@ -155,6 +155,13 @@ interface Store {
   remove(id: string, ctx: OsContext): Promise<Outcome>
 }
 export const UNLOCK_KEYRING = 'Unlock your keyring, then try again.'
+/** No store holds a token under this id. Anything else a read throws is the store failing (locked, dismissed, broken). */
+export class CredentialMissingError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'CredentialMissingError'
+  }
+}
 const UNLOCK = 'Unlock the system credential store or pair this environment again'
 const ok = (value?: string): Outcome => ({ kind: 'ok', value })
 
@@ -210,7 +217,7 @@ export function credentialStore(ctx: OsContext = osContext()) {
         if (result.kind === 'ok') { if (cached) cache.set(id, result.value!); return result.value! }
         detail ??= result.detail
       }
-      throw new Error(detail ? `${UNLOCK} (${detail})` : UNLOCK)
+      throw new CredentialMissingError(detail ? `${UNLOCK} (${detail})` : UNLOCK)
     },
     async write(id: string, token: string): Promise<void> {
       const backends = credentialBackends(ctx)
