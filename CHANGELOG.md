@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.21.4
+
+<!-- kybern-release-title: Fewer password prompts, every machine up to date -->
+<!-- kybern-release-summary: macOS stops asking for your keychain password after every update, Update all machines now covers computers running the desktop app, and your other machines reconnect on their own. -->
+
+- On macOS, updating Kybern no longer asks for your login keychain password every time. Your machine logins now live in one Keychain item, read by a small helper that stays the same from release to release. The first update to 0.21.4 asks once more, naming "kybern-keychain"; choose Always Allow. macOS may also ask once more for notification permission.
+- Update all machines and Keep all machines on the same version now update computers that run the desktop app, not only the ones that run just the daemon. When Kybern is open there, it installs the update and restarts by itself once nothing is running. When only the daemon runs, it updates the installed app itself. A Linux .deb or .rpm install shows what to run instead.
+- When another machine stops accepting this computer's saved login, Kybern asks for a new one by itself. Before, the machine stayed offline in Settings, its threads failed to open, and only pairing again helped.
+- Opening a thread on another machine connects to it first instead of saying "This machine is offline", and Settings → Machines shows a machine the network reports online as Online, with "connecting…" while this computer reaches it.
+- An old saved entry for this same computer no longer shows up as a second, unpaired "This Mac".
+- A machine removed from your network while it was offline learns of it the next time it reaches another machine, then leaves the network and stops starting Kybern at login.
+
 ## 0.21.3
 
 <!-- kybern-release-title: Up-to-date status for your other machines -->
