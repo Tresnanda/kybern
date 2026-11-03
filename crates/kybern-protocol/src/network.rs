@@ -74,7 +74,7 @@ pub mod features {
     pub const REMOVAL_PROOF_V1: &str = "removal.proof.v1";
 
     /// Every feature the network design names, in design order.
-    pub const ALL: [&str; 24] = [
+    pub const ALL: [&str; 25] = [
         NETWORK_V1,
         SPACES_SYNC_V1,
         RELAY_V1,
