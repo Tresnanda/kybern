@@ -20,7 +20,10 @@
 # Secrets: TAURI_SIGNING_PRIVATE_KEY (required, the minisign updater key; the
 # name dates from the retired Tauri app, and the Tauri CLI in apps/gpuix still
 # does the signing) and TAURI_SIGNING_PRIVATE_KEY_PASSWORD (empty when the key
-# has none).
+# has none); MACOS_SIGNING_P12_BASE64 and MACOS_SIGNING_P12_PASSWORD (required
+# for the macOS bundles: the self-signed "Kybern Code Signing" identity that
+# keeps the app's designated requirement the same from version to version;
+# apps/gpuix/packaging/keychain/README.md).
 name: Desktop
 
 on:
@@ -121,6 +124,8 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      MACOS_SIGNING_P12_BASE64: ${{ secrets.MACOS_SIGNING_P12_BASE64 }}
+      MACOS_SIGNING_P12_PASSWORD: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
       KYBERN_NATIVE_CHECKS: "0"
       KYBERN_GPUIX_TARGET: ${{ matrix.target }}
       # scripts/bundle-gpuix.sh packages these instead of target/release.
@@ -144,6 +149,12 @@ jobs:
         run: |
           if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
             echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set; add the repository secret before releasing" >&2
+            exit 1
+          fi
+      - name: Require the code-signing identity
+        run: |
+          if [ -z "$MACOS_SIGNING_P12_BASE64" ] || [ -z "$MACOS_SIGNING_P12_PASSWORD" ]; then
+            echo "::error::MACOS_SIGNING_P12_BASE64 and MACOS_SIGNING_P12_PASSWORD are not set; an ad-hoc app would ask every user for their keychain password again" >&2
             exit 1
           fi
       - id: release
