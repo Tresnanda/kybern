@@ -13,7 +13,8 @@
 //   Secret Service or D-Bus at all (the command exits 5) stores it in a 0600 file under the GPUIX data folder instead.
 // - A scratch run (`KYBERN_GPUIX_CREDENTIALS_DIR`) uses only that folder, on every platform.
 import { spawn } from 'node:child_process'
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, utimesSync, writeFileSync, writeSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { combinedKeychain, type CombinedKeychain, type KeychainItems } from './combinedKeychain.ts'
@@ -122,21 +123,68 @@ export function helperItems(serviceId: string, run: () => KeyringRunner = () => 
     delete: async account => { await call('delete', account) },
   }
 }
-const LOCK_WAIT_MS = 15_000, LOCK_STALE_MS = 10_000
-/** A lock file shared by every GPUIX process of this user; one left by a crashed process expires. */
-export function fileLock(file: string) {
+export interface FileLockTiming {
+  /** How long a caller waits for the lock: longer than one Keychain dialog in the window that holds it. */
+  waitMs: number
+  /** A lock whose file was not touched for this long belongs to a process that stopped; it is taken over. */
+  staleMs: number
+  /** How often the holder touches the file while its work runs (a Keychain dialog can take up to two minutes). */
+  heartbeatMs: number
+}
+export const LOCK_TIMING: FileLockTiming = { waitMs: KEYRING_TIMEOUT_MS + 15_000, staleMs: 30_000, heartbeatMs: 2_000 }
+
+const lockOwner = (file: string) => { try { return readFileSync(file, 'utf8') } catch { return null } }
+/** Whether the process named in a lock (`<pid>:<nonce>`) still runs; a lock without one (older releases) counts as alive. */
+function ownerRuns(owner: string): boolean {
+  const pid = Number(owner.split(':')[0])
+  if (!Number.isInteger(pid) || pid <= 0) return true
+  try { process.kill(pid, 0); return true } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM' }
+}
+/** Remove the lock at `file` if its holder is gone or stopped touching it. True when the caller should try again. */
+function breakStaleLock(file: string, staleMs: number): boolean {
+  const owner = lockOwner(file)
+  let touched: number
+  try { touched = statSync(file).mtimeMs } catch { return true } // released meanwhile
+  if (owner === null) return true
+  const gone = owner !== '' && !ownerRuns(owner)
+  if (!gone && Date.now() - touched <= staleMs) return false
+  // Only the lock judged stale goes, never one another window took a moment ago.
+  if (lockOwner(file) !== owner) return true
+  try { unlinkSync(file) } catch { /* another waiter removed it */ }
+  return true
+}
+
+/**
+ * A lock file shared by every GPUIX process of this user. The file names its holder (`<pid>:<nonce>`), which touches it
+ * while its work runs, so a Keychain dialog that keeps the lock for a while does not let another window take it; a lock
+ * whose holder exited or stopped touching it is taken over. Only the holder removes its own lock.
+ */
+export function fileLock(file: string, timing: FileLockTiming = LOCK_TIMING) {
   return async <T>(work: () => Promise<T>): Promise<T> => {
     mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
-    const deadline = Date.now() + LOCK_WAIT_MS
+    const me = `${process.pid}:${randomUUID()}`
+    const deadline = Date.now() + timing.waitMs
     for (;;) {
-      try { closeSync(openSync(file, 'wx', 0o600)); break } catch (error) {
+      try {
+        const fd = openSync(file, 'wx', 0o600)
+        try { writeSync(fd, me) } finally { closeSync(fd) }
+        break
+      } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-        try { if (Date.now() - statSync(file).mtimeMs > LOCK_STALE_MS) { unlinkSync(file); continue } } catch { continue }
+        if (breakStaleLock(file, timing.staleMs)) continue
         if (Date.now() > deadline) throw new Error('Another Kybern window is saving a device token. Try again in a moment.')
         await new Promise(resolve => setTimeout(resolve, 25))
       }
     }
-    try { return await work() } finally { try { unlinkSync(file) } catch { /* already gone */ } }
+    const heartbeat = setInterval(() => {
+      if (lockOwner(file) !== me) return
+      try { const at = new Date(); utimesSync(file, at, at) } catch { /* released */ }
+    }, timing.heartbeatMs)
+    heartbeat.unref?.()
+    try { return await work() } finally {
+      clearInterval(heartbeat)
+      if (lockOwner(file) === me) try { unlinkSync(file) } catch { /* already gone */ }
+    }
   }
 }
 const combined = new Map<string, CombinedKeychain>()

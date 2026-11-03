@@ -105,6 +105,29 @@ test('a token another window saved meanwhile wins over an old item', async () =>
   expect(kc.items.has('machine:1')).toBe(false)
 })
 
+test('two windows moving the same old items at once read each once, and neither finds it missing', async () => {
+  const old = { 'machine:1': 't1', 'machine:2': 't2' }
+  const kc = fakeKeychain(old)
+  const lock = serialLock()
+  const windowA = combinedKeychain(kc.api, lock), windowB = combinedKeychain(kc.api, lock)
+  const [a, b] = await Promise.all([Promise.all(Object.keys(old).map(id => windowA.read(id))), Promise.all(Object.keys(old).map(id => windowB.read(id)))])
+  expect(a).toEqual(['t1', 't2'])
+  expect(b).toEqual(['t1', 't2'])
+  for (const id of Object.keys(old)) expect(kc.calls.filter(call => call === `get ${id}`)).toHaveLength(1)
+  expect(kc.combined()).toEqual(old)
+  expect([...kc.items.keys()]).toEqual([COMBINED_ACCOUNT])
+})
+
+test('a window that read an empty map before another window moved the item still finds it', async () => {
+  const kc = fakeKeychain({ 'machine:1': 't1' })
+  const lock = serialLock()
+  const windowA = combinedKeychain(kc.api, lock), windowB = combinedKeychain(kc.api, lock)
+  await windowB.read('other') // B's map is cached and lacks machine:1
+  expect(await windowA.read('machine:1')).toBe('t1') // A moves it and deletes the old item
+  expect(await windowB.read('machine:1')).toBe('t1')
+  expect(kc.calls.filter(call => call === 'get machine:1')).toHaveLength(1)
+})
+
 test('changes are read-modify-write from the item itself, so two windows never drop each other\'s tokens', async () => {
   const kc = fakeKeychain()
   const lock = serialLock()
