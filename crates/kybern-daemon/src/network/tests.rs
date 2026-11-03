@@ -598,8 +598,8 @@ async fn a_link_that_hears_nothing_for_three_pings_is_closed_and_a_talkative_one
     let silent = PeerLink::new("silent".into(), Direction::Dialed, None, vec![], Arc::new(NullSink));
     let talking = PeerLink::new("talking".into(), Direction::Dialed, None, vec![], Arc::new(NullSink));
     let (tx, mut pings) = tokio::sync::mpsc::channel(8);
-    peers::spawn_heartbeat(silent.clone(), timing.clone(), tx.clone());
-    peers::spawn_heartbeat(talking.clone(), timing.clone(), tx);
+    peers::spawn_heartbeat(silent.clone(), timing.clone(), tx.clone(), || {});
+    peers::spawn_heartbeat(talking.clone(), timing.clone(), tx, || {});
     // Real time: the idle clock is std's. Twenty beats of 150 ms is five times `dead_after`.
     for _ in 0..20 {
         tokio::time::sleep(timing.ping_every / 2).await;

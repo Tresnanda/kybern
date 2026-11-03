@@ -786,3 +786,38 @@ async fn stopping_the_parent_stops_its_remote_children_too() {
     tokio::time::sleep(Duration::from_millis(400)).await;
     assert_eq!(p.children_on_b(), 1, "the queued one never started");
 }
+
+// ADE-121: clients read a's own record of the child (`delegations.remote_list`) and hear every change of it
+// (`delegations.remote_changed`), so a launch row or sidebar row settles even when the client's copy of b is stale.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn clients_see_a_remote_childs_record_and_hear_it_settle() {
+    let Some(p) = Pair::new().await else { return };
+    let mut changes = p.a.state.orchestrator.subscribe_remote_children();
+    let started = p.delegate(json!({"task": "Tidy the release notes", "title": "Release notes"})).await;
+    let task_id = task_id_of(&started);
+
+    let listed = p.a.state.orchestrator.remote_children_list(p.parent.id).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!((listed[0].task_id, listed[0].target.as_str()), (task_id, p.b.id().as_str()));
+    assert!(listed[0].remote_thread_id.is_some(), "the target acknowledged before the call returned");
+    assert!(p.a.state.orchestrator.remote_children_list(ThreadId::now_v7()).unwrap().is_empty(), "another thread has none");
+
+    let first = tokio::time::timeout(Duration::from_secs(5), changes.recv()).await.expect("a change is announced").unwrap();
+    assert_eq!(first.task_id, task_id);
+
+    let agent = p.agent("Tidy the release notes").await;
+    p.end_parent_turn().await;
+    agent.finish("Release notes are tidy.").await;
+    let settled = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let change = changes.recv().await.unwrap();
+            if change.task_id == task_id && change.state == RemoteChildState::Completed {
+                return change;
+            }
+        }
+    })
+    .await
+    .expect("the completion is announced");
+    assert!(settled.info.completed_at.is_some());
+    assert_eq!(p.a.state.orchestrator.remote_children_list(p.parent.id).unwrap()[0].state, RemoteChildState::Completed);
+}

@@ -403,13 +403,20 @@ export class MachineHub {
       if (this.streams.has(client)) continue
       // The proxy keeps this subscription while the machine is offline and re-issues it from its cursor on the next route.
       const stream: { sub?: Subscription } = {}
+      // The machine's id now, not when the stream opened: a stand-in id is re-keyed once the daemon answers.
+      const machineOf = () => (client instanceof MachineClientProxy ? client.machineId : wanted.get(client))
       stream.sub = client.subscribeEvents({ include_tool_output: false }, (event) => {
         // A stream that was closed (the machine was removed) says nothing more.
         if (this.streams.get(client) !== stream.sub || this.disposed) return
-        // The machine's id now, not when the stream opened: a stand-in id is re-keyed once the daemon answers.
-        const machineId = client instanceof MachineClientProxy ? client.machineId : wanted.get(client)
+        const machineId = machineOf()
         if (!machineId) return
         for (const listener of [...this.eventListeners]) listener(machineId, event)
+      }, (_head, replay) => {
+        // A stream that starts without replaying what it missed (opened again after the app's own daemon reconnected, or
+        // a cursor the machine no longer knows, as after a restore) cannot patch the lists up: they are read again (ADE-121).
+        if ((replay.resumed && replay.supported) || this.streams.get(client) !== stream.sub || this.disposed) return
+        const machineId = machineOf()
+        if (machineId) void this.refreshMachine(machineId).catch(() => {})
       })
       this.streams.set(client, stream.sub)
     }

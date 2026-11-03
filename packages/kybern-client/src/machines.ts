@@ -356,6 +356,13 @@ export interface MachineSetOptions {
 
 const MAX_PROJECTS_PER_MACHINE = 1000;
 const FAILURE_DELAYS_MS = [2_000, 4_000, 8_000, 16_000, 32_000, 64_000, 128_000, 300_000];
+/**
+ * A connect attempt older than this is abandoned when another is asked for: every step of one has its own timeout,
+ * so an attempt this old is stuck, and waiting on it would keep the machine offline until the app restarts.
+ */
+const ATTEMPT_STALE_MS = 120_000;
+/** How often a sync may dial a member the daemon reports online, out of its backoff. */
+const REDIAL_MS = 30_000;
 const LIVE: ReadonlySet<MachineConnectionStatus> = new Set(["online", "relaying", "needs-update"]);
 
 interface Opened {
@@ -401,6 +408,10 @@ interface Slot {
   tried?: Set<string>;
   failures: number;
   retryTimer?: unknown;
+  /** When the attempt in `attempt` started (clock ms). */
+  attemptAt?: number;
+  /** When a sync last dialed it because the daemon saw it online (clock ms). */
+  redialAt?: number;
   graceTimer?: unknown;
   lists?: { projects: Project[]; threads: MachineThread[]; activity?: ThreadActivitySummary[] };
   view?: MachineConnection;
@@ -1152,9 +1163,11 @@ export class MachineSet {
       return Promise.resolve();
     }
     if (slot.external) return Promise.resolve();
-    if (slot.attempt) return slot.attempt;
+    if (slot.attempt && this.clock.now() - (slot.attemptAt ?? 0) < ATTEMPT_STALE_MS) return slot.attempt;
+    // A stuck attempt is superseded: the new generation makes whatever it still finds close itself.
     this.clock.clearTimeout(slot.retryTimer);
     const gen = ++slot.gen;
+    slot.attemptAt = this.clock.now();
     const attempt = (async () => {
       try {
         const result = await this.findRoute(slot, gen, {});
@@ -1668,8 +1681,28 @@ export class MachineSet {
         // Routes are refreshed on the next sync.
       }
     }
+    // The machine the user is at sees these members online: one that is offline here (waiting out its backoff, or
+    // with routes learned while it was away) is dialed now, so it comes back without an app restart. Not awaited:
+    // a dial that hangs must not hold up the next sync.
+    const redial: Slot[] = [];
+    for (const card of members) {
+      const slot = this.slots.get(card.machine_id);
+      if (!slot || slot === source || card.status !== "online" || !wantsDial(slot) || fresh.includes(slot)) continue;
+      // At most every REDIAL_MS: a machine the daemon reaches and this device cannot keeps its backoff otherwise.
+      if (slot.redialAt !== undefined && this.clock.now() - slot.redialAt < REDIAL_MS) continue;
+      slot.redialAt = this.clock.now();
+      slot.failures = 0;
+      this.clock.clearTimeout(slot.retryTimer);
+      redial.push(slot);
+    }
     this.persist();
     this.touch(undefined, "records");
+    for (const slot of redial) void this.connectSlot(slot);
     await mapLimit(fresh, 4, (slot) => this.connectSlot(slot));
   }
+}
+
+/** A machine the set dials itself that is not connected. One with an attempt under way joins it (`connectSlot`). */
+function wantsDial(slot: Slot): boolean {
+  return !slot.external && !slot.record.paused && !LIVE.has(slot.status) && slot.status !== "unpaired";
 }

@@ -33,6 +33,13 @@ pub async fn card(state: &AppState, machine_id: &str) -> Option<MachineCard> {
         card.features = presence.features;
         card.harnesses = presence.harnesses;
     }
+    // A machine with a session up is seen now; its stored time moves on about once a minute.
+    if peer.online
+        && let Some(seen) = network.peers.refresh_seen(machine_id)
+    {
+        let _ = state.store.network_machine_touch(machine_id, seen);
+    }
+    let peer = if peer.online { network.peers.status(machine_id) } else { peer };
     card.last_seen_at = peer.last_seen.or_else(|| cached.and_then(|row| row.last_seen_at));
     if card.status != MachineStatus::Paused {
         card.status = if peer.online { MachineStatus::Online } else { MachineStatus::Offline };
@@ -98,10 +105,16 @@ async fn tailscale_state(state: &AppState) -> TailscaleState {
 
 /// Everything Settings → Machines needs.
 pub async fn network_status(state: &AppState) -> Option<NetworkStatus> {
+    // A client looking at Machines makes discovery tick every minute for a while (§3.1).
+    state.network.touch_watching();
+    snapshot(state).await
+}
+
+/// What `network.status` reports, without counting as a client looking at Machines: what the
+/// `network.changed` notification carries.
+pub async fn snapshot(state: &AppState) -> Option<NetworkStatus> {
     let network = &state.network;
     let membership = network.membership()?;
-    // A client looking at Machines makes discovery tick every minute for a while (§3.1).
-    network.touch_watching();
     let me = membership.machine_id();
     let projection = membership.projection();
     let mut members = Vec::new();

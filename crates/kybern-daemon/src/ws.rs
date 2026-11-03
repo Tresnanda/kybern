@@ -462,6 +462,9 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     let mut spaces = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_spaces());
     let mut preview_requests = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_preview_requests());
     let mut request_progress = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.requests().subscribe());
+    let mut remote_children = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_remote_children());
+    // The machine network's changes reach clients that may read it as `network.changed`, at most a few a second.
+    let network_changes = ctx.principal.has(Scope::NetworkRead).then(|| forward_network_changes(state.clone(), ctx.out.clone()));
     if !principal_is_active(&state, &ctx.principal) {
         return;
     }
@@ -690,6 +693,19 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
                     Err(_) => session_imports = None,
                 }
             }
+            child = async {
+                match remote_children.as_mut() {
+                    Some(children) => children.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match child {
+                    Ok(child) => { let _ = ctx.out.notify(kybern_protocol::methods::DELEGATIONS_REMOTE_CHANGED_NOTIFICATION, child).await; }
+                    // Clients read `delegations.remote_list` again when they reconnect; a missed record is caught up then.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => remote_children = None,
+                }
+            }
             limits = async {
                 match usage.as_mut() {
                     Some(usage) => usage.recv().await,
@@ -718,11 +734,39 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     for (_, h) in ctx.terminal_subs.lock().await.drain() {
         h.abort();
     }
+    if let Some(forwarder) = network_changes {
+        forwarder.abort();
+    }
     closed.cancel();
     drop(ctx);
     writer.abort();
     input_lane.abort();
     tracing::info!("client disconnected");
+}
+
+/// How long `network.changed` waits for more changes before it reads the status once for all of them.
+const NETWORK_CHANGED_COALESCE: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Send `network.changed` (the whole [`kybern_protocol::NetworkStatus`]) whenever the members, the found
+/// list or a link changed: a member coming online, going offline or being added. Clients resync their
+/// machine list from it, so a machine that came back is dialed again without an app restart. A burst
+/// of changes is one notification.
+fn forward_network_changes(state: AppState, out: Outbox) -> tokio::task::JoinHandle<()> {
+    let mut changes = state.network.subscribe_changes();
+    tokio::spawn(async move {
+        loop {
+            match changes.recv().await {
+                Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+            tokio::time::sleep(NETWORK_CHANGED_COALESCE).await;
+            while matches!(changes.try_recv(), Ok(()) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))) {}
+            let Some(status) = crate::network::status::snapshot(&state).await else { continue };
+            if out.notify(kybern_protocol::NETWORK_CHANGED_NOTIFICATION, status).await.is_err() {
+                break;
+            }
+        }
+    })
 }
 
 /// A frame sink over a connection's outbox and a data lane: what a [`PeerLink`] writes to on the accepting side. Control

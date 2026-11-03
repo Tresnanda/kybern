@@ -1883,6 +1883,22 @@ export interface DelegationsWorktreeRemoveParams {
   force?: boolean;
 }
 
+export interface DelegationsRemoteListParams {
+  /** The delegating thread on this machine. */
+  parent_thread_id: ThreadId;
+}
+
+export interface DelegationsRemoteListResult {
+  /** The thread's children on other machines, as this machine records them, oldest first. */
+  children: RemoteChild[];
+}
+
+/**
+ * This machine's record of one child on another machine changed (created, acknowledged, followed, settled).
+ * Params: the whole `RemoteChild`. A client that missed one reads `delegations.remote_list` again.
+ */
+export const DELEGATIONS_REMOTE_CHANGED_NOTIFICATION = "delegations.remote_changed";
+
 export interface ThreadsListResult {
   threads: Thread[];
   activity?: ThreadActivitySummary[];
@@ -4665,6 +4681,7 @@ export interface Methods {
   "threads.messages.deliver": [{ message_id: MessageId }, ThreadMessageRecord];
   "threads.messages.dismiss": [{ message_id: MessageId }, ThreadMessageRecord];
   "delegations.worktree_remove": [DelegationsWorktreeRemoveParams, Thread];
+  "delegations.remote_list": [DelegationsRemoteListParams, DelegationsRemoteListResult];
   "coordinator.get": [CoordinatorGetParams, Thread | null];
   "coordinator.open": [CoordinatorOpenParams, CoordinatorOpenResult];
   "coordinator.setup": [CoordinatorSetupParams, Thread];
