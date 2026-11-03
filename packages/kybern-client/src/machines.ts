@@ -433,7 +433,20 @@ interface Slot {
   external: boolean;
   /** Read the lists on connect and in a whole-set `refresh()`. */
   autoRefresh: boolean;
+  /** When this set last minted a token for the machine (clock ms), and how long it waits before the next. */
+  mintedAt?: number;
+  mintWaitMs?: number;
 }
+
+/**
+ * A minted token revokes the one this device held there, so mints are limited per machine: at most one a minute, and
+ * the wait doubles (to a quarter of an hour) while mints keep following each other, as they would if two windows kept
+ * replacing each other's token. A quiet stretch resets it.
+ */
+export const MINT_MIN_INTERVAL_MS = 60_000;
+export const MINT_MAX_INTERVAL_MS = 15 * 60_000;
+/** `token` found no saved token but minted one for this machine too recently; the attempt is retried later. */
+const MINT_LATER = Symbol("mint later");
 
 /** The `http(s)` base of a daemon address, for showing the route of a connection the app opened. */
 function httpUrlOf(url: string): string {
@@ -444,6 +457,11 @@ function httpUrlOf(url: string): string {
   } catch {
     return "http://localhost";
   }
+}
+
+/** A new token for the machine was minted a moment ago; the next attempt (after the usual retry wait) tries again. */
+function mintLaterError(machine: string): MachineError {
+  return { code: "unreachable", message: `${machine} did not accept this device's sign-in. Kybern will try again in a minute` };
 }
 
 function errorMessage(code: MachineErrorCode, machine: string): string {
@@ -1267,10 +1285,12 @@ export class MachineSet {
     scope: { before?: string },
   ): Promise<{ kind: "open"; opened: Opened } | { kind: "unpaired" | "none"; error?: MachineError }> {
     const { record } = slot;
-    let token = await this.token(slot);
+    const first = await this.token(slot);
     if (gen !== slot.gen) return { kind: "none" };
-    if (!token)
+    if (first === MINT_LATER) return { kind: "none", error: mintLaterError(record.name) };
+    if (!first)
       return { kind: "unpaired", error: { code: "unpaired", message: errorMessage("unpaired", record.name) } };
+    let token: string = first;
     let routes = this.candidates(slot);
     if (scope.before === undefined) slot.tried = new Set(routes.map(routeId));
     if (scope.before !== undefined) {
@@ -1308,12 +1328,22 @@ export class MachineSet {
         }
         if (outcome.kind === "open") return outcome;
         if (outcome.kind === "revoked" && !retried) {
-          // The machine no longer accepts this device's token: mint a fresh one through a member, once.
+          // The machine no longer accepts this device's token. Another window may already have saved a fresh one
+          // (minting revoked the token this one held): use that. Only the refused token is discarded, and then a
+          // fresh one is minted through a member, once.
           retried = true;
           const { credentials } = this.options;
+          const stored = await credentials.get(record.machineId);
+          if (gen !== slot.gen) return { kind: "none" };
+          if (stored && stored !== token) {
+            token = stored;
+            continue;
+          }
           await (credentials.discard ? credentials.discard(record.machineId) : credentials.delete(record.machineId));
-          token = await this.token(slot);
-          if (!token) return { kind: "unpaired", error: { code: "unpaired", message: errorMessage("unpaired", record.name) } };
+          const fresh = await this.token(slot);
+          if (fresh === MINT_LATER) return { kind: "none", error: mintLaterError(record.name) };
+          if (!fresh) return { kind: "unpaired", error: { code: "unpaired", message: errorMessage("unpaired", record.name) } };
+          token = fresh;
           continue;
         }
         note("unreachable", route);
@@ -1602,12 +1632,22 @@ export class MachineSet {
       })[0];
   }
 
-  /** This device's token for a machine: the saved one, else one minted through a member (§3.4). */
-  private async token(slot: Slot): Promise<string | undefined> {
+  /**
+   * This device's token for a machine: the saved one, else one minted through a member (§3.4), at most as often as
+   * `MINT_MIN_INTERVAL_MS` and its backoff allow (`MINT_LATER` otherwise).
+   */
+  private async token(slot: Slot): Promise<string | undefined | typeof MINT_LATER> {
     const saved = await this.options.credentials.get(slot.record.machineId);
     if (saved) return saved;
     const member = this.bestMember(slot);
     if (!member?.inner) return undefined;
+    const now = this.clock.now();
+    const wait = slot.mintWaitMs ?? MINT_MIN_INTERVAL_MS;
+    if (slot.mintedAt !== undefined && now - slot.mintedAt < wait) return MINT_LATER;
+    // Mints that follow each other within twice the wait are churn: wait longer next time. Otherwise start over.
+    slot.mintWaitMs =
+      slot.mintedAt !== undefined && now - slot.mintedAt < wait * 2 ? Math.min(wait * 2, MINT_MAX_INTERVAL_MS) : MINT_MIN_INTERVAL_MS;
+    slot.mintedAt = now;
     try {
       const grant = (await member.inner.call("network.client_grant", {
         machine_id: slot.record.machineId,

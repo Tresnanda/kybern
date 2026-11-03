@@ -318,6 +318,52 @@ test("a token the machine revoked is replaced by a fresh one through a member", 
   set.dispose();
 });
 
+test("a refused token that another window already replaced is not discarded, and nothing is minted", async () => {
+  const { world, set, creds } = setup({
+    records: [rec("a", [tailnet("http://100.64.0.1:4173")], { signingKey: "key-a" }), rec("b", [tailnet(T)], { signingKey: "key-b" })],
+    credentials: { a: "tok-a", b: "old" },
+  });
+  world.host("http://100.64.0.1:4173", "a");
+  // While this window was refused with "old", another window minted "fresh" (which revoked "old") and saved it.
+  world.host(T, "b", { rejectToken: (token) => { if (token !== "old") return false; creds.tokens.set("b", "fresh"); return true; } });
+  world.lists("a", [], []);
+  world.lists("b", [], []);
+  let grants = 0;
+  world.on("a", "network.client_grant", () => { grants += 1; return { token: "minted", scopes: [], routes: [] }; });
+  await set.ensureAll();
+  assert.equal(grants, 0);
+  assert.equal(creds.tokens.get("b"), "fresh");
+  assert.equal(set.connection("b").status, "online");
+  assert.equal(world.clients.filter((c) => c.machineId === "b").at(-1).token, "fresh");
+  set.dispose();
+});
+
+test("tokens for a machine are minted at most once a minute, and less often while they keep being refused", async () => {
+  const { world, set, clock } = setup({
+    records: [rec("a", [tailnet("http://100.64.0.1:4173")], { signingKey: "key-a" }), rec("b", [tailnet(T)], { signingKey: "key-b" })],
+    credentials: { a: "tok-a", b: "old" },
+  });
+  world.host("http://100.64.0.1:4173", "a");
+  // Every token is refused, as if another window kept replacing it.
+  world.host(T, "b", { rejectToken: () => true });
+  world.lists("a", [], []);
+  const grants = [];
+  world.on("a", "network.client_grant", () => { grants.push(clock.now()); return { token: `minted-${grants.length}`, scopes: [], routes: [] }; });
+  await set.ensureAll();
+  assert.equal(grants.length, 1);
+  assert.notEqual(set.connection("b").status, "online");
+  assert.match(set.connection("b").error.message, /try again in a minute/);
+  // Retries keep coming on the usual backoff; mints do not follow each one.
+  for (let i = 0; i < 30; i++) await clock.advance(60_000);
+  assert.ok(grants.length >= 2, `${grants.length} mints in half an hour`);
+  assert.ok(grants.length <= 6, `${grants.length} mints in half an hour`);
+  for (let i = 1; i < grants.length; i++) assert.ok(grants[i] - grants[i - 1] >= 60_000, "never two mints within a minute");
+  // The waits grow while the refusals go on.
+  const gaps = grants.slice(1).map((at, i) => at - grants[i]);
+  assert.ok(gaps.at(-1) >= gaps[0], `${gaps}`);
+  set.dispose();
+});
+
 test("members found through network.status are added, connected and forgotten when removed anywhere", async () => {
   const { world, set, creds, store, cache } = setup({
     records: [rec("a", [tailnet("http://100.64.0.1:4173")], { signingKey: "key-a" })],
