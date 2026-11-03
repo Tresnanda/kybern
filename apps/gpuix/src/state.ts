@@ -344,6 +344,9 @@ export async function connect() {
       reloadOpenTranscripts()
       // Joins the machine set under the daemon's id; a failure there never touches this connection.
       void machineHub().primaryOpened(owner).then(() => watchMachines()).catch(() => {})
+      // This machine's daemon may ask this window to install an update (ADE-125); it forgets the window when the
+      // connection closes, so it is told again on every reconnect.
+      if (activeEnvironment().local) void import('./platform/update.ts').then(({ takeUpdateRequests }) => takeUpdateRequests(owner)).catch(() => {})
     }
   })
   client.onNotification('projects.changed', () => void refreshLists())

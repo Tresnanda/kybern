@@ -288,7 +288,7 @@ function Updates({ busy, following, machines, result }: { busy: boolean; followi
         <Label color={t.textSecondary} size={13} lineHeight={20} truncate style={{ flexGrow: 1 }}>{row.text}</Label>
       </div>)}
     </div>}
-    <Row title="Keep all machines on the same version" description="A machine updates itself, once it is idle, when another one runs a newer version. A machine managed by the desktop app is left out."><Switch aria-label="Keep all machines on the same version" testId="machines-follow-updates" checked={!!following} disabled={following === undefined || net.busy === 'follow'} onCheckedChange={(enabled) => void setFollowUpdates(enabled).catch((e) => toast.error('Unable to change the setting', { description: errorText(e) }))} /></Row>
+    <Row title="Keep all machines on the same version" description="A machine updates itself, once it is idle, when another one runs a newer version. A deb or rpm install shows the command to run instead."><Switch aria-label="Keep all machines on the same version" testId="machines-follow-updates" checked={!!following} disabled={following === undefined || net.busy === 'follow'} onCheckedChange={(enabled) => void setFollowUpdates(enabled).catch((e) => toast.error('Unable to change the setting', { description: errorText(e) }))} /></Row>
   </Section>
 }
 
