@@ -8,15 +8,24 @@
 //!   and a random token. Each connection sends the token; M checks it and that the connection comes from V's node
 //!   (`whois`), connects the target's (T's) forward listener (resolved from membership, never from V) and answers one
 //!   byte, then copies bytes. M needs `machine:relay` from V's grants and policy, as for any relay.
-//! * **The target (T)**, `peer.ports.via`: V's forward may also arrive from M's node. T still checks the forward's own
-//!   token on every connection, end to end through M, and its ports permission for V. M is refused when it is not a
-//!   current, unpaused member.
-//! * **The viewing machine (V)**, [`choose`]: after a forward opens on a direct ready-socket route, it measures the
-//!   direct route and each candidate member with timed probes (mode `P`, about [`PROBE_TIME`] each, twice). A member is
-//!   used only when both rounds show at least [`GAIN`] times the direct speed. New connections (and the forward's next
-//!   HTTP/2 connection) take the new route; open ones finish where they are. The choice is kept per target for
-//!   [`BOOK_FOR`], so the next forward to it takes the route at once. A route through a member that stops answering
-//!   falls back to the direct one.
+//! * **The target (T)**, `peer.ports.via`: V's forward may also arrive from M's node, with a token T issued for that route
+//!   only (V gets it over its own session with T; the forward's own token never passes through M). T checks it on every
+//!   connection, with V's ports permission and M's: M must be a current, unpaused member with a session that may use T's
+//!   ports itself. Dropping M (`drop`), or M losing any of that, ends every connection let in through it, ready ones too.
+//! * **End to end**: M sees the route token as it passes, so the token alone does not prove who answers. V sends a fresh
+//!   nonce after it, and T answers with an Ed25519 signature, made with its membership key, over the nonce, the forward,
+//!   its listener port and the three machine ids ([`direct::hop_proof`]). V verifies it against T's key in membership
+//!   before it sends a byte of the page. M cannot answer in T's place or replay an answer. It still carries the bytes,
+//!   which are not encrypted beyond WireGuard on each leg, so it could read or change them after that: M is a machine of
+//!   the user's own network that was granted `machine:relay`, and the route is chosen only among such members. Pinned
+//!   TLS to T would close that too, at the cost of a TLS layer on every relayed socket; it is not done.
+//! * **The viewing machine (V)**, [`choose`]: when a forward's load looks slow, or after a load ends, V measures the direct
+//!   route first (mode `P`, at most [`direct::PROBE_LIMIT`] and about [`PROBE_TIME`]). A direct route at [`GOOD_ENOUGH`]
+//!   or faster is kept without asking any member. Otherwise each candidate member is measured too, twice, one at a time.
+//!   A member is used only when both rounds show at least [`GAIN`] times the direct speed. New connections (and the
+//!   forward's next HTTP/2 connection) take the new route; open ones finish where they are. The choice is kept per
+//!   target for [`BOOK_FOR`], so the next forward to it takes the route at once ([`use_booked`]) and nothing is measured
+//!   again until then. A route through a member that stops answering falls back to the direct one.
 //! * Candidates are members with a session open now that list `ports.route.v1` (and so does the target), and that are not
 //!   paused. Older members are never asked.
 
@@ -47,6 +56,8 @@ pub const PROBE_TIME: Duration = Duration::from_millis(if cfg!(test) { 150 } els
 pub const GAIN: f64 = 2.0;
 /// Below this a route is not worth taking whatever the ratio (bytes per second).
 const MIN_RATE: u64 = 64 * 1024;
+/// A direct route at least this fast is kept without measuring any member (bytes per second).
+pub const GOOD_ENOUGH: u64 = 1_000_000;
 const ROUNDS: usize = 2;
 /// Members tried at most.
 const MAX_CANDIDATES: usize = 3;
@@ -112,7 +123,7 @@ fn relay_allowed(network: &Network, link: &PeerLink) -> bool {
 }
 
 /// A current member that is not paused, and its Tailscale node.
-fn live_member_node(network: &Network, machine: &str) -> Option<String> {
+pub(super) fn live_member_node(network: &Network, machine: &str) -> Option<String> {
     let membership = network.membership()?;
     let projection = membership.projection();
     let entry = projection.entry(machine)?;
@@ -395,7 +406,10 @@ pub(super) async fn through(network: &Arc<Network>, forward: &Forward, direct: &
         release(network, &forward.machine_id, via, forward.id);
         return None;
     };
-    let hop = Hop { machine_id: via.to_string(), machine_name: via_name.to_string(), address, token: hop.token };
+    let membership = network.membership()?;
+    let target_key = membership.projection().entry(&forward.machine_id)?.descriptor.signing_key.clone();
+    let proof = direct::HopProof { caller: network.machine_id()?, target: forward.machine_id.clone(), target_key, forward_id: forward.id };
+    let hop = Hop { machine_id: via.to_string(), machine_name: via_name.to_string(), address, token: hop.token, proof };
     let endpoint = PeerPortsDirect { token, ..direct.endpoint.clone() };
     Some(Arc::new(Route::through(direct.address, endpoint, Some(hop), forward.cancel.child_token())))
 }
@@ -438,9 +452,21 @@ async fn direct_rate(network: &Network, forward: &Forward, direct: &Route) -> u6
     probed + page as u64
 }
 
+/// Take the route already chosen for this forward's target, if one is booked: what a new forward does at once. Nothing
+/// is measured here.
+pub(super) async fn use_booked(network: Arc<Network>, forward: Arc<Forward>) {
+    if forward.choosing.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        return;
+    }
+    if let Some(direct) = direct_route(&network, &forward) {
+        take_booked(&network, &forward, &direct).await;
+    }
+    forward.choosing.store(false, std::sync::atomic::Ordering::Release);
+}
+
 /// Measure the routes of a forward that runs on a direct ready-socket route, and take a member's route when it is
-/// [`GAIN`] times faster in every round. Runs in the background, once at a time per forward; the forward works on the
-/// direct route meanwhile.
+/// [`GAIN`] times faster in every round. Runs in the background, once at a time per forward, after a slow-load signal or
+/// the end of a load; the forward works on the direct route meanwhile. A booked choice is used without measuring.
 pub(super) async fn choose(network: Arc<Network>, forward: Arc<Forward>) {
     if forward.choosing.swap(true, std::sync::atomic::Ordering::AcqRel) {
         return;
@@ -449,21 +475,45 @@ pub(super) async fn choose(network: Arc<Network>, forward: Arc<Forward>) {
     forward.choosing.store(false, std::sync::atomic::Ordering::Release);
 }
 
-async fn choose_once(network: &Arc<Network>, forward: &Arc<Forward>) {
-    let Some(direct) = forward.route_now().filter(|route| route.ready_sockets() && route.hop.is_none()) else { return };
-    if !lists(network, &forward.machine_id, features::PORTS_ROUTE_V1) {
-        return;
-    }
-    if let Some(choice) = network.ports.book.get(&forward.machine_id) {
-        let Some(via) = choice.via else { return };
-        let name = network.membership().and_then(|m| m.projection().entry(&via).map(|e| e.descriptor.name.clone())).unwrap_or_default();
-        if let Some(route) = through(network, forward, &direct, &via, &name).await {
-            super::take_route(network, forward, &direct, route);
-            return;
+/// The forward's direct ready-socket route, when its target can relay routes at all.
+fn direct_route(network: &Network, forward: &Forward) -> Option<Arc<Route>> {
+    let direct = forward.route_now().filter(|route| route.ready_sockets() && route.hop.is_none())?;
+    lists(network, &forward.machine_id, features::PORTS_ROUTE_V1).then_some(direct)
+}
+
+/// Use the booked choice for the target. True when there is one (taken, or the direct route), so nothing is measured.
+async fn take_booked(network: &Arc<Network>, forward: &Arc<Forward>, direct: &Arc<Route>) -> bool {
+    let Some(choice) = network.ports.book.get(&forward.machine_id) else { return false };
+    let Some(via) = choice.via else { return true };
+    let name = network.membership().and_then(|m| m.projection().entry(&via).map(|e| e.descriptor.name.clone())).unwrap_or_default();
+    match through(network, forward, direct, &via, &name).await {
+        Some(route) => {
+            super::take_route(network, forward, direct, route);
+            true
         }
+        None => false,
+    }
+}
+
+/// Whether the members are worth measuring after the direct route's first probe.
+pub fn worth_trying_members(direct: u64) -> bool {
+    direct < GOOD_ENOUGH
+}
+
+async fn choose_once(network: &Arc<Network>, forward: &Arc<Forward>) {
+    let Some(direct) = direct_route(network, forward) else { return };
+    if take_booked(network, forward, &direct).await {
+        return;
     }
     let candidates = candidates(network, &forward.machine_id);
     if candidates.is_empty() {
+        return;
+    }
+    // The direct route first: when it is fast enough, no member is asked and nothing else is probed.
+    let first = direct_rate(network, forward, &direct).await;
+    if !worth_trying_members(first) {
+        tracing::info!(target: TARGET, machine = %forward.machine_id, direct = first, "a forward's direct route is fast enough");
+        network.ports.book.set(&forward.machine_id, None);
         return;
     }
     let mut routes = Vec::new();
@@ -477,14 +527,16 @@ async fn choose_once(network: &Arc<Network>, forward: &Arc<Forward>) {
         return;
     }
     // Each round measures the direct route, then each member's, one at a time so they do not share the link.
-    let mut direct_rates = Vec::new();
+    let mut direct_rates = vec![first];
     let mut rates = vec![Vec::new(); routes.len()];
-    for _ in 0..ROUNDS {
+    for round in 0..ROUNDS {
         if forward.cancel.is_cancelled() {
             give_up(network, forward, &routes);
             return;
         }
-        direct_rates.push(direct_rate(network, forward, &direct).await);
+        if round > 0 {
+            direct_rates.push(direct_rate(network, forward, &direct).await);
+        }
         for (i, route) in routes.iter().enumerate() {
             rates[i].push(route.probe(network, PROBE_TIME).await.unwrap_or(0));
         }
@@ -541,5 +593,43 @@ mod tests {
         assert_eq!(pick(&[0, 0], &[vec![100 * kb, 100 * kb]]), Some(0), "a direct route that carries nothing");
         assert_eq!(pick(&[90 * kb, 90 * kb], &[vec![500 * kb, 600 * kb], vec![900 * kb, 800 * kb]]), Some(1), "the faster member");
         assert_eq!(pick(&[90 * kb], &[vec![]]), None);
+    }
+
+    #[test]
+    fn a_fast_direct_route_is_kept_without_asking_any_member() {
+        assert!(!worth_trying_members(2_500_000), "2.5 MB/s");
+        assert!(!worth_trying_members(GOOD_ENOUGH));
+        assert!(worth_trying_members(86_000), "86 KB/s");
+    }
+
+    #[test]
+    fn a_probe_sends_at_most_its_byte_cap() {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+            let (mut sender, mut receiver) = tokio::io::duplex(64 * 1024);
+            let sending = tokio::spawn(async move { direct::send_probe(&mut sender).await });
+            let mut received = Vec::new();
+            receiver.read_to_end(&mut received).await.unwrap();
+            sending.await.unwrap();
+            assert!(received.len() <= direct::PROBE_LIMIT + 64 * 1024, "{} bytes", received.len());
+            assert!(received.len() >= direct::PROBE_LIMIT, "a fast link gets the whole probe");
+        });
+    }
+
+    #[test]
+    fn only_the_target_can_prove_a_relayed_route() {
+        let target = crate::network::keys::MachineKeys::generate();
+        let member = crate::network::keys::MachineKeys::generate();
+        let forward = Uuid::now_v7();
+        let message = direct::hop_proof(&[7; direct::NONCE_LEN], forward, 4000, "v", "m", "t");
+        let key = target.signing_public_b64();
+        let verify = |message: &[u8], signature: &[u8]| crate::network::keys::verify_signature(&key, message, signature).is_ok();
+        assert!(verify(&message, &target.sign(&message)));
+        assert!(!verify(&message, &member.sign(&message)), "the member signs in the target's place");
+        let replayed = direct::hop_proof(&[8; direct::NONCE_LEN], forward, 4000, "v", "m", "t");
+        assert!(!verify(&replayed, &target.sign(&message)), "an answer to another nonce");
+        let other_port = direct::hop_proof(&[7; direct::NONCE_LEN], forward, 4001, "v", "m", "t");
+        assert!(!verify(&other_port, &target.sign(&message)), "an answer for another listener");
+        let other_member = direct::hop_proof(&[7; direct::NONCE_LEN], forward, 4000, "v", "x", "t");
+        assert!(!verify(&other_member, &target.sign(&message)), "an answer for a route through another member");
     }
 }

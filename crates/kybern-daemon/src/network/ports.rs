@@ -306,7 +306,8 @@ pub async fn forward_to(
     tokio::spawn(accept_loop(network.clone(), shutdown.clone(), forward.clone(), listener));
     if let Some(route) = forward.route_now() {
         tokio::spawn(route.keep_warm(network.clone()));
-        tokio::spawn(hop::choose(network.clone(), forward.clone()));
+        // Only a route already chosen for this target is taken now; measuring waits for a slow load or its end.
+        tokio::spawn(hop::use_booked(network.clone(), forward.clone()));
     }
     if https && let Err(error) = start_https(network, &forward).await {
         tracing::info!(target: TARGET, machine = machine_id, error = %error.message, "the forward has no HTTPS listener");
@@ -399,7 +400,7 @@ async fn current_route(network: &Arc<Network>, forward: &Arc<Forward>) -> Option
     }
     if let Some(route) = &route {
         tokio::spawn(route.clone().keep_warm(network.clone()));
-        tokio::spawn(hop::choose(network.clone(), forward.clone()));
+        tokio::spawn(hop::use_booked(network.clone(), forward.clone()));
     }
     tracing::info!(target: TARGET, machine = %forward.machine_id, remote_port = forward.remote_port, direct = route.is_some(), "prepared a forward again on a new session");
     route
@@ -444,34 +445,48 @@ fn fall_back(network: &Arc<Network>, forward: &Arc<Forward>, failed: &Arc<direct
     Some(direct)
 }
 
-/// Repeat a forward's load to clients once a second while it runs, after [`load::ANNOUNCE_AFTER`].
+/// Tell clients about a forward's load while it runs and [`load::looks_slow`], after [`load::ANNOUNCE_AFTER`] and at most
+/// every [`load::ANNOUNCE_EVERY`], and once more when it stops showing. A slow load, or the end of a load, is also when
+/// the forward's routes through other members are measured ([`hop::choose`]), so probes never compete with a fast page.
 fn watch_load(network: &Arc<Network>, forward: &Arc<Forward>) {
     if !forward.load.start_ticking() {
         return;
     }
     let (network, forward) = (network.clone(), forward.clone());
     tokio::spawn(async move {
-        let mut announced = false;
+        let mut announced: Option<Instant> = None;
+        let mut measured = false;
         loop {
             tokio::select! {
                 _ = forward.cancel.cancelled() => break,
                 _ = tokio::time::sleep(Duration::from_secs(1)) => {}
             }
             let view = forward.load.view();
-            if view.as_ref().is_some_and(|load| load.elapsed_ms >= load::ANNOUNCE_AFTER.as_millis() as u64) {
+            let showing =
+                view.as_ref().is_some_and(|load| load.elapsed_ms >= load::ANNOUNCE_AFTER.as_millis() as u64 && load::looks_slow(load));
+            if showing {
+                if announced.is_none_or(|at| at.elapsed() >= load::ANNOUNCE_EVERY) {
+                    announce(&network);
+                    announced = Some(Instant::now());
+                }
+                if !measured {
+                    measured = true;
+                    tokio::spawn(hop::choose(network.clone(), forward.clone()));
+                }
+            } else if announced.take().is_some() {
+                // The load ended or no longer looks slow: say so once, so the notice goes away.
                 announce(&network);
-                announced = true;
-            } else if view.is_none() && !forward.load.active() {
+            }
+            if view.is_none() && !forward.load.active() {
                 break;
-            } else if view.is_none() && announced {
-                // Every request is answered: say so once, so the slow-page notice goes away.
-                announce(&network);
-                announced = false;
             }
         }
         forward.load.stop_ticking();
-        if announced {
+        if announced.is_some() {
             announce(&network);
+        }
+        if !measured && !forward.cancel.is_cancelled() {
+            tokio::spawn(hop::choose(network.clone(), forward.clone()));
         }
         // A request that began while this task was ending starts it again.
         if forward.load.active() && !forward.cancel.is_cancelled() {

@@ -174,35 +174,55 @@ instabox → kdi-vps ran at 778 KB/s and kdi-vps → the Mac at about 2.5 MB/s.
   raw sockets carry bytes Kybern does not parse; compressing them would need the stream to be parsed on both ends (or a
   general-purpose stream compressor, which gains little on already-compressed traffic and costs CPU on every byte), so
   they stay as they are.
-- **Load progress** (`ports/load.rs`): each response's bytes are counted as they arrive. `PortForward.loading` carries
-  the load while requests are open (received and cached bytes, the previous load's total as an estimate, the rate over
-  3 s); `ports.changed` repeats it once a second, only after 2 s. The Browser shows "Loading over a slow connection —
-  4.2 of 31 MB · 90 KB/s" under its chrome after 3 s with bytes arriving (`apps/gpuix/src/preview/slow.ts`).
+- **Load progress** (`ports/load.rs`): each response's bytes are counted as they arrive. A load starts with each
+  navigation (what the old page still has open drops out) or the first request after 1.5 s without one, and ends 1.5 s
+  after the last. A request open 5 s with no bytes for as long (a long poll) or open 20 s at under 512 B/s (a stream of
+  events) is left out for good. `PortForward.loading` carries the load (received and cached bytes, the previous load's
+  total as an estimate, the rate over 3 s) only while one of its requests has been open 2 s and still counts, so a fast
+  link or quick polling shows nothing. `ports.changed` repeats it at most every 3 s, after 2 s, and only while it looks
+  slow: under 500 KB/s, more than 10 s left by the estimate, or 10 s gone without one (`load::looks_slow`). The Browser
+  applies the same rule and shows "Loading over a slow connection — 4.2 of 31 MB · 90 KB/s" under its chrome after 3 s
+  with bytes arriving (`apps/gpuix/src/preview/slow.ts`); only the first words are a live region.
 - **Viewing-side cache** (`ports/cache.rs`, `ports.cache.v1`): whole `200` answers to plain `GET`s with an `ETag` or
   `Last-Modified` are kept per forward, keyed by host, path and the request headers they `Vary` on. A request's
-  `Cookie` always counts as a variant, so a page kept for one session is never answered to another. Never kept: with
-  `Set-Cookie`, `private`, `no-store`, `Vary: *`, a range, `Authorization`, or an event stream. A navigation request
-  starts one batched revalidation of that host's entries (`x-kybern-revalidate` on the HTTP/2 connection): the target
-  asks its dev server about each over loopback, 16 at a time with 5 s each, and answers fresh, changed (a new body of
-  at most 512 KiB, compressed; 4 MiB per batch) or gone (a larger change is fetched by the browser as usual). The
-  page's requests wait for the batch rather than crossing the network. An entry validated in the last 20 s is
-  answered locally, and one checked in the last 3 s even for a request with `no-cache` or `max-age=0`; otherwise it
-  is revalidated on its own. Validation counts from when the request left, and a data message on the forward's
-  WebSocket after the first (Vite's `connected`) marks everything stale. Bounds: 32 MiB per response, 96 MiB per
+  `Cookie` always counts as a variant, an absent one included, so a page kept for one session (or for none) is never
+  answered to another. Never kept: with `Set-Cookie`, `private`, `no-store`, `Vary: *`, a range, `Authorization`, or an
+  event stream. A navigation request starts one batched revalidation of that host's entries (`x-kybern-revalidate` on
+  the HTTP/2 connection): the target asks its dev server about each over loopback, 16 at a time with 5 s each, and
+  streams back fresh, changed (a new body of at most 512 KiB, compressed) or gone (a larger change is fetched by the
+  browser as usual), each record as its check ends and fresh or gone ones ahead of changed bodies. The changed bytes
+  one batch carries are what the forward's last load moved in 2 s, between 256 KiB and 4 MiB. Each of the page's
+  requests waits only for its own record; a batch that times out keeps what arrived. A kept response is answered
+  locally only when this page load's batch confirmed it (within 2 minutes) and the request is a subresource
+  (`Sec-Fetch-Dest` script, style, image, font or worker; never a `fetch` or XHR), or when its own `max-age` still
+  covers it and the request does not ask for a checked answer. `no-cache`, `max-age=0` and `must-revalidate` answers
+  are revalidated every time outside a batch. Validation counts from when the request left. A data message on the
+  forward's WebSocket after the first (Vite's `connected`) marks everything stale, and a request other than `GET`,
+  `HEAD`, `OPTIONS` or `TRACE` marks everything of its host stale, before it leaves and when its answer arrives. Bounds: 32 MiB per response, 96 MiB per
   forward, 256 MiB for all and 128 MiB being buffered, least recently used first out; in memory only, gone with the
   forward. The target keeps the dev server's own tag beside a weakened one (`x-kybern-etag`, only for a viewing
   machine that sent `x-kybern-cache`), and strips every `x-kybern-*` request header before the dev server; the viewing
   side strips a page's own.
 - **Routes through a member** (`ports/hop.rs`, `ports.route.v1`). The viewing machine V names a member M at the
   target T (`peer.ports.via`); T answers with a token for that route only, which works only from M's node and only
-  while M may use T's ports itself, so the forward's own token never passes through M. V then asks M to relay
-  (`peer.ports.hop`, needs `machine:relay`); M resolves T from membership and asks T to confirm that the port is the
-  listener of V's forward and that V named M (`peer.ports.hop_check`), so a hop never reaches any other port of T.
-  M checks its own token and V's node on each connection. After a forward opens, V probes the direct route and up
-  to three candidates (mode `P`: the target sends filler, the caller reads for 2.5 s), twice, one at a time; the
+  while M is a current, unpaused member with a session that may use T's ports itself, so the forward's own token never
+  passes through M. Dropping M, or M losing any of that, ends every connection T let in through it, ready ones too.
+  V then asks M to relay (`peer.ports.hop`, needs `machine:relay`); M resolves T from membership and asks T to confirm
+  that the port is the listener of V's forward and that V named M (`peer.ports.hop_check`), so a hop never reaches any
+  other port of T. M checks its own token and V's node on each connection.
+  M sees the route token pass, so V does not rely on it to know who answers: after the token V sends a 32-byte nonce,
+  and T answers with an Ed25519 signature by its membership key over the nonce, the forward id, its listener port and
+  the three machine ids. V checks it against T's key in membership before it sends any page bytes, so M can neither
+  answer in T's place nor replay an answer. The bytes are not encrypted end to end beyond WireGuard on each leg, so M
+  could still read or change them: M is a member of the user's own network granted `machine:relay`. TLS pinned to T
+  would close that at the cost of a TLS layer on every relayed socket; it is not done.
+  V measures routes only when a load looks slow or after a load ends, never while a fast page loads. It probes the
+  direct route first (mode `P`: the target sends at most 2 MiB of filler for at most 5 s, the caller reads for 2.5 s);
+  at 1 MB/s or more no member is asked. Otherwise it probes up to three candidates, twice, one at a time; the
   page's own bytes during the direct probe count toward the direct route. A member is taken only when every round is
   at least twice as fast and above 64 KB/s. New connections and the next HTTP/2 connection use it; open ones finish
   where they are. Candidates have a session open, list `ports.route.v1` and are not paused; the target must list it
-  too. Unchosen routes are released at M and dropped at T. The choice is kept per target for 15 minutes; a member
+  too. Unchosen routes are released at M and dropped at T. The choice is kept per target for 15 minutes (a new forward
+  takes it at once, and nothing is measured again until then); a member
   that stops answering sends the forward back to the direct route for 2 minutes. The Browser shows
   "on instabox via kdi-vps".

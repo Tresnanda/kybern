@@ -59,9 +59,14 @@ pub const MODE_HTTP2: u8 = b'H';
 /// most [`PROBE_LIMIT`] bytes or [`PROBE_TIME`].
 pub const MODE_PROBE: u8 = b'P';
 pub(super) const ACK: u8 = 1;
-/// What one probe sends at most, and for how long.
-const PROBE_LIMIT: usize = 24 * 1024 * 1024;
-const PROBE_TIME: Duration = Duration::from_secs(8);
+/// What one probe sends at most, and for how long: enough to tell a fast route (2 MiB in under a second at 2.5 MB/s)
+/// without spending much of a slow or metered link on it.
+pub(super) const PROBE_LIMIT: usize = 2 * 1024 * 1024;
+const PROBE_TIME: Duration = Duration::from_secs(5);
+/// What a caller sends after a relayed route's token: a fresh nonce the target signs, so the caller knows the target
+/// answers, not the member in between.
+pub(super) const NONCE_LEN: usize = 32;
+const SIGNATURE_LEN: usize = 64;
 
 struct Serving {
     id: Uuid,
@@ -81,6 +86,16 @@ struct Via {
     machine: String,
     node: String,
     token_hash: String,
+    /// Ends every connection let in with this token: the member is dropped, no longer permitted, or its session ends.
+    cancel: CancellationToken,
+}
+
+/// Which credential a connection presented.
+enum Credential {
+    /// The forward's own token, from the caller's node.
+    Own,
+    /// A relaying member's token, from that member's node: the connection lasts while the member may relay it.
+    Via { machine: String, cancel: CancellationToken },
 }
 
 /// Members one forward may name at once; the oldest goes first.
@@ -121,18 +136,31 @@ impl Listeners {
         let serving = self.serving(machine, id)?;
         let token = crate::auth::hash(&crate::auth::generate());
         let mut vias = serving.vias.lock().unwrap_or_else(|p| p.into_inner());
-        vias.retain(|held| held.machine != via);
+        vias.retain(|held| {
+            let keep = held.machine != via;
+            if !keep {
+                held.cancel.cancel();
+            }
+            keep
+        });
         if vias.len() >= MAX_VIAS {
-            vias.remove(0);
+            vias.remove(0).cancel.cancel();
         }
-        vias.push(Via { machine: via.to_string(), node, token_hash: crate::auth::hash(&token) });
+        let cancel = serving.cancel.child_token();
+        vias.push(Via { machine: via.to_string(), node, token_hash: crate::auth::hash(&token), cancel });
         Some(token)
     }
 
-    /// Take back what [`Self::allow_via`] gave `via`.
+    /// Take back what [`Self::allow_via`] gave `via`, and end the connections it relays: open ones and ready ones alike.
     pub fn drop_via(&self, machine: &str, id: Uuid, via: &str) {
         if let Some(serving) = self.serving(machine, id) {
-            serving.vias.lock().unwrap_or_else(|p| p.into_inner()).retain(|held| held.machine != via);
+            serving.vias.lock().unwrap_or_else(|p| p.into_inner()).retain(|held| {
+                let keep = held.machine != via;
+                if !keep {
+                    held.cancel.cancel();
+                }
+                keep
+            });
         }
     }
 
@@ -143,15 +171,45 @@ impl Listeners {
         })
     }
 
+    /// End the forwards whose caller may no longer use this machine's ports, and the relayed connections of members that
+    /// may no longer relay them (removed, paused, without ports permission, or with no session).
     pub fn close_unpermitted(&self, network: &Network) {
         self.0.lock().unwrap_or_else(|p| p.into_inner()).retain(|s| {
             let keep = authorized(network, &s.link);
             if !keep {
                 s.cancel.cancel();
             }
+            s.vias.lock().unwrap_or_else(|p| p.into_inner()).retain(|via| {
+                let keep = keep && member_may_relay(network, &via.machine);
+                if !keep {
+                    tracing::info!(target: TARGET, caller = %s.link.machine_id, via = %via.machine, "ended a forward's connections through a member that may no longer relay them");
+                    via.cancel.cancel();
+                }
+                keep
+            });
             keep
         });
     }
+}
+
+/// A member may relay a forward here while it is a current, unpaused member with a session that may use this machine's
+/// ports itself.
+fn member_may_relay(network: &Network, machine: &str) -> bool {
+    super::hop::live_member_node(network, machine).is_some() && network.peers.link(machine).is_some_and(|link| authorized(network, &link))
+}
+
+/// What the target of a relayed connection signs: the caller's nonce, bound to that forward, its listener and the three
+/// machines, so a member in between can neither answer in the target's place nor replay an answer.
+pub(super) fn hop_proof(nonce: &[u8], forward_id: Uuid, port: u16, caller: &str, via: &str, target: &str) -> Vec<u8> {
+    let mut message = b"kybern ports hop v1\0".to_vec();
+    message.extend_from_slice(nonce);
+    message.extend_from_slice(forward_id.as_bytes());
+    message.extend_from_slice(&port.to_be_bytes());
+    for machine in [caller, via, target] {
+        message.extend_from_slice(machine.as_bytes());
+        message.push(0);
+    }
+    message
 }
 
 pub(super) fn authorized(network: &Network, link: &PeerLink) -> bool {
@@ -280,21 +338,48 @@ async fn verify_source(state: &AppState, serving: &Serving, source: IpAddr, node
 
 /// Which credential a connection presented: the forward's own token, which works only from the caller's node, or a
 /// relaying member's, which works only from that member's node while it may use this machine's ports itself.
-async fn verify_token(state: &AppState, serving: &Serving, source: IpAddr, node: &str, token_hash: &str, presented: &str) -> bool {
+async fn verify_token(
+    state: &AppState,
+    serving: &Serving,
+    source: IpAddr,
+    node: &str,
+    token_hash: &str,
+    presented: &str,
+) -> Option<Credential> {
     let presented = crate::auth::hash(presented);
     if presented == token_hash {
-        return verify_source(state, serving, source, node).await;
+        return verify_source(state, serving, source, node).await.then_some(Credential::Own);
     }
     let via = serving
         .vias
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .iter()
-        .find(|via| via.token_hash == presented)
-        .map(|via| (via.machine.clone(), via.node.clone()));
-    let Some((machine, via_node)) = via else { return false };
-    let member_may = state.network.peers.link(&machine).is_some_and(|link| authorized(&state.network, &link));
-    member_may && verify_source(state, serving, source, &via_node).await
+        .find(|via| via.token_hash == presented && !via.cancel.is_cancelled())
+        .map(|via| (via.machine.clone(), via.node.clone(), via.cancel.clone()));
+    let (machine, via_node, cancel) = via?;
+    (member_may_relay(&state.network, &machine) && verify_source(state, serving, source, &via_node).await)
+        .then_some(Credential::Via { machine, cancel })
+}
+
+/// Resolves when a connection must end: the forward or the caller's session ended, or, for a relayed connection, the
+/// member was dropped, lost its permission or its session.
+async fn connection_ended(serving: &Serving, relayed: Option<&(CancellationToken, Option<Arc<PeerLink>>)>) {
+    let via = async {
+        match relayed {
+            Some((cancel, Some(member))) => tokio::select! {
+                _ = cancel.cancelled() => {},
+                _ = member.closed() => {},
+            },
+            Some((cancel, None)) => cancel.cancelled().await,
+            None => std::future::pending().await,
+        }
+    };
+    tokio::select! {
+        _ = serving.cancel.cancelled() => {},
+        _ = serving.link.closed() => {},
+        _ = via => {},
+    }
 }
 
 /// One connection to a forward's listener. `handshake` is its place among the connections not yet authorized
@@ -311,35 +396,50 @@ async fn transfer(
     handshake: tokio::sync::OwnedSemaphorePermit,
 ) {
     let link = &serving.link;
-    let ended = async {
-        tokio::select! {
-            _ = serving.cancel.cancelled() => {},
-            _ = link.closed() => {},
-        }
-    };
-    tokio::pin!(ended);
+    let handshaking = connection_ended(serving, None);
+    tokio::pin!(handshaking);
     let authorize = async {
         let mut token = [0u8; 64];
         socket.read_exact(&mut token).await.ok()?;
         let token = std::str::from_utf8(&token).ok()?;
-        if !verify_token(state, serving, source, node, token_hash, token).await
-            || !authorized(&state.network, link)
-            || super::own_ports(state).contains(&port)
-        {
+        let credential = verify_token(state, serving, source, node, token_hash, token).await?;
+        if !authorized(&state.network, link) || super::own_ports(state).contains(&port) {
             return None;
         }
-        Some(())
+        // Through a member, the caller proves nothing more but asks this machine to prove itself: it sends a nonce, and
+        // reads nothing of the page until this machine's signature over it checks out.
+        let mut proof = None;
+        if let Credential::Via { machine, .. } = &credential {
+            if serving.version < 2 {
+                return None;
+            }
+            let mut nonce = [0u8; NONCE_LEN];
+            socket.read_exact(&mut nonce).await.ok()?;
+            let membership = state.network.membership()?;
+            let me = state.network.machine_id()?;
+            let message = hop_proof(&nonce, serving.id, serving.port, &link.machine_id, machine, &me);
+            proof = Some(membership.keys().sign(&message));
+        }
+        Some((credential, proof))
     };
-    let authorized_now = tokio::select! {
-        _ = &mut ended => return,
-        result = tokio::time::timeout(HANDSHAKE_TIMEOUT, authorize) => matches!(result, Ok(Some(()))),
+    let (credential, proof) = tokio::select! {
+        _ = &mut handshaking => return,
+        result = tokio::time::timeout(HANDSHAKE_TIMEOUT, authorize) => match result {
+            Ok(Some(authorized)) => authorized,
+            _ => return,
+        },
     };
-    if !authorized_now {
-        return;
-    }
     drop(handshake);
+    let relayed = match credential {
+        Credential::Own => None,
+        Credential::Via { machine, cancel } => Some((cancel, state.network.peers.link(&machine))),
+    };
+    let ended = connection_ended(serving, relayed.as_ref());
+    tokio::pin!(ended);
     let mode = if serving.version >= 2 {
-        if socket.write_all(&[ACK]).await.is_err() {
+        let mut answer = vec![ACK];
+        answer.extend_from_slice(proof.as_deref().unwrap_or_default());
+        if socket.write_all(&answer).await.is_err() {
             return;
         }
         // A ready socket: it waits for the caller to use it.
@@ -673,7 +773,7 @@ impl hyper::body::Body for GzipBody {
 }
 
 /// Mode `P`: filler bytes until the caller has measured enough and closes, within [`PROBE_LIMIT`] and [`PROBE_TIME`].
-async fn send_probe(socket: &mut TcpStream) {
+pub(super) async fn send_probe<S: tokio::io::AsyncWrite + Unpin>(socket: &mut S) {
     let filler = vec![0x5au8; 64 * 1024];
     let deadline = Instant::now() + PROBE_TIME;
     let mut sent = 0;
@@ -688,13 +788,25 @@ async fn send_probe(socket: &mut TcpStream) {
 
 // ---- the caller ----
 
-/// A member that relays a route's connections (`peer.ports.hop`): its listener and token.
+/// A member that relays a route's connections (`peer.ports.hop`): its listener and token, and what the target behind it
+/// must prove on every connection.
 #[derive(Clone, Debug)]
 pub struct Hop {
     pub machine_id: String,
     pub machine_name: String,
     pub address: SocketAddr,
     pub token: String,
+    pub proof: HopProof,
+}
+
+/// Who must answer at the far end of a relayed route: the target's signing key from membership, and what binds its
+/// signature to this route.
+#[derive(Clone, Debug)]
+pub struct HopProof {
+    pub caller: String,
+    pub target: String,
+    pub target_key: String,
+    pub forward_id: Uuid,
 }
 
 /// A TCP connection from this machine's Tailscale address (the fake binds a loopback source).
@@ -709,8 +821,12 @@ pub(super) async fn connect_from_tailnet(network: &Network, address: SocketAddr)
 }
 
 /// Dial a forward's listener (through `hop` when given) and authorize: for version 2 the socket is then ready and waits for
-/// a mode. Through a hop, the member checks its own token, connects the target and answers one byte; the target's
-/// handshake then runs end to end.
+/// a mode. Through a hop, the member checks its own token, connects the target and answers one byte. The caller then
+/// sends the route's token and a fresh nonce, and the target answers with its signature over the nonce, the forward, its
+/// listener and the three machines ([`hop_proof`]). The socket is used only when that signature verifies against the
+/// target's key in membership: a member cannot answer in the target's place. (It still carries the bytes, unencrypted
+/// beyond WireGuard on each leg, so it could read or change them; a member is a machine of the user's own network that
+/// was granted `machine:relay`.)
 async fn dial(network: &Network, address: SocketAddr, endpoint: &PeerPortsDirect, hop: Option<&Hop>) -> Option<(TcpStream, Duration)> {
     let connect = async {
         if endpoint.token.len() != 64 || hop.is_some_and(|hop| hop.token.len() != 64) {
@@ -719,15 +835,29 @@ async fn dial(network: &Network, address: SocketAddr, endpoint: &PeerPortsDirect
         let started = Instant::now();
         let mut socket = connect_from_tailnet(network, hop.map_or(address, |hop| hop.address)).await?;
         let round_trip = started.elapsed();
+        let mut hello = endpoint.token.as_bytes().to_vec();
+        let mut nonce = [0u8; NONCE_LEN];
         if let Some(hop) = hop {
             socket.write_all(hop.token.as_bytes()).await.ok()?;
-            if socket.read_u8().await.ok()? != ACK {
+            if socket.read_u8().await.ok()? != ACK || endpoint.version.unwrap_or(1) < 2 {
                 return None;
             }
+            rand::RngExt::fill(&mut rand::rng(), &mut nonce);
+            hello.extend_from_slice(&nonce);
         }
-        socket.write_all(endpoint.token.as_bytes()).await.ok()?;
+        socket.write_all(&hello).await.ok()?;
         if endpoint.version.unwrap_or(1) >= 2 && socket.read_u8().await.ok()? != ACK {
             return None;
+        }
+        if let Some(hop) = hop {
+            let mut signature = [0u8; SIGNATURE_LEN];
+            socket.read_exact(&mut signature).await.ok()?;
+            let proof = &hop.proof;
+            let message = hop_proof(&nonce, proof.forward_id, endpoint.port, &proof.caller, &hop.machine_id, &proof.target);
+            if crate::network::keys::verify_signature(&proof.target_key, &message, &signature).is_err() {
+                tracing::warn!(target: TARGET, via = %hop.machine_name, "a relayed route did not prove it reaches the target; not using it");
+                return None;
+            }
         }
         Some((socket, round_trip))
     };
@@ -786,6 +916,9 @@ impl Route {
                 break;
             }
             bytes += read as u64;
+            if bytes + first as u64 >= PROBE_LIMIT as u64 {
+                break;
+            }
         }
         let elapsed = started.elapsed().as_secs_f64().max(0.05);
         Some((bytes as f64 / elapsed) as u64)
