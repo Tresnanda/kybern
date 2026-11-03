@@ -65,9 +65,13 @@ pub mod features {
     /// pass `machine` to use apps here. Listed in presence only while that is true, so it is not part
     /// of [`ALL`].
     pub const COMPUTER_USE_V1: &str = "computer.use.v1";
+    /// A machine that asks for a session after it was removed is answered with the signed operations that
+    /// removed it (a 403 with a `RemovalNotice` body), so one that was offline at its removal learns of it.
+    /// A session request lists it in its `features` to ask for that answer.
+    pub const REMOVAL_PROOF_V1: &str = "removal.proof.v1";
 
     /// Every feature the network design names, in design order.
-    pub const ALL: [&str; 23] = [
+    pub const ALL: [&str; 24] = [
         NETWORK_V1,
         SPACES_SYNC_V1,
         RELAY_V1,
@@ -91,6 +95,7 @@ pub mod features {
         SKILLS_SYNC_V1,
         PLUGINS_SYNC_V1,
         RELAY_PAGE_V1,
+        REMOVAL_PROOF_V1,
     ];
 }
 

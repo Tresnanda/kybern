@@ -752,7 +752,8 @@ impl Network {
     /// operations go once more on the link being closed, and the accepting side's membership check hands a removed
     /// machine's socket here instead of closing it. Its streams end now and its requests are refused (a removed machine
     /// has no scopes); it closes once the machine answers, or after [`FAREWELL_TIMEOUT`]. Saying it again on the same
-    /// link does nothing.
+    /// link does nothing. Only the operations that removed it go, with their signers' chain
+    /// ([`super::Membership::removal_proof`]); a machine that was never a member is told nothing.
     pub fn say_farewell(&self, link: Arc<PeerLink>) {
         if link.farewell.swap(true, Ordering::SeqCst) {
             return;
@@ -760,7 +761,7 @@ impl Network {
         let ops = self
             .membership()
             .filter(|membership| !membership.is_member(&link.machine_id))
-            .map(|membership| membership.all_ops())
+            .map(|membership| membership.removal_proof(&link.machine_id))
             .unwrap_or_default();
         let runtime = tokio::runtime::Handle::try_current();
         let (Ok(runtime), false, false) = (runtime, ops.is_empty(), link.is_closed()) else {
@@ -1607,10 +1608,12 @@ async fn discover(state: &AppState, status: &TsStatus) {
             });
         }
     }
+    let found: Vec<FoundEntry> = found.into_iter().flatten().collect();
+    tell_removed_machines(state, &found);
     let mut changed = false;
     {
         let mut inner = network.peers.lock();
-        for entry in found.into_iter().flatten() {
+        for entry in found {
             tracing::debug!(target: DISCOVERY_TARGET, machine = %entry.descriptor.machine_id, node = %entry.node.node_id, "found a machine on the tailnet");
             changed |= inner.found.insert(entry.node.node_id.clone(), entry).is_none();
         }
@@ -1618,6 +1621,65 @@ async fn discover(state: &AppState, status: &TsStatus) {
     if changed {
         network.notify_changed();
     }
+}
+
+/// A machine that was removed while it was offline, with the larger id, never dials: it nudges the member that should
+/// dial it, and members do not dial removed machines. When a removed machine nudged this one (so it does not know)
+/// and discovery then finds it answering with the very key the set recorded for it (its well-known proof verified),
+/// this member dials it once to say farewell (ADE-120): the removed machine still takes it for a member and grants
+/// the session, and the link that opens is handed to [`Network::say_farewell`] by `removed_while_opening`, which
+/// pushes the operations that removed it. Once per nudge, and at most once per
+/// [`super::Timing::removal_notice_every`] for each machine; a removed machine that knows nudges no one.
+fn tell_removed_machines(state: &AppState, found: &[FoundEntry]) {
+    let network = &state.network;
+    let Some(membership) = network.membership().filter(|membership| membership.self_is_member()) else { return };
+    let projection = membership.projection();
+    for entry in found {
+        let answered = &entry.descriptor;
+        let removed = projection
+            .entry(&answered.machine_id)
+            .is_some_and(|recorded| recorded.removed.is_some() && recorded.descriptor.signing_key == answered.signing_key);
+        if !removed
+            || network.peers.link(&answered.machine_id).is_some()
+            || !network.take_farewell_wanted(&answered.machine_id)
+            || !network.removal_notice_due(&answered.machine_id)
+        {
+            continue;
+        }
+        let state = state.clone();
+        let entry = entry.clone();
+        tokio::spawn(async move {
+            let machine = entry.descriptor.machine_id.clone();
+            match farewell_dial(&state, &entry).await {
+                Ok(()) => tracing::info!(target: SESSION_TARGET, %machine, "told a removed machine that it was removed"),
+                Err(error) => {
+                    tracing::debug!(target: SESSION_TARGET, %machine, %error, "could not tell a removed machine that it was removed")
+                }
+            }
+        });
+    }
+}
+
+/// Open a session to a removed machine only to close it with the operations that removed it.
+async fn farewell_dial(state: &AppState, found: &FoundEntry) -> Result<(), String> {
+    let network = &state.network;
+    let membership = network.membership().ok_or("the network is unavailable")?;
+    let projection = membership.projection();
+    let machine_id = found.descriptor.machine_id.as_str();
+    let entry = projection.entry(machine_id).filter(|entry| entry.removed.is_some()).ok_or("not a removed machine")?;
+    let ip = found.node.ip().ok_or("the node has no tailnet address")?;
+    let target = Target {
+        machine_id: machine_id.to_string(),
+        signing_key: entry.descriptor.signing_key.clone(),
+        ts_ip: ip,
+        port: found.port,
+        url: None,
+    };
+    let established = session::open(network, membership, &target, &[Scope::MachinePeer], None).await.map_err(|error| error.to_string())?;
+    let socket = connect_socket(network, &target, &established.token).await?;
+    // Registered, found removed, told and closed: `run_dialed` never treats it as a member's session.
+    run_dialed(state.clone(), target, established, socket);
+    Ok(())
 }
 
 pub(super) async fn probe_node(state: &AppState, node: TsNode) -> Option<FoundEntry> {

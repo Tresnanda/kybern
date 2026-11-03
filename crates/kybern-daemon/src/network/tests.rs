@@ -266,6 +266,7 @@ fn signed_request(from: &Node, to: &Node, scopes: &[Scope]) -> SessionRequest {
         scopes: scopes.iter().map(|scope| scope.as_str().to_string()).collect(),
         renews: None,
         sig: String::new(),
+        features: vec![],
     };
     request.sig = B64.encode(from.membership().keys().sign(&session::request_message(&request)));
     request
