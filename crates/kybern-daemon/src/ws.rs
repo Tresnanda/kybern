@@ -463,11 +463,15 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     let mut preview_requests = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_preview_requests());
     let mut request_progress = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.requests().subscribe());
     let mut remote_children = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_remote_children());
-    // The machine network's changes reach clients that may read it as `network.changed`, at most a few a second.
-    let network_changes = ctx.principal.has(Scope::NetworkRead).then(|| forward_network_changes(state.clone(), ctx.out.clone()));
     if !principal_is_active(&state, &ctx.principal) {
         return;
     }
+    // The machine network's changes reach clients that may read it as `network.changed`, at most a few a second. Started
+    // after the check above: a connection that returns early leaves no forwarder behind.
+    let network_changes = ctx
+        .principal
+        .has(Scope::NetworkRead)
+        .then(|| forward_network_changes(crate::network::status::subscribe_changes(&state), ctx.out.clone()));
     tracing::info!(conn = %ctx.id, label = %ctx.principal.label, "client connected");
 
     let input_state = state.clone();
@@ -744,25 +748,19 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     tracing::info!("client disconnected");
 }
 
-/// How long `network.changed` waits for more changes before it reads the status once for all of them.
-const NETWORK_CHANGED_COALESCE: std::time::Duration = std::time::Duration::from_millis(300);
-
-/// Send `network.changed` (the whole [`kybern_protocol::NetworkStatus`]) whenever the members, the found
-/// list or a link changed: a member coming online, going offline or being added. Clients resync their
-/// machine list from it, so a machine that came back is dialed again without an app restart. A burst
-/// of changes is one notification.
-fn forward_network_changes(state: AppState, out: Outbox) -> tokio::task::JoinHandle<()> {
-    let mut changes = state.network.subscribe_changes();
+/// Send `network.changed` (the whole [`kybern_protocol::NetworkStatus`]) whenever the members, the found list or a link
+/// changed: a member coming online, going offline or being added. Clients resync their machine list from it, so a
+/// machine that came back is dialed again without an app restart. The status is built once per burst of changes for
+/// every connection (`status::subscribe_changes`).
+fn forward_network_changes(
+    mut feed: tokio::sync::watch::Receiver<Option<Arc<kybern_protocol::NetworkStatus>>>,
+    out: Outbox,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        loop {
-            match changes.recv().await {
-                Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-            }
-            tokio::time::sleep(NETWORK_CHANGED_COALESCE).await;
-            while matches!(changes.try_recv(), Ok(()) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))) {}
-            let Some(status) = crate::network::status::snapshot(&state).await else { continue };
-            if out.notify(kybern_protocol::NETWORK_CHANGED_NOTIFICATION, status).await.is_err() {
+        while feed.changed().await.is_ok() {
+            let status = feed.borrow_and_update().clone();
+            let Some(status) = status else { continue };
+            if out.notify(kybern_protocol::NETWORK_CHANGED_NOTIFICATION, &*status).await.is_err() {
                 break;
             }
         }
