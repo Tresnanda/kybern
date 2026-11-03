@@ -735,7 +735,7 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
             } => {
                 match notice {
                     Ok(notice) if notice.connection == ctx.id => {
-                        let params = kybern_protocol::methods::AppUpdateRequestedNotification { version: notice.version };
+                        let params = kybern_protocol::methods::AppUpdateRequestedNotification { version: notice.version, automatic: notice.automatic };
                         let _ = ctx.out.notify(kybern_protocol::methods::APP_UPDATE_REQUESTED_NOTIFICATION, params).await;
                     }
                     Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}

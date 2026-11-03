@@ -366,10 +366,15 @@ fn an_unattached_window_of_the_app_keeps_the_daemon_from_replacing_it() {
 #[test]
 fn requests_keep_the_highest_version_and_a_closed_window_hands_the_update_back() {
     let updates = AppUpdates::default();
-    updates.request(Some("0.21.4".into()));
-    updates.request(Some("0.21.3".into()));
+    updates.request(Some("0.21.4".into()), true);
+    assert!(updates.pending().unwrap().automatic);
+    updates.request(Some("0.21.3".into()), true);
     assert_eq!(updates.pending().unwrap().version.as_deref(), Some("0.21.4"));
-    updates.request(None);
+    assert!(updates.pending().unwrap().automatic, "following twice is still automatic");
+    updates.request(None, false);
+    assert!(!updates.pending().unwrap().automatic, "someone asked for it");
+    updates.request(None, true);
+    assert!(!updates.pending().unwrap().automatic, "and following again does not change that");
     assert_eq!(updates.pending().unwrap().version.as_deref(), Some("0.21.4"));
 
     let first = uuid::Uuid::now_v7();
@@ -441,7 +446,7 @@ async fn a_window_that_fails_or_finds_nothing_closes_the_request() {
     let daemon = desktop_daemon(Detected::Install(DesktopInstall::MacApp { bundle: "/nowhere/Kybern GPUIX.app".into() }));
     let state = &daemon.state;
     let window = attach(state, true);
-    request(state, Some("0.99.0".into()));
+    request(state, Some("0.99.0".into()), false);
     assert_eq!(tick(state).await, Step::Handed(window));
     report(
         state,
@@ -462,7 +467,7 @@ async fn a_closed_app_is_updated_by_the_daemon_but_not_right_after_its_window_qu
     let daemon = desktop_daemon(Detected::Install(DesktopInstall::MacApp { bundle: "/nowhere/Kybern GPUIX.app".into() }));
     let state = &daemon.state;
     let window = attach(state, true);
-    request(state, None);
+    request(state, None, false);
     assert_eq!(tick(state).await, Step::Handed(window));
     // The window quit without a word, perhaps to restart on the new version: the daemon waits before doing it itself.
     state.app_updates.detach(window);
@@ -495,4 +500,28 @@ async fn a_package_install_and_a_development_build_are_not_started() {
     assert_eq!(crate::network::updates::start_self(&dev.state, Some("99.0.0")).await.reason.as_deref(), Some("Updates are off"));
     // Already there wins.
     assert_eq!(crate::network::updates::start_self(&dev.state, Some(CURRENT_VERSION)).await.reason.as_deref(), Some("Already up to date"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_followed_update_also_waits_for_terminals_and_says_so_to_the_window() {
+    let daemon = desktop_daemon(Detected::Install(DesktopInstall::MacApp { bundle: "/nowhere/Kybern GPUIX.app".into() }));
+    let state = &daemon.state;
+    let mut notices = state.app_updates.subscribe();
+    let window = attach(state, true);
+    state.app_updates.test_terminals.store(true, Ordering::SeqCst);
+
+    // Following another machine: an open terminal (a dev server) keeps it waiting.
+    request(state, Some("0.99.0".into()), true);
+    assert_eq!(tick(state).await, Step::Wait);
+    assert!(notices.try_recv().is_err());
+    state.app_updates.test_terminals.store(false, Ordering::SeqCst);
+    assert_eq!(tick(state).await, Step::Handed(window));
+    assert!(notices.try_recv().unwrap().automatic, "the window waits for terminals too");
+
+    // An update someone asked for does not wait for terminals.
+    state.app_updates.finish();
+    state.app_updates.test_terminals.store(true, Ordering::SeqCst);
+    request(state, Some("0.99.0".into()), false);
+    assert_eq!(tick(state).await, Step::Handed(window));
+    assert!(!notices.try_recv().unwrap().automatic);
 }

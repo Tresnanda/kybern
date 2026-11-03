@@ -4992,6 +4992,8 @@ export interface AppUpdaterReportParams { phase: AppUpdatePhase; version?: strin
 export interface AppUpdateRequestedNotification {
   /** The version this machine was asked to reach; the app still installs only what its own track's feed offers. */
   version?: string;
+  /** Nobody asked: the machine follows another one. The app then also waits for terminals to close. */
+  automatic?: boolean;
 }
 export const APP_UPDATE_REQUESTED_NOTIFICATION = "app_update.requested";
 

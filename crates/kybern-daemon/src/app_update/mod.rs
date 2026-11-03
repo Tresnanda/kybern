@@ -60,6 +60,9 @@ pub struct Attached {
 pub struct Pending {
     /// The version asked for, when the request named one. The installer still reads its own feed.
     pub version: Option<String>,
+    /// Nobody asked for it on any machine: this machine follows another one ("Keep all machines on the same
+    /// version"). Such an update also waits while a terminal is open, since a restart ends its processes.
+    pub automatic: bool,
     /// The window it was handed to, if one has it.
     pub handed_to: Option<Uuid>,
     /// When that window went away without saying how it ended. It may be the app quitting to restart on the new
@@ -72,6 +75,7 @@ pub struct Pending {
 pub struct Notice {
     pub connection: Uuid,
     pub version: Option<String>,
+    pub automatic: bool,
 }
 
 #[derive(Default)]
@@ -92,6 +96,9 @@ pub struct AppUpdates {
     /// Work is running, as far as a test is concerned.
     #[cfg(test)]
     pub(crate) test_busy: std::sync::atomic::AtomicBool,
+    /// A terminal is open, as far as a test is concerned.
+    #[cfg(test)]
+    pub(crate) test_terminals: std::sync::atomic::AtomicBool,
 }
 
 impl Default for AppUpdates {
@@ -105,6 +112,8 @@ impl Default for AppUpdates {
             test_install: Mutex::new(None),
             #[cfg(test)]
             test_busy: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            test_terminals: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -156,15 +165,18 @@ impl AppUpdates {
         self.inner().pending.clone()
     }
 
-    /// Queue an update. A second request while one waits keeps the higher version.
-    pub fn request(&self, version: Option<String>) {
+    /// Queue an update. A second request while one waits keeps the higher version, and a request someone made
+    /// makes the pending update no longer automatic.
+    pub fn request(&self, version: Option<String>, automatic: bool) {
         {
             let mut inner = self.inner();
-            let version = match (inner.pending.take().and_then(|pending| pending.version), version) {
+            let previous = inner.pending.take();
+            let automatic = automatic && previous.as_ref().is_none_or(|pending| pending.automatic);
+            let version = match (previous.and_then(|pending| pending.version), version) {
                 (Some(a), Some(b)) => Some(if self_update::newer(&b, &a) { b } else { a }),
                 (a, b) => b.or(a),
             };
-            inner.pending = Some(Pending { version, handed_to: None, released_at: None });
+            inner.pending = Some(Pending { version, automatic, handed_to: None, released_at: None });
         }
         self.wake.notify_one();
     }
@@ -181,7 +193,7 @@ impl AppUpdates {
             return None;
         }
         pending.handed_to = Some(connection);
-        Some(Notice { connection, version: pending.version.clone() })
+        Some(Notice { connection, version: pending.version.clone(), automatic: pending.automatic })
     }
 }
 
@@ -251,9 +263,10 @@ pub fn blocked(state: &AppState, version: Option<&str>) -> Option<String> {
     }
 }
 
-/// Queue an update of the app; [`run`] carries it out once nothing is running.
-pub fn request(state: &AppState, version: Option<String>) {
-    state.app_updates.request(version);
+/// Queue an update of the app; [`run`] carries it out once nothing is running. An `automatic` one (following another
+/// machine) also waits for this machine's terminals to close.
+pub fn request(state: &AppState, version: Option<String>, automatic: bool) {
+    state.app_updates.request(version, automatic);
     note(state, Status::Waiting, "Waiting for running work to finish".into());
 }
 
@@ -317,7 +330,7 @@ pub enum Step {
 pub async fn tick(state: &AppState) -> Step {
     let Ok(_worker) = state.app_updates.worker.try_lock() else { return Step::Wait };
     let Some(pending) = state.app_updates.pending() else { return Step::Idle };
-    if busy(state).await {
+    if busy(state, pending.automatic).await {
         note(state, Status::Waiting, "Waiting for running work to finish".into());
         return Step::Wait;
     }
@@ -332,7 +345,7 @@ pub async fn tick(state: &AppState) -> Step {
             None => Step::WithWindow,
         },
         Route::Daemon(_) if pending.released_at.is_some_and(|at| at.elapsed() < RELEASE_GRACE) => Step::Wait,
-        Route::Daemon(target) => install_here(state, &target, pending.version.as_deref()).await,
+        Route::Daemon(target) => install_here(state, &target, &pending).await,
         Route::Package(kind) => {
             note(state, Status::Unsupported, install::package_message(kind, pending.version.as_deref(), std::env::consts::ARCH));
             state.app_updates.finish();
@@ -346,18 +359,24 @@ pub async fn tick(state: &AppState) -> Step {
     }
 }
 
-/// Anything a restart would interrupt: a turn, an approval, background work, a queued message. A failed read of the
-/// activity counts as busy: better late than in the middle of a turn.
-async fn busy(state: &AppState) -> bool {
+/// Anything a restart would interrupt: a turn, an approval, background work, a queued message, and for an `automatic`
+/// update an open terminal (a dev server the user started). A failed read of the activity counts as busy: better late
+/// than in the middle of a turn.
+async fn busy(state: &AppState, automatic: bool) -> bool {
     #[cfg(test)]
     if state.app_updates.test_busy.load(Ordering::SeqCst) {
         return true;
     }
-    self_update::busy(state, false).await.unwrap_or(true)
+    #[cfg(test)]
+    if automatic && state.app_updates.test_terminals.load(Ordering::SeqCst) {
+        return true;
+    }
+    self_update::busy(state, automatic).await.unwrap_or(true)
 }
 
 /// The daemon replaces the installed app itself, then restarts on the new binary.
-async fn install_here(state: &AppState, target: &DesktopInstall, wanted: Option<&str>) -> Step {
+async fn install_here(state: &AppState, target: &DesktopInstall, pending: &Pending) -> Step {
+    let wanted = pending.version.as_deref();
     if install::app_running(target) {
         note(state, Status::Waiting, "Waiting for Kybern to close on this machine".into());
         return Step::Wait;
@@ -375,7 +394,7 @@ async fn install_here(state: &AppState, target: &DesktopInstall, wanted: Option<
         Err(error) => return failed(state, error),
     };
     // The download took a while: never swap the app under work that started meanwhile, nor under a window that opened.
-    if busy(state).await || install::app_running(target) || state.app_updates.window().is_some() {
+    if busy(state, pending.automatic).await || install::app_running(target) || state.app_updates.window().is_some() {
         note(state, Status::Waiting, format!("{} is ready. Waiting for running work to finish", prepared.version));
         return Step::Wait;
     }

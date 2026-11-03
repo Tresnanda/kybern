@@ -74,6 +74,15 @@ pub fn decide(updater: &Updater, current: &str, wanted: Option<&str>, track: Upd
 /// `peer.update.start`, and this machine's own part of `network.update_all`: queue the update. The
 /// updater itself waits for running work to finish and restarts the daemon when it is done.
 pub async fn start_self(state: &AppState, wanted: Option<&str>) -> PeerUpdateStartResult {
+    start(state, wanted, false).await
+}
+
+/// Queue an update nobody asked for: this machine follows another one. It also waits for terminals to close.
+async fn start_following(state: &AppState, wanted: &str) -> PeerUpdateStartResult {
+    start(state, Some(wanted), true).await
+}
+
+async fn start(state: &AppState, wanted: Option<&str>, automatic: bool) -> PeerUpdateStartResult {
     let track = state.settings.get().update_track;
     if state.desktop_managed.load(Ordering::SeqCst) {
         // A package install's answer names the release to install, so it needs a version even when none was asked for.
@@ -85,7 +94,7 @@ pub async fn start_self(state: &AppState, wanted: Option<&str>) -> PeerUpdateSta
         return match decide(&updater, CURRENT_VERSION, wanted.as_deref(), track) {
             Decision::Skip(reason) => PeerUpdateStartResult { started: false, reason: Some(reason) },
             Decision::Start => {
-                crate::app_update::request(state, wanted);
+                crate::app_update::request(state, wanted, automatic);
                 PeerUpdateStartResult { started: true, reason: None }
             }
         };
@@ -297,7 +306,7 @@ pub async fn follow_tick(state: &AppState) -> Option<String> {
         return None;
     }
     tracing::info!(target: TARGET, %version, "another machine runs a newer version; updating to follow it");
-    let answer = start_self(state, Some(&version)).await;
+    let answer = start_following(state, &version).await;
     answer.started.then_some(version)
 }
 

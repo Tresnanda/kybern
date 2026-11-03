@@ -48,8 +48,11 @@
 // its updater (`app_updater.attach`). Once nothing runs, the daemon sends one
 // window `app_update.requested`; it installs the newest release of its own track
 // with the steps above, without asking, waits again until no turn, agent or
-// queued message is running, shows a short notice and restarts (the new app
-// restarts the daemon). It tells the daemon how far it got (`app_updater.report`).
+// queued message is running (and, for an update that follows another machine,
+// no terminal), shows a short notice and restarts (the new app restarts the
+// daemon). A window someone used in the last two minutes asks first (Restart
+// now / Later); Later waits until it has been left alone for five minutes. It
+// tells the daemon how far it got (`app_updater.report`).
 // While the app is closed the daemon updates it itself.
 //
 // Tests point the app at a local feed with KYBERN_UPDATE_FEED and
@@ -72,7 +75,8 @@ import { quitOtherWindows } from '../windows/registry.ts'
 import { appImageName, imageDirWritable, linuxInstall, packageCommand } from './linuxPackage.ts'
 import { installedWindowsFolder } from './windowsInstall.ts'
 import type { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
-import { APP_UPDATE_REQUESTED_NOTIFICATION, type AppUpdaterReportParams, type DaemonActivity } from '../../../../packages/kybern-client/src/types.ts'
+import { APP_UPDATE_REQUESTED_NOTIFICATION, type AppUpdateRequestedNotification, type AppUpdaterReportParams, type DaemonActivity } from '../../../../packages/kybern-client/src/types.ts'
+import { sinceUserInput } from './userInput.ts'
 
 const run = promisify(execFile)
 
@@ -536,11 +540,21 @@ async function relaunchAppImage(image: string) {
 export const IDLE_POLL_MS = 5000
 /** How long the notice shows before the app restarts. */
 export const RESTART_NOTICE_MS = 2500
+/** Input this recent means someone is using the window: it asks before restarting. */
+export const IN_USE_MS = 2 * 60_000
+/** After Later (or while the question is unanswered), how long the window must be left alone before it restarts. */
+export const LATER_QUIET_MS = 5 * 60_000
 const RESTART_TOAST = 'kybern-update-restart'
 
-/** Nothing a restart would interrupt: no turn or approval, no agent or background work, no queued message. */
-export const activityIdle = (activity: Pick<DaemonActivity, 'running_threads' | 'live_sessions' | 'idle_sessions' | 'queued_messages'>) =>
-  activity.running_threads === 0 && activity.live_sessions === activity.idle_sessions && activity.queued_messages === 0
+/**
+ * Nothing a restart would interrupt: no turn or approval, no agent or background work, no queued message. An
+ * `automatic` update (following another machine) also waits for terminals, whose processes a restart ends.
+ */
+export const activityIdle = (activity: Pick<DaemonActivity, 'running_threads' | 'live_sessions' | 'idle_sessions' | 'queued_messages'> & Partial<Pick<DaemonActivity, 'terminals'>>, automatic = false) =>
+  activity.running_threads === 0 && activity.live_sessions === activity.idle_sessions && activity.queued_messages === 0 && (!automatic || !activity.terminals)
+
+/** The question a window in use is asked before it restarts. `hide` takes it away without answering. */
+export interface RestartPrompt { choice: Promise<'now' | 'later'>; hide: () => void }
 
 /** What a requested update needs; the app's own updater and daemon in use, a test's in tests. */
 export interface RequestedUpdateDeps {
@@ -553,6 +567,10 @@ export interface RequestedUpdateDeps {
   report: (params: AppUpdaterReportParams) => Promise<void>
   /** Show the notice before the restart; the returned function takes it away again. */
   notice: (version: string) => Promise<() => void>
+  /** Milliseconds since this window last had the user's input. */
+  sinceInput: () => number
+  /** Ask whether to restart now or later; closing the question counts as Later. */
+  ask: (version: string) => RestartPrompt
   sleep: (ms: number) => Promise<void>
 }
 export type RequestedOutcome = 'current' | 'failed' | 'restarted' | 'busy'
@@ -560,6 +578,8 @@ export type RequestedOutcome = 'current' | 'failed' | 'restarted' | 'busy'
 /**
  * The daemon asked for an update. Install the newest release of this app's track, verified as always, then restart
  * once nothing is running, and never in the middle of a turn: the machine is checked again after the notice shows.
+ * A window someone is using asks first: Restart now restarts as soon as nothing runs; Later (or no answer) waits
+ * until the window has been left alone for `LATER_QUIET_MS`, then restarts after the usual notice.
  */
 export async function runRequestedUpdate(deps: RequestedUpdateDeps): Promise<RequestedOutcome> {
   const fail = async (error: unknown) => { await deps.report({ phase: 'failed', message: describe(error) }); return 'failed' as const }
@@ -571,16 +591,35 @@ export async function runRequestedUpdate(deps: RequestedUpdateDeps): Promise<Req
   let apply: () => Promise<void>
   try { apply = await deps.prepare(update) } catch (error) { return fail(error) }
   let waiting = false
+  let prompt: RestartPrompt | null = null
+  let answer: 'now' | 'later' | null = null
+  let consented = false
+  let deferred = false
   for (;;) {
+    if (answer === 'now') { consented = true; prompt = null; answer = null }
+    if (answer === 'later') { deferred = true; prompt = null; answer = null }
     if (await deps.idle()) {
-      const hide = await deps.notice(version)
-      await deps.sleep(RESTART_NOTICE_MS)
-      if (await deps.idle()) break
-      // Work started while the notice showed: take it away and wait again.
-      hide()
+      if (consented) break
+      const asked = prompt !== null || deferred
+      if (deps.sinceInput() >= (asked ? LATER_QUIET_MS : IN_USE_MS)) {
+        // Nobody is using the window: an unanswered question goes, and the notice shows before the restart.
+        const question: RestartPrompt | null = prompt
+        prompt = null
+        question?.hide()
+        const hide = await deps.notice(version)
+        await deps.sleep(RESTART_NOTICE_MS)
+        if (await deps.idle()) break
+        // Work started while the notice showed: take it away and wait again.
+        hide()
+      } else if (!asked) {
+        const question = deps.ask(version)
+        prompt = question
+        void question.choice.then(choice => { if (prompt === question) answer = choice })
+      }
     }
     if (!waiting) { waiting = true; await deps.report({ phase: 'waiting', version }) }
-    await deps.sleep(IDLE_POLL_MS)
+    // An answer ends the wait at once.
+    await (prompt ? Promise.race([deps.sleep(IDLE_POLL_MS), prompt.choice.then(() => {})]) : deps.sleep(IDLE_POLL_MS))
   }
   await deps.report({ phase: 'restarting', version })
   try { await apply() } catch (error) { return fail(error) }
@@ -604,7 +643,7 @@ const listening = new WeakSet<object>()
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 
 /** Install what the daemon asked for, with this app's updater and state (the rail shows the progress). */
-export function applyRequestedUpdate(client: UpdaterClient): Promise<RequestedOutcome> {
+export function applyRequestedUpdate(client: UpdaterClient, automatic = false): Promise<RequestedOutcome> {
   if (requestedInFlight) return requestedInFlight
   if (installInFlight || state.phase === 'installing') return Promise.resolve('busy')
   requestedInFlight = runRequestedUpdate({
@@ -618,16 +657,43 @@ export function applyRequestedUpdate(client: UpdaterClient): Promise<RequestedOu
       try { return await prepareInstall(update, (progress) => set({ progress })) }
       catch (error) { set({ phase: 'available', progress: null, error: describe(error), errorKind: 'install' }); throw error }
     },
-    idle: async () => { try { return activityIdle(await client.call('daemon.activity', {})) } catch { return false } },
+    idle: async () => { try { return activityIdle(await client.call('daemon.activity', {}), automatic) } catch { return false } },
     report: (params) => client.call('app_updater.report', params).then(() => {}, () => {}),
     notice: async (version) => {
       const { toast } = await import('../shell/toasts.tsx')
       toast.info(`Updating Kybern to ${version} — restarting…`, { id: RESTART_TOAST, duration: Infinity })
       return () => toast.dismiss(RESTART_TOAST)
     },
+    sinceInput: () => sinceUserInput(),
+    ask: (version) => askToRestart(version),
     sleep,
   }).finally(() => { requestedInFlight = null })
   return requestedInFlight
+}
+
+/** The kit toast as a prompt: Restart now or Later; its close button is Later too. */
+function askToRestart(version: string): RestartPrompt {
+  let settle: (choice: 'now' | 'later') => void = () => {}
+  const choice = new Promise<'now' | 'later'>(resolve => { settle = resolve })
+  let hidden = false
+  void import('../shell/toasts.tsx').then(({ toast }) => {
+    if (hidden) return
+    toast.info(`Kybern ${version} is ready`, {
+      id: RESTART_TOAST,
+      description: 'Restart Kybern to finish updating.',
+      duration: Infinity,
+      cancel: { label: 'Later', onClick: () => settle('later') },
+      action: { label: 'Restart now', onClick: () => settle('now') },
+      onClose: () => settle('later'),
+    })
+  })
+  return {
+    choice,
+    hide: () => {
+      hidden = true
+      void import('../shell/toasts.tsx').then(({ toast }) => toast.dismiss(RESTART_TOAST))
+    },
+  }
 }
 
 /**
@@ -637,7 +703,9 @@ export function applyRequestedUpdate(client: UpdaterClient): Promise<RequestedOu
 export function takeUpdateRequests(client: UpdaterClient) {
   if (!listening.has(client)) {
     listening.add(client)
-    client.onNotification(APP_UPDATE_REQUESTED_NOTIFICATION, () => { void applyRequestedUpdate(client) })
+    client.onNotification(APP_UPDATE_REQUESTED_NOTIFICATION, (params) => {
+      void applyRequestedUpdate(client, (params as AppUpdateRequestedNotification | null)?.automatic === true)
+    })
   }
   let version: string
   try { version = desktopVersion() } catch { return Promise.resolve() }

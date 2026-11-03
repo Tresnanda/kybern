@@ -720,6 +720,10 @@ method!(AppUpdaterReport, "app_updater.report", Some(Scope::OrchestrationOperate
 pub struct AppUpdateRequestedNotification {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// Nobody asked for this update: the machine follows another one ("Keep all machines on the same version").
+    /// The daemon waited for terminals to close as well; the app does the same before it restarts.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub automatic: bool,
 }
 pub const APP_UPDATE_REQUESTED_NOTIFICATION: &str = "app_update.requested";
 
