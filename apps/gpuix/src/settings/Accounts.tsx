@@ -89,7 +89,7 @@ export function Accounts() {
   // omp, OpenCode and pi have no account: they are listed only to manage a profile (its own folder) added
   // before Kybern stopped offering them, so nothing a user set up disappears.
   const installed = providers.filter((p) => p.available && accounts.some((a) => a.provider.kind === p.kind && (!withoutSignIn(p.kind) || !isCliInstance(a.provider.instance))))
-  const missing = providers.filter((p) => !p.available)
+  const missing = providers.filter((p) => !p.available && !withoutSignIn(p.kind))
   return <>
     {legacy && <PageBlock><Note>{`Update Kybern on ${host} to sign in from the browser.`}</Note></PageBlock>}
     {!legacy && <LoginBrokerSection />}
