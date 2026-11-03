@@ -10,10 +10,10 @@
 //
 // The folder can disappear while the app runs (a disk cleanup, ADE-122): a write
 // that finds it gone makes it again and tries once more, and bytes that still
-// cannot be written there go to a folder in the OS temp dir, so a fetched image
-// still shows.
+// cannot be written there go to this process's own folder in the OS temp dir
+// (made with mkdtemp, removed on exit), so a fetched image still shows.
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync, utimesSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, unlinkSync, utimesSync } from 'node:fs'
 import { mkdir, rename, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -57,12 +57,23 @@ async function intoCache<T>(write: () => Promise<T>): Promise<T> {
   }
 }
 
-/** Where fetched bytes go when the cache folder cannot be written at all: the OS temp dir, still a file (never a `data:` URL). */
-let fallbackFolder: string | null = null
+/** This process's own folders in the OS temp dir, removed when it exits. */
+const tempFolders: string[] = []
+/** A folder in the OS temp dir for when the cache folder cannot be written. `mkdtemp` makes it, so its name cannot be
+ *  guessed and no other user's file or link can be waiting there in the shared temp dir; one deleted since is made anew
+ *  the same way, never again at a known path. Removed on exit. */
+export function tempImageFolder(): string {
+  const current = tempFolders.at(-1)
+  if (current && existsSync(current)) return current
+  const folder = mkdtempSync(path.join(tmpdir(), 'kybern-gpuix-images-'))
+  if (!tempFolders.length) process.once('exit', () => { for (const dir of tempFolders) try { rmSync(dir, { recursive: true, force: true }) } catch { /* Left for the OS to clear. */ } })
+  tempFolders.push(folder)
+  return folder
+}
+
+/** Where fetched bytes go when the cache folder cannot be written at all: still a file (never a `data:` URL). */
 async function fallbackFile(name: string, bytes: Uint8Array): Promise<string> {
-  fallbackFolder ??= path.join(tmpdir(), `kybern-gpuix-images-${process.pid}`)
-  await mkdir(fallbackFolder, { recursive: true })
-  const file = path.join(fallbackFolder, name)
+  const file = path.join(tempImageFolder(), name)
   if (!existsSync(file)) {
     const temp = `${file}.${++writes}.tmp`
     await writeFile(temp, bytes)
@@ -86,7 +97,7 @@ function prune(dir: string) {
 /** A file in the image cache for the native layer to write (a live visual's frame); pruned with the rest. The folder
  *  exists when this returns, even if something deleted it since launch. */
 export function imageCachePath(name: string): string {
-  try { return path.join(ensureCacheFolder(), name) } catch { return path.join(tmpdir(), name) }
+  try { return path.join(ensureCacheFolder(), name) } catch { return path.join(tempImageFolder(), name) }
 }
 
 const hex = (value: string | Uint8Array) => Bun.hash(value).toString(16).padStart(16, '0')

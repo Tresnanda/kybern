@@ -7,7 +7,7 @@ import { gradientPng } from '../../visual/fixture.ts'
 
 const dir = mkdtempSync(path.join(tmpdir(), 'kybern-image-files-'))
 process.env.KYBERN_CLIENT_CONFIG_DIR = dir
-const { imageCachePath, imageFiles, storeImageBytes } = await import('./imageFiles.ts')
+const { imageCachePath, imageFiles, storeImageBytes, tempImageFolder } = await import('./imageFiles.ts')
 /** A PNG's pixel width, from its header. */
 const width = (file: string) => readFileSync(file).readUInt32BE(16)
 
@@ -69,7 +69,19 @@ test('an unwritable cache folder still gives the image a file to show', async ()
     const file = await storeImageBytes(bytes, 'image/png')
     expect(path.dirname(file)).not.toBe(folder)
     expect(readFileSync(file).equals(Buffer.from(bytes))).toBe(true)
+    // This process's own temp folder, not a name another user could make first in the shared temp dir.
+    expect(path.dirname(file)).toBe(tempImageFolder())
+    expect(path.basename(path.dirname(file))).not.toContain(String(process.pid))
   } finally {
     rmSync(folder, { force: true })
   }
+})
+
+test('a deleted temp folder is made anew under a new name', () => {
+  const first = tempImageFolder()
+  expect(tempImageFolder()).toBe(first)
+  rmSync(first, { recursive: true, force: true })
+  const second = tempImageFolder()
+  expect(second).not.toBe(first)
+  expect(existsSync(second)).toBe(true)
 })
