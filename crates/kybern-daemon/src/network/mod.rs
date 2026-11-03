@@ -149,6 +149,10 @@ pub struct Timing {
     /// The soonest a member tells the same removed machine again that it was removed (ADE-120): a removed machine
     /// that keeps retrying is answered once per this, and refused plainly in between.
     pub removal_notice_every: Duration,
+    /// The longest one dial of a member may take, every step of it (well-known, session, socket, upgrade). A dial
+    /// past it is given up and counted as a failure; one in flight when the network changes (a wake, a tailnet change,
+    /// the switch) is given up at once and tried again without waiting.
+    pub dial_deadline: Duration,
 }
 
 impl Default for Timing {
@@ -175,6 +179,7 @@ impl Default for Timing {
             resume_tick: Duration::from_secs(5),
             status_poll: Duration::from_secs(30),
             removal_notice_every: Duration::from_secs(30),
+            dial_deadline: Duration::from_secs(45),
         }
     }
 }
@@ -203,6 +208,7 @@ impl Timing {
             resume_tick: Duration::from_secs(1),
             status_poll: Duration::from_millis(300),
             removal_notice_every: Duration::from_secs(1),
+            dial_deadline: Duration::from_secs(3),
         }
     }
 }
