@@ -179,23 +179,30 @@ instabox → kdi-vps ran at 778 KB/s and kdi-vps → the Mac at about 2.5 MB/s.
   3 s); `ports.changed` repeats it once a second, only after 2 s. The Browser shows "Loading over a slow connection —
   4.2 of 31 MB · 90 KB/s" under its chrome after 3 s with bytes arriving (`apps/gpuix/src/preview/slow.ts`).
 - **Viewing-side cache** (`ports/cache.rs`, `ports.cache.v1`): whole `200` answers to plain `GET`s with an `ETag` or
-  `Last-Modified` are kept per forward, keyed by host, path and the request headers they `Vary` on; never with
-  `Set-Cookie`, `private`, `no-store`, `Vary: *`, a range, `Authorization` or an event stream. A navigation request
-  starts one batched revalidation (`x-kybern-revalidate` on the HTTP/2 connection): the target asks its dev server
-  about every kept response over loopback, 16 at a time, and answers fresh, changed (with the new body, compressed) or
-  gone. The page's requests wait for the batch rather than crossing the network. A response validated in the last 20 s
-  is answered locally; an older one is revalidated on its own. A data message on the forward's WebSocket after the
-  first (Vite's `connected`) marks everything stale. Bounds: 32 MiB per response, 96 MiB per forward, 256 MiB for all,
-  least recently used first out; in memory only, gone with the forward. The target keeps the dev server's own tag
-  beside a weakened one (`x-kybern-etag`, only for a viewing machine that sent `x-kybern-cache`), and strips every
-  `x-kybern-*` request header before the dev server; the viewing side strips a page's own.
-- **Routes through a member** (`ports/hop.rs`, `ports.route.v1`): `peer.ports.hop` makes a member M relay the caller's
-  connections for one forward to the target's forward listener (M checks its own token and the caller's node, needs
-  `machine:relay`, resolves the target from membership); `peer.ports.via` lets the target accept that forward's
-  connections from M's node (the forward's own token is still checked end to end). After a forward opens, the viewing
-  machine probes the direct route and up to three candidate members (mode `P`: the target sends filler, the caller
-  reads for 2.5 s), twice, one at a time; it takes a member only when every round is at least twice as fast and above
-  64 KB/s. New connections and the next HTTP/2 connection use it; open ones finish where they are. Candidates have a
-  session open, list `ports.route.v1` and are not paused; the target must list it too. The choice is kept per target
-  for 15 minutes. A member that stops answering sends the forward back to the direct route. The Browser shows
+  `Last-Modified` are kept per forward, keyed by host, path and the request headers they `Vary` on. A request's
+  `Cookie` always counts as a variant, so a page kept for one session is never answered to another. Never kept: with
+  `Set-Cookie`, `private`, `no-store`, `Vary: *`, a range, `Authorization`, or an event stream. A navigation request
+  starts one batched revalidation of that host's entries (`x-kybern-revalidate` on the HTTP/2 connection): the target
+  asks its dev server about each over loopback, 16 at a time with 5 s each, and answers fresh, changed (a new body of
+  at most 512 KiB, compressed; 4 MiB per batch) or gone (a larger change is fetched by the browser as usual). The
+  page's requests wait for the batch rather than crossing the network. An entry validated in the last 20 s is
+  answered locally, and one checked in the last 3 s even for a request with `no-cache` or `max-age=0`; otherwise it
+  is revalidated on its own. Validation counts from when the request left, and a data message on the forward's
+  WebSocket after the first (Vite's `connected`) marks everything stale. Bounds: 32 MiB per response, 96 MiB per
+  forward, 256 MiB for all and 128 MiB being buffered, least recently used first out; in memory only, gone with the
+  forward. The target keeps the dev server's own tag beside a weakened one (`x-kybern-etag`, only for a viewing
+  machine that sent `x-kybern-cache`), and strips every `x-kybern-*` request header before the dev server; the viewing
+  side strips a page's own.
+- **Routes through a member** (`ports/hop.rs`, `ports.route.v1`). The viewing machine V names a member M at the
+  target T (`peer.ports.via`); T answers with a token for that route only, which works only from M's node and only
+  while M may use T's ports itself, so the forward's own token never passes through M. V then asks M to relay
+  (`peer.ports.hop`, needs `machine:relay`); M resolves T from membership and asks T to confirm that the port is the
+  listener of V's forward and that V named M (`peer.ports.hop_check`), so a hop never reaches any other port of T.
+  M checks its own token and V's node on each connection. After a forward opens, V probes the direct route and up
+  to three candidates (mode `P`: the target sends filler, the caller reads for 2.5 s), twice, one at a time; the
+  page's own bytes during the direct probe count toward the direct route. A member is taken only when every round is
+  at least twice as fast and above 64 KB/s. New connections and the next HTTP/2 connection use it; open ones finish
+  where they are. Candidates have a session open, list `ports.route.v1` and are not paused; the target must list it
+  too. Unchosen routes are released at M and dropped at T. The choice is kept per target for 15 minutes; a member
+  that stops answering sends the forward back to the direct route for 2 minutes. The Browser shows
   "on instabox via kdi-vps".

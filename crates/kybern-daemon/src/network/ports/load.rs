@@ -7,7 +7,7 @@
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use kybern_protocol::PortLoad;
@@ -18,6 +18,8 @@ pub const QUIET: Duration = Duration::from_millis(1500);
 pub const ANNOUNCE_AFTER: Duration = Duration::from_secs(2);
 /// The transfer rate is measured over this window.
 const RATE_WINDOW: Duration = Duration::from_secs(3);
+/// A load that runs longer than this (a long poll that never ends) is no longer shown.
+pub const LONGEST: Duration = Duration::from_secs(15 * 60);
 
 #[derive(Default)]
 struct State {
@@ -52,6 +54,8 @@ pub struct LoadMeter {
     state: Mutex<State>,
     /// A task repeats the load to clients while it runs.
     ticking: AtomicBool,
+    /// Every byte received over the forward's life.
+    total: AtomicU64,
 }
 
 impl LoadMeter {
@@ -77,6 +81,7 @@ impl LoadMeter {
 
     /// Bytes of a response arrived over the network.
     pub fn received(&self, bytes: usize) {
+        self.total.fetch_add(bytes as u64, Ordering::Relaxed);
         let now = Instant::now();
         let mut state = self.lock();
         state.received += bytes as u64;
@@ -108,7 +113,7 @@ impl LoadMeter {
         let mut state = self.lock();
         state.settle(now);
         let started = state.started?;
-        if state.open == 0 {
+        if state.open == 0 || now.duration_since(started) > LONGEST {
             return None;
         }
         let rate = match (state.samples.front(), state.samples.back()) {
@@ -127,6 +132,11 @@ impl LoadMeter {
             open_requests: state.open,
             elapsed_ms: now.duration_since(started).as_millis().min(u64::MAX as u128) as u64,
         })
+    }
+
+    /// Every byte received over the forward's life.
+    pub fn total_received(&self) -> u64 {
+        self.total.load(Ordering::Relaxed)
     }
 
     /// Whether a load runs (requests open, or not yet quiet).

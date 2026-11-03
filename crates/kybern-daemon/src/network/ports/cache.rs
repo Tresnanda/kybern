@@ -45,13 +45,19 @@ pub const REVALIDATE_HEADER: &str = "x-kybern-revalidate";
 
 /// A response validated this recently is answered without asking the target.
 pub const FRESH_FOR: Duration = Duration::from_secs(20);
+/// What counts as checked by the page load now, for a request that asks for a checked answer.
+const JUST_CHECKED: Duration = Duration::from_secs(3);
 pub const MAX_ENTRY: usize = 32 * 1024 * 1024;
 pub const MAX_FORWARD: usize = 96 * 1024 * 1024;
 pub const MAX_TOTAL: usize = 256 * 1024 * 1024;
 /// Responses one batch revalidates at most.
 const MAX_BATCH: usize = 2000;
 /// Changed bodies one batch answer carries at most; the rest are reported gone and fetched as usual.
-const MAX_BATCH_BODIES: usize = 64 * 1024 * 1024;
+const MAX_BATCH_BODIES: usize = 4 * 1024 * 1024;
+/// One changed body a batch carries at most, before compression.
+const MAX_BATCH_BODY: usize = 512 * 1024;
+/// How long the target waits for the dev server on one entry of a batch.
+const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 /// Checks a target runs against its dev server at once.
 const BATCH_CONCURRENCY: usize = 16;
 /// How long a page request waits for a batch before it asks on its own.
@@ -171,6 +177,18 @@ fn has_directive(headers: &HeaderMap, name: HeaderName, directive: &str) -> bool
         .any(|part| part.trim().split('=').next().is_some_and(|name| name.trim().eq_ignore_ascii_case(directive)))
 }
 
+/// The request asks for an answer the server has checked: `Cache-Control: no-cache` or `max-age=0`, or `Pragma: no-cache`.
+fn wants_checked(headers: &HeaderMap) -> bool {
+    has_directive(headers, hyper::header::CACHE_CONTROL, "no-cache")
+        || has_directive(headers, hyper::header::PRAGMA, "no-cache")
+        || headers
+            .get_all(hyper::header::CACHE_CONTROL)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .flat_map(|value| value.split(','))
+            .any(|part| part.trim().eq_ignore_ascii_case("max-age=0"))
+}
+
 /// Whether a response may be kept, and the request headers it varies on.
 pub fn storable(parts: &hyper::http::response::Parts) -> Option<Vec<String>> {
     let headers = &parts.headers;
@@ -242,30 +260,49 @@ impl Cache {
         self.state.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    fn fresh(&self, state: &State, entry: &Entry) -> bool {
+    /// Validated within `window`, and after the last hot-reload message.
+    fn fresh(&self, state: &State, entry: &Entry, window: Duration) -> bool {
         let at = entry.validated_at();
-        at.elapsed() < FRESH_FOR && state.invalidated_at.is_none_or(|invalidated| at > invalidated)
+        at.elapsed() < window && state.invalidated_at.is_none_or(|invalidated| at > invalidated)
     }
 
+    /// A request that asks for an answer checked with the server (`no-cache`, `max-age=0`, a hard reload) is answered from
+    /// here only when this page load's batch has just checked it.
     pub fn lookup(&self, key: &str, headers: &HeaderMap) -> Lookup {
         let state = self.lock();
         let Some(entry) = state.entries.get(key).and_then(|variants| variants.iter().find(|entry| entry.matches(headers))) else {
             return Lookup::Miss;
         };
         entry.used.store(self.clock.fetch_add(1, Ordering::Relaxed), Ordering::Relaxed);
-        if self.fresh(&state, entry) { Lookup::Fresh(entry.clone()) } else { Lookup::Stale(entry.clone()) }
+        let window = if wants_checked(headers) { JUST_CHECKED } else { FRESH_FOR };
+        if self.fresh(&state, entry, window) { Lookup::Fresh(entry.clone()) } else { Lookup::Stale(entry.clone()) }
     }
 
-    /// The dev server confirmed `entry` (a `304`).
-    pub fn confirm(&self, entry: &Entry) {
-        *entry.validated_at.lock().unwrap_or_else(|p| p.into_inner()) = Instant::now();
+    /// The dev server confirmed `entry` (a `304`) for a request sent at `sent`.
+    pub fn confirm(&self, entry: &Entry, sent: Instant) {
+        let mut at = entry.validated_at.lock().unwrap_or_else(|p| p.into_inner());
+        *at = (*at).max(sent);
     }
 
     /// Keep a response. `request` are the browser's request headers, `parts` the response as it travelled (headers that
-    /// belong to Kybern are taken out here).
-    pub fn store(&self, key: String, request: &HeaderMap, mut parts: hyper::http::response::Parts, vary: Vec<String>, body: Bytes) {
+    /// belong to Kybern are taken out here), `sent` when the request left: the body is what the server had then, so a
+    /// hot-reload message after that point makes it stale even when the body arrives later.
+    pub fn store(
+        &self,
+        key: String,
+        request: &HeaderMap,
+        mut parts: hyper::http::response::Parts,
+        mut vary: Vec<String>,
+        body: Bytes,
+        sent: Instant,
+    ) {
         if body.len() > MAX_ENTRY {
             return;
+        }
+        // A cookie is part of what the browser asked for even when the server does not say it varies on it: a page for
+        // one session is never answered to another.
+        if request.contains_key(hyper::header::COOKIE) && !vary.iter().any(|name| name == "cookie") {
+            vary.push("cookie".into());
         }
         let upstream_etag = parts
             .headers
@@ -290,7 +327,7 @@ impl Cache {
             headers: parts.headers,
             body,
             key: key.clone(),
-            validated_at: Mutex::new(Instant::now()),
+            validated_at: Mutex::new(sent),
             used: AtomicU64::new(self.clock.fetch_add(1, Ordering::Relaxed)),
         });
         self.insert(entry);
@@ -379,10 +416,17 @@ impl Cache {
         Some((entries, done))
     }
 
-    /// Apply a batch's answer (`None` when it failed: the batch's responses are then asked about one by one).
-    pub fn finish_batch(&self, entries: &[Arc<Entry>], outcome: Option<Vec<Outcome>>, done: tokio::sync::watch::Sender<bool>) {
+    /// Apply a batch's answer (`None` when it failed: the batch's responses are then asked about one by one). `sent` is
+    /// when the batch left: what it confirmed was true then.
+    pub fn finish_batch(
+        &self,
+        entries: &[Arc<Entry>],
+        outcome: Option<Vec<Outcome>>,
+        done: tokio::sync::watch::Sender<bool>,
+        sent: Instant,
+    ) {
         if let Some(outcomes) = outcome {
-            let now = Instant::now();
+            let now = sent;
             let mut answered = vec![false; entries.len()];
             for outcome in outcomes {
                 let Some(entry) = entries.get(outcome.index) else { continue };
@@ -603,6 +647,18 @@ pub(super) async fn serve_revalidate(upstream: SocketAddr, request: Request<Inco
     response
 }
 
+/// Take `amount` from `left` when that much is left, in one step however many tasks take at once.
+pub(super) fn take_from(left: &AtomicUsize, amount: usize) -> bool {
+    let mut current = left.load(Ordering::Acquire);
+    loop {
+        let Some(next) = current.checked_sub(amount) else { return false };
+        match left.compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return true,
+            Err(seen) => current = seen,
+        }
+    }
+}
+
 enum Checked {
     Fresh,
     Changed(Vec<(String, String)>, Vec<u8>),
@@ -641,7 +697,9 @@ async fn check_one(
     let mut request = Request::new(http_body_util::Empty::<Bytes>::new());
     *request.uri_mut() = uri;
     *request.headers_mut() = headers;
-    let Ok(response) = client.request(request).await else { return Checked::Gone };
+    // A dev server that holds a request (Vite while it optimizes dependencies) must not hold the whole batch: that
+    // response is reported gone and the browser asks for it as usual.
+    let Ok(Ok(response)) = tokio::time::timeout(CHECK_TIMEOUT, client.request(request)).await else { return Checked::Gone };
     if response.status() == StatusCode::NOT_MODIFIED {
         return Checked::Fresh;
     }
@@ -649,7 +707,11 @@ async fn check_one(
     if storable(&parts).is_none() {
         return Checked::Gone;
     }
-    let Ok(body) = Limited::new(body, MAX_ENTRY).collect().await else { return Checked::Gone };
+    // Only small changed bodies travel in the batch, so its answer stays quick on a slow link and the page's requests
+    // are not held behind a large one; a large change is fetched by the browser and streams as usual.
+    let Ok(Ok(body)) = tokio::time::timeout(CHECK_TIMEOUT, Limited::new(body, MAX_BATCH_BODY).collect()).await else {
+        return Checked::Gone;
+    };
     let mut body = body.to_bytes().to_vec();
     strip_hop_headers(&mut parts.headers);
     if gzip_ok && direct::compressible(&parts) {
@@ -659,8 +721,7 @@ async fn check_one(
     }
     parts.headers.remove(hyper::header::CONTENT_LENGTH);
     // A changed body counts against the batch's budget; past it the viewing machine fetches it as usual.
-    let left = budget.fetch_sub(body.len().min(budget.load(Ordering::Relaxed)), Ordering::Relaxed);
-    if body.len() > left {
+    if !take_from(budget, body.len()) {
         return Checked::Gone;
     }
     let headers = parts
@@ -721,7 +782,7 @@ mod tests {
     fn keep(cache: &Cache, key: &str, request_headers: &[(&str, &str)], response: &[(&str, &str)], body: &str) {
         let parts = parts(200, response);
         let vary = storable(&parts).unwrap();
-        cache.store(key.into(), &request(request_headers), parts, vary, Bytes::from(body.to_string()));
+        cache.store(key.into(), &request(request_headers), parts, vary, Bytes::from(body.to_string()), Instant::now());
     }
 
     #[test]
@@ -740,7 +801,7 @@ mod tests {
         assert_eq!(respond(&entry, &request(&[("if-none-match", "\"2\"")])).status(), 200);
         cache.invalidate();
         assert!(matches!(cache.lookup("localhost:3000/a.js", &request(&gzip)), Lookup::Stale(_)), "a hot reload makes it stale");
-        cache.confirm(&entry);
+        cache.confirm(&entry, Instant::now());
         assert!(matches!(cache.lookup("localhost:3000/a.js", &request(&gzip)), Lookup::Fresh(_)));
     }
 
@@ -788,7 +849,7 @@ mod tests {
         );
         push_record(&mut wire, &RecordHead { i: index("h/gone"), state: "gone".into(), headers: vec![] }, None);
         let outcomes = parse_batch(&wire).unwrap();
-        cache.finish_batch(&entries, Some(outcomes), done);
+        cache.finish_batch(&entries, Some(outcomes), done, Instant::now());
         let headers = request(&[("host", "h")]);
         assert!(matches!(cache.lookup("h/same", &headers), Lookup::Fresh(_)));
         let Lookup::Fresh(new) = cache.lookup("h/new", &headers) else { panic!("the changed body is kept") };
@@ -798,6 +859,52 @@ mod tests {
         assert!(matches!(cache.lookup("other/x", &request(&[("host", "other")])), Lookup::Stale(_)), "another host's entry is left alone");
         assert!(matches!(cache.lookup("other/x", &request(&[("host", "other")])), Lookup::Stale(_)), "another host's entry is left alone");
         assert!(parse_batch(&[0, 0, 0, 9, b'{']).is_none(), "a cut answer is refused");
+    }
+
+    #[test]
+    fn a_page_kept_for_one_session_is_never_answered_to_another() {
+        let cache = Cache::default();
+        let signed_in = [("host", "h"), ("cookie", "session=alice")];
+        keep(&cache, "h/dashboard", &signed_in, &[("etag", "W/\"1\"")], "alice's dashboard");
+        assert!(matches!(cache.lookup("h/dashboard", &request(&signed_in)), Lookup::Fresh(_)));
+        assert!(matches!(cache.lookup("h/dashboard", &request(&[("host", "h")])), Lookup::Miss), "signed out");
+        assert!(matches!(cache.lookup("h/dashboard", &request(&[("host", "h"), ("cookie", "session=bob")])), Lookup::Miss));
+    }
+
+    #[test]
+    fn a_request_that_asks_for_a_checked_answer_gets_one_unless_this_load_just_checked() {
+        let cache = Cache::default();
+        let parts = parts(200, &[("etag", "\"1\"")]);
+        let vary = storable(&parts).unwrap();
+        cache.store("h/a.js".into(), &HeaderMap::new(), parts, vary, Bytes::from_static(b"a"), Instant::now() - Duration::from_secs(10));
+        assert!(matches!(cache.lookup("h/a.js", &HeaderMap::new()), Lookup::Fresh(_)), "within the fresh window");
+        for asks in [("cache-control", "no-cache"), ("cache-control", "max-age=0"), ("pragma", "no-cache")] {
+            assert!(matches!(cache.lookup("h/a.js", &request(&[asks])), Lookup::Stale(_)), "{asks:?}");
+        }
+        let Lookup::Stale(entry) = cache.lookup("h/a.js", &request(&[("cache-control", "no-cache")])) else { unreachable!() };
+        cache.confirm(&entry, Instant::now());
+        assert!(matches!(cache.lookup("h/a.js", &request(&[("cache-control", "no-cache")])), Lookup::Fresh(_)), "just checked");
+    }
+
+    #[test]
+    fn a_hot_update_during_a_slow_answer_leaves_that_answer_stale() {
+        let cache = Cache::default();
+        let sent = Instant::now();
+        std::thread::sleep(Duration::from_millis(5));
+        cache.invalidate();
+        let parts = parts(200, &[("etag", "\"1\"")]);
+        let vary = storable(&parts).unwrap();
+        cache.store("h/a.js".into(), &HeaderMap::new(), parts, vary, Bytes::from_static(b"old"), sent);
+        assert!(matches!(cache.lookup("h/a.js", &HeaderMap::new()), Lookup::Stale(_)), "the body is from before the edit");
+    }
+
+    #[test]
+    fn a_budget_is_taken_whole_or_not_at_all() {
+        let left = AtomicUsize::new(10);
+        assert!(take_from(&left, 6));
+        assert!(!take_from(&left, 6), "only 4 left");
+        assert!(take_from(&left, 4));
+        assert_eq!(left.load(Ordering::Relaxed), 0);
     }
 
     #[test]

@@ -34,7 +34,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::Forward;
-use super::direct::{self, ACK, HANDSHAKE_TIMEOUT, Hop, MAX_HANDSHAKES, QUEUE_WAIT, Route};
+use super::direct::{self, ACK, HANDSHAKE_TIMEOUT, Hop, MAX_HANDSHAKES, Route};
 use crate::network::Network;
 use crate::network::peers::{self, PeerLink};
 use crate::network::tailscale;
@@ -135,6 +135,16 @@ pub async fn handle_hop(state: &AppState, link: &Arc<PeerLink>, params: PeerPort
         .ok_or_else(|| RpcError::new(codes::NOT_AVAILABLE, "no Tailscale node for the caller"))?;
     if live_member_node(network, &params.target).is_none() {
         return Err(RpcError::new(codes::NOT_FOUND, "That machine is not a current member."));
+    }
+    // Only a listener the target prepared for the caller's forward, and only when the caller named this machine for it:
+    // the target confirms both, so a hop is never a way to reach any other port of the target from here.
+    let target = network
+        .peers
+        .link(&params.target)
+        .ok_or_else(|| RpcError::new(codes::NOT_AVAILABLE, "This machine has no session to that machine."))?;
+    let check = PeerPortsHopCheckParams { caller: link.machine_id.clone(), forward_id: params.forward_id, port: params.port };
+    if let Err(error) = target.call::<PeerPortsHopCheck>(check).await {
+        return Err(RpcError::new(codes::FORBIDDEN, format!("That machine did not confirm the forward: {}", error.message)));
     }
     let destination = direct::destination(network, &params.target, params.port)
         .await
@@ -246,7 +256,9 @@ async fn relay_one(
     }
     drop(handshake);
     let key = format!("hop:{}", hop.caller.machine_id);
-    let Some(_slot) = network.relays.acquire_wait(&key, crate::network::relay::MAX_INBOUND_PER_MEMBER, QUEUE_WAIT, &hop.cancel).await
+    // Shorter than the caller's handshake wait, so a busy member is refused rather than taken for a dead one.
+    let Some(_slot) =
+        network.relays.acquire_wait(&key, crate::network::relay::MAX_INBOUND_PER_MEMBER, HANDSHAKE_TIMEOUT, &hop.cancel).await
     else {
         return;
     };
@@ -264,11 +276,17 @@ async fn relay_one(
     }
 }
 
-// ---- the target: peer.ports.via ----
+// ---- the target: peer.ports.via and peer.ports.hop_check ----
 
-/// `peer.ports.via`.
-pub fn handle_via(state: &AppState, link: &Arc<PeerLink>, params: PeerPortsViaParams) -> Result<Empty, RpcError> {
+/// `peer.ports.via`: the caller names `via` to relay its forward, and gets the token for that route. `via` must be a
+/// current, unpaused member that may use this machine's ports itself, so it can reach nothing through the route that
+/// it could not reach on its own.
+pub fn handle_via(state: &AppState, link: &Arc<PeerLink>, params: PeerPortsViaParams) -> Result<PeerPortsViaResult, RpcError> {
     let network = &state.network;
+    if params.drop {
+        network.ports.direct.drop_via(&link.machine_id, params.forward_id, &params.via);
+        return Ok(PeerPortsViaResult { token: None });
+    }
     if !direct::authorized(network, link) {
         return Err(RpcError::new(codes::FORBIDDEN, "This machine no longer permits port forwarding."));
     }
@@ -277,18 +295,35 @@ pub fn handle_via(state: &AppState, link: &Arc<PeerLink>, params: PeerPortsViaPa
     }
     let node =
         live_member_node(network, &params.via).ok_or_else(|| RpcError::new(codes::NOT_FOUND, "That machine is not a current member."))?;
-    if !network.ports.direct.allow_via(&link.machine_id, params.forward_id, node) {
-        return Err(RpcError::new(codes::NOT_FOUND, "That forward is not open on this machine."));
+    if !network.peers.link(&params.via).is_some_and(|via| direct::authorized(network, &via)) {
+        return Err(RpcError::new(codes::FORBIDDEN, "That machine may not use this machine's ports."));
+    }
+    let token = network
+        .ports
+        .direct
+        .allow_via(&link.machine_id, params.forward_id, &params.via, node)
+        .ok_or_else(|| RpcError::new(codes::NOT_FOUND, "That forward is not open on this machine."))?;
+    Ok(PeerPortsViaResult { token: Some(token) })
+}
+
+/// `peer.ports.hop_check`, from the member asked to relay: `port` is `caller`'s forward listener here, and `caller`
+/// named that member for it.
+pub fn handle_hop_check(state: &AppState, link: &Arc<PeerLink>, params: PeerPortsHopCheckParams) -> Result<Empty, RpcError> {
+    let network = &state.network;
+    if !direct::authorized(network, link)
+        || !network.ports.direct.relays_through(&params.caller, params.forward_id, params.port, &link.machine_id)
+    {
+        return Err(RpcError::new(codes::FORBIDDEN, "That forward does not go through this machine."));
     }
     Ok(Empty {})
 }
 
 // ---- the viewing machine: choosing a route ----
 
-/// What was chosen for a target, and when.
+/// What was chosen for a target, until when.
 #[derive(Clone)]
 pub struct Choice {
-    at: Instant,
+    until: Instant,
     via: Option<String>,
 }
 
@@ -298,11 +333,15 @@ pub struct Book(Mutex<HashMap<String, Choice>>);
 
 impl Book {
     pub(super) fn get(&self, target: &str) -> Option<Choice> {
-        self.0.lock().unwrap_or_else(|p| p.into_inner()).get(target).filter(|choice| choice.at.elapsed() < BOOK_FOR).cloned()
+        self.0.lock().unwrap_or_else(|p| p.into_inner()).get(target).filter(|choice| Instant::now() < choice.until).cloned()
     }
 
     pub(super) fn set(&self, target: &str, via: Option<String>) {
-        self.0.lock().unwrap_or_else(|p| p.into_inner()).insert(target.to_string(), Choice { at: Instant::now(), via });
+        self.set_for(target, via, BOOK_FOR);
+    }
+
+    fn set_for(&self, target: &str, via: Option<String>, keep: Duration) {
+        self.0.lock().unwrap_or_else(|p| p.into_inner()).insert(target.to_string(), Choice { until: Instant::now() + keep, via });
     }
 }
 
@@ -330,57 +369,106 @@ fn candidates(network: &Network, target: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Set up a route for `forward` through `via`: T accepts it, M relays it.
+/// Set up a route for `forward` through `via`: the target gives it its own token, the member relays it. Whatever was
+/// set up is taken back when a step fails.
 pub(super) async fn through(network: &Arc<Network>, forward: &Forward, direct: &Route, via: &str, via_name: &str) -> Option<Arc<Route>> {
     let target = network.peers.link(&forward.machine_id)?;
     let member = network.peers.link(via)?;
-    if let Err(error) = target.call::<PeerPortsVia>(PeerPortsViaParams { forward_id: forward.id, via: via.to_string() }).await {
-        tracing::debug!(target: TARGET, via, error = %error.message, "the target did not accept a relayed route");
-        return None;
-    }
+    let token = match target.call::<PeerPortsVia>(PeerPortsViaParams { forward_id: forward.id, via: via.to_string(), drop: false }).await {
+        Ok(PeerPortsViaResult { token: Some(token) }) => token,
+        Ok(_) => return None,
+        Err(error) => {
+            tracing::debug!(target: TARGET, via, error = %error.message, "the target did not accept a relayed route");
+            return None;
+        }
+    };
     let params = PeerPortsHopParams { forward_id: forward.id, target: forward.machine_id.clone(), port: direct.endpoint.port };
     let hop = match member.call::<PeerPortsHop>(params).await {
         Ok(hop) => hop,
         Err(error) => {
             tracing::debug!(target: TARGET, via, error = %error.message, "a member did not relay a route");
+            drop_via(network, &forward.machine_id, via, forward.id);
             return None;
         }
     };
-    let address = direct::destination(network, via, hop.port).await?;
+    let Some(address) = direct::destination(network, via, hop.port).await else {
+        release(network, &forward.machine_id, via, forward.id);
+        return None;
+    };
     let hop = Hop { machine_id: via.to_string(), machine_name: via_name.to_string(), address, token: hop.token };
-    Some(Arc::new(Route::through(direct.address, direct.endpoint.clone(), Some(hop), forward.cancel.child_token())))
+    let endpoint = PeerPortsDirect { token, ..direct.endpoint.clone() };
+    Some(Arc::new(Route::through(direct.address, endpoint, Some(hop), forward.cancel.child_token())))
 }
 
-fn release_hop(network: &Network, via: &str, forward_id: Uuid) {
+/// The target stops accepting `via` for the forward.
+fn drop_via(network: &Network, target: &str, via: &str, forward_id: Uuid) {
+    if let Some(link) = network.peers.link(target) {
+        let params = PeerPortsViaParams { forward_id, via: via.to_string(), drop: true };
+        tokio::spawn(async move {
+            let _ = link.call::<PeerPortsVia>(params).await;
+        });
+    }
+}
+
+/// A member's route of a forward is given up: the member stops relaying it and the target stops accepting it.
+pub(super) fn release(network: &Network, target: &str, via: &str, forward_id: Uuid) {
     if let Some(link) = network.peers.link(via) {
         tokio::spawn(async move {
             let _ = link.notify(PeerPortsRelease::NAME, json!({ "forward_id": forward_id })).await;
         });
     }
+    drop_via(network, target, via, forward_id);
+}
+
+fn give_up(network: &Network, forward: &Forward, routes: &[Arc<Route>]) {
+    for route in routes {
+        route.stop();
+        if let Some(hop) = &route.hop {
+            release(network, &forward.machine_id, &hop.machine_id, forward.id);
+        }
+    }
+}
+
+/// The direct route's speed while the page may be loading over it too: the probe shares the link with the page, so the
+/// page's own bytes in that time count as what the link carried.
+async fn direct_rate(network: &Network, forward: &Forward, direct: &Route) -> u64 {
+    let (before, started) = (forward.load.total_received(), Instant::now());
+    let probed = direct.probe(network, PROBE_TIME).await.unwrap_or(0);
+    let page = (forward.load.total_received() - before) as f64 / started.elapsed().as_secs_f64().max(0.05);
+    probed + page as u64
 }
 
 /// Measure the routes of a forward that runs on a direct ready-socket route, and take a member's route when it is
-/// [`GAIN`] times faster in every round. Runs in the background; the forward works on the direct route meanwhile.
+/// [`GAIN`] times faster in every round. Runs in the background, once at a time per forward; the forward works on the
+/// direct route meanwhile.
 pub(super) async fn choose(network: Arc<Network>, forward: Arc<Forward>) {
+    if forward.choosing.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        return;
+    }
+    choose_once(&network, &forward).await;
+    forward.choosing.store(false, std::sync::atomic::Ordering::Release);
+}
+
+async fn choose_once(network: &Arc<Network>, forward: &Arc<Forward>) {
     let Some(direct) = forward.route_now().filter(|route| route.ready_sockets() && route.hop.is_none()) else { return };
-    if !lists(&network, &forward.machine_id, features::PORTS_ROUTE_V1) {
+    if !lists(network, &forward.machine_id, features::PORTS_ROUTE_V1) {
         return;
     }
     if let Some(choice) = network.ports.book.get(&forward.machine_id) {
         let Some(via) = choice.via else { return };
         let name = network.membership().and_then(|m| m.projection().entry(&via).map(|e| e.descriptor.name.clone())).unwrap_or_default();
-        if let Some(route) = through(&network, &forward, &direct, &via, &name).await {
-            super::take_route(&network, &forward, &direct, route);
+        if let Some(route) = through(network, forward, &direct, &via, &name).await {
+            super::take_route(network, forward, &direct, route);
             return;
         }
     }
-    let candidates = candidates(&network, &forward.machine_id);
+    let candidates = candidates(network, &forward.machine_id);
     if candidates.is_empty() {
         return;
     }
     let mut routes = Vec::new();
     for (via, name) in &candidates {
-        if let Some(route) = through(&network, &forward, &direct, via, name).await {
+        if let Some(route) = through(network, forward, &direct, via, name).await {
             routes.push(route);
         }
     }
@@ -393,11 +481,12 @@ pub(super) async fn choose(network: Arc<Network>, forward: Arc<Forward>) {
     let mut rates = vec![Vec::new(); routes.len()];
     for _ in 0..ROUNDS {
         if forward.cancel.is_cancelled() {
+            give_up(network, forward, &routes);
             return;
         }
-        direct_rates.push(direct.probe(&network, PROBE_TIME).await.unwrap_or(0));
+        direct_rates.push(direct_rate(network, forward, &direct).await);
         for (i, route) in routes.iter().enumerate() {
-            rates[i].push(route.probe(&network, PROBE_TIME).await.unwrap_or(0));
+            rates[i].push(route.probe(network, PROBE_TIME).await.unwrap_or(0));
         }
     }
     let best = pick(&direct_rates, &rates);
@@ -409,23 +498,15 @@ pub(super) async fn choose(network: Arc<Network>, forward: Arc<Forward>) {
         chosen = ?best.map(|i| routes[i].hop.as_ref().map(|hop| hop.machine_name.clone())),
         "measured a forward's routes"
     );
-    for (i, route) in routes.iter().enumerate() {
-        if Some(i) != best {
-            route.stop();
-            if let Some(hop) = &route.hop {
-                release_hop(&network, &hop.machine_id, forward.id);
-            }
-        }
-    }
-    let Some(best) = best else {
+    let chosen = best.map(|i| routes.swap_remove(i));
+    give_up(network, forward, &routes);
+    let Some(route) = chosen else {
         network.ports.book.set(&forward.machine_id, None);
         return;
     };
-    let route = routes.swap_remove(best);
     network.ports.book.set(&forward.machine_id, route.hop.as_ref().map(|hop| hop.machine_id.clone()));
-    super::take_route(&network, &forward, &direct, route);
+    super::take_route(network, forward, &direct, route);
 }
-
 /// The member route to take: the one whose slowest round is fastest, among those at least [`GAIN`] times the direct
 /// route in every round and above [`MIN_RATE`].
 pub fn pick(direct: &[u64], members: &[Vec<u64>]) -> Option<usize> {
@@ -441,11 +522,10 @@ pub fn pick(direct: &[u64], members: &[Vec<u64>]) -> Option<usize> {
         .map(|(i, _)| i)
 }
 
-/// Forget a member's route when it stops answering; `ports::fall_back` puts the direct one back.
+/// A member's route stopped answering: the direct route is used for this target for a few minutes, then measured again.
 pub fn forget(network: &Network, target: &str) {
-    network.ports.book.set(target, None);
+    network.ports.book.set_for(target, None, Duration::from_secs(120));
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

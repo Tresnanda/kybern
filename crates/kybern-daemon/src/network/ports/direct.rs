@@ -68,11 +68,23 @@ struct Serving {
     link: Arc<PeerLink>,
     cancel: CancellationToken,
     version: u8,
-    /// Source addresses `whois` already named as the member's node, and when.
-    verified: Mutex<HashMap<IpAddr, Instant>>,
-    /// Nodes of the members this forward's connections may also be relayed through (`peer.ports.via`).
-    via_nodes: Mutex<Vec<String>>,
+    /// The listener's port.
+    port: u16,
+    /// Source addresses `whois` already named, with the node it named, and when.
+    verified: Mutex<HashMap<IpAddr, (String, Instant)>>,
+    /// The members this forward's connections may also be relayed through (`peer.ports.via`).
+    vias: Mutex<Vec<Via>>,
 }
+
+/// A member allowed to relay one forward: its node, and the hash of the token that works only from there.
+struct Via {
+    machine: String,
+    node: String,
+    token_hash: String,
+}
+
+/// Members one forward may name at once; the oldest goes first.
+const MAX_VIAS: usize = 4;
 
 #[derive(Default)]
 pub struct Listeners(Mutex<Vec<Arc<Serving>>>);
@@ -94,21 +106,41 @@ impl Listeners {
         });
     }
 
-    /// Let `machine`'s forward `id` also arrive relayed by the member whose Tailscale node is `node`.
-    pub fn allow_via(&self, machine: &str, id: Uuid, node: String) -> bool {
-        let held = self.0.lock().unwrap_or_else(|p| p.into_inner());
-        let Some(serving) = held.iter().find(|s| s.link.machine_id == machine && s.id == id && !s.cancel.is_cancelled()) else {
-            return false;
-        };
-        let mut nodes = serving.via_nodes.lock().unwrap_or_else(|p| p.into_inner());
-        if !nodes.contains(&node) {
-            // A forward tries a few members at most; the list stays small.
-            if nodes.len() >= 8 {
-                nodes.remove(0);
-            }
-            nodes.push(node);
+    fn serving(&self, machine: &str, id: Uuid) -> Option<Arc<Serving>> {
+        self.0
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .find(|s| s.link.machine_id == machine && s.id == id && !s.cancel.is_cancelled())
+            .cloned()
+    }
+
+    /// Let `machine`'s forward `id` also arrive relayed by member `via` (node `node`): the token for that route, which
+    /// works only from `node`. `None` when no such forward is open here.
+    pub fn allow_via(&self, machine: &str, id: Uuid, via: &str, node: String) -> Option<String> {
+        let serving = self.serving(machine, id)?;
+        let token = crate::auth::hash(&crate::auth::generate());
+        let mut vias = serving.vias.lock().unwrap_or_else(|p| p.into_inner());
+        vias.retain(|held| held.machine != via);
+        if vias.len() >= MAX_VIAS {
+            vias.remove(0);
         }
-        true
+        vias.push(Via { machine: via.to_string(), node, token_hash: crate::auth::hash(&token) });
+        Some(token)
+    }
+
+    /// Take back what [`Self::allow_via`] gave `via`.
+    pub fn drop_via(&self, machine: &str, id: Uuid, via: &str) {
+        if let Some(serving) = self.serving(machine, id) {
+            serving.vias.lock().unwrap_or_else(|p| p.into_inner()).retain(|held| held.machine != via);
+        }
+    }
+
+    /// Whether `port` is the listener of `machine`'s forward `id` and `via` may relay it.
+    pub fn relays_through(&self, machine: &str, id: Uuid, port: u16, via: &str) -> bool {
+        self.serving(machine, id).is_some_and(|serving| {
+            serving.port == port && serving.vias.lock().unwrap_or_else(|p| p.into_inner()).iter().any(|held| held.machine == via)
+        })
     }
 
     pub fn close_unpermitted(&self, network: &Network) {
@@ -170,8 +202,9 @@ pub async fn prepare(state: &AppState, link: &Arc<PeerLink>, request: PeerPortsP
         link: link.clone(),
         cancel: CancellationToken::new(),
         version,
+        port,
         verified: Mutex::default(),
-        via_nodes: Mutex::default(),
+        vias: Mutex::default(),
     });
     {
         let mut held = network.ports.direct.0.lock().unwrap_or_else(|p| p.into_inner());
@@ -226,17 +259,42 @@ pub async fn prepare(state: &AppState, link: &Arc<PeerLink>, request: PeerPortsP
     Ok(PeerPortsPrepareResult { direct: Some(PeerPortsDirect { port, token, version: (version == 2).then_some(2) }) })
 }
 
-/// The connection comes from the member's node: an address `whois` named recently for this forward, or `whois` now.
+/// The connection comes from `node`: an address `whois` named as that node recently for this forward, or `whois` now.
 async fn verify_source(state: &AppState, serving: &Serving, source: IpAddr, node: &str) -> bool {
-    if serving.verified.lock().unwrap_or_else(|p| p.into_inner()).get(&source).is_some_and(|at| at.elapsed() < VERIFIED_FOR) {
+    let known = serving
+        .verified
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .get(&source)
+        .is_some_and(|(named, at)| named == node && at.elapsed() < VERIFIED_FOR);
+    if known {
         return true;
     }
     let Ok(who) = state.network.tailscale.whois(source).await else { return false };
-    if who.node_id != node && !serving.via_nodes.lock().unwrap_or_else(|p| p.into_inner()).contains(&who.node_id) {
+    if who.node_id != node {
         return false;
     }
-    serving.verified.lock().unwrap_or_else(|p| p.into_inner()).insert(source, Instant::now());
+    serving.verified.lock().unwrap_or_else(|p| p.into_inner()).insert(source, (who.node_id, Instant::now()));
     true
+}
+
+/// Which credential a connection presented: the forward's own token, which works only from the caller's node, or a
+/// relaying member's, which works only from that member's node while it may use this machine's ports itself.
+async fn verify_token(state: &AppState, serving: &Serving, source: IpAddr, node: &str, token_hash: &str, presented: &str) -> bool {
+    let presented = crate::auth::hash(presented);
+    if presented == token_hash {
+        return verify_source(state, serving, source, node).await;
+    }
+    let via = serving
+        .vias
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .iter()
+        .find(|via| via.token_hash == presented)
+        .map(|via| (via.machine.clone(), via.node.clone()));
+    let Some((machine, via_node)) = via else { return false };
+    let member_may = state.network.peers.link(&machine).is_some_and(|link| authorized(&state.network, &link));
+    member_may && verify_source(state, serving, source, &via_node).await
 }
 
 /// One connection to a forward's listener. `handshake` is its place among the connections not yet authorized
@@ -264,10 +322,7 @@ async fn transfer(
         let mut token = [0u8; 64];
         socket.read_exact(&mut token).await.ok()?;
         let token = std::str::from_utf8(&token).ok()?;
-        if crate::auth::hash(token) != token_hash {
-            return None;
-        }
-        if !verify_source(state, serving, source, node).await
+        if !verify_token(state, serving, source, node, token_hash, token).await
             || !authorized(&state.network, link)
             || super::own_ports(state).contains(&port)
         {

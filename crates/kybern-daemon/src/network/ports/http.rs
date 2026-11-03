@@ -166,8 +166,13 @@ pub(super) async fn exchange(
     }
     let key = caching.then(|| cache::request_key(&parts.method, &browser, &path)).flatten();
     let mut stale = None;
+    let mut route = route;
     if let Some(key) = &key {
         forward.cache.wait_for_batch(key).await;
+        // The wait may have been long enough for the route to change (a member's route taken, or given up).
+        if let Some(now) = super::current_route(network, forward).await.filter(|route| route.ready_sockets()) {
+            route = now;
+        }
         match forward.cache.lookup(key, &browser) {
             Lookup::Fresh(entry) => {
                 meter.cached(entry.body.len());
@@ -192,6 +197,7 @@ pub(super) async fn exchange(
     }
     parts.uri = uri;
     parts.version = hyper::Version::HTTP_2;
+    let sent = std::time::Instant::now();
     let response = match send(network, forward, &route, Request::from_parts(parts, body.boxed())).await {
         Some(response) => response,
         None => return status_response(StatusCode::BAD_GATEWAY),
@@ -200,7 +206,7 @@ pub(super) async fn exchange(
     strip_hop_headers(&mut parts.headers);
     if let Some(entry) = stale {
         if parts.status == StatusCode::NOT_MODIFIED {
-            forward.cache.confirm(&entry);
+            forward.cache.confirm(&entry, sent);
             meter.cached(entry.body.len());
             return cache::respond(&entry, &browser);
         }
@@ -208,11 +214,18 @@ pub(super) async fn exchange(
     }
     let tee = key.and_then(|key| {
         let vary = cache::storable(&parts)?;
-        Some(Tee { key, request: browser, status: parts.status, headers: parts.headers.clone(), vary, buffer: Vec::new() })
+        Some(Tee { key, request: browser, status: parts.status, headers: parts.headers.clone(), vary, buffer: Vec::new(), sent })
     });
     // Kybern's own header stays here; the browser sees the response as the dev server's.
     parts.headers.remove(cache::ORIGINAL_ETAG_HEADER);
-    Response::from_parts(parts, Tracked { inner: body.boxed(), meter: Some(meter), tee, forward: forward.clone() }.boxed())
+    // An event stream (or any response that never ends) is not part of a page load.
+    let streaming = parts
+        .headers
+        .get(hyper::header::CONTENT_TYPE)
+        .and_then(|kind| kind.to_str().ok())
+        .is_some_and(|kind| kind.to_ascii_lowercase().starts_with("text/event-stream"));
+    let meter = (!streaming).then_some(meter);
+    Response::from_parts(parts, Tracked { inner: body.boxed(), meter, tee, forward: forward.clone() }.boxed())
 }
 
 /// Send a request over the forward's HTTP/2 connection, opening a fresh connection once when the held one is gone.
@@ -262,7 +275,7 @@ fn start_batch(network: &Arc<Network>, forward: &Arc<Forward>, route: &Arc<Route
         };
         let outcome = tokio::time::timeout(BATCH_TIMEOUT, run).await.ok().flatten();
         let answered = outcome.as_ref().map(Vec::len);
-        forward.cache.finish_batch(&entries, outcome, done);
+        forward.cache.finish_batch(&entries, outcome, done, started);
         tracing::info!(target: TARGET, machine = %forward.machine_id, entries = entries.len(), answered, ms = started.elapsed().as_millis() as u64, "revalidated a forward's cache in one batch");
     });
 }
@@ -294,6 +307,9 @@ impl Drop for Metering {
     }
 }
 
+/// Room left in what all forwards may hold at once for responses still arriving that the cache will keep (128 MiB).
+static BUFFER_ROOM: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(128 * 1024 * 1024);
+
 /// A response being kept in the cache as it streams.
 struct Tee {
     key: String,
@@ -302,6 +318,24 @@ struct Tee {
     headers: HeaderMap,
     vary: Vec<String>,
     buffer: Vec<u8>,
+    sent: std::time::Instant,
+}
+
+impl Tee {
+    /// Add a piece, within [`cache::MAX_ENTRY`] and [`BUFFER_ROOM`]; false when it no longer fits.
+    fn push(&mut self, data: &[u8]) -> bool {
+        if self.buffer.len() + data.len() > cache::MAX_ENTRY || !cache::take_from(&BUFFER_ROOM, data.len()) {
+            return false;
+        }
+        self.buffer.extend_from_slice(data);
+        true
+    }
+}
+
+impl Drop for Tee {
+    fn drop(&mut self) {
+        BUFFER_ROOM.fetch_add(self.buffer.len(), std::sync::atomic::Ordering::AcqRel);
+    }
 }
 
 /// A response body on its way to the browser: counted, and kept when it may be.
@@ -315,11 +349,14 @@ struct Tracked {
 impl Tracked {
     /// The whole body went by: keep it, and end the request's part in the load.
     fn finish(&mut self) {
-        if let Some(tee) = self.tee.take() {
+        if let Some(mut tee) = self.tee.take() {
             let (mut parts, ()) = Response::new(()).into_parts();
             parts.status = tee.status;
-            parts.headers = tee.headers;
-            self.forward.cache.store(tee.key, &tee.request, parts, tee.vary, Bytes::from(tee.buffer));
+            parts.headers = std::mem::take(&mut tee.headers);
+            let body = Bytes::from(std::mem::take(&mut tee.buffer));
+            BUFFER_ROOM.fetch_add(body.len(), std::sync::atomic::Ordering::AcqRel);
+            let (key, vary) = (std::mem::take(&mut tee.key), std::mem::take(&mut tee.vary));
+            self.forward.cache.store(key, &tee.request, parts, vary, body, tee.sent);
         }
         self.meter = None;
     }
@@ -342,12 +379,7 @@ impl hyper::body::Body for Tracked {
                     if let Some(meter) = &self.meter {
                         meter.received(len);
                     }
-                    let keep = self.tee.as_ref().is_some_and(|tee| tee.buffer.len() + len <= cache::MAX_ENTRY);
-                    if keep {
-                        if let Some(tee) = self.tee.as_mut() {
-                            tee.buffer.extend_from_slice(data);
-                        }
-                    } else {
+                    if self.tee.as_mut().is_some_and(|tee| !tee.push(data)) {
                         self.tee = None;
                     }
                 }

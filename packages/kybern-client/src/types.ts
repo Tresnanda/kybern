@@ -4198,9 +4198,11 @@ export interface PortsListResult { forwards: PortForward[] }
 export interface PeerPortsPrepareParams { forward_id: string; port: number; direct_version?: number }
 export interface PeerPortsDirect { port: number; token: string; version?: number }
 export interface PeerPortsPrepareResult { direct?: PeerPortsDirect }
-export interface PeerPortsViaParams { forward_id: string; via: MachineId }
+export interface PeerPortsViaParams { forward_id: string; via: MachineId; drop?: boolean }
+export interface PeerPortsViaResult { token?: string }
 export interface PeerPortsHopParams { forward_id: string; target: MachineId; port: number }
 export interface PeerPortsHopResult { port: number; token: string }
+export interface PeerPortsHopCheckParams { caller: MachineId; forward_id: string; port: number }
 export interface PeerPortsReleaseParams { forward_id: string }
 export interface PeerPortsOpenParams { stream_id: number; port: number }
 
@@ -4866,8 +4868,9 @@ export interface Methods {
   "peer.ports.prepare": [PeerPortsPrepareParams, PeerPortsPrepareResult];
   "peer.ports.release": [PeerPortsReleaseParams, Empty];
   "peer.ports.open": [PeerPortsOpenParams, Empty];
-  "peer.ports.via": [PeerPortsViaParams, Empty];
+  "peer.ports.via": [PeerPortsViaParams, PeerPortsViaResult];
   "peer.ports.hop": [PeerPortsHopParams, PeerPortsHopResult];
+  "peer.ports.hop_check": [PeerPortsHopCheckParams, Empty];
   "peer.ports.data": [PeerRelayDataParams, Empty];
   "peer.ports.close": [PeerRelayCloseParams, Empty];
 }

@@ -85,6 +85,8 @@ struct Forward {
     load: load::LoadMeter,
     /// The member new connections go through, and the direct route to return to when it stops answering.
     via: std::sync::Mutex<Option<(PortRouteVia, Arc<direct::Route>)>>,
+    /// A route choice ([`hop::choose`]) runs.
+    choosing: std::sync::atomic::AtomicBool,
 }
 
 impl Forward {
@@ -282,6 +284,7 @@ pub async fn forward_to(
         cache: cache::Cache::default(),
         load: load::LoadMeter::default(),
         via: std::sync::Mutex::new(None),
+        choosing: Default::default(),
         connections: AtomicU32::new(0),
         cancel,
     });
@@ -392,7 +395,7 @@ async fn current_route(network: &Arc<Network>, forward: &Arc<Forward>) -> Option
     // A member's route belonged to the old listener: start from the direct one and choose again.
     if let Some((via, direct)) = forward.via.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take() {
         direct.stop();
-        release_at(network, &via.machine_id, forward.id);
+        hop::release(network, &forward.machine_id, &via.machine_id, forward.id);
     }
     if let Some(route) = &route {
         tokio::spawn(route.clone().keep_warm(network.clone()));
@@ -400,15 +403,6 @@ async fn current_route(network: &Arc<Network>, forward: &Arc<Forward>) -> Option
     }
     tracing::info!(target: TARGET, machine = %forward.machine_id, remote_port = forward.remote_port, direct = route.is_some(), "prepared a forward again on a new session");
     route
-}
-
-/// `peer.ports.release` for a forward at another member (one that relays it).
-fn release_at(network: &Network, machine: &str, forward_id: Uuid) {
-    if let Some(link) = network.peers.link(machine) {
-        tokio::spawn(async move {
-            let _ = link.notify(PeerPortsRelease::NAME, json!({ "forward_id": forward_id })).await;
-        });
-    }
 }
 
 /// New connections of `forward` go through a member's `route` from now on; `direct` is kept to return to.
@@ -419,13 +413,14 @@ fn take_route(network: &Arc<Network>, forward: &Arc<Forward>, direct: &Arc<direc
         // The session changed while measuring: that route is gone with it.
         if !held.0.as_ref().is_some_and(|current| Arc::ptr_eq(current, direct)) {
             route.stop();
-            release_at(network, &hop.machine_id, forward.id);
+            hop::release(network, &forward.machine_id, &hop.machine_id, forward.id);
             return;
         }
         held.0 = Some(route.clone());
+        // Under the route's lock, so a new session never sees the route without its member, or the reverse.
+        *forward.via.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            Some((PortRouteVia { machine_id: hop.machine_id.clone(), machine_name: hop.machine_name.clone() }, direct.clone()));
     }
-    *forward.via.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) =
-        Some((PortRouteVia { machine_id: hop.machine_id.clone(), machine_name: hop.machine_name.clone() }, direct.clone()));
     tokio::spawn(route.keep_warm(network.clone()));
     announce(network);
     tracing::info!(target: TARGET, machine = %forward.machine_id, via = %hop.machine_name, "a forward now goes through another member");
@@ -442,8 +437,8 @@ fn fall_back(network: &Arc<Network>, forward: &Arc<Forward>, failed: &Arc<direct
     drop(held);
     failed.stop();
     hop::forget(network, &forward.machine_id);
-    release_at(network, &via.machine_id, forward.id);
-    tokio::spawn(direct.clone().keep_warm(network.clone()));
+    hop::release(network, &forward.machine_id, &via.machine_id, forward.id);
+    // The direct route's ready sockets were kept warm all along.
     announce(network);
     tracing::info!(target: TARGET, machine = %forward.machine_id, via = %via.machine_name, "a member's route stopped answering; back to the direct route");
     Some(direct)
@@ -585,7 +580,7 @@ async fn accept_loop(network: Arc<Network>, shutdown: CancellationToken, forward
         let _ = link.notify(PeerPortsRelease::NAME, json!({"forward_id": forward.id})).await;
     }
     if let Some(via) = forward.via_now() {
-        release_at(&network, &via.machine_id, forward.id);
+        hop::release(&network, &forward.machine_id, &via.machine_id, forward.id);
     }
     network.ports.remove(forward.id);
     announce(&network);
@@ -931,6 +926,7 @@ mod tests {
             cache: cache::Cache::default(),
             load: load::LoadMeter::default(),
             via: std::sync::Mutex::new(None),
+            choosing: Default::default(),
             connections: AtomicU32::new(0),
             cancel: CancellationToken::new(),
         };

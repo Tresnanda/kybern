@@ -1085,30 +1085,19 @@ async fn run_hop() {
 
     // The target accepts a member only for a forward it holds; a member relays only to a third machine.
     let to_t = v.state.network.peers.link(&t.id()).unwrap();
-    let refused = to_t.call::<PeerPortsVia>(PeerPortsViaParams { forward_id: Uuid::now_v7(), via: m.id() }).await;
-    assert_eq!(refused.unwrap_err().code, codes::NOT_FOUND);
     let to_m = v.state.network.peers.link(&m.id()).unwrap();
-    let refused = to_m.call::<PeerPortsHop>(PeerPortsHopParams { forward_id: forward.id, target: m.id(), port: 1 }).await;
-    assert_eq!(refused.unwrap_err().code, codes::INVALID_PARAMS);
-    // Without `peer.ports.via`, the target refuses connections that come from the member.
-    let unannounced = crate::network::ports::direct::Route::through(
-        straight.address,
-        straight.endpoint.clone(),
-        Some({
-            let hop = to_m
-                .call::<PeerPortsHop>(PeerPortsHopParams { forward_id: Uuid::now_v7(), target: t.id(), port: straight.endpoint.port })
-                .await
-                .unwrap();
-            crate::network::ports::direct::Hop {
-                machine_id: m.id(),
-                machine_name: "m".into(),
-                address: crate::network::ports::direct::destination(&v.state.network, &m.id(), hop.port).await.unwrap(),
-                token: hop.token,
-            }
-        }),
-        tokio_util::sync::CancellationToken::new(),
-    );
-    assert!(unannounced.probe(&v.state.network, Duration::from_millis(100)).await.is_none(), "the target accepted an unannounced member");
+    let via = |forward_id| PeerPortsViaParams { forward_id, via: m.id(), drop: false };
+    assert_eq!(to_t.call::<PeerPortsVia>(via(Uuid::now_v7())).await.unwrap_err().code, codes::NOT_FOUND);
+    let hop = |target: String, port| PeerPortsHopParams { forward_id: forward.id, target, port };
+    assert_eq!(to_m.call::<PeerPortsHop>(hop(m.id(), 1)).await.unwrap_err().code, codes::INVALID_PARAMS);
+    // Until the caller names the member at the target, the target does not confirm the hop.
+    assert_eq!(to_m.call::<PeerPortsHop>(hop(t.id(), straight.endpoint.port)).await.unwrap_err().code, codes::FORBIDDEN);
+    // Named, the member still relays only to that forward's listener, never to another port of the target.
+    assert!(to_t.call::<PeerPortsVia>(via(forward.id)).await.unwrap().token.is_some());
+    assert_eq!(to_m.call::<PeerPortsHop>(hop(t.id(), remote_port)).await.unwrap_err().code, codes::FORBIDDEN, "the dev server's own port");
+    assert_eq!(to_m.call::<PeerPortsHop>(hop(t.id(), 22)).await.unwrap_err().code, codes::FORBIDDEN);
+    to_t.call::<PeerPortsVia>(PeerPortsViaParams { drop: true, ..via(forward.id) }).await.unwrap();
+    assert!(!t.state.network.ports.direct.relays_through(&v.id(), forward.id, straight.endpoint.port, &m.id()));
 
     let route = hop::through(&v.state.network, &forward, &straight, &m.id(), "m").await.expect("a route through m");
     assert!(route.probe(&v.state.network, Duration::from_millis(100)).await.unwrap() > 0);
@@ -1128,5 +1117,9 @@ async fn run_hop() {
     assert_eq!((status, &body[..]), (hyper::StatusCode::OK, &b"through a member"[..]));
     let view = v.state.network.ports.views().into_iter().find(|f| f.id == forward.id).unwrap();
     assert!(view.route_via.is_none(), "back on the direct route");
+    crate::network::harness::eventually("the target stops accepting the member", Duration::from_secs(5), || {
+        !t.state.network.ports.direct.relays_through(&v.id(), forward.id, straight.endpoint.port, &m.id())
+    })
+    .await;
     dev.abort();
 }

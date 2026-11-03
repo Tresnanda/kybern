@@ -321,20 +321,40 @@ pub struct PeerPortsReleaseParams {
     pub forward_id: Uuid,
 }
 
-/// `peer.ports.via` (`ports.route.v1`): the caller's forward `forward_id` may also arrive relayed by member `via`.
-/// The per-forward token still authorizes each connection; only the source node check accepts `via`'s node too.
+/// `peer.ports.via` (`ports.route.v1`): the caller's forward `forward_id` may also arrive relayed by member `via`, with
+/// a token of its own that works only from `via`'s node and only while `via` itself may use this machine's ports. The
+/// forward's own token never passes through `via`. `drop` takes that permission back.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PeerPortsViaParams {
     pub forward_id: Uuid,
     pub via: MachineId,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub drop: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerPortsViaResult {
+    /// The route's token, sent as 64 ASCII bytes through `via`. Absent for `drop`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }
 
 /// `peer.ports.hop` (`ports.route.v1`): relay the caller's connections for forward `forward_id` to the listener
-/// `port` that machine `target` prepared for it. This machine resolves `target`'s address from membership.
+/// `port` that machine `target` prepared for it. This machine resolves `target`'s address from membership and asks
+/// `target` to confirm the listener (`peer.ports.hop_check`) before it relays anything.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PeerPortsHopParams {
     pub forward_id: Uuid,
     pub target: MachineId,
+    pub port: u16,
+}
+
+/// `peer.ports.hop_check` (`ports.route.v1`), from the relaying member to the target: `port` is the listener of
+/// `caller`'s forward `forward_id`, and the caller named this member with `peer.ports.via`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerPortsHopCheckParams {
+    pub caller: MachineId,
+    pub forward_id: Uuid,
     pub port: u16,
 }
 

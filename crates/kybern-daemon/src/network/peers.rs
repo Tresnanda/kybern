@@ -878,6 +878,7 @@ pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, para
         PeerPortsPrepare::NAME => ok(super::ports::direct::prepare(state, link, parse(params)?).await?),
         PeerPortsVia::NAME => ok(super::ports::hop::handle_via(state, link, parse(params)?)?),
         PeerPortsHop::NAME => ok(super::ports::hop::handle_hop(state, link, parse(params)?).await?),
+        PeerPortsHopCheck::NAME => ok(super::ports::hop::handle_hop_check(state, link, parse(params)?)?),
         PeerPortsRelease::NAME => {
             let request: PeerPortsReleaseParams = parse(params)?;
             network.ports.direct.release(&link.machine_id, request.forward_id);

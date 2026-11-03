@@ -4773,8 +4773,9 @@ method!(PeerClipboardAuto, "peer.clipboard.auto", Some(Scope::MachineClipboardAu
 method!(PeerPortsPrepare, "peer.ports.prepare", Some(Scope::MachinePorts), PeerPortsPrepareParams, PeerPortsPrepareResult);
 method!(PeerPortsRelease, "peer.ports.release", Some(Scope::MachinePeer), PeerPortsReleaseParams, Empty);
 method!(PeerPortsOpen, "peer.ports.open", Some(Scope::MachinePorts), PeerPortsOpenParams, Empty);
-method!(PeerPortsVia, "peer.ports.via", Some(Scope::MachinePorts), PeerPortsViaParams, Empty);
+method!(PeerPortsVia, "peer.ports.via", Some(Scope::MachinePorts), PeerPortsViaParams, PeerPortsViaResult);
 method!(PeerPortsHop, "peer.ports.hop", Some(Scope::MachineRelay), PeerPortsHopParams, PeerPortsHopResult);
+method!(PeerPortsHopCheck, "peer.ports.hop_check", Some(Scope::MachinePorts), PeerPortsHopCheckParams, Empty);
 // Data and close frames only reach a stream that an authorized open created, so `machine:peer` is enough.
 method!(PeerPortsData, "peer.ports.data", Some(Scope::MachinePeer), PeerRelayDataParams, Empty);
 method!(PeerPortsClose, "peer.ports.close", Some(Scope::MachinePeer), PeerRelayCloseParams, Empty);
@@ -5097,6 +5098,7 @@ registry!(
     PeerPortsOpen,
     PeerPortsVia,
     PeerPortsHop,
+    PeerPortsHopCheck,
     PeerPortsData,
     PeerPortsClose,
     PluginsInventory,

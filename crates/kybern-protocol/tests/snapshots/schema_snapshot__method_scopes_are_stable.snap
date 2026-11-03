@@ -578,6 +578,8 @@ expression: scopes
   - "machine:ports"
 - - peer.ports.hop
   - "machine:relay"
+- - peer.ports.hop_check
+  - "machine:ports"
 - - peer.ports.data
   - "machine:peer"
 - - peer.ports.close
