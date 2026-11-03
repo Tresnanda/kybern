@@ -11,6 +11,7 @@ import { readCredential, removeCredential, writeCredential } from '../environmen
 import { ensureSshTunnel } from '../environments/ssh.ts'
 import { MachineHub } from './hub.ts'
 import { fileCacheStorage, machineCredentials, migrateEnvironments, writeMachineRecords, type GpuixMachineRecord } from './store.ts'
+import { staleSelfRecords } from './staleSelf.ts'
 
 let hub: MachineHub | undefined
 export function machineHub(): MachineHub {
@@ -78,9 +79,11 @@ export interface MachineRow {
 const LIVE = new Set<MachineConnectionStatus>(['online', 'relaying', 'needs-update'])
 
 export function machineRows(h: MachineHub): MachineRow[] {
-  const connections = h.connections()
-  const count = connections.length
   const local = h.localMachineId
+  const all = h.connections()
+  const stale = staleSelfRecords(all, local)
+  const connections = stale.size ? all.filter((connection) => !stale.has(connection.record.machineId)) : all
+  const count = connections.length
   const glyphs = h.set.glyphs()
   return connections.map((connection) => {
     const { machineId } = connection.record
