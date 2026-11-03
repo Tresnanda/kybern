@@ -47,8 +47,10 @@ VERSION="$(grep -m1 '^version' "$ROOT/Cargo.toml" | sed -E 's/.*"([^"]+)".*/\1/'
 TARBALL="$DIST/kybern-gpuix_${VERSION}_${ARCH}.app.tar.gz"
 
 if [[ -z "${KYBERN_CODESIGN_IDENTITY:-}" && -n "${MACOS_SIGNING_P12_BASE64:-}" ]]; then
-  eval "$("$ROOT/scripts/macos-signing.sh" setup)"
   trap '"$ROOT/scripts/macos-signing.sh" cleanup' EXIT
+  SIGNING="$("$ROOT/scripts/macos-signing.sh" setup)"
+  eval "$SIGNING"
+  [[ -n "${KYBERN_CODESIGN_IDENTITY:-}" ]] || { echo "the code-signing identity could not be set up" >&2; exit 1; }
 fi
 
 echo "==> packaging Kybern GPUIX $VERSION for $TARGET"
