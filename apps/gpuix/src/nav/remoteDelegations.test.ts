@@ -60,9 +60,12 @@ test('a stale copy that still says Working gives way to the record; a copy that 
   expect(shown!.delegation?.result).toBe('Done it')
   const ended = listed('a', 'idle')
   expect(overlay.apply([ended], [record('a', 'running', '2026-11-02T16:00:00Z')], parents)[0]).toBe(ended)
-  // Woken again by a message after it ended (its copy changed after the end): the record does not follow that.
+  // Woken again by a message after it ended (its copy changed after the end): the record does not follow that. Both
+  // times are the other machine's only when the record's end came from following the child to its end.
   const woken = { ...listed('a'), updated_at: '2026-11-02T19:00:00Z' }
-  expect(overlay.apply([woken], [record('a', 'completed', '2026-11-02T18:06:00Z')], parents)[0]).toBe(woken)
+  expect(overlay.apply([woken], [record('a', 'completed', '2026-11-02T18:06:00Z', { completed_at_from_target: true })], parents)[0]).toBe(woken)
+  // An end this machine recorded by its own clock cannot be compared with the other machine's: the settled record wins.
+  expect(childState(overlay.apply([woken], [record('a', 'completed', '2026-11-02T18:06:00Z')], parents)[0]!)).toEqual({ phase: 'done', word: 'Done' })
 })
 
 test('the overlay keeps object identity while nothing changes', () => {
