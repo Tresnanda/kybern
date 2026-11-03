@@ -136,9 +136,12 @@ async fn update_all_starts_the_machines_that_can_update_and_says_why_the_others_
             bundle: "/nowhere/Kybern GPUIX.app".into(),
         }));
     let window = uuid::Uuid::now_v7();
-    d.state
-        .app_updates
-        .attach(&d.state, crate::app_update::Attached { connection: window, version: "0.0.0".into(), can_install: true, reason: None });
+    d.state.app_updates.attach(crate::app_update::Attached {
+        connection: window,
+        version: "0.0.0".into(),
+        can_install: true,
+        reason: None,
+    });
     // As far as `a` knows, `b` already runs the newest version.
     heard_from(&a, &b).await;
     a.state.network.peers.set_presence(&b.id(), presence("99.0.0", &[features::UPDATE_V1]));

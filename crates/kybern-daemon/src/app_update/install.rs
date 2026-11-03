@@ -161,6 +161,7 @@ pub fn app_running(install: &DesktopInstall) -> bool {
 }
 
 /// `ps -o comm=` lines that are a program of `bundle` other than its daemon.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn running_from_bundle(ps: &str, bundle: &Path) -> bool {
     let prefix = format!("{}/Contents/MacOS/", bundle.display());
     ps.lines().map(str::trim).any(|line| line.starts_with(&prefix) && !line.ends_with("/kybernd") && !line.ends_with("/kybern"))
@@ -474,11 +475,9 @@ fn run_windows_installer(data: &[u8], dir: &Path) -> Result<()> {
 #[cfg(windows)]
 fn run_installer(file: &Path, dir: &Path) -> Result<()> {
     use std::os::windows::process::CommandExt;
-    let status = std::process::Command::new(file)
-        .raw_arg(installer_arguments(&dir.to_string_lossy()))
-        .no_window()
-        .status()
-        .context("start the Kybern installer")?;
+    let mut command = std::process::Command::new(file).no_window();
+    command.raw_arg(installer_arguments(&dir.to_string_lossy()));
+    let status = command.status().context("start the Kybern installer")?;
     if !status.success() {
         bail!("The Kybern installer failed (exit code {}). Run the installer from the release page.", status.code().unwrap_or(-1));
     }

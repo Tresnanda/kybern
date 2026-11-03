@@ -243,10 +243,12 @@ async fn dispatch_part_3(state: &AppState, ctx: &ConnectionCtx, method: &str, sl
                 return Err(RpcError::new(codes::FORBIDDEN, "Only the Kybern app on this machine can update it"));
             }
             let p: AppUpdaterAttachParams = parse(params)?;
-            state.app_updates.attach(
-                state,
-                crate::app_update::Attached { connection: ctx.id, version: p.version, can_install: p.can_install, reason: p.reason },
-            );
+            state.app_updates.attach(crate::app_update::Attached {
+                connection: ctx.id,
+                version: p.version,
+                can_install: p.can_install,
+                reason: p.reason,
+            });
             ok(Empty {})
         }
         AppUpdaterReport::NAME => {

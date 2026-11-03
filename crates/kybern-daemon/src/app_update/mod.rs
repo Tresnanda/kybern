@@ -116,14 +116,13 @@ impl AppUpdates {
 
     /// A window attached (again). A pending update is looked at once more, so a window that opens while the
     /// daemon waits takes it.
-    pub fn attach(&self, state: &AppState, window: Attached) {
+    pub fn attach(&self, window: Attached) {
         {
             let mut inner = self.inner();
             inner.attached.retain(|existing| existing.connection != window.connection);
             tracing::debug!(target: TARGET, connection = %window.connection, version = %window.version, can_install = window.can_install, "a window attached as the app's updater");
             inner.attached.push(window);
         }
-        let _ = state;
         self.wake.notify_one();
     }
 
@@ -222,7 +221,6 @@ pub fn route(window: Option<&Attached>, detected: &Detected) -> Route {
 pub fn detect(state: &AppState) -> Detected {
     #[cfg(test)]
     {
-        let _ = state;
         state.app_updates.test_install.lock().unwrap().clone().unwrap_or_else(|| Detected::NotInstalled(install::DEVELOPMENT.into()))
     }
     #[cfg(not(test))]

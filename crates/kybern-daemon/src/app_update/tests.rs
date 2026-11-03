@@ -367,7 +367,7 @@ fn desktop_daemon(detected: Detected) -> Daemon {
 
 fn attach(state: &AppState, can_install: bool) -> uuid::Uuid {
     let connection = uuid::Uuid::now_v7();
-    state.app_updates.attach(state, Attached { connection, version: CURRENT_VERSION.into(), can_install, reason: None });
+    state.app_updates.attach(Attached { connection, version: CURRENT_VERSION.into(), can_install, reason: None });
     connection
 }
 
@@ -448,10 +448,12 @@ async fn a_package_install_and_a_development_build_are_not_started() {
     let answer = crate::network::updates::start_self(&dev.state, Some("99.0.0")).await;
     assert_eq!(answer.reason.as_deref(), Some(install::DEVELOPMENT));
     // An app that cannot install says why itself.
-    dev.state.app_updates.attach(
-        &dev.state,
-        Attached { connection: uuid::Uuid::now_v7(), version: "x".into(), can_install: false, reason: Some("Updates are off".into()) },
-    );
+    dev.state.app_updates.attach(Attached {
+        connection: uuid::Uuid::now_v7(),
+        version: "x".into(),
+        can_install: false,
+        reason: Some("Updates are off".into()),
+    });
     assert_eq!(crate::network::updates::start_self(&dev.state, Some("99.0.0")).await.reason.as_deref(), Some("Updates are off"));
     // Already there wins.
     assert_eq!(crate::network::updates::start_self(&dev.state, Some(CURRENT_VERSION)).await.reason.as_deref(), Some("Already up to date"));
