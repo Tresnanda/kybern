@@ -1029,3 +1029,31 @@ test("a member the daemon reports online all along but this device cannot reach 
   assert.ok(probesTo(world, T).length > lost, "a member that came back is dialed out of its backoff");
   set.dispose();
 });
+
+// `network.changed` carries the whole status: the sync it starts does not ask the daemon for it again.
+test("a sync started by network.changed uses the status it carried", async () => {
+  const { world, set, clock } = setup({
+    records: [rec("a", [tailnet("http://100.64.0.1:4173")], { signingKey: "key-a" }), rec("b", [tailnet(T)], { signingKey: "key-b" })],
+    credentials: { a: "tok-a", b: "tok-b" },
+    localMachineId: "a",
+  });
+  world.host("http://100.64.0.1:4173", "a");
+  world.host(T, "b");
+  world.lists("a", [], []);
+  world.lists("b", [], []);
+  let reads = 0;
+  world.on("a", "network.status", () => { reads++; return { enabled: true, self_machine: card("a"), members: [card("a"), card("b")] }; });
+  world.on("a", "network.routes", () => ({ routes: [tailnet(T)] }));
+  await set.ensureAll();
+  const before = reads;
+  const a = world.clients.find((c) => c.machineId === "a").client;
+  a.notify("network.changed", { enabled: true, self_machine: card("a"), members: [card("a"), card("b", { name: "renamed" })] });
+  await clock.advance(400);
+  assert.equal(reads, before, "no network.status read");
+  assert.equal(set.connection("b").record.name, "renamed");
+  // An older daemon's empty payload still reads the status.
+  a.notify("network.changed", {});
+  await clock.advance(400);
+  assert.equal(reads, before + 1);
+  set.dispose();
+});

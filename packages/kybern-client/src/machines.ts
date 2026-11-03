@@ -40,6 +40,7 @@ import {
   type MachineCard,
   type MachineId,
   type NetworkClientGrantResult,
+  type NetworkStatus,
   type Project,
   type Route,
   type Thread,
@@ -490,6 +491,8 @@ export class MachineSet {
   private probeTimer: unknown;
   private syncTimer: unknown;
   private syncing: Promise<void> | undefined;
+  /** The status the last `network.changed` carried, and the member that sent it, until a sync uses it. */
+  private pushed: { slot: Slot; status: NetworkStatus } | undefined;
   private syncAgain = false;
   private disposed = false;
   private _version = 0;
@@ -1061,7 +1064,7 @@ export class MachineSet {
       autoRefresh: true,
     };
     // Members tell clients when the network changes. The proxy keeps these handlers across route changes.
-    slot.proxy.onNotification("network.changed", () => this.scheduleSync());
+    slot.proxy.onNotification("network.changed", (params) => this.scheduleSync(slot, params));
     slot.proxy.onNotification("network.machine.changed", () => this.scheduleSync());
     this.slots.set(record.machineId, slot);
     return slot;
@@ -1562,8 +1565,10 @@ export class MachineSet {
     }
   }
 
-  private scheduleSync() {
+  private scheduleSync(from?: Slot, params?: unknown) {
     if (this.disposed) return;
+    // `network.changed` carries the whole status: the sync uses it instead of asking again when it asks that member.
+    if (from && isNetworkStatus(params)) this.pushed = { slot: from, status: params };
     if (this.syncing) { this.syncAgain = true; return; }
     this.clock.clearTimeout(this.syncTimer);
     this.syncTimer = this.clock.setTimeout(() => void this.syncMembers(), 300);
@@ -1604,8 +1609,10 @@ export class MachineSet {
     const localId = this.localId;
     const current = () => !this.disposed && this.localId === localId && this.slots.get(source.record.machineId) === source && source.inner === inner && source.gen === gen && LIVE.has(source.status);
     let members: MachineCard[];
+    const pushed = this.pushed;
+    this.pushed = undefined;
     try {
-      const status = await inner.call("network.status", {});
+      const status = pushed?.slot === source ? pushed.status : await inner.call("network.status", {});
       if (!current() || this.syncAgain || status.self_machine.machine_id !== source.record.machineId) return;
       // Turning the switch off keeps the saved network, routes and credentials. It must not
       // become an authoritative empty member list (or mint grants through this connection).
@@ -1715,4 +1722,11 @@ export class MachineSet {
 /** A machine the set dials itself that is not connected. One with an attempt under way joins it (`connectSlot`). */
 function wantsDial(slot: Slot): boolean {
   return !slot.external && !slot.record.paused && !LIVE.has(slot.status) && slot.status !== "unpaired";
+}
+
+/** A `network.changed` payload that is a whole `NetworkStatus` (older daemons send `{}`). */
+export function isNetworkStatus(value: unknown): value is NetworkStatus {
+  const status = value as Partial<NetworkStatus> | null | undefined;
+  return !!status && typeof status === "object" && typeof status.enabled === "boolean" && Array.isArray(status.members) &&
+    typeof status.self_machine?.machine_id === "string";
 }
