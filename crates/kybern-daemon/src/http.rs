@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use crate::auth::authenticate;
 use crate::state::AppState;
+use crate::thread_image::ImageError;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -188,60 +189,6 @@ mod tests {
     }
 
     #[test]
-    fn image_references_resolve_relative_absolute_home_and_file_urls() {
-        let root = std::path::Path::new("/work/ade");
-        let home = std::path::Path::new("/home/me");
-        let targets = |reference: &str| super::image_targets(reference, root, Some(home));
-        assert_eq!(targets(".screenshots/a.png"), [root.join(".screenshots/a.png")]);
-        assert_eq!(targets("./shots/../a.png"), [root.join("a.png")]);
-        assert_eq!(targets("/elsewhere/b.png"), [std::path::PathBuf::from("/elsewhere/b.png")]);
-        assert_eq!(targets("~/Desktop/c.png"), [home.join("Desktop/c.png")]);
-        assert_eq!(targets("file:///tmp/d.png"), [std::path::PathBuf::from("/tmp/d.png")]);
-        assert_eq!(targets("a%20b.png"), [root.join("a%20b.png"), root.join("a b.png")]);
-        assert!(super::image_targets("~/x.png", root, None).is_empty(), "no home folder, no `~/`");
-        assert_eq!(super::percent_decode("a%20b%C3%A4.png").as_deref(), Some("a bä.png"));
-        assert_eq!(super::percent_decode("plain.png"), None);
-    }
-
-    #[test]
-    fn only_local_disks_are_looked_at() {
-        assert!(super::local_path(std::path::Path::new("/Users/me/a.png")));
-        #[cfg(windows)]
-        {
-            assert!(super::local_path(std::path::Path::new(r"C:\Users\me\a.png")));
-            assert!(super::local_path(std::path::Path::new(r"\\?\C:\Users\me\a.png")));
-            for share in [r"\\host\share\a.png", r"\\?\UNC\host\share\a.png", r"\\.\pipe\x", "//host/share/a.png"] {
-                assert!(!super::local_path(std::path::Path::new(share)), "{share}");
-            }
-        }
-    }
-
-    // ADE-122: an image is served from wherever it is; what it has to be is a regular file.
-    #[tokio::test]
-    async fn an_image_path_is_any_regular_file_inside_or_outside_the_thread_folder() {
-        let base = std::env::temp_dir().join(format!("kybern-image-path-{}", uuid::Uuid::now_v7()));
-        let (root, outside, home) = (base.join("thread"), base.join("other-checkout"), base.join("home"));
-        for folder in [&root, &outside, &home.join("Pictures")] {
-            std::fs::create_dir_all(folder).unwrap();
-        }
-        std::fs::write(root.join("in.png"), "x").unwrap();
-        std::fs::write(outside.join("out.png"), "x").unwrap();
-        std::fs::write(home.join("Pictures/shot.png"), "x").unwrap();
-        let find = |reference: String| {
-            let (root, home) = (root.clone(), home.clone());
-            async move { super::thread_image_path(&root, Some(&home), &reference).await }
-        };
-        let canonical = |path: std::path::PathBuf| std::fs::canonicalize(path).unwrap();
-        assert_eq!(find("in.png".into()).await, Some(canonical(root.join("in.png"))));
-        assert_eq!(find("../other-checkout/out.png".into()).await, Some(canonical(outside.join("out.png"))));
-        assert_eq!(find(outside.join("out.png").to_string_lossy().into()).await, Some(canonical(outside.join("out.png"))));
-        assert_eq!(find("~/Pictures/shot.png".into()).await, Some(canonical(home.join("Pictures/shot.png"))));
-        assert_eq!(find("missing.png".into()).await, None);
-        assert_eq!(find(outside.to_string_lossy().into()).await, None, "a folder is no image");
-        std::fs::remove_dir_all(base).unwrap();
-    }
-
-    #[test]
     fn accepts_tauri_and_vite_origins() {
         for origin in ["http://tauri.localhost", "tauri://localhost", "http://localhost:1420", "http://127.0.0.1:5173"] {
             assert_eq!(allowed_asset_origin(&headers(origin)).unwrap(), origin);
@@ -304,33 +251,38 @@ async fn get_thread_image(
             return (StatusCode::FORBIDDEN, "token cannot read images").into_response();
         }
         let Ok(Some(thread)) = state.store.thread_get(id) else { return (StatusCode::NOT_FOUND, "thread not found").into_response() };
-        // Relative references resolve against the thread's folder; one that is gone (a removed worktree) still serves
-        // absolute and `~/` references.
-        let root = tokio::fs::canonicalize(&thread.cwd).await.unwrap_or_else(|_| thread.cwd.clone().into());
         let home = directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf());
-        let Some(path) = thread_image_path(&root, home.as_deref(), &query.path).await else { return IMAGE_NOT_FOUND.into_response() };
-        let Ok(mut file) = tokio::fs::File::open(&path).await else { return IMAGE_NOT_FOUND.into_response() };
-        use tokio::io::AsyncReadExt;
-        // The header first: a file that is not an image is refused before the rest of it is read.
-        let mut bytes = Vec::with_capacity(IMAGE_HEADER_BYTES);
-        if (&mut file).take(IMAGE_HEADER_BYTES as u64).read_to_end(&mut bytes).await.is_err() {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "unable to read image").into_response();
-        }
-        let Some(mime) = image_mime(&bytes) else {
-            return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "use a PNG, JPEG, GIF, WebP, or AVIF image").into_response();
+        let reference = query.path.clone();
+        // Finding and reading the file blocks, and a hung network mount can block it for good: it runs on the blocking
+        // pool, and the request gets an answer after IMAGE_READ_TIMEOUT whatever the thread is stuck on.
+        let read = tokio::task::spawn_blocking(move || {
+            // Relative references resolve against the thread's folder; one that is gone (a removed worktree) still
+            // serves absolute and `~/` references.
+            let cwd = std::path::PathBuf::from(&thread.cwd);
+            let root = std::fs::canonicalize(&cwd).unwrap_or(cwd);
+            crate::thread_image::load(&root, home.as_deref(), &reference, MAX_ASSET_BYTES)
+        });
+        let image = match tokio::time::timeout(IMAGE_READ_TIMEOUT, read).await {
+            Ok(Ok(Ok(image))) => image,
+            Ok(Ok(Err(ImageError::NotFound))) => return IMAGE_NOT_FOUND.into_response(),
+            Ok(Ok(Err(ImageError::TooLarge))) => return (StatusCode::PAYLOAD_TOO_LARGE, "images are limited to 50 MB").into_response(),
+            Ok(Ok(Err(ImageError::NotImage))) => {
+                return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "use a PNG, JPEG, GIF, WebP, or AVIF image").into_response();
+            }
+            Ok(Ok(Err(ImageError::Unreadable)) | Err(_)) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, "unable to read image").into_response();
+            }
+            Err(_) => {
+                return (StatusCode::GATEWAY_TIMEOUT, "Reading the image took too long. Check that its disk is connected, then retry.")
+                    .into_response();
+            }
         };
-        // Acquire before reading compressed data, and keep ownership inside
-        // spawn_blocking so a cancelled HTTP request cannot oversubscribe decodes.
+        let (mime, bytes) = (image.mime, image.bytes);
+        // Decodes run two at a time. The permit is taken once the bytes are in hand (a slow read holds none), and
+        // owned inside spawn_blocking so a cancelled HTTP request cannot oversubscribe decodes.
         static DECODES: std::sync::LazyLock<std::sync::Arc<tokio::sync::Semaphore>> =
             std::sync::LazyLock::new(|| std::sync::Arc::new(tokio::sync::Semaphore::new(2)));
         let permit = if query.preview { Some(DECODES.clone().acquire_owned().await.unwrap()) } else { None };
-        let rest = (MAX_ASSET_BYTES + 1).saturating_sub(bytes.len()) as u64;
-        if file.take(rest).read_to_end(&mut bytes).await.is_err() {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "unable to read image").into_response();
-        }
-        if bytes.len() > MAX_ASSET_BYTES {
-            return (StatusCode::PAYLOAD_TOO_LARGE, "images are limited to 50 MB").into_response();
-        }
         let (mime, bytes) = if let Some(permit) = permit {
             match tokio::task::spawn_blocking(move || {
                 let _permit = permit;
@@ -363,111 +315,9 @@ async fn get_thread_image(
     with_asset_cors(response, origin)
 }
 
-/// Enough of a file to tell an image by its content (`image_mime`).
-const IMAGE_HEADER_BYTES: usize = 16;
+/// How long finding and reading a thread's image may take: a hung network mount can hold any step.
+const IMAGE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// A reference that names no regular file.
 const IMAGE_NOT_FOUND: (StatusCode, &str) =
     (StatusCode::NOT_FOUND, "Image not found. Check the path, or retry once the agent has saved it.");
-
-/// The file a thread's image reference names, or `None` when it names no regular file. `reference` is the path as the
-/// message wrote it: relative to the thread's folder (`root`), absolute, `~/…` or `file://…` (percent-encoding is tried
-/// when the literal path is missing). Any folder works: an agent in a worktree or another checkout shows its images
-/// wherever it saved them (ADE-122). What makes it an image is its content, checked when it is read (`image_mime`),
-/// with the size limit; the route stays behind the daemon's token and the thread it is asked for.
-async fn thread_image_path(root: &std::path::Path, home: Option<&std::path::Path>, reference: &str) -> Option<std::path::PathBuf> {
-    for target in image_targets(reference.trim(), root, home) {
-        // Only this computer's disks: a network share (`\\host\share`) would make the daemon connect out, with the
-        // user's credentials, just to look.
-        if !local_path(&target) {
-            continue;
-        }
-        if let Ok(path) = tokio::fs::canonicalize(&target).await
-            && tokio::fs::metadata(&path).await.is_ok_and(|meta| meta.is_file())
-        {
-            return Some(path);
-        }
-    }
-    None
-}
-
-/// A path on this computer's own disks: no UNC share and no device namespace (`\\host\x`, `\\?\UNC\…`, `\\.\…`).
-/// Paths have no such prefix off Windows.
-fn local_path(path: &std::path::Path) -> bool {
-    use std::path::{Component, Prefix};
-    match path.components().next() {
-        Some(Component::Prefix(prefix)) => matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)),
-        _ => true,
-    }
-}
-
-/// Where a reference points, without touching the file system: `file://` stripped, `~/` expanded, relative paths
-/// joined to the thread's folder, `.` and `..` resolved lexically. The literal form first, then the percent-decoded one.
-fn image_targets(reference: &str, root: &std::path::Path, home: Option<&std::path::Path>) -> Vec<std::path::PathBuf> {
-    let literal = reference.strip_prefix("file://localhost").or_else(|| reference.strip_prefix("file://")).unwrap_or(reference);
-    let mut targets = Vec::new();
-    for raw in [Some(literal.to_string()), percent_decode(literal)].into_iter().flatten() {
-        if raw.is_empty() {
-            continue;
-        }
-        let joined = match raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\")) {
-            Some(rest) => match home {
-                Some(home) => home.join(rest),
-                None => continue,
-            },
-            None => root.join(&raw),
-        };
-        let mut target = std::path::PathBuf::new();
-        for part in joined.components() {
-            match part {
-                std::path::Component::CurDir => {}
-                std::path::Component::ParentDir => {
-                    target.pop();
-                }
-                part => target.push(part),
-            }
-        }
-        if !targets.contains(&target) {
-            targets.push(target);
-        }
-    }
-    targets
-}
-
-fn percent_decode(text: &str) -> Option<String> {
-    if !text.contains('%') {
-        return None;
-    }
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%'
-            && let Some(hex) = text.get(i + 1..i + 3)
-            && let Ok(byte) = u8::from_str_radix(hex, 16)
-        {
-            out.push(byte);
-            i += 3;
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8(out).ok()
-}
-
-fn image_mime(bytes: &[u8]) -> Option<&'static str> {
-    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        Some("image/png")
-    } else if bytes.starts_with(&[255, 216, 255]) {
-        Some("image/jpeg")
-    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
-        Some("image/gif")
-    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
-        Some("image/webp")
-    } else if bytes.get(4..8) == Some(b"ftyp") && matches!(bytes.get(8..12), Some(b"avif" | b"avis")) {
-        Some("image/avif")
-    } else {
-        None
-    }
-}
