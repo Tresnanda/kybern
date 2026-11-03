@@ -372,6 +372,7 @@ impl Network {
             features::SECRETS_STORE_V1.to_string(),
             features::LOGIN_BROKER_V1.to_string(),
             features::UPDATE_V1.to_string(),
+            features::APP_UPDATE_V1.to_string(),
             features::FILES_PUSH_V1.to_string(),
             features::PORTS_V1.to_string(),
             features::PORTS_DIRECT_V1.to_string(),

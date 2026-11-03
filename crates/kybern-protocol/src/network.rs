@@ -49,6 +49,9 @@ pub mod features {
     pub const LOGIN_BROKER_V1: &str = "login.broker.v1";
     /// `peer.update.start`: another member can ask this machine to update itself.
     pub const UPDATE_V1: &str = "update.v1";
+    /// A daemon the desktop app manages answers `peer.update.start` by updating the app: through an open window,
+    /// or by itself while the app is closed (ADE-125). Older versions answer "Updates with the app" instead.
+    pub const APP_UPDATE_V1: &str = "update.app.v1";
     /// A group project's thread (several repositories) can be forked, moved or delegated to this machine:
     /// `group` in `peer.fork`, `peer.move.prepare` and `peer.delegate`, `group_repos` in `peer.git.import`.
     pub const GROUP_V1: &str = "group.v1";
@@ -90,6 +93,7 @@ pub mod features {
         SECRETS_STORE_V1,
         LOGIN_BROKER_V1,
         UPDATE_V1,
+        APP_UPDATE_V1,
         GROUP_V1,
         PROVISION_V1,
         SKILLS_SYNC_V1,

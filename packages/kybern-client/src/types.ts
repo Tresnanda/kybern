@@ -3524,6 +3524,8 @@ export const NETWORK_FEATURES = {
   secretsStore: "secrets.store.v1",
   loginBroker: "login.broker.v1",
   update: "update.v1",
+  /** A desktop app's machine updates the app when asked (ADE-125); older ones answer "Updates with the app". */
+  appUpdate: "update.app.v1",
   group: "group.v1",
   /** The relay serves ticket pages (`network.relay_page.open`) to a web view that cannot send the relay header. */
   relayPage: "relay.page.v1",
@@ -4626,6 +4628,8 @@ export interface Methods {
   "daemon_update.status": [Empty, DaemonUpdate];
   "daemon_update.check": [Empty, DaemonUpdate];
   "daemon_update.run": [Empty, DaemonUpdate];
+  "app_updater.attach": [AppUpdaterAttachParams, Empty];
+  "app_updater.report": [AppUpdaterReportParams, Empty];
   "files.search": [FilesSearchParams, FilesSearchResult];
   "files.list": [FilesListParams, FilesListResult];
   "files.read": [FilesReadParams, FilesReadResult];
@@ -4971,6 +4975,26 @@ export interface DaemonUpdate {
   latest_version: string | null;
   checked_at: DateTime | null;
 }
+/**
+ * The desktop app updates the machine it runs on for the daemon (ADE-125): each window attaches over its local
+ * connection, the daemon sends `app_update.requested` to one of them once nothing is running, and the window reports
+ * how far it got. Only the local desktop client may attach.
+ */
+export interface AppUpdaterAttachParams {
+  version: string;
+  /** Whether this copy can install a release by itself. */
+  can_install: boolean;
+  /** Why it cannot, for the machines page. */
+  reason?: string;
+}
+export type AppUpdatePhase = "installing" | "waiting" | "restarting" | "current" | "failed";
+export interface AppUpdaterReportParams { phase: AppUpdatePhase; version?: string; message?: string }
+export interface AppUpdateRequestedNotification {
+  /** The version this machine was asked to reach; the app still installs only what its own track's feed offers. */
+  version?: string;
+}
+export const APP_UPDATE_REQUESTED_NOTIFICATION = "app_update.requested";
+
 export interface HarnessUpdate {
   kind: ProviderKind;
   status: "not_checked" | "waiting" | "updating" | "updated" | "current" | "unsupported" | "failed";

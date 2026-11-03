@@ -38,6 +38,8 @@ pub struct Inner {
     pub thread_projections: crate::thread_projection::ThreadProjectionCache,
     pub harness_updates: crate::harness_updates::HarnessUpdates,
     pub daemon_updates: crate::self_update::DaemonUpdates,
+    /// Updates of the desktop app that manages this daemon (ADE-125): its attached windows and a pending request.
+    pub app_updates: crate::app_update::AppUpdates,
     pub cursor_setup: crate::cursor_setup::CursorSetup,
     pub account_identities: crate::account_identity::AccountIdentities,
     pub account_logins: crate::account_login::AccountLogins,
@@ -55,6 +57,8 @@ pub struct Inner {
     pub process_owned: std::sync::atomic::AtomicBool,
     /// A newer binary is in place; hand over to it after the graceful shutdown.
     pub restart_pending: std::sync::atomic::AtomicBool,
+    /// The binary to start after that shutdown when it is not this process's own path (an updated install moved it).
+    pub restart_exe: std::sync::Mutex<Option<std::path::PathBuf>>,
     /// "Keep this machine reachable when Kybern is closed": the login item that starts this daemon.
     pub login_service: crate::login_service::LoginService,
     pub pairing: Pairing,
@@ -197,6 +201,7 @@ impl AppState {
                 thread_projections: crate::thread_projection::ThreadProjectionCache::default(),
                 harness_updates,
                 daemon_updates,
+                app_updates: Default::default(),
                 cursor_setup: Default::default(),
                 account_identities: Default::default(),
                 account_logins: Default::default(),
@@ -207,6 +212,7 @@ impl AppState {
                 desktop_managed: std::sync::atomic::AtomicBool::new(false),
                 process_owned: std::sync::atomic::AtomicBool::new(false),
                 restart_pending: std::sync::atomic::AtomicBool::new(false),
+                restart_exe: std::sync::Mutex::new(None),
                 login_service: Default::default(),
                 pairing: Pairing::default(),
                 tickets: crate::access::Tickets::default(),
