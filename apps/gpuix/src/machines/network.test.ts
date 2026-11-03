@@ -49,7 +49,7 @@ test('enable waits for a trailing status read, and switching primaries discards 
   expect(result.exitCode).toBe(0)
 })
 
-// \`network.changed\` carries the status: it is shown without another read, and a read sent before it cannot undo it.
+// `network.changed` carries the status: it is shown without another read, and a read sent before it cannot undo it.
 test('a network.changed status is shown as is and beats a read that was already on its way', () => {
   const result = Bun.spawnSync(['bun', '--eval', `
     import { expect, mock } from 'bun:test'

@@ -531,14 +531,7 @@ mod tests {
     async fn concurrent_status_reads_share_one_cli_call() {
         let dir = std::env::temp_dir().join(format!("kybern-ts-status-{}", uuid::Uuid::now_v7()));
         let calls = dir.join("calls");
-        let body = format!(
-            "#!/bin/sh
-echo x >> '{}'
-sleep 0.3
-echo '{{\"BackendState\":\"Stopped\"}}'
-",
-            calls.display()
-        );
+        let body = format!("#!/bin/sh\necho x >> '{}'\nsleep 0.3\necho '{{\"BackendState\":\"Stopped\"}}'\n", calls.display());
         let binary = crate::test_support::script(&dir, "tailscale", &body, "");
         let cli = Cli::default();
         *cli.binary.lock().unwrap() = Some(binary.to_string_lossy().into_owned());

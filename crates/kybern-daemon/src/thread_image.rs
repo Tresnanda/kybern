@@ -310,8 +310,8 @@ mod tests {
         #[cfg(windows)]
         {
             assert!(local_path(Path::new(r"C:\Users\me\a.png")));
-            assert!(local_path(Path::new(r"\?\C:\Users\me\a.png")));
-            for share in [r"\host\share\a.png", r"\?\UNC\host\share\a.png", r"\.\pipe\x", "//host/share/a.png"] {
+            assert!(local_path(Path::new(r"\\?\C:\Users\me\a.png")));
+            for share in [r"\\host\share\a.png", r"\\?\UNC\host\share\a.png", r"\\.\pipe\x", "//host/share/a.png"] {
                 assert!(!local_path(Path::new(share)), "{share}");
             }
         }
