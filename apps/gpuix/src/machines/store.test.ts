@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { EnvironmentProfile, Registry } from '../environments/registry.ts'
-import { CredentialMissingError } from '../environments/credentials.ts'
+import { CredentialMissingError, credentialStore } from '../environments/credentials.ts'
 import { ENVIRONMENTS_FILE, MACHINES_FILE, machineCredentialId, machineCredentials, migrateEnvironments, readMachineRecords, writeMachineRecords, type MigrationDeps } from './store.ts'
 
 let dir = ''
@@ -181,4 +181,32 @@ test('a credential store that fails is an error, not a missing token, so no repl
   await expect(credentials.get('m1')).rejects.toThrow('Keychain -25308')
   const missing = machineCredentials({ read: async () => { throw new CredentialMissingError('missing') }, write: async () => {}, remove: async () => {}, legacyProfileOf: () => undefined })
   expect(await missing.get('m1')).toBeUndefined()
+})
+
+test('a file the store could not read is an error too; only CredentialMissingError means no token', async () => {
+  const unreadable = machineCredentials({
+    read: async () => { throw Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' }) },
+    write: async () => {}, remove: async () => {},
+    legacyProfileOf: () => 'p1',
+  })
+  await expect(unreadable.get('m1')).rejects.toThrow('ENOENT')
+})
+
+test('the scratch credentials folder reports a token it does not have as missing', async () => {
+  const saved = { dir: process.env.KYBERN_GPUIX_CREDENTIALS_DIR, config: process.env.KYBERN_CLIENT_CONFIG_DIR }
+  process.env.KYBERN_GPUIX_CREDENTIALS_DIR = path.join(dir, 'creds')
+  process.env.KYBERN_CLIENT_CONFIG_DIR = dir
+  try {
+    const store = credentialStore({ platform: process.platform, env: { ...process.env }, home: dir })
+    await expect(store.read('machine:none')).rejects.toBeInstanceOf(CredentialMissingError)
+    const credentials = machineCredentials({ read: store.read, write: store.write, remove: store.remove, legacyProfileOf: () => undefined })
+    expect(await credentials.get('none')).toBeUndefined()
+    await credentials.set('m1', 'tok')
+    expect(await credentials.get('m1')).toBe('tok')
+  } finally {
+    for (const [key, value] of [['KYBERN_GPUIX_CREDENTIALS_DIR', saved.dir], ['KYBERN_CLIENT_CONFIG_DIR', saved.config]] as const) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
 })

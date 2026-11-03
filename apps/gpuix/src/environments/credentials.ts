@@ -240,7 +240,7 @@ const fileStore: Store = {
   remove: async (id, ctx) => { removeFileToken(credentialFile(id, ctx)); return ok() },
 }
 const scratchStore: Store = {
-  read: async (id) => { const file = scratchFile(id); return ok(readFileSync(file, 'utf8').trim()) },
+  read: async (id) => { const token = readFileToken(scratchFile(id)); return token ? ok(token) : { kind: 'missing' } },
   write: async (id, token) => { writeFileToken(scratchFile(id), token); return ok() },
   remove: async (id) => { removeFileToken(scratchFile(id)); return ok() },
 }

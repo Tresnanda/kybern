@@ -131,10 +131,12 @@ export async function migrateEnvironments(deps: MigrationDeps): Promise<Migratio
   return { records, migrated: true }
 }
 
-/** A read that found no token: `CredentialMissingError`, or a missing-file error from a test store. */
+/**
+ * A read that found no token. Only `CredentialMissingError` says so: anything else (a locked store, a file that could
+ * not be read) is the store failing, and treating it as "no token" would mint a new one, which revokes the saved one.
+ */
 function isMissing(error: unknown): boolean {
-  const e = error as { name?: string; code?: string } | null
-  return e?.name === 'CredentialMissingError' || e?.code === 'ENOENT'
+  return (error as { name?: string } | null)?.name === 'CredentialMissingError'
 }
 
 export interface CredentialDeps {
