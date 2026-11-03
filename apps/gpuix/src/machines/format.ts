@@ -24,6 +24,17 @@ export function reachText(connecting: boolean): string {
   return connecting ? 'Online · connecting…' : 'Online · not reachable from this computer yet'
 }
 
+/**
+ * This app reaches the machine but the daemon of this computer has no session to it: delegation, port forwards, previews
+ * and relays to it fail until that link is back, so the machine never reads a plain "Online".
+ */
+export const LINK_DOWN_TEXT = "Online · this computer's link is reconnecting"
+
+/** Whether a machine this app reaches is one the daemon here reports without a session (`daemon` is its card's status). */
+export function daemonLinkDown(connection: StatusInput['status'], daemon?: string | null, isLocal = false): boolean {
+  return !isLocal && connection === 'online' && daemon === 'offline'
+}
+
 export function statusText(machine: StatusInput, now = Date.now()): string {
   switch (machine.status) {
     case 'online': return 'Online'

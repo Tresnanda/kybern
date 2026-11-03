@@ -75,6 +75,8 @@ export interface MachineRow {
   error?: string
   /** This app is connecting to it now. */
   connecting?: boolean
+  /** This app reaches it, but the daemon of this computer has no session to it (`daemonLinkDown`). */
+  linkDown?: boolean
 }
 const LIVE = new Set<MachineConnectionStatus>(['online', 'relaying', 'needs-update'])
 

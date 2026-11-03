@@ -4,7 +4,7 @@ import { looksGeneratedName, shortMachineName } from '../../../../packages/kyber
 import { harnessChips, machineSpecs, osKind, type HarnessChip, type MachineSpecs, type OsKind } from '../../../../packages/kybern-client/src/machineSpecs.ts'
 import type { KeepReachableStatus, MachineCard, MachineId, MachineInfo } from '../../../../packages/kybern-client/src/types.ts'
 import type { MachineRow } from '../machines/index.ts'
-import { reachText, shownStatus, statusText, statusTone, type Tone } from '../machines/format.ts'
+import { daemonLinkDown, LINK_DOWN_TEXT, reachText, shownStatus, statusText, statusTone, type Tone } from '../machines/format.ts'
 
 export interface MachineCardModel {
   machineId: string
@@ -29,6 +29,8 @@ export interface MachineCardModel {
   harnessesKnown: boolean
   /** The daemon the user is at reports it online, and this app is still connecting to it. */
   reaching: boolean
+  /** This app reaches it, and the daemon of this computer has no session to it: what goes through the daemon fails. */
+  linkDown: boolean
   /** The machine runs an older version than the one the user is at. */
   behind: boolean
   canPause: boolean
@@ -63,6 +65,7 @@ export function buildCards(input: {
     // is down, with a note that this computer is still reaching it (ADE-124).
     const status = shownStatus(raw.status, card?.status)
     const reaching = status !== raw.status
+    const linkDown = daemonLinkDown(raw.status, card?.status, raw.isLocal)
     // When it was last seen: whichever saw it last, this app or the daemon.
     const daemonSeen = card?.last_seen_at ? Date.parse(card.last_seen_at) : NaN
     const lastSeenAt = Number.isFinite(daemonSeen) ? Math.max(daemonSeen, raw.lastSeenAt ?? 0) : raw.lastSeenAt
@@ -76,9 +79,10 @@ export function buildCards(input: {
       name: shortMachineName(row.name) || row.name,
       row,
       member: row.member,
-      tone: reaching ? 'warn' : statusTone(row.status),
-      status: reaching ? reachText(!!row.connecting) : statusText({ status: row.status, ...(row.lastSeenAt !== undefined ? { lastSeenAt: row.lastSeenAt } : {}), ...(via ? { via } : {}), ...(row.error ? { error: row.error } : {}) }, input.now),
+      tone: reaching || linkDown ? 'warn' : statusTone(row.status),
+      status: reaching ? reachText(!!row.connecting) : linkDown ? LINK_DOWN_TEXT : statusText({ status: row.status, ...(row.lastSeenAt !== undefined ? { lastSeenAt: row.lastSeenAt } : {}), ...(via ? { via } : {}), ...(row.error ? { error: row.error } : {}) }, input.now),
       reaching,
+      linkDown,
       version: version || null,
       os: osKind(card?.os ?? row.os),
       osLabel: osName(card?.os ?? row.os),

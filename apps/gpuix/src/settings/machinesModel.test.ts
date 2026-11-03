@@ -140,6 +140,24 @@ test('a machine the daemon reports online reads online, with a note while this c
   expect([gone!.status, gone!.reaching]).toEqual(['Offline · last seen 1h ago', false])
 })
 
+// 2026-11-03: this app reached kdi-vps and SatyaMas, but the Mac daemon had no session to either; both read "Online".
+test('a machine this app reaches while the daemon here has no session to it says the link is reconnecting', () => {
+  const rows = [
+    row({ machineId: 'mac', name: 'Mac', isLocal: true }),
+    row({ machineId: 'kdi', name: 'kdi-vps' }),
+    row({ machineId: 'sat', name: 'SatyaMas' }),
+  ]
+  const members = [
+    member({ machine_id: 'mac', name: 'Mac', status: 'offline' }),
+    member({ machine_id: 'kdi', name: 'kdi-vps', status: 'offline' }),
+    member({ machine_id: 'sat', name: 'SatyaMas' }),
+  ]
+  const [mac, kdi, sat] = buildCards({ rows, members, infos: {} })
+  expect([kdi!.status, kdi!.tone, kdi!.linkDown, kdi!.row.offline]).toEqual(["Online · this computer's link is reconnecting", 'warn', true, false])
+  expect([sat!.status, sat!.linkDown]).toEqual(['Online', false])
+  expect(mac!.linkDown).toBe(false)
+})
+
 test('the header counts offline machines of the network, not a saved one that is not in it', () => {
   const rows = [
     row({ machineId: 'mac', name: 'Mac', isLocal: true }),
