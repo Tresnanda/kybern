@@ -16,6 +16,9 @@ import type { TerminalInfo } from '../../../../packages/kybern-client/src/types.
 import { agents, closeSheet, sheetExited } from './agentsStore.ts'
 import { bez } from './motion.tsx'
 
+/** The key that runs the typed command, named the way the keyboard labels it. */
+const RUN_KEY = process.platform === 'darwin' ? 'Return' : 'Enter'
+
 const HEIGHT = 330
 
 /** What the sheet shows: its title and the terminal (`openTypedTerminal`), once it exists. */
@@ -77,8 +80,8 @@ export function TerminalSheetView({ sheet, onClose, onExit, testId = 'agent-shee
             {done
               ? <Label color={t.green} size={13} lineHeight={18} weight={500}>Done. Close the terminal and Kybern checks again.</Label>
               : <>
-                  <Kbd keys={[process.platform === 'darwin' ? 'Return' : 'Enter']} />
-                  <Label color={t.textSecondary} size={13} lineHeight={18}>Press Return to run it. Nothing runs until you do.</Label>
+                  <Kbd keys={[RUN_KEY]} />
+                  <Label color={t.textSecondary} size={13} lineHeight={18}>{`Press ${RUN_KEY} to run it. Nothing runs until you do.`}</Label>
                 </>}
             <div style={{ flexGrow: 1 }} />
             {done

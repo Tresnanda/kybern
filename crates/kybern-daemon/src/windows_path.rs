@@ -11,8 +11,9 @@ use std::path::{Path, PathBuf};
 /// The system Path, then the user's, with `%VAR%` references expanded. Empty off Windows or when
 /// the registry cannot be read.
 pub(crate) fn registry_path() -> Vec<PathBuf> {
-    // Plays a daemon started before an install changed the registry Path (end-to-end checks).
-    if std::env::var_os("KYBERN_NO_REGISTRY_PATH").is_some() {
+    // Plays a daemon started before an install changed the registry Path (end-to-end checks in
+    // debug builds only; a shipped daemon always reads the registry).
+    if cfg!(debug_assertions) && std::env::var_os("KYBERN_NO_REGISTRY_PATH").is_some() {
         return Vec::new();
     }
     #[cfg(windows)]
