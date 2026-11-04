@@ -101,10 +101,10 @@ const VARIANT_CACHE_MISS_TTL: std::time::Duration = std::time::Duration::from_se
 type VariantCacheKey = (PathBuf, BTreeMap<String, String>);
 type VariantCache = HashMap<VariantCacheKey, (std::time::Instant, HashMap<String, Vec<Value>>)>;
 
-fn cached_variants(cache: &VariantCache, key: &VariantCacheKey) -> Option<HashMap<String, Vec<Value>>> {
+fn cached_variants(cache: &VariantCache, key: &VariantCacheKey, now: std::time::Instant) -> Option<HashMap<String, Vec<Value>>> {
     cache.get(key).and_then(|(at, catalog)| {
         let ttl = if catalog.is_empty() { VARIANT_CACHE_MISS_TTL } else { VARIANT_CACHE_TTL };
-        (at.elapsed() < ttl).then(|| catalog.clone())
+        (now.duration_since(*at) < ttl).then(|| catalog.clone())
     })
 }
 
@@ -112,15 +112,31 @@ async fn variant_catalog(bin: &Path, context: &ProbeContext) -> HashMap<String, 
     static CACHE: std::sync::Mutex<Option<VariantCache>> = std::sync::Mutex::new(None);
     static PROBE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let key = (bin.to_path_buf(), context.env.clone());
-    if let Some(catalog) = CACHE.lock().unwrap().as_ref().and_then(|cache| cached_variants(cache, &key)) {
+    if let Some(catalog) = CACHE.lock().unwrap().as_ref().and_then(|cache| cached_variants(cache, &key, std::time::Instant::now())) {
         return catalog;
     }
     let _flight = PROBE.lock().await;
-    if let Some(catalog) = CACHE.lock().unwrap().as_ref().and_then(|cache| cached_variants(cache, &key)) {
+    if let Some(catalog) = CACHE.lock().unwrap().as_ref().and_then(|cache| cached_variants(cache, &key, std::time::Instant::now())) {
         return catalog;
     }
     let catalog = read_variant_catalog(bin, &context.env).await.unwrap_or_default();
     CACHE.lock().unwrap().get_or_insert_with(HashMap::new).insert(key, (std::time::Instant::now(), catalog.clone()));
+    catalog
+}
+
+/// Parse `/api/model` variants into a catalog keyed by `providerID/id`.
+fn parse_model_catalog(models: &[Value]) -> HashMap<String, Vec<Value>> {
+    let mut catalog = HashMap::new();
+    for model in models {
+        let Some(id) = model["id"].as_str() else { continue };
+        let key = match model["providerID"].as_str() {
+            Some(provider) if !provider.is_empty() => format!("{provider}/{id}"),
+            _ => id.to_string(),
+        };
+        if let Some(variants) = model["variants"].as_array() {
+            catalog.insert(key, variants.clone());
+        }
+    }
     catalog
 }
 
@@ -136,18 +152,7 @@ async fn read_variant_catalog(bin: &Path, env: &BTreeMap<String, String>) -> Opt
     .ok()
     .flatten();
     let _ = tokio::fs::remove_dir_all(&folder).await;
-    let mut catalog: HashMap<String, Vec<Value>> = HashMap::new();
-    for model in models.unwrap_or_default() {
-        let Some(id) = model["id"].as_str() else { continue };
-        let key = match model["providerID"].as_str() {
-            Some(provider) if !provider.is_empty() => format!("{provider}/{id}"),
-            _ => id.to_string(),
-        };
-        if let Some(variants) = model["variants"].as_array() {
-            catalog.insert(key, variants.clone());
-        }
-    }
-    Some(catalog)
+    Some(parse_model_catalog(models.unwrap_or_default().as_slice()))
 }
 
 /// Merge v2 variant efforts into the CLI model catalog. Rows join on the
@@ -2266,6 +2271,38 @@ mod orchestration_part_tests {
         let mut message = orchestration_message();
         message.parts.insert(0, ContentPart::Skill { name: "review".into(), path: "/s/SKILL.md".into() });
         assert_flattened(&skill_command(&message).unwrap().arguments);
+    }
+
+    #[test]
+    fn parse_model_catalog_joins_variants_on_provider_and_id() {
+        let models = vec![
+            json!({"id": "m1", "providerID": "prov", "variants": [{"id": "high"}]}),
+            json!({"id": "m2", "providerID": "", "variants": []}),
+            json!({"id": "m3", "providerID": "prov"}),
+            json!({"providerID": "prov", "variants": [{"id": "x"}]}),
+            json!({"id": "m5", "providerID": "prov", "variants": "not-an-array"}),
+        ];
+        let catalog = parse_model_catalog(&models);
+        assert_eq!(catalog.get("prov/m1").unwrap(), &[json!({"id": "high"})]);
+        assert_eq!(catalog.get("m2").unwrap(), &Vec::<Value>::new());
+        assert!(!catalog.contains_key("prov/m3"));
+        assert!(!catalog.contains_key("prov/m5"));
+        assert_eq!(catalog.len(), 2);
+    }
+
+    #[test]
+    fn variant_cache_ages_full_reads_and_misses_differently() {
+        let key: VariantCacheKey = ("/bin/opencode".into(), BTreeMap::new());
+        let now = std::time::Instant::now();
+        let mut cache: VariantCache = HashMap::new();
+        cache.insert(key.clone(), (now, HashMap::from([("prov/m".to_string(), vec![json!({"id": "high"})])])));
+        assert!(cached_variants(&cache, &key, now).is_some());
+        assert!(cached_variants(&cache, &key, now + VARIANT_CACHE_TTL).is_none());
+        cache.insert(key.clone(), (now, HashMap::new()));
+        assert!(cached_variants(&cache, &key, now + VARIANT_CACHE_MISS_TTL - std::time::Duration::from_secs(1)).is_some());
+        assert!(cached_variants(&cache, &key, now + VARIANT_CACHE_MISS_TTL).is_none());
+        let other_env = (key.0.clone(), BTreeMap::from([("OTHER".to_string(), "1".to_string())]));
+        assert!(cached_variants(&cache, &other_env, now).is_none());
     }
 
     #[test]
