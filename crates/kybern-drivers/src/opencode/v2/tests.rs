@@ -376,15 +376,20 @@ fn model_reference_carries_an_effort_as_the_variant() {
 
 #[tokio::test]
 async fn an_effort_switch_resends_the_current_model_with_the_variant() {
-    let (base, server) = mock(1).await;
+    let (base, server) = mock(2).await;
     let (session, _rx) = session(&base);
     session.state.lock().await.model = Some("p/m".into());
     let handle = Handle(session.clone(), std::sync::Mutex::new(None), None);
     handle.set_effort("xhigh").await.unwrap();
+    // A stored `#variant` must not shadow the switch: it is stripped, so the
+    // new effort wins and the stored model drops its variant.
+    session.state.lock().await.model = Some("p/m#low".into());
+    handle.set_effort("high").await.unwrap();
     session.state.lock().await.model = None;
     assert!(matches!(handle.set_effort("high").await, Err(DriverError::Unsupported(_))));
     let requests = server.await.unwrap();
-    assert_eq!(requests.len(), 1);
+    assert_eq!(requests.len(), 2);
     assert!(requests[0].starts_with("POST /api/session/ses_root/model "));
     assert_eq!(body(&requests[0])["model"], json!({"providerID": "p", "id": "m", "variant": "xhigh"}));
+    assert_eq!(body(&requests[1])["model"], json!({"providerID": "p", "id": "m", "variant": "high"}));
 }

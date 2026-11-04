@@ -1218,11 +1218,14 @@ impl AgentSession for Handle {
         let Some(model) = current else {
             return Err(DriverError::Unsupported("OpenCode needs a named model before its effort can change".into()));
         };
-        let reference = model_ref(&model, Some(effort))
+        // A stored `p/m#low` would otherwise keep its old variant and make the
+        // switch a no-op: the reference below wins to the effort, so strip it.
+        let bare = model.split('#').next().unwrap_or(&model).to_string();
+        let reference = model_ref(&bare, Some(effort))
             .ok_or_else(|| DriverError::Unsupported(format!("OpenCode models are named provider/model, got {model}")))?;
         let session_id = s.state.lock().await.session_id.clone();
         s.call(Method::POST, &format!("/api/session/{session_id}/model"), Some(json!({ "model": reference }))).await?;
-        s.state.lock().await.model = Some(model);
+        s.state.lock().await.model = Some(bare);
         Ok(())
     }
 
