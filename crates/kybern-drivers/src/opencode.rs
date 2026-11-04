@@ -81,6 +81,112 @@ async fn opencode_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<P
     models
 }
 
+/// Efforts a model accepts, from its v2 variants (`settings.reasoningEffort`).
+fn variant_efforts(model: &Value) -> Vec<String> {
+    let mut efforts: Vec<String> = Vec::new();
+    for variant in model["variants"].as_array().into_iter().flatten() {
+        let Some(effort) = variant.pointer("/settings/reasoningEffort").and_then(Value::as_str).map(str::trim).filter(|e| !e.is_empty())
+        else {
+            continue;
+        };
+        if !efforts.iter().any(|seen| seen == effort) {
+            efforts.push(effort.to_string());
+        }
+    }
+    efforts
+}
+
+/// A private v2 server, started only to read the model catalog.
+/// Dropping it stops the process.
+struct CatalogServer {
+    child: Child,
+    base: String,
+    password: String,
+    http: reqwest::Client,
+}
+
+impl Drop for CatalogServer {
+    fn drop(&mut self) {
+        self.child.start_kill().ok();
+    }
+}
+
+impl CatalogServer {
+    async fn start(bin: &Path, context: &ProbeContext) -> Option<Self> {
+        let password = uuid::Uuid::new_v4().simple().to_string();
+        let mut cmd = Command::new(bin).no_window();
+        if let Some(cwd) = &context.cwd {
+            cmd.current_dir(cwd);
+        }
+        cmd.args(["serve", "--port", "0", "--hostname", "127.0.0.1"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        for (key, value) in &context.env {
+            cmd.env(key, value);
+        }
+        cmd.env("OPENCODE_PASSWORD", &password).env("OPENCODE_SERVER_PASSWORD", &password);
+        #[cfg(unix)]
+        cmd.process_group(0);
+        let mut child = cmd.spawn().ok()?;
+        let mut stdout = tokio::io::BufReader::new(child.stdout.take()?);
+        let base = tokio::time::timeout(MODEL_DISCOVERY_TIMEOUT, async {
+            let mut line = String::new();
+            while stdout.read_line(&mut line).await.is_ok_and(|n| n > 0) {
+                if let Some(index) = line.find("http://") {
+                    return Some(line[index..].split_whitespace().next()?.trim_end_matches('/').to_string());
+                }
+                line.clear();
+            }
+            None
+        })
+        .await
+        .ok()
+        .flatten()?;
+        Some(Self { child, base, password, http: reqwest::Client::builder().build().ok()? })
+    }
+
+    async fn models(&self) -> Vec<Value> {
+        let response = match self
+            .http
+            .get(format!("{}/api/model", self.base))
+            .basic_auth("opencode", Some(&self.password))
+            .timeout(MODEL_DISCOVERY_TIMEOUT)
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(_) => return Vec::new(),
+        };
+        let Ok(bytes) = response.bytes().await else { return Vec::new() };
+        serde_json::from_slice::<Value>(&bytes).ok().and_then(|value| value["data"].as_array().cloned()).unwrap_or_default()
+    }
+}
+
+/// Merge v2 variant efforts into the CLI model catalog. Rows join on the
+/// full `provider/model` id; v1 and failed probes keep the plain catalog.
+fn merge_efforts(models: &mut [ProviderModel], server_models: &[Value]) {
+    let by_key: HashMap<String, &Value> = server_models
+        .iter()
+        .filter_map(|entry| {
+            let id = entry["id"].as_str()?;
+            match entry["providerID"].as_str() {
+                Some(provider) if !provider.is_empty() => Some((format!("{provider}/{id}"), entry)),
+                _ => Some((id.to_string(), entry)),
+            }
+        })
+        .collect();
+    for model in models {
+        if !model.efforts.is_empty() {
+            continue;
+        }
+        let efforts = by_key.get(&model.id).map(|entry| variant_efforts(entry)).unwrap_or_default();
+        if !efforts.is_empty() {
+            model.efforts = efforts;
+        }
+    }
+}
 /// Which server API an installed OpenCode speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Api {
@@ -170,6 +276,23 @@ impl OpencodeDriver {
                 status.version = Some(v);
                 if ok {
                     status.models = opencode_models(&bin, context).await;
+                    if matches!(api_of(&bin).await, Ok(Api::V2))
+                        && let Some(server) = CatalogServer::start(&bin, context).await
+                    {
+                        let server_models = server.models().await;
+                        merge_efforts(&mut status.models, &server_models);
+                        let union: Vec<String> = status
+                            .models
+                            .iter()
+                            .flat_map(|model| model.efforts.iter().cloned())
+                            .collect::<HashSet<_>>()
+                            .into_iter()
+                            .collect();
+                        if !union.is_empty() {
+                            status.supported_efforts = union;
+                            status.supports_effort_switch = true;
+                        }
+                    }
                 }
             }
             None => status.unavailable_reason = Some("could not run `opencode --version`".into()),
@@ -2174,5 +2297,46 @@ mod orchestration_part_tests {
         let mut message = orchestration_message();
         message.parts.insert(0, ContentPart::Skill { name: "review".into(), path: "/s/SKILL.md".into() });
         assert_flattened(&skill_command(&message).unwrap().arguments);
+    }
+
+    #[test]
+    fn variant_efforts_reads_reasoning_effort_in_variant_order_without_duplicates() {
+        let model = json!({
+            "id": "m", "providerID": "p",
+            "variants": [
+                { "id": "max", "settings": { "reasoningEffort": "max" } },
+                { "id": "low", "settings": { "reasoningEffort": "low" } },
+                { "id": "low2", "settings": { "reasoningEffort": "low" } },
+                { "id": "off", "settings": { "reasoningEffort": "" } },
+                { "id": "no-effort", "settings": {} }
+            ]
+        });
+        assert_eq!(variant_efforts(&model), ["max", "low"]);
+        assert!(variant_efforts(&json!({"id": "m", "providerID": "p"})).is_empty());
+    }
+
+    #[test]
+    fn merge_efforts_joins_on_the_full_catalog_id_and_keeps_plain_rows() {
+        let server_models = vec![
+            json!({"id": "m1", "providerID": "prov", "variants": [{"id": "high", "settings": {"reasoningEffort": "high"}}]}),
+            json!({"id": "bare", "providerID": "prov", "variants": []}),
+        ];
+        let row = |id: &str, provider: &str| ProviderModel {
+            id: id.into(),
+            display_name: id.into(),
+            resolved_id: None,
+            description: None,
+            provider: Some(provider.into()),
+            efforts: Vec::new(),
+            default_effort: None,
+            is_default: false,
+            parameters: Vec::new(),
+            variants: Vec::new(),
+        };
+        let mut models = vec![row("prov/m1", "prov"), row("prov/bare", "prov"), row("other/m2", "other")];
+        merge_efforts(&mut models, &server_models);
+        assert_eq!(models[0].efforts, ["high"]);
+        assert!(models[1].efforts.is_empty());
+        assert!(models[2].efforts.is_empty());
     }
 }

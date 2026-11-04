@@ -364,3 +364,27 @@ async fn steering_needs_a_running_turn_and_uses_native_delivery() {
     assert_eq!(body(&requests[0])["delivery"], "steer");
     assert_eq!(body(&requests[0])["text"], "also check tests");
 }
+
+#[test]
+fn model_reference_carries_an_effort_as_the_variant() {
+    assert_eq!(model_ref("p/m", None), Some(json!({"providerID": "p", "id": "m"})));
+    assert_eq!(model_ref("p/m", Some("high")), Some(json!({"providerID": "p", "id": "m", "variant": "high"})));
+    assert_eq!(model_ref("p/m#low", Some("high")), Some(json!({"providerID": "p", "id": "m", "variant": "low"})));
+    assert_eq!(model_ref("p/m", Some(" ")), Some(json!({"providerID": "p", "id": "m"})));
+    assert_eq!(model_ref("nomodel", Some("high")), None);
+}
+
+#[tokio::test]
+async fn an_effort_switch_resends_the_current_model_with_the_variant() {
+    let (base, server) = mock(1).await;
+    let (session, _rx) = session(&base);
+    session.state.lock().await.model = Some("p/m".into());
+    let handle = Handle(session.clone(), std::sync::Mutex::new(None), None);
+    handle.set_effort("xhigh").await.unwrap();
+    session.state.lock().await.model = None;
+    assert!(matches!(handle.set_effort("high").await, Err(DriverError::Unsupported(_))));
+    let requests = server.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].starts_with("POST /api/session/ses_root/model "));
+    assert_eq!(body(&requests[0])["model"], json!({"providerID": "p", "id": "m", "variant": "xhigh"}));
+}
