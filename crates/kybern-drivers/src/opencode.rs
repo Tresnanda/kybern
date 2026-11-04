@@ -95,27 +95,29 @@ fn variant_efforts(variants: &[Value]) -> Vec<String> {
     efforts
 }
 
-/// The v2 variant catalog, cached by binary path and modification time: key
-/// is the full `provider/model` id, value its raw variants. A cached read
-/// avoids another OpenCode start (a full serve loads the user's plugins and
-/// MCP config) on every provider refresh.
-type VariantCache = HashMap<PathBuf, (Option<std::time::SystemTime>, HashMap<String, Vec<Value>>)>;
+/// The v2 variant catalog, cached briefly: key is the full `provider/model`
+/// id, value its raw variants. The cache keeps provider refreshes from
+/// starting another OpenCode (a full serve loads the user's plugins and MCP
+/// config) while a TTL bounds how long a config change stays unseen — the
+/// variants live in OpenCode's config, which no binary stamp can track.
+const VARIANT_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Cached variant catalogs per binary: when it was read and what it held.
+type VariantCache = HashMap<PathBuf, (std::time::Instant, HashMap<String, Vec<Value>>)>;
 
 /// Read the variant catalog for `bin`: cache-first, one v2 server otherwise.
-/// The whole probe is bounded by one overall timeout; any failure returns an
-/// empty map and the catalog stays plain.
+/// The whole read is bounded by one overall timeout; a failure is not cached,
+/// so the next probe retries.
 async fn variant_catalog(bin: &Path, context: &ProbeContext) -> HashMap<String, Vec<Value>> {
     static CACHE: std::sync::Mutex<Option<VariantCache>> = std::sync::Mutex::new(None);
-    let modified = std::fs::metadata(bin).and_then(|meta| meta.modified()).ok();
-    let cached = CACHE.lock().unwrap().as_ref().and_then(|cache| cache.get(bin)).cloned();
-    if let Some((stamp, catalog)) = cached
-        && stamp == modified
-        && modified.is_some()
-    {
+    let fresh = |cache: &VariantCache| cache.get(bin).and_then(|(at, catalog)| (at.elapsed() < VARIANT_CACHE_TTL).then(|| catalog.clone()));
+    if let Some(catalog) = CACHE.lock().unwrap().as_ref().and_then(fresh) {
         return catalog;
     }
     let catalog = read_variant_catalog(bin, context).await.unwrap_or_default();
-    CACHE.lock().unwrap().get_or_insert_with(HashMap::new).insert(bin.to_path_buf(), (modified, catalog.clone()));
+    if !catalog.is_empty() {
+        CACHE.lock().unwrap().get_or_insert_with(HashMap::new).insert(bin.to_path_buf(), (std::time::Instant::now(), catalog.clone()));
+    }
     catalog
 }
 
