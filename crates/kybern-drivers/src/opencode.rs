@@ -98,10 +98,11 @@ fn variant_efforts(variants: &[Value]) -> Vec<String> {
 const VARIANT_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(600);
 const VARIANT_CACHE_MISS_TTL: std::time::Duration = std::time::Duration::from_secs(60);
 
-type VariantCache = HashMap<PathBuf, (std::time::Instant, HashMap<String, Vec<Value>>)>;
+type VariantCacheKey = (PathBuf, BTreeMap<String, String>);
+type VariantCache = HashMap<VariantCacheKey, (std::time::Instant, HashMap<String, Vec<Value>>)>;
 
-fn cached_variants(cache: &VariantCache, bin: &Path) -> Option<HashMap<String, Vec<Value>>> {
-    cache.get(bin).and_then(|(at, catalog)| {
+fn cached_variants(cache: &VariantCache, key: &VariantCacheKey) -> Option<HashMap<String, Vec<Value>>> {
+    cache.get(key).and_then(|(at, catalog)| {
         let ttl = if catalog.is_empty() { VARIANT_CACHE_MISS_TTL } else { VARIANT_CACHE_TTL };
         (at.elapsed() < ttl).then(|| catalog.clone())
     })
@@ -110,41 +111,43 @@ fn cached_variants(cache: &VariantCache, bin: &Path) -> Option<HashMap<String, V
 async fn variant_catalog(bin: &Path, context: &ProbeContext) -> HashMap<String, Vec<Value>> {
     static CACHE: std::sync::Mutex<Option<VariantCache>> = std::sync::Mutex::new(None);
     static PROBE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-    if let Some(catalog) = CACHE.lock().unwrap().as_ref().and_then(|cache| cached_variants(cache, bin)) {
+    let key = (bin.to_path_buf(), context.env.clone());
+    if let Some(catalog) = CACHE.lock().unwrap().as_ref().and_then(|cache| cached_variants(cache, &key)) {
         return catalog;
     }
     let _flight = PROBE.lock().await;
-    if let Some(catalog) = CACHE.lock().unwrap().as_ref().and_then(|cache| cached_variants(cache, bin)) {
+    if let Some(catalog) = CACHE.lock().unwrap().as_ref().and_then(|cache| cached_variants(cache, &key)) {
         return catalog;
     }
-    let catalog = read_variant_catalog(bin, context).await.unwrap_or_default();
-    CACHE.lock().unwrap().get_or_insert_with(HashMap::new).insert(bin.to_path_buf(), (std::time::Instant::now(), catalog.clone()));
+    let catalog = read_variant_catalog(bin, &context.env).await.unwrap_or_default();
+    CACHE.lock().unwrap().get_or_insert_with(HashMap::new).insert(key, (std::time::Instant::now(), catalog.clone()));
     catalog
 }
 
-/// Start one v2 server, read `/api/model`, and stop it. Bounded by one
-/// overall timeout covering start, the catalog read, and the shutdown.
-async fn read_variant_catalog(bin: &Path, context: &ProbeContext) -> Option<HashMap<String, Vec<Value>>> {
-    tokio::time::timeout(MODEL_DISCOVERY_TIMEOUT, async {
-        let env = context.env.iter().collect::<Vec<_>>();
-        let server = v2::Server::start(bin, context.cwd.as_deref(), env, &[]).await.ok()?;
-        let models = server.call(reqwest::Method::GET, "/api/model", None).await.ok()?["data"].as_array().cloned().unwrap_or_default();
-        let mut catalog: HashMap<String, Vec<Value>> = HashMap::new();
-        for model in models {
-            let Some(id) = model["id"].as_str() else { continue };
-            let key = match model["providerID"].as_str() {
-                Some(provider) if !provider.is_empty() => format!("{provider}/{id}"),
-                _ => id.to_string(),
-            };
-            if let Some(variants) = model["variants"].as_array() {
-                catalog.insert(key, variants.clone());
-            }
-        }
-        Some(catalog)
+async fn read_variant_catalog(bin: &Path, env: &BTreeMap<String, String>) -> Option<HashMap<String, Vec<Value>>> {
+    let folder = std::env::temp_dir().join(format!("kybern-opencode-probe-{}", uuid::Uuid::new_v4().simple()));
+    tokio::fs::create_dir_all(&folder).await.ok()?;
+    let models = tokio::time::timeout(MODEL_DISCOVERY_TIMEOUT, async {
+        let env = env.iter().collect::<Vec<_>>();
+        let server = v2::Server::start(bin, Some(&folder), env, &[]).await.ok()?;
+        server.call(reqwest::Method::GET, "/api/model", None).await.ok()?["data"].as_array().cloned()
     })
     .await
     .ok()
-    .flatten()
+    .flatten();
+    let _ = tokio::fs::remove_dir_all(&folder).await;
+    let mut catalog: HashMap<String, Vec<Value>> = HashMap::new();
+    for model in models.unwrap_or_default() {
+        let Some(id) = model["id"].as_str() else { continue };
+        let key = match model["providerID"].as_str() {
+            Some(provider) if !provider.is_empty() => format!("{provider}/{id}"),
+            _ => id.to_string(),
+        };
+        if let Some(variants) = model["variants"].as_array() {
+            catalog.insert(key, variants.clone());
+        }
+    }
+    Some(catalog)
 }
 
 /// Merge v2 variant efforts into the CLI model catalog. Rows join on the
