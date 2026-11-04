@@ -33,9 +33,12 @@ repo=https://github.com/Tresnanda/gpuix.git
 # setInputDecorations queued, the latter still validated at the call; getElementBounds answers with the last painted
 # bounds without window.refresh(); Markdown and syntax documents used through a registry handle kept on the renderer)
 # and stallUiThread for the checks; no zed change.
-# Both are fast-forwarded into the forks' `next` and `kybern` (gpuix c9647c3, zed a2275d8, 2026-11-04):
-# `commit` and `zed` are the heads of both forks' `kybern` branches.
-commit=c9647c3e003b9f99eaebfa3a22ea2badbcde89da
+# Both are fast-forwarded into the forks' `next` and `kybern` (gpuix c9647c3, zed a2275d8, 2026-11-04).
+# `issue-218` (#218): gpuix's `issue-218` branch, one commit on c9647c3: focus handles are synced before a cached
+# island or a virtual-list row builds, so an input first built there (the model picker's search, reopened) shares the
+# renderer's handle and receives keys. It also applies cleanly on `issue-215` (#222); no zed change. Pin the merged
+# `kybern` head once it is integrated.
+commit=91e01c5f2c42e4881a768b3fed17f2b8c875efdd
 # The zed submodule commit `commit` records; update.sh refuses a checkout that differs.
 zed=a2275d84c575f48d149e8f1768248c843fc66040
 # The upstream tag `commit` is based on. It must be `@gpuix/native@<VERSION>`.
