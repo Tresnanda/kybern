@@ -38,7 +38,7 @@ repo=https://github.com/Tresnanda/gpuix.git
 # a UI-thread mirror off macOS (no waited call per keystroke; waited while intercepted keys wait for JS or replay); no zed change.
 # gpuix `issue-218` (#218): focus handles are synced before a cached island or a virtual-list row builds, so an input
 # first built there (the model picker's search, reopened) shares the renderer's handle and receives keys; no zed change.
-# `integ-215-218` merges both on c9647c3, until it is fast-forwarded into the forks' `next` and `kybern`.
+# Both merged on c9647c3 and fast-forwarded into the forks' `next` and `kybern` (gpuix 80be4fa, zed a2275d8, 2026-11-04).
 commit=80be4fa4a9c8d93a598a1cefffd52477aa718620
 # The zed submodule commit `commit` records; update.sh refuses a checkout that differs.
 zed=a2275d84c575f48d149e8f1768248c843fc66040
