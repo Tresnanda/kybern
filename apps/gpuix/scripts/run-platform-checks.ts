@@ -139,6 +139,17 @@ const CHECKS: Record<string, Check> = {
       minutes: 5,
     })),
   },
+  // The composer's selection-dependent behaviour (#215) through its own verify scripts, on the conversation fixture (no
+  // daemon); each writes its PNGs to KYBERN_VERIFY_OUTPUT. Not under a display nothing can grab.
+  ...Object.fromEntries(([
+    ['editor', 'Composer: a picked mention is one atomic token (one Backspace removes it), undo/redo walk the edits, Enter sends structured parts'],
+    ['skill-pick', 'Composer: a skill picked from the $ menu (Enter or a click, at the end or before text) becomes its chip with the caret after it'],
+    ['skill-token', 'Composer: a picked skill paints as its accent chip on the first frame, before any further typing'],
+    ['conversation', 'Composer: note, task and Computer mentions, a completion in the middle of text, the Coordinator draft and harness switch'],
+  ] as const).map(([name, description]): [string, Check] => [name, {
+    description,
+    runs: ({ capture }) => capture === 'none' ? [] : [{ name, args: [path.join(root, 'src', 'composer', `${name}.verify.ts`)], minutes: 10 }],
+  }])),
 }
 
 if (flag('list')) {
