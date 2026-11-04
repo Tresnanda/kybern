@@ -237,12 +237,9 @@ fn restriction_rules(bridge: Option<&NativeToolBridge>) -> Vec<Value> {
     rules
 }
 
-/// `provider/model#variant` as a v2 model reference. An effort becomes the
-/// variant unless the model string already names one; an explicit `#variant`
-/// on the model wins, so stored older selections keep working.
 fn model_ref(model: &str, effort: Option<&str>) -> Option<Value> {
     let (model, variant) = model.split_once('#').map_or((model, None), |(model, variant)| (model, Some(variant)));
-    let variant = variant.filter(|v| !v.is_empty()).or_else(|| effort.filter(|e| !e.trim().is_empty()));
+    let variant = effort.map(str::trim).filter(|effort| !effort.is_empty()).or_else(|| variant.filter(|v| !v.is_empty()));
     let (provider, id) = split_model(model)?;
     let mut value = json!({ "providerID": provider, "id": id });
     if let Some(variant) = variant {
@@ -358,6 +355,7 @@ pub(super) async fn spawn(bin: &Path, config: SessionConfig) -> Result<SpawnedSe
         state: {
             let mut state = State::new(session_id.clone(), restrictions);
             state.model = config.model.clone().filter(|model| split_model(model).is_some());
+            state.effort = config.effort.clone();
             Mutex::new(state)
         },
     });
@@ -411,6 +409,7 @@ struct State {
     step_model: Option<String>,
     /// The model the session runs (`provider/model`), for effort switches.
     model: Option<String>,
+    effort: Option<String>,
     active: bool,
     turn_usage: Usage,
     turn_cost: f64,
@@ -434,6 +433,7 @@ impl State {
             context_windows: HashMap::new(),
             step_model: None,
             model: None,
+            effort: None,
             active: false,
             turn_usage: Usage::default(),
             turn_cost: 0.0,
@@ -1204,11 +1204,13 @@ impl AgentSession for Handle {
 
     async fn set_model(&self, model: &str) -> Result<()> {
         let s = &self.0;
-        let reference = model_ref(model, None)
+        let effort = s.state.lock().await.effort.clone();
+        let reference = model_ref(model, effort.as_deref())
             .ok_or_else(|| DriverError::Unsupported(format!("OpenCode models are named provider/model, got {model}")))?;
         let session_id = s.state.lock().await.session_id.clone();
         s.call(Method::POST, &format!("/api/session/{session_id}/model"), Some(json!({ "model": reference }))).await.map(|_| ())?;
-        s.state.lock().await.model = Some(model.to_string());
+        let bare = model.split('#').next().unwrap_or(model).to_string();
+        s.state.lock().await.model = Some(bare);
         Ok(())
     }
 
@@ -1218,14 +1220,14 @@ impl AgentSession for Handle {
         let Some(model) = current else {
             return Err(DriverError::Unsupported("OpenCode needs a named model before its effort can change".into()));
         };
-        // A stored `p/m#low` would otherwise keep its old variant and make the
-        // switch a no-op: the reference below wins to the effort, so strip it.
         let bare = model.split('#').next().unwrap_or(&model).to_string();
         let reference = model_ref(&bare, Some(effort))
             .ok_or_else(|| DriverError::Unsupported(format!("OpenCode models are named provider/model, got {model}")))?;
         let session_id = s.state.lock().await.session_id.clone();
         s.call(Method::POST, &format!("/api/session/{session_id}/model"), Some(json!({ "model": reference }))).await?;
-        s.state.lock().await.model = Some(bare);
+        let mut state = s.state.lock().await;
+        state.model = Some(bare);
+        state.effort = Some(effort.to_string());
         Ok(())
     }
 
