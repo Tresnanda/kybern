@@ -570,10 +570,19 @@ enum GhAnswer {
 }
 
 async fn gh_api(gh: &str, args: &[&str]) -> GhAnswer {
-    let output = Command::new(gh).no_window().current_dir(std::env::temp_dir()).args(args).stdin(std::process::Stdio::null()).output();
-    let out = match tokio::time::timeout(STAR_TIMEOUT, output).await {
+    // `spawn` finds a gh installed after the daemon started, like every other gh call.
+    let child = match spawn(&std::env::temp_dir(), gh, args, std::process::Stdio::null()) {
+        Ok(child) => child,
+        Err(error) => {
+            let text = format!("{error:#}");
+            return match classify(&text) {
+                Some((Some(GhErrorKind::GhMissing), _)) => GhAnswer::Unavailable,
+                _ => GhAnswer::Failed(text),
+            };
+        }
+    };
+    let out = match tokio::time::timeout(STAR_TIMEOUT, child.wait_with_output()).await {
         Err(_) => return GhAnswer::Failed("gh api timed out".into()),
-        Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => return GhAnswer::Unavailable,
         Ok(Err(error)) => return GhAnswer::Failed(format!("run gh: {error}")),
         Ok(Ok(out)) => out,
     };
