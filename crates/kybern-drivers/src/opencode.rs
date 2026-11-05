@@ -151,8 +151,23 @@ fn parse_model_catalog(models: &[Value]) -> HashMap<String, Vec<Value>> {
     catalog
 }
 
+/// One fixed, per-user folder for the variant probe. OpenCode 2 records every
+/// folder it serves as a project, so a fresh folder per probe would add a
+/// project to the user's OpenCode on every refresh. The folder is kept: a
+/// server still exiting holds it as its working directory on Windows.
+fn probe_folder(env: &BTreeMap<String, String>) -> PathBuf {
+    let var = |key: &str| env.get(key).cloned().or_else(|| std::env::var(key).ok()).filter(|value| !value.is_empty()).map(PathBuf::from);
+    // The system temp folder is per-user on macOS and Windows, shared on Linux.
+    let base = if cfg!(target_os = "linux") {
+        var("XDG_CACHE_HOME").or_else(|| var("HOME").map(|home| home.join(".cache"))).unwrap_or_else(std::env::temp_dir)
+    } else {
+        std::env::temp_dir()
+    };
+    base.join("kybern").join("opencode-probe")
+}
+
 async fn read_variant_catalog(bin: &Path, env: &BTreeMap<String, String>) -> Option<HashMap<String, Vec<Value>>> {
-    let folder = std::env::temp_dir().join(format!("kybern-opencode-probe-{}", uuid::Uuid::new_v4().simple()));
+    let folder = probe_folder(env);
     tokio::fs::create_dir_all(&folder).await.ok()?;
     let models = tokio::time::timeout(MODEL_DISCOVERY_TIMEOUT, async {
         let env = env.iter().collect::<Vec<_>>();
@@ -162,7 +177,6 @@ async fn read_variant_catalog(bin: &Path, env: &BTreeMap<String, String>) -> Opt
     .await
     .ok()
     .flatten();
-    let _ = tokio::fs::remove_dir_all(&folder).await;
     Some(parse_model_catalog(models.unwrap_or_default().as_slice()))
 }
 
@@ -2291,6 +2305,16 @@ mod orchestration_part_tests {
         let mut message = orchestration_message();
         message.parts.insert(0, ContentPart::Skill { name: "review".into(), path: "/s/SKILL.md".into() });
         assert_flattened(&skill_command(&message).unwrap().arguments);
+    }
+
+    #[test]
+    fn the_variant_probe_reuses_one_folder() {
+        let env = BTreeMap::from([("XDG_CACHE_HOME".to_string(), "/cache".to_string())]);
+        assert_eq!(probe_folder(&env), probe_folder(&env));
+        assert!(probe_folder(&env).ends_with("kybern/opencode-probe"));
+        if cfg!(target_os = "linux") {
+            assert_eq!(probe_folder(&env), PathBuf::from("/cache/kybern/opencode-probe"));
+        }
     }
 
     #[test]
