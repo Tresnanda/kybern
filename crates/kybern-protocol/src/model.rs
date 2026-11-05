@@ -41,10 +41,11 @@ pub enum ProviderKind {
     Omp,
     Cursor,
     Antigravity,
+    GrokBuild,
 }
 
 impl ProviderKind {
-    pub const ALL: [ProviderKind; 7] = [
+    pub const ALL: [ProviderKind; 8] = [
         ProviderKind::ClaudeCode,
         ProviderKind::Codex,
         ProviderKind::Opencode,
@@ -52,6 +53,7 @@ impl ProviderKind {
         ProviderKind::Omp,
         ProviderKind::Cursor,
         ProviderKind::Antigravity,
+        ProviderKind::GrokBuild,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -63,6 +65,7 @@ impl ProviderKind {
             ProviderKind::Omp => "omp",
             ProviderKind::Cursor => "cursor",
             ProviderKind::Antigravity => "antigravity",
+            ProviderKind::GrokBuild => "grok-build",
         }
     }
 
@@ -75,6 +78,7 @@ impl ProviderKind {
             ProviderKind::Omp => "Oh My Pi",
             ProviderKind::Cursor => "Cursor",
             ProviderKind::Antigravity => "Antigravity",
+            ProviderKind::GrokBuild => "Grok Build",
         }
     }
 
@@ -88,6 +92,7 @@ impl ProviderKind {
             ProviderKind::Omp => "omp",
             ProviderKind::Cursor => "agent",
             ProviderKind::Antigravity => "agy",
+            ProviderKind::GrokBuild => "grok",
         }
     }
 }
@@ -3309,13 +3314,21 @@ mod orchestration_tests {
 
     #[test]
     fn antigravity_is_a_provider_kind_with_its_own_binary() {
-        assert_eq!(ProviderKind::ALL.last(), Some(&ProviderKind::Antigravity));
+        assert!(ProviderKind::ALL.contains(&ProviderKind::Antigravity));
         let kind: ProviderKind = "antigravity".parse().unwrap();
         assert_eq!((kind, kind.display_name(), kind.default_binary()), (ProviderKind::Antigravity, "Antigravity", "agy"));
         assert_eq!(serde_json::to_value(kind).unwrap(), "antigravity");
         for kind in ProviderKind::ALL {
             assert_eq!(kind.as_str().parse::<ProviderKind>().unwrap(), kind);
         }
+    }
+
+    #[test]
+    fn grok_build_is_a_provider_kind_with_its_own_binary() {
+        assert_eq!(ProviderKind::ALL.last(), Some(&ProviderKind::GrokBuild));
+        let kind: ProviderKind = "grok-build".parse().unwrap();
+        assert_eq!((kind, kind.display_name(), kind.default_binary()), (ProviderKind::GrokBuild, "Grok Build", "grok"));
+        assert_eq!(serde_json::to_value(kind).unwrap(), "grok-build");
     }
 
     #[test]
