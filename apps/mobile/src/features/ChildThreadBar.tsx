@@ -20,7 +20,7 @@ import {
   subagentTypeLabel,
 } from "../../../../packages/kybern-client/src/subagents";
 import type { Thread } from "../state/protocol";
-import { errorText, machineHub, rpc, useApp, useMachineView } from "../state/runtime";
+import { errorText, machineHub, rpc, useMachineView, useThreadLive } from "../state/runtime";
 import { showToast } from "../ui/Toast";
 import { Button, T } from "../ui/primitives";
 import { StatusGlyph } from "../ui/TaskGlyphs";
@@ -37,8 +37,8 @@ function useTick(live: boolean) {
 }
 
 export function ChildThreadBar({ thread }: { thread?: Thread | null }) {
-  const app = useApp();
   const view = useMachineView();
+  const live = useThreadLive(thread?.id);
   const working = !!thread && isChildWorking(thread);
   const now = useTick(working);
   const [stopping, setStopping] = useState(false);
@@ -92,7 +92,7 @@ export function ChildThreadBar({ thread }: { thread?: Thread | null }) {
           role="destructive"
           size="medium"
           busy={stopping}
-          disabled={app.status !== "open"}
+          disabled={!live}
           label={`Stop ${thread.title || "agent"}`}
           onPress={() => void stop()}
         >

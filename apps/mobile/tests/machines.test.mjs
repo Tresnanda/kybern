@@ -108,7 +108,7 @@ test("a stand-in id becomes the daemon's real id: record, token and the app's sa
   assert.deepEqual(store.records.map((r) => r.machineId), ["mac-1"]);
 });
 
-test("the primary's lists reach the set only once a second machine is listed, once per burst", async () => {
+test("the primary's lists reach the set (and its offline cache) even with one machine, once per burst", async () => {
   const { hub, world, runTimers } = setup({ records: [rec("mac")], credentials: { mac: "tok" } });
   world.host("http://vps.tail.ts.net:4173", "vps", { features: [] });
   world.lists("vps", [], []);
@@ -120,11 +120,10 @@ test("the primary's lists reach the set only once a second machine is listed, on
   const off = hub.subscribe(() => {});
   runTimers();
   const first = hub.view();
-  assert.deepEqual(first.threads.all, [], "one machine: the screens read the computer's own lists, nothing was merged");
+  assert.deepEqual(first.threads.all.map((t) => t.thread.id), ["t1"], "one machine: cached for the next cold start (#248)");
   lists = { ...lists, threads: [thread("t1", "p1", "2026-10-02T00:00:00Z"), thread("t2", "p1", "2026-10-03T00:00:00Z")] };
   hub.primaryListsChanged(client);
   runTimers();
-  assert.equal(hub.view(), first);
   // A second machine arrives: the primary's latest lists are merged with its.
   await hub.addMachine({ machineId: "vps", name: "VPS", routes: [{ kind: "direct_advertised", url: "http://vps.tail.ts.net:4173" }] }, "tok-vps");
   await settle();
@@ -139,6 +138,42 @@ test("the primary's lists reach the set only once a second machine is listed, on
   runTimers();
   assert.equal(seen.filter((type) => type === "lists").length, 1);
   stop();
+  off();
+});
+
+test("a fresh connection's empty lists never replace the cached ones before its first refresh (#245)", async () => {
+  const cache = new MachineCache();
+  cache.put("mac", { projects: [project("p1", "kybern", "r1")], threads: [thread("t1", "p1", "2026-10-02T00:00:00Z")] }, 1);
+  const world = fakeWorld(manualClock());
+  const timers = [];
+  const hub = new MachineHub({
+    store: memoryStore([rec("mac"), rec("vps")]), credentials: memoryCredentials({ mac: "tok", vps: "tok-vps" }), cache, deviceId: "phone-1",
+    transport: world.transport, setTimer: (fn) => { timers.push(fn); return timers.length; }, clearTimer: () => {},
+  });
+  hubs.push(hub);
+  world.host("http://vps.tail.ts.net:4173", "vps", { features: [] });
+  world.lists("vps", [project("p9", "site", "r2")], []);
+  const mac = app(world, "mac", { open: false });
+  await hub.beginPrimary(mac, { machineId: "mac", name: "Mac" });
+  let lists = { projects: [], threads: [], activity: [] };
+  // runtime.ts hands over the placeholders of a connection that has not read anything yet.
+  hub.setPrimaryLists(mac, () => lists, { ready: false });
+  const off = hub.subscribe(() => {});
+  for (let i = 0; i < 3; i++) { hub.primaryListsChanged(mac); timers.splice(0).forEach((fn) => fn()); await settle(); }
+  assert.equal(hub.primaryListed, false);
+  assert.deepEqual(hub.view().threads.all.filter((t) => t.machineId === "mac").map((t) => t.thread.id), ["t1"], "the cached thread stays");
+  assert.ok(hub.view().projects.some((p) => p.instances.some((i) => i.machineId === "mac")), "the cached project stays: no space reads 0 projects");
+  assert.equal(cache.get("mac").threads.length, 1);
+  // The first refresh answered: now its lists are real and replace the cache.
+  lists = { projects: [project("p1", "kybern", "r1")], threads: [thread("t1", "p1", "2026-10-02T00:00:00Z"), thread("t3", "p1", "2026-10-04T00:00:00Z")], activity: [] };
+  mac.info = mac.info ?? { ...mac.host.info };
+  mac.setStatus("open");
+  await hub.primaryOpened(mac);
+  hub.primaryListsReady(mac);
+  timers.splice(0).forEach((fn) => fn());
+  await settle();
+  assert.equal(hub.primaryListed, true);
+  assert.deepEqual(hub.view().threads.all.filter((t) => t.machineId === "mac").map((t) => t.thread.id), ["t3", "t1"]);
   off();
 });
 

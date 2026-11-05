@@ -1,4 +1,5 @@
-import { threadHasActivity } from "../src/state/runtime";
+import { isThreadCached, prefetchThreads, threadHasActivity } from "../src/state/runtime";
+import { markThreadTap } from "../src/state/devTiming";
 import { router, useFocusEffect } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ScrollView, View, useWindowDimensions } from "react-native";
@@ -175,6 +176,10 @@ function HomeScreen() {
   // The agents follow the machine: another machine's come from that machine.
   const providers = useProviders(chosenMachine ? { machineId: chosenMachine.machineId, reachable: target.reachable } : undefined);
   const recent = useMemo(() => continueThreads(lists.threads, project?.id), [lists.threads, project?.id]);
+  // The threads Home offers to continue load ahead of a tap (#248).
+  useEffect(() => {
+    if (focused) prefetchThreads(recent);
+  }, [recent, focused]);
   const active = lists.threads.filter((t) =>
     threadHasActivity(t, lists.activity),
   ).length;
@@ -269,8 +274,10 @@ function HomeScreen() {
     return { threadId, messageId };
   }
   const pickup = reachable && !outgoing && recent.length > 0;
-  const open = (thread: Thread) =>
+  const open = (thread: Thread) => {
+    markThreadTap(thread.id, isThreadCached(thread.id));
     router.push({ pathname: "/thread/[id]", params: { id: thread.id } });
+  };
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       {regular ? (

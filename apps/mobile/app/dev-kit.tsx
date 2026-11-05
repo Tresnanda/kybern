@@ -2,7 +2,8 @@
 // Open it with `exp://<host>:<port>/--/dev-kit` (Expo Go) or `kybern://dev-kit`.
 // Release builds redirect home.
 import { Redirect, router, Stack } from "expo-router";
-import { useState, type PropsWithChildren } from "react";
+import { useState, useSyncExternalStore, type PropsWithChildren } from "react";
+import { subscribeTimings, timings } from "../src/state/devTiming";
 import { ScrollView, View, useWindowDimensions } from "react-native";
 import { useSharedValue } from "react-native-reanimated";
 import { count, plural } from "../src/state/format";
@@ -138,6 +139,27 @@ function ChromeInner({ scrollY }: { scrollY: ReturnType<typeof useSharedValue<nu
   );
 }
 
+/** Development only: tap → first transcript content, and cold start → first thread list (`state/devTiming.ts`). */
+function LoadTimings() {
+  const rows = useSyncExternalStore(subscribeTimings, timings, timings);
+  return (
+    <Section title="Load timings">
+      <InsetGroup>
+        {rows.length ? (
+          rows.map((row, index) => (
+            <View key={`${row.at}:${index}`}>
+              {index > 0 && <ListSeparator />}
+              <ListRow title={`${row.kind === "thread" ? "Open thread" : "Cold start"} · ${Math.round(row.ms)} ms`} subtitle={row.detail} />
+            </View>
+          ))
+        ) : (
+          <ListRow title="Nothing timed yet" subtitle="Open a thread from a list, or restart the app." />
+        )}
+      </InsetGroup>
+    </Section>
+  );
+}
+
 export default function DevKit() {
   const { colors, appearance, setAppearance } = useTheme();
   const { width } = useWindowDimensions();
@@ -205,6 +227,8 @@ export default function DevKit() {
             { value: "dark", label: "Dark" },
           ]}
         />
+
+        <LoadTimings />
 
         <Section title="List scope filter (compact)">
           <Segmented

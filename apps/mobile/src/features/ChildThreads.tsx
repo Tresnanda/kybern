@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { mergeChildren, remoteChildrenOf } from "../machines/remoteChildren";
 import type { Thread } from "../state/protocol";
 import { childIsRunning, sortChildren } from "../state/orchestration";
-import { machineHub, rpc, useApp, useMachineView } from "../state/runtime";
+import { machineHub, rpc, useMachineView, useThreadLive } from "../state/runtime";
 
 const POLL_MS = 5000;
 
@@ -15,14 +15,13 @@ const POLL_MS = 5000;
  * merged lists and opens on its own machine.
  */
 export function useChildThreads(thread?: Thread | null, active = true): Thread[] {
-  const app = useApp();
   const [children, setChildren] = useState<Thread[]>([]);
   const generation = useRef(0);
   const id = thread?.id;
   const view = useMachineView();
   // The machine that owns the thread: `threads.list` takes a parent id, which does not name a machine by itself.
   const owner = id && view.machines.length > 1 ? machineHub().machineOfThread(id) : undefined;
-  const connected = app.status === "open";
+  const connected = useThreadLive(id);
   const load = useCallback(async () => {
     if (!id || !connected) return;
     const current = ++generation.current;

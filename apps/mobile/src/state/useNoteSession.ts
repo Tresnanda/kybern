@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { AppState } from "react-native";
-import { subscribeNoteChanges } from "./notes";
+import { noteClient, noteWritable, subscribeNoteChanges } from "./notes";
 import { NoteSession, type NoteTarget } from "./noteSession";
-import { errorText, rpc, useApp } from "./runtime";
+import { errorText, rpc, useApp, useNetworkLive, useThreadLive } from "./runtime";
 
 /**
  * Binds an open note to the live connection: loads it, keeps it in step with
@@ -11,7 +11,11 @@ import { errorText, rpc, useApp } from "./runtime";
  */
 export function useNoteSession(target: NoteTarget) {
   const app = useApp();
-  const connected = app.status === "open";
+  const live = useNetworkLive();
+  const threadLive = useThreadLive(target.kind === "thread" ? target.threadId : undefined);
+  // Writable while the machine that holds the note answers (`federated.ts`); an away machine's note is read-only.
+  // A thread's note lives on the thread's machine.
+  const connected = target.kind === "thread" ? threadLive : live && noteWritable(target.kind === "id" ? target.id : undefined);
   const identity =
     target.kind === "id"
       ? `id:${target.id}`
@@ -21,7 +25,16 @@ export function useNoteSession(target: NoteTarget) {
   const session = useMemo(
     () =>
       new NoteSession(target, {
-        call: (method, params) => rpc(method as never, params as never),
+        // A thread's note lives on the thread's machine; any other goes to the machine that holds it.
+        call: (method, params) => {
+          const ids = params as { id?: string; thread_id?: string } | null;
+          if (ids?.thread_id) return rpc(method as never, params as never);
+          try {
+            return noteClient(ids?.id).call(method as never, params as never);
+          } catch (e) {
+            return Promise.reject(e);
+          }
+        },
         subscribeChanges: subscribeNoteChanges,
         scope: app.activeId ?? "",
         errorText,

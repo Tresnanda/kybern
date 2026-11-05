@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AppState, Image, View, useWindowDimensions } from "react-native";
 import type { ComputerFrame } from "../src/state/protocol";
 import { pollFrames } from "../src/state/computerUse";
-import { useApp } from "../src/state/runtime";
+import { useApp, useThreadLive } from "../src/state/runtime";
 import { Empty, Page, T } from "../src/ui/primitives";
 import { CONTENT_MAX_WIDTH, gutter, radius, space, useTheme } from "../src/ui/theme";
 
@@ -15,6 +15,7 @@ export default function ComputerLiveScreen() {
   const { colors } = useTheme();
   const { width } = useWindowDimensions();
   const thread = app.threads.find((t) => t.id === threadId);
+  const live = useThreadLive(threadId);
   const [frame, setFrame] = useState<ComputerFrame | null>(null);
   const [active, setActive] = useState(AppState.currentState === "active");
   useEffect(() => {
@@ -23,9 +24,9 @@ export default function ComputerLiveScreen() {
   }, []);
   useFocusEffect(
     useCallback(() => {
-      if (!threadId || !active || app.status !== "open") return;
+      if (!threadId || !active || !live) return;
       return pollFrames(threadId, setFrame);
-    }, [threadId, active, app.status]),
+    }, [threadId, active, live]),
   );
   const available = Math.min(width, CONTENT_MAX_WIDTH) - gutter(width) * 2;
   const height = frame ? Math.min((available * frame.height) / Math.max(1, frame.width), 640) : 0;

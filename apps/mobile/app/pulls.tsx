@@ -21,6 +21,7 @@ import { SearchField } from "../src/ui/Search";
 import { Segmented } from "../src/ui/Segmented";
 import { space, useTheme } from "../src/ui/theme";
 import { Working } from "../src/ui/Working";
+import { useLists } from "../src/state/useLists";
 
 type Item = { project: Project; pr: PullRequest };
 type ListRowItem =
@@ -36,6 +37,8 @@ const memberName = (project: Project, repo?: string) =>
 export default function PullRequestsScreen() {
   const { projectId: initialProject } = useLocalSearchParams<{ projectId?: string }>();
   const app = useApp();
+  // Every machine's projects: the computer the phone is at may be away (#245).
+  const lists = useLists(null);
   const { colors } = useTheme();
   const [filter, setFilter] = useState<PrFilter>("open");
   const [projectId, setProjectId] = useState<string | null>(initialProject ?? null);
@@ -43,7 +46,7 @@ export default function PullRequestsScreen() {
   const [revision, setRevision] = useState(0);
   const [loaded, setLoaded] = useState<{ scope: string; items: Item[]; errors: string[] } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const githubProjects = useMemo(() => app.projects.filter(hasPullRequests), [app.projects]);
+  const githubProjects = useMemo(() => lists.projects.filter(hasPullRequests), [lists.projects]);
   const targets = useMemo(
     () => githubProjects.filter((p) => !projectId || p.id === projectId),
     [githubProjects, projectId],
