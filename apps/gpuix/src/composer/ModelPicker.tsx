@@ -1,13 +1,13 @@
 // The composer's agent / model / effort panel (`components/kybern/ModelPicker.tsx`,
-// `ModelPickerTabs.tsx`, `ComposerModelTriggerLabel.tsx`): a 20rem panel that
-// opens upward from the trigger with a tab per agent account, a search field,
-// the model list (sections, favorites, recents, "Show more"), and the effort
-// card of the selected model. The pure list logic comes from the shared
+// `ModelPickerTabs.tsx`, `ComposerModelTriggerLabel.tsx`): a panel that opens
+// upward from the trigger. A rail on the left lists Favorites and one row per
+// agent account (#249); the pane beside it holds a search field, the model list
+// (sections, favorites, recents, "Show more"), and the effort card of the
+// selected model. The panel keeps one size whichever agent is selected. The pure list logic comes from the shared
 // `packages/kybern-client/src/models.ts` and the desktop's `lib/accountUi.ts`.
 import { motion, useGpuix, useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { followLine, nextTabIndex, pickerTabs, type PickerTab } from '@/lib/accountUi'
-import { Tabs as KitTabs, type TabsItem } from '../kit/Tabs.tsx'
+import { followLine, pickerTabs, type PickerTab } from '@/lib/accountUi'
 import { formatEffort, PROVIDER_LABEL } from '@/lib/format'
 import {
   MODEL_FLAT_LIMIT,
@@ -48,6 +48,8 @@ import { Kbd } from '../kit/Kbd.tsx'
 import { PickerChip } from '../kit/PickerChip.tsx'
 import { SearchField } from '../kit/SearchField.tsx'
 import { useFooterFit } from './footerWidth.tsx'
+import { ModelRail, RAIL_WIDTH } from './ModelRail.tsx'
+import { observeElementBounds } from '../native/layout.ts'
 import { G } from './glyphs.ts'
 import { CheckMark, muted, PickerItem, PickerMenu, PopupLayer, popoverStyle } from './Menu.tsx'
 import { DURATION, EASE, SPRING } from '../motion/kit.tsx'
@@ -59,10 +61,15 @@ import { showDialog } from '../dialogs/store.ts'
 
 const SEARCH_RESULT_LIMIT = 150
 const SECTION_STEP = 100
-const PANEL_WIDTH = 320
-/** Effort thumb diameter; the track runs the panel's inner width (320 − 2 border − 24 padding). */
+/** The pane right of the rail: search, models, effort. */
+const PANE_WIDTH = 300
+/** The rail, the pane and the popover's 2 px border. */
+const PANEL_WIDTH = RAIL_WIDTH + PANE_WIDTH + 2
+/** One fixed height, so switching agent never resizes the popover. */
+const PANEL_HEIGHT = 404
+/** Effort thumb diameter; the track runs the pane's width less 24 padding. */
 const THUMB = 28
-const TRACK = PANEL_WIDTH - 2 - 24
+const TRACK = PANE_WIDTH - 24
 const ROW_RADIUS = 6.4
 /** Row heights in the list: a plain row, a row with its description line (4 + 18 + 17 + 4), a section header. */
 const ROW_HEIGHT = 28
@@ -70,6 +77,8 @@ const DESCRIBED_ROW_HEIGHT = 43
 const HEADER_HEIGHT = 35
 /** The list's top and bottom padding. */
 const LIST_PAD = 4
+/** The list's height until its layout is read: the pane less the search field, two dividers and a one-slider footer. */
+const LIST_FALLBACK = 250
 
 type Row =
   | { kind: 'default'; key: string }
@@ -175,7 +184,7 @@ export function ModelPicker(props: ModelPickerProps) {
             })
             close()
           }}
-          style={{ ...popoverStyle(t), display: 'flex', flexDirection: 'column', width: PANEL_WIDTH }}
+          style={{ ...popoverStyle(t), display: 'flex', flexDirection: 'column', width: props.canPickModel ? PANEL_WIDTH : RAIL_WIDTH + 2 }}
         >
           <ModelPickerPanel {...props} close={close} />
         </PopupLayer>
@@ -286,7 +295,9 @@ function ModelPickerPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canPickProvider, catalog, current, expanded, favorites, large, model, multiBackend, provider.kind, provider.instance, providers, instances, query, recents, results, showFavorites])
 
-  const listHeight = Math.min(336, 0.5 * 820)
+  // The list fills what the pane leaves it (the footer varies with the model), so it is read back from the layout.
+  const [measured, setMeasured] = useState<number | null>(null)
+  const listHeight = measured ?? LIST_FALLBACK
   const isSelected = (row: Row) =>
     row.kind === 'default' ? !selectedId : row.kind === 'model' ? row.harness === provider.kind && row.model.id === selectedId : row.kind === 'custom' && row.id === selectedId
   const rows = useMemo(() => blocks.flatMap((block) => block.rows), [blocks])
@@ -310,6 +321,11 @@ function ModelPickerPanel({
     [virtual, blocks],
   )
   const listRef = useRef<PublicInstance | null>(null)
+  useEffect(() => {
+    const id = listRef.current?.id
+    if (id == null || !renderer) return
+    return observeElementBounds(renderer, { id }, (event) => { if (event.rect) setMeasured((old) => (old !== null && Math.abs(old - event.rect!.height) < 0.5 ? old : event.rect!.height)) })
+  }, [renderer, virtual, canPickModel])
   /** The list items in view, as the native list last reported them (its first item is the top padding). */
   const visibleRange = useRef({ first: 0, last: 0 })
   /** Keep the row the arrow keys moved to in view: the virtual list lays out only what is near its viewport. */
@@ -506,106 +522,103 @@ function ModelPickerPanel({
       </div>
     )])
 
+  const rail = (
+    <ModelRail
+      tabs={tabs}
+      busy={busy}
+      bordered={canPickModel}
+      onStarred={() => {
+        setView('favorites')
+        setActiveKey(null)
+        focusInput()
+      }}
+      onAccount={(tab) => void selectAccountTab(tab)}
+    />
+  )
+  if (!canPickModel) return <div style={{ display: 'flex', flexDirection: 'column', maxHeight: PANEL_HEIGHT }}>{rail}</div>
   return (
-    <>
-      <Tabs
-        tabs={tabs}
-        busy={busy}
-        canReload={canPickModel && canReload}
-        loading={loading}
-        onStarred={() => {
-          setView('favorites')
-          setActiveKey(null)
-          focusInput()
-        }}
-        onAccount={(tab) => void selectAccountTab(tab)}
-        onReload={onReload}
-      />
-      {follow && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, paddingLeft: 12, paddingRight: 12 }}>
-          <Label color={t.textSecondary} size={13} truncate>
-            {follow.text}
-          </Label>
-          {follow.state === 'pinned' && (
-            <>
-              <div style={{ flexGrow: 1 }} />
-              <Button variant="ghost" size="sm" disabled={busy} onClick={() => void onAccountChange?.(null)}>{follow.action}</Button>
-            </>
-          )}
-        </div>
-      )}
-      {canPickModel && (
-        <>
-          <div style={{ display: 'flex', alignItems: 'center', paddingLeft: 8, paddingRight: 8, paddingTop: 4, paddingBottom: 4, flexShrink: 0 }}>
-            <SearchField
-              ref={(el: PublicInstance | null) => {
-                inputRef.current = el
-              }}
-              testId="model-search"
-              label={showFavorites ? 'Search favorites' : `Search ${agentName} models`}
-              placeholder={showFavorites ? 'Search favorites' : `Search ${agentName} models`}
-              autoFocus
-              width="100%"
-              value={query}
-              onChange={(value) => {
-                setQuery(value)
-                setActiveKey(null)
-              }}
-              onKeyDown={(e) => onKeyDown(e.key ?? '', isPrimary(e.modifiers))}
-              // The input consumes Enter as its own submit action; it never reaches onKeyDown.
-              onSubmit={() => onKeyDown('enter', false)}
-            />
+    <div style={{ display: 'flex', flexDirection: 'row', height: PANEL_HEIGHT }}>
+      {rail}
+      <div style={{ display: 'flex', flexDirection: 'column', width: PANE_WIDTH, minWidth: 0, height: '100%' }}>
+        {follow && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, paddingLeft: 12, paddingRight: 12, flexShrink: 0 }}>
+            <Label color={t.textSecondary} size={13} truncate>
+              {follow.text}
+            </Label>
+            {follow.state === 'pinned' && (
+              <>
+                <div style={{ flexGrow: 1 }} />
+                <Button variant="ghost" size="sm" disabled={busy} onClick={() => void onAccountChange?.(null)}>{follow.action}</Button>
+              </>
+            )}
           </div>
-          {divider}
-          {virtual ? (
-            <virtual-list
-              ref={(el: PublicInstance | null) => {
-                listRef.current = el
-              }}
-              testId="model-list"
-              estimatedItemHeight={ROW_HEIGHT}
-              onVisibleRange={(event: { startIndex?: number; endIndex?: number }) => {
-                visibleRange.current = { first: event.startIndex ?? 0, last: event.endIndex ?? 0 }
-              }}
-              style={{ width: '100%', height: listHeight, flexShrink: 0 }}
-            >
-              <div key="pad:top" style={{ height: LIST_PAD, flexShrink: 0 }} />
-              {entries.map((entry) => (
-                <div key={entry.key} style={{ display: 'flex', flexDirection: 'column', width: '100%', paddingLeft: LIST_PAD, paddingRight: LIST_PAD }}>
-                  {entry.kind === 'header' ? <SectionHeader label={entry.block.label!} icon={entry.block.icon} /> : renderRow(entry.row)}
-                </div>
-              ))}
-              {notes.map(([key, note]) => (
-                <div key={key} style={{ display: 'flex', flexDirection: 'column', width: '100%', paddingLeft: LIST_PAD, paddingRight: LIST_PAD }}>
-                  {note}
-                </div>
-              ))}
-              <div key="pad:bottom" style={{ height: LIST_PAD, flexShrink: 0 }} />
-            </virtual-list>
-          ) : (
-            <div
-              testId="model-list"
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                padding: LIST_PAD,
-                overflowY: 'scroll',
-                ...(large && !showFavorites ? { height: listHeight } : { maxHeight: listHeight }),
-              }}
-            >
-              {blocks.map((block) => (
-                <div key={block.key} style={{ display: 'flex', flexDirection: 'column' }}>
-                  {block.label && <SectionHeader label={block.label} icon={block.icon} />}
-                  {block.rows.map(renderRow)}
-                </div>
-              ))}
-              {notes.map(([key, note]) => (
-                <div key={key} style={{ display: 'flex', flexDirection: 'column' }}>
-                  {note}
-                </div>
-              ))}
-            </div>
-          )}
+        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, paddingLeft: 8, paddingRight: 8, paddingTop: 4, paddingBottom: 4, flexShrink: 0 }}>
+          <SearchField
+            ref={(el: PublicInstance | null) => {
+              inputRef.current = el
+            }}
+            testId="model-search"
+            label={showFavorites ? 'Search favorites' : `Search ${agentName} models`}
+            placeholder={showFavorites ? 'Search favorites' : `Search ${agentName} models`}
+            autoFocus
+            width="100%"
+            value={query}
+            onChange={(value) => {
+              setQuery(value)
+              setActiveKey(null)
+            }}
+            onKeyDown={(e) => onKeyDown(e.key ?? '', isPrimary(e.modifiers))}
+            // The input consumes Enter as its own submit action; it never reaches onKeyDown.
+            onSubmit={() => onKeyDown('enter', false)}
+          />
+          {canReload && <ReloadButton loading={loading} onReload={onReload} />}
+        </div>
+        {divider}
+        {virtual ? (
+          <virtual-list
+            ref={(el: PublicInstance | null) => {
+              listRef.current = el
+            }}
+            testId="model-list"
+            estimatedItemHeight={ROW_HEIGHT}
+            onVisibleRange={(event: { startIndex?: number; endIndex?: number }) => {
+              visibleRange.current = { first: event.startIndex ?? 0, last: event.endIndex ?? 0 }
+            }}
+            style={{ width: '100%', flexGrow: 1, flexShrink: 1, minHeight: 0 }}
+          >
+            <div key="pad:top" style={{ height: LIST_PAD, flexShrink: 0 }} />
+            {entries.map((entry) => (
+              <div key={entry.key} style={{ display: 'flex', flexDirection: 'column', width: '100%', paddingLeft: LIST_PAD, paddingRight: LIST_PAD }}>
+                {entry.kind === 'header' ? <SectionHeader label={entry.block.label!} icon={entry.block.icon} /> : renderRow(entry.row)}
+              </div>
+            ))}
+            {notes.map(([key, note]) => (
+              <div key={key} style={{ display: 'flex', flexDirection: 'column', width: '100%', paddingLeft: LIST_PAD, paddingRight: LIST_PAD }}>
+                {note}
+              </div>
+            ))}
+            <div key="pad:bottom" style={{ height: LIST_PAD, flexShrink: 0 }} />
+          </virtual-list>
+        ) : (
+          <div
+            testId="model-list"
+            style={{ display: 'flex', flexDirection: 'column', padding: LIST_PAD, overflowY: 'scroll', flexGrow: 1, flexShrink: 1, minHeight: 0 }}
+          >
+            {blocks.map((block) => (
+              <div key={block.key} style={{ display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+                {block.label && <SectionHeader label={block.label} icon={block.icon} />}
+                {block.rows.map(renderRow)}
+              </div>
+            ))}
+            {notes.map(([key, note]) => (
+              <div key={key} style={{ display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+                {note}
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
           <ModelFooter
             current={current}
             model={model}
@@ -617,69 +630,35 @@ function ModelPickerPanel({
             onModelChange={onModelChange}
             onEffortChange={onEffortChange}
           />
-        </>
-      )}
-    </>
+        </div>
+      </div>
+    </div>
   )
 }
 
-/** `ModelPickerTabs`: Starred, then one tab per agent account; reload at the end. */
-function Tabs({
-  tabs,
-  busy,
-  canReload,
-  loading,
-  onStarred,
-  onAccount,
-  onReload,
-}: {
-  tabs: PickerTab[]
-  busy: boolean
-  canReload: boolean
-  loading: boolean
-  onStarred: () => void
-  onAccount: (tab: Extract<PickerTab, { type: 'account' }>) => void
-  onReload: () => void
-}) {
+/** Reload the agent's model list; next to the search field. */
+function ReloadButton({ loading, onReload }: { loading: boolean; onReload: () => void }) {
   const t = useTheme()
-  const [hover, setHover] = useState<string | null>(null)
-  const yellow = t.v('--color-accent-yellow')
+  const [hover, setHover] = useState(false)
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 2, paddingLeft: 6, paddingRight: 6, paddingTop: 2 }}>
-      {/* The kit strip (ADE-55 §2.7): Starred, then one tab per account; an account that needs setting up is shown, dimmed.
-          Marks pack at 24px so every agent fits beside a selected multi-account tab's name; beyond that the strip
-          scrolls under the kit's edge fades instead of running under the reload button (a » menu would open inside
-          this popover). The scroller clips, so the tabs sit centred in a 36px band and the underline (4px under the
-          tab, as before) ends on its bottom edge. */}
-      <div style={{ display: 'flex', alignItems: 'center', minWidth: 0, height: 36, flexGrow: 1, flexShrink: 1 }}>
-        <KitTabs testId="model-tabs" minWidth={0} iconPad={5} overflowMenu={false} animate={false} underlineGap={4}
-          active={tabs.find((tab) => tab.selected)?.key ?? null}
-          items={tabs.map((tab): TabsItem => tab.type === 'starred'
-            ? { key: tab.key, label: 'Starred', iconOnly: true, testId: `model-tab-${tab.key}`, iconNode: <Icon source={tab.selected ? G.starFilled : G.star} size={14} color={tab.selected ? yellow : t.textSecondary} /> }
-            : { key: tab.key, label: tab.label || PROVIDER_LABEL[tab.kind as keyof typeof PROVIDER_LABEL] || tab.kind, iconOnly: !tab.label, mark: tab.kind, testId: `model-tab-${tab.key}`, disabled: tab.disabled || (busy && !tab.selected), ...(tab.needsSignIn ? { tooltip: tab.signedOutOn ? tab.tooltip : 'Sign in to use this account' } : tab.notSetUp ? { tooltip: 'Set up this agent to use it' } : {}) })}
-          onSelect={(key) => { const tab = tabs.find((x) => x.key === key); if (!tab) return; if (tab.type === 'starred') onStarred(); else if (!tab.disabled) onAccount(tab) }} />
-      </div>
-      {canReload && (
-        <div
-          testId="model-reload"
-          onMouseEnter={() => setHover('__reload')}
-          onMouseLeave={() => setHover((h) => (h === '__reload' ? null : h))}
-          onClick={() => !loading && onReload()}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: 28,
-            height: 28,
-            borderRadius: ROW_RADIUS,
-            flexShrink: 0,
-            cursor: 'pointer',
-            ...(hover === '__reload' && !loading ? { backgroundColor: t.buttonSecondaryHover } : {}),
-          }}
-        >
-          {loading ? <MatrixLoader /> : <Icon source={G.refresh} size={14} color={hover === '__reload' ? t.text : muted(t, 0.6)} />}
-        </div>
-      )}
+    <div
+      testId="model-reload"
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onClick={() => !loading && onReload()}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 28,
+        height: 28,
+        borderRadius: ROW_RADIUS,
+        flexShrink: 0,
+        cursor: 'pointer',
+        ...(hover && !loading ? { backgroundColor: t.buttonSecondaryHover } : {}),
+      }}
+    >
+      {loading ? <MatrixLoader /> : <Icon source={G.refresh} size={14} color={hover ? t.text : muted(t, 0.6)} />}
     </div>
   )
 }
