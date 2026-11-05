@@ -85,4 +85,14 @@ export function newFiles(attached: readonly { path?: string }[], paths: readonly
 /** A pasted or dropped image's identity: the digest of its bytes. */
 export const contentHash = (bytes: ArrayBuffer | Uint8Array): string => createHash('sha1').update(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)).digest('hex')
 
+/**
+ * How the @ list shows an attachment: a pasted image (its path is a data URI) is "Pasted image N", numbered by its label
+ * (`image3`), because every paste would otherwise be called `clipboard.png`; anything else keeps its own name. Images get a
+ * thumbnail source. The upload on disk keeps its own name either way.
+ */
+export function attachmentView(a: { label: string; name: string; media_type: string; path: string }): { title: string; preview: string | null } {
+  const pasted = a.path.startsWith('data:')
+  return { title: pasted ? `Pasted image ${a.label.replace(/^\D+/, '') || a.label}` : a.name, preview: a.media_type.startsWith('image/') ? a.path : null }
+}
+
 export const alreadyAttachedText = (names: readonly string[]) => names.length === 1 ? `${names[0]} is already attached.` : `${names.length} files are already attached.`

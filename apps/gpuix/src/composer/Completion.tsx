@@ -55,6 +55,7 @@ import { getState, localClient, ownProjectId, projectClient, threadClient, useAp
 import { Label, useTheme } from '../ui.tsx'
 import { useNativeWindowSize } from '../native/layout-hooks.ts'
 import { G } from './glyphs.ts'
+import { AttachedGroup, type AttachedRow } from './AttachedGroup.tsx'
 import { muted, PICKER_RADIUS, PopupLayer, popoverStyle, SectionLabel } from './Menu.tsx'
 
 export interface SlashCommand {
@@ -67,12 +68,15 @@ export interface SlashCommand {
   invocation?: string
 }
 
+/** How the picker shows an attachment: a display name ("Pasted image 1") and a thumbnail source for images. */
+export interface AttachmentView { title: string; preview: string | null }
+
 type Item =
   | { id: string; type: 'note'; note: NoteSummary; snippet: string | null }
   | { id: string; type: 'task'; task: TaskItem }
   | { id: string; type: 'thread'; thread: Thread; snippet?: string | null }
   | { id: string; type: 'file'; path: string }
-  | { id: string; type: 'attachment'; label: string; name: string; mediaType: string }
+  | { id: string; type: 'attachment'; label: string; name: string; mediaType: string; title: string; preview: string | null }
   | { id: string; type: 'command'; command: SlashCommand }
   | { id: string; type: 'skill'; skill: SkillInfo }
   | { id: string; type: 'plugin'; skill: SkillInfo }
@@ -86,9 +90,10 @@ export const skillReference = (skill: Pick<SkillInfo, 'name' | 'display_name' | 
   ? { token: `@${skill.display_name ?? skill.name}`, label: skill.display_name ?? skill.name, icon: tokenIcon(skill.path === COMPUTER_MENTION_PATH ? 'computer' : 'plugin', '') }
   : { token: `$${skill.name}`, label: skill.name, icon: tokenIcon('skill', '') }
 
-function rankSkills(skills: readonly SkillInfo[], query: string, limit = 12, scope: 'skill' | 'plugin' = 'skill'): SkillInfo[] {
+/** `origin`: the agent's own skills, or the ones listed from other agents' folders (`home` set). */
+function rankSkills(skills: readonly SkillInfo[], query: string, limit = 12, scope: 'skill' | 'plugin' = 'skill', origin: 'own' | 'other' = 'own'): SkillInfo[] {
   return skills
-    .filter((skill) => skill.enabled && (skill.scope === 'plugin') === (scope === 'plugin'))
+    .filter((skill) => skill.enabled && (skill.scope === 'plugin') === (scope === 'plugin') && !!skill.home === (origin === 'other'))
     .flatMap((skill) => {
       const scores = [skill.name, skill.display_name ?? '', skill.description ?? ''].flatMap((value) => {
         const score = fuzzyScore(value, query)
@@ -148,6 +153,7 @@ export function useCompletion({
   provider,
   currentThreadId,
   attachments,
+  attachmentViews,
   commands,
 }: {
   draftKey: string
@@ -161,6 +167,8 @@ export function useCompletion({
   provider?: { kind: ProviderKind; instance: string }
   currentThreadId?: string
   attachments: AttachmentReference[]
+  /** How the picker shows an attachment, by its label (`image1`): a display name and a thumbnail source. */
+  attachmentViews?: ReadonlyMap<string, AttachmentView>
   commands: SlashCommand[]
 }) {
   const threads = useApp((s) => s.threads)
@@ -249,7 +257,7 @@ export function useCompletion({
     let live = true
     const own = currentThreadId ? getState().threads.find((t) => t.id === currentThreadId) : undefined
     void (currentThreadId ? threadClient(currentThreadId, own?.machineId) : projectClient(projectId))
-      ?.call('skills.list', { project_id: own ? ownProjectId(own) : projectId, provider: provider.kind, instance: provider.instance })
+      ?.call('skills.list', { project_id: own ? ownProjectId(own) : projectId, provider: provider.kind, instance: provider.instance, include_other_agents: true })
       .then((r) => live && setCatalog({ key: catalogKey, skills: r.skills }))
       .catch(() => live && setCatalog({ key: catalogKey, skills: [] }))
     return () => {
@@ -295,7 +303,7 @@ export function useCompletion({
     return kinds.length > 1 || filter !== 'all' ? ['all', ...kinds] : []
   }, [anyPlugin, anyThread, mention, filter, mentionNotes.any, mentionTasks.any, projectId])
 
-  const items = useMemo<Item[]>(() => {
+  const listed = useMemo<Item[]>(() => {
     if (mention && term !== null) {
       const byKind: Record<MentionKind, Item[]> = {
         thread: threadHits.map((hit) => ({ id: `thread:${hit.thread.id}`, type: 'thread' as const, ...hit })),
@@ -308,6 +316,7 @@ export function useCompletion({
       const attached: Item[] = attachments
         .filter((a) => a.part.type === 'attachment')
         .map((a) => ({ label: a.token.slice(1), name: a.part.type === 'attachment' ? a.part.name : '', mediaType: a.part.type === 'attachment' ? a.part.media_type : '' }))
+        .map((a) => ({ ...a, title: attachmentViews?.get(a.label)?.title ?? a.name, preview: attachmentViews?.get(a.label)?.preview ?? null }))
         .filter((a) => fuzzyScore(a.label, term) != null || fuzzyScore(a.name, term) != null)
         .map((a) => ({ id: `attachment:${a.label}`, type: 'attachment' as const, ...a }))
       // A few of each kind; when only one kind matches, all of it.
@@ -315,7 +324,8 @@ export function useCompletion({
       const cap = filled > 1 ? MENTION_ALL_PER_KIND : Infinity
       return [...attached, ...MENTION_KINDS.flatMap((kind) => byKind[kind].slice(0, cap))]
     }
-    if (skill) return rankSkills(skills, skill.query).map((s) => ({ id: `skill:${s.name}`, type: 'skill' as const, skill: s }))
+    // The agent's own skills first, then other agents' folders as their own group (#219).
+    if (skill) return [...rankSkills(skills, skill.query), ...rankSkills(skills, skill.query, 12, 'skill', 'other')].map((s) => ({ id: `skill:${s.name}`, type: 'skill' as const, skill: s }))
     if (!slash) return []
     const commandItems: Item[] = slash.skillOnly
       ? []
@@ -328,12 +338,9 @@ export function useCompletion({
           .map(({ command }) => ({ id: `command:${command.name}`, type: 'command' as const, command }))
     const skillItems = rankSkills(skills, slash.query).map((s) => ({ id: `skill:${s.name}`, type: 'skill' as const, skill: s }))
     return [...commandItems, ...skillItems].slice(0, 16)
-  }, [mention, term, filter, threadHits, files, skills, attachments, skill, slash, commands, mentionNotes, mentionTasks])
+  }, [mention, term, filter, threadHits, files, skills, attachments, attachmentViews, skill, slash, commands, mentionNotes, mentionTasks])
 
   const menuKey = mention ? `@${mention.start}` : skill ? `$${skill.start}` : slash ? `/${slash.start}` : null
-  const open = !composing && !!menuKey && dismissed !== menuKey
-  const signature = `${menuKey}:${mention ? filter : ''}:${items.map((item) => item.id).join('|')}`
-  const index = sel.sig === signature ? sel.index : 0
   const wants = (kind: MentionKind) => filter === 'all' || filter === kind
   const loading =
     mention && term !== null ? (wants('file') && !!projectId && files.query !== term) || (wants('thread') && !!term && found.query !== term) : (!!skill || !!slash) && catalog.key !== catalogKey
@@ -366,14 +373,22 @@ export function useCompletion({
   const knownTokens = (): string[] => [...new Set([
     ...mentionRefs.map((r) => r.token), ...threadRefs.map((r) => r.token), ...[...mentioned].map((path) => `@${path}`),
     ...[...picked.values()].map((s) => skillReference(s).token), ...attachments.map((a) => a.token),
-    ...items.flatMap((item) => { const token = tokenOf(item); return token ? [token] : [] }),
+    ...listed.flatMap((item) => { const token = tokenOf(item); return token ? [token] : [] }),
   ])]
   const attachedIds = useMemo(() => {
     const standing = standingTokens(text, knownTokens(), trigger)
-    return new Set(items.filter((item) => { const token = tokenOf(item); return !!token && standing.has(token) }).map((item) => item.id))
+    return new Set(listed.filter((item) => { const token = tokenOf(item); return !!token && standing.has(token) }).map((item) => item.id))
   },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [items, text, mention?.start, skill?.start, slash?.start, caret, mentionRefs, threadRefs, mentioned, picked, attachments])
+    [listed, text, mention?.start, skill?.start, slash?.start, caret, mentionRefs, threadRefs, mentioned, picked, attachments])
+
+  // The @ list leads with what the draft already carries, as one group (#246). The highlight still starts where it did: on the
+  // first row of the unsorted list, wherever that row moved to.
+  const items = useMemo<Item[]>(() => (mention ? [...listed.filter((item) => attachedIds.has(item.id)), ...listed.filter((item) => !attachedIds.has(item.id))] : listed), [listed, attachedIds, mention !== null])
+  const attachedCount = mention ? attachedIds.size : 0
+  const open = !composing && !!menuKey && dismissed !== menuKey
+  const signature = `${menuKey}:${mention ? filter : ''}:${items.map((item) => item.id).join('|')}`
+  const index = sel.sig === signature ? sel.index : Math.max(0, items.findIndex((item) => item === listed[0]))
 
   const replace = (start: number, token: string, added?: TokenReference) => {
     // Whitespace already after the caret stands in for the token's own trailing space; the replacement takes it over so
@@ -456,7 +471,7 @@ export function useCompletion({
     if (!items.length) return false
     if (key === 'down' || key === 'up') {
       const step = key === 'down' ? 1 : -1
-      setSel(previous => ({ sig: signature, index: ((previous.sig === signature ? previous.index : 0) + step + items.length) % items.length }))
+      setSel(previous => ({ sig: signature, index: (index + step + items.length) % items.length }))
       return true
     }
     if (key === 'enter' && !shift) {
@@ -472,7 +487,7 @@ export function useCompletion({
   }
 
   const buildParts = (): ContentPart[] => {
-    const skillItems = [...skills, ...picked.values()]
+    const skillItems = [...skills.filter((s) => !s.home), ...picked.values()]
     return convertTypedSlashSkills(buildStructuredTextParts(text, mentioned, skillItems, threadRefs, attachments, mentionRefs), skillItems)
   }
 
@@ -497,15 +512,16 @@ export function useCompletion({
     setMentionRefs(list => [...list.filter(r => !refs.mentions.some(m => m.part.path === r.part.path)), ...refs.mentions])
   }
 
-  /** `width` may be a function, read only while the menu is open (a bounds read waits on the UI thread off macOS). */
-  const menu = (width: number | (() => number)) =>
+  /** `width` is the composer card's width from a layout observer; unmeasured, the list sizes to its content (never wider than the window). */
+  const menu = (width: number | null) =>
     open ? (
     <CompletionList
-      width={typeof width === 'function' ? width() : width}
+      width={width}
       items={items}
       index={index}
       grouped={!mention || filter === 'all'}
       attached={attachedIds}
+      attachedCount={attachedCount}
       chips={mention ? chips : []}
       filter={filter}
       onFilter={selectFilter}
@@ -558,6 +574,7 @@ function sectionOf(item: Item | undefined): string | null {
     case 'file': return 'Files'
     case 'command': return 'Commands'
     case 'plugin': return 'Plugins'
+    case 'skill': return item.skill.home ? 'Other agents' : 'Skills'
     default: return 'Skills'
   }
 }
@@ -585,12 +602,26 @@ function RowIcon({ item, active }: { item: Item; active: boolean }) {
   return <Icon source={source} size={16} color={color} style={style} />
 }
 
+/** What a row is called: its note, task or thread title, the file's name, an attachment's display name. */
+function itemTitle(item: Item): string {
+  switch (item.type) {
+    case 'note': return noteTitle(item.note)
+    case 'task': return item.task.title.trim() || 'Untitled task'
+    case 'thread': return item.thread.title || 'Untitled thread'
+    case 'attachment': return item.title
+    case 'file': return basename(item.path)
+    case 'command': return titleCase(item.command.name)
+    default: return item.skill.display_name ?? titleCase(item.skill.name)
+  }
+}
+
 function CompletionList({
   width,
   items,
   index,
   grouped,
   attached,
+  attachedCount,
   chips,
   filter,
   onFilter,
@@ -600,12 +631,14 @@ function CompletionList({
   onHover,
   onPick,
 }: {
-  width: number
+  width: number | null
   items: Item[]
   index: number
   grouped: boolean
   /** The ids of the rows already in the draft. */
   attached: ReadonlySet<string>
+  /** How many leading rows are attached: they are drawn as one inset group. */
+  attachedCount: number
   chips: MentionFilter[]
   filter: MentionFilter
   onFilter: (filter: MentionFilter) => void
@@ -617,7 +650,7 @@ function CompletionList({
 }) {
   const t = useTheme()
   const controls = useControls()
-  const windowHeight = useNativeWindowSize().height
+  const { width: windowWidth, height: windowHeight } = useNativeWindowSize()
   const lookups = useMemo(() => ({
     projects: Object.fromEntries(projects.map((p) => [p.id, p])),
     threads: Object.fromEntries(threads.map((th) => [th.id, th])),
@@ -632,7 +665,7 @@ function CompletionList({
       sideOffset={8}
       collisionPadding={8}
       testId="completion"
-      style={{ ...popoverStyle(t), borderRadius: PICKER_RADIUS, display: 'flex', flexDirection: 'column', width, overflow: 'hidden' }}
+      style={{ ...popoverStyle(t), borderRadius: PICKER_RADIUS, display: 'flex', flexDirection: 'column', ...(width === null ? {} : { width: Math.min(width, windowWidth - 16) }), maxWidth: windowWidth - 16, overflow: 'hidden' }}
     >
       {chips.length > 1 && <MentionChips chips={chips.map((id) => ({ id, label: MENTION_FILTER_LABEL[id] }))} active={filter} onSelect={onFilter} />}
       <div style={{ display: 'flex', flexDirection: 'column', padding: 6, overflowY: 'scroll', minHeight: 0, maxHeight: Math.min(352, windowHeight * 0.45) }}>
@@ -643,28 +676,41 @@ function CompletionList({
           </Label>
         </div>
       ) : (
-        items.map((item, i) => {
+        <>
+        {attachedCount > 0 && (
+          <>
+            <AttachedGroup
+              rows={items.slice(0, attachedCount).map((item, i): AttachedRow => ({
+                index: i,
+                key: item.id,
+                title: itemTitle(item),
+                preview: item.type === 'attachment' ? item.preview : null,
+                icon: <RowIcon item={item} active={i === index} />,
+                trail: <Trailing item={item} projectName={projectName} scopeLabel={item.type === 'note' ? noteScopeLabel(item.note, lookups.projects as never, lookups.threads as never) : ''} />,
+              }))}
+              active={index}
+              onHover={onHover}
+              onPick={onPick}
+            />
+            {items.length > attachedCount && <div style={{ height: 4, flexShrink: 0 }} />}
+          </>
+        )}
+        {items.slice(attachedCount).map((item, k) => {
+          const i = k + attachedCount
           const active = i === index
           const isAttached = attached.has(item.id)
           const section = sectionOf(item)
-          const title =
-            item.type === 'note' ? noteTitle(item.note)
-              : item.type === 'task' ? item.task.title.trim() || 'Untitled task'
-                : item.type === 'thread' ? item.thread.title || 'Untitled thread'
-                  : item.type === 'attachment' ? `@${item.label}`
-                    : item.type === 'file' ? basename(item.path)
-                      : item.type === 'command' ? titleCase(item.command.name)
-                        : item.skill.display_name ?? titleCase(item.skill.name)
+          const title = itemTitle(item)
           const description =
             item.type === 'thread' ? item.snippet
               : item.type === 'note' ? item.snippet ?? item.note.preview
-                : item.type === 'attachment' ? item.name
+                : item.type === 'attachment' ? (item.title === item.name ? null : item.name)
                   : item.type === 'command' ? item.command.hint
                     : item.type === 'skill' || item.type === 'plugin' ? item.skill.description
                       : null
           return (
             <div key={item.id} style={{ display: 'flex', flexDirection: 'column' }}>
-              {grouped && section !== sectionOf(items[i - 1]) && <SectionLabel first={i === 0}>{section!}</SectionLabel>}
+              {grouped && (i === attachedCount || section !== sectionOf(items[i - 1])) && <SectionLabel first={i === 0}>{section!}</SectionLabel>}
               <div
                 testId={`completion-${i}`}
                 aria-selected={active}
@@ -703,12 +749,13 @@ function CompletionList({
                     )}
                   </div>
                   <Trailing item={item} projectName={projectName} scopeLabel={item.type === 'note' ? noteScopeLabel(item.note, lookups.projects as never, lookups.threads as never) : ''} />
-                  {isAttached && <AttachedMark active={active} testId={`completion-attached-${i}`} />}
+                  {isAttached && <AttachedMark testId={`completion-attached-${i}`} />}
                 </div>
               </div>
             </div>
           )
-        })
+        })}
+        </>
       )}
       </div>
     </PopupLayer>
@@ -736,14 +783,10 @@ function Trailing({ item, projectName, scopeLabel }: { item: Item; projectName: 
   }
 }
 
-/** A picked row's mark: the check and a quiet hint, which says what Enter will do (Remove) while the row is the live one. */
-function AttachedMark({ active, testId }: { active: boolean; testId: string }) {
-  const t = useTheme()
+/** A picked row outside the leading group (a `$` or `/` list): the check, which Enter turns into a removal. */
+function AttachedMark({ testId }: { testId: string }) {
   const controls = useControls()
-  return <div testId={testId} style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-    <div style={{ display: 'flex', width: 52, justifyContent: 'flex-end' }}>
-      <Label color={muted(t, active ? 0.75 : 0.5)} size={12}>{active ? 'Remove' : 'Attached'}</Label>
-    </div>
+  return <div testId={testId} style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
     <Icon source={G.check} size={14} color={controls.accentFg} />
   </div>
 }
