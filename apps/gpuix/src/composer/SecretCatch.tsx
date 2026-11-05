@@ -5,6 +5,7 @@
 // Two states in one `TrayFrame` (the composer tray's grammar): the detection line, and the form that names the variable and
 // picks the file. The form checks the target as the name and file change (`secrets.target`, no value), so "Replace" and the
 // `.gitignore` line say what will happen before it does.
+import { problemLine } from '../problems/describe.ts'
 import { useEffect, useRef, useState } from 'react'
 import type { SecretsTargetResult } from '../../../../packages/kybern-client/src/types.ts'
 import { toEnvName, type SecretMatch } from './secretCatcher.ts'
@@ -90,7 +91,7 @@ export function SecretNameForm({ match, workspace, onCancel, onStored }: { match
     const timer = setTimeout(() => {
       client.call('secrets.target', { ...workspace, env_key: name, file })
         .then(result => { if (alive) setCheck(result) })
-        .catch(e => { if (alive) setCheck({ error: e instanceof Error ? e.message : String(e) }) })
+        .catch(e => { if (alive) setCheck({ error: problemLine(e, { action: 'check that file' }) }) })
     }, delay)
     return () => { alive = false; clearTimeout(timer) }
   }, [name, file, valid, workspace.thread_id, workspace.project_id])

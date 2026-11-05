@@ -2,7 +2,10 @@
 // Cursor row of "Installed agents" (install or update it there); the account section appears once the SDK is in place.
 import { useEffect, useRef, useState } from 'react'
 import type { CursorSetupAction, CursorSetupStatus } from '../../../../packages/kybern-client/src/types.ts'
-import { getClient } from '../state.ts'
+import { getClient, requireClient } from '../state.ts'
+import { problemLine } from '../problems/describe.ts'
+import { resolveAction } from '../problems/actions.ts'
+import { plainSentence } from '../../../../packages/kybern-client/src/problems.ts'
 import { loadProviders } from '../nav/live.ts'
 import { openUrl } from '../pulls/PrStates.tsx'
 import { Row, Section } from './controls.tsx'
@@ -27,12 +30,12 @@ export function useCursorSetup() {
     let timer: ReturnType<typeof setTimeout>
     const poll = async () => {
       try {
-        const next = await client!.call('cursor.status', {})
+        const next = await requireClient().call('cursor.status', {})
         if (!live) return
         apply(next)
         if (next.installing || next.signing_in) timer = setTimeout(() => void poll(), 1500)
         else if (waiting) void loadProviders(true)
-      } catch (e) { if (live) setError(String(e)) }
+      } catch (e) { if (live) setError(problemLine(e, { action: 'check Cursor' })) }
     }
     void poll()
     return () => { live = false; clearTimeout(timer) }
@@ -40,17 +43,17 @@ export function useCursorSetup() {
   const act = async (action: CursorSetupAction) => {
     setBusy(true); setError('')
     try {
-      const next = await client!.call('cursor.setup', { action })
+      const next = await requireClient().call('cursor.setup', { action })
       if (client !== getClient()) return
       apply(next)
       if (!next.installing && !next.signing_in) await loadProviders(true)
-    } catch (e) { setError(`Unable to complete Cursor setup. ${String(e)}`) } finally { setBusy(false) }
+    } catch (e) { setError(problemLine(e, { action: 'set up Cursor' })) } finally { setBusy(false) }
   }
   const check = async () => {
     setBusy(true); setError('')
-    try { apply(await client!.call('cursor.status', {})); await loadProviders(true) } catch (e) { setError(String(e)) } finally { setBusy(false) }
+    try { apply(await requireClient().call('cursor.status', {})); await loadProviders(true) } catch (e) { setError(problemLine(e, { action: 'check Cursor' })) } finally { setBusy(false) }
   }
-  return { status, busy, error: error || status?.error || '', act, check }
+  return { status, busy, error: error || (status?.error ? plainSentence(status.error) ?? problemLine(new Error(status.error), { action: 'set up Cursor' }) : ''), act, check }
 }
 
 /** The Cursor row's action while the SDK is missing or out of date. */
@@ -59,6 +62,9 @@ export function CursorSdkAction({ setup }: { setup: CursorSetup }) {
   if (!status) return <Button busy>Checking…</Button>
   if (status.installed) return null
   if (status.installing) return <Button busy>Installing…</Button>
+  // The SDK installs with npm: when Node.js is what is missing, the fix is Node.js, not another try.
+  const node = status.problem && /Node\.js/.test(status.problem) ? resolveAction({ id: 'install_tool', label: 'Install Node.js', params: { tool: 'node' } }, { retry: () => void setup.check() }, 'cursor-install-node') : null
+  if (node) return <Button testId={node.testId} variant="primary" onClick={node.onClick}>{node.label}</Button>
   return <Button testId="cursor-install" variant="primary" disabled={busy || !!status.problem} onClick={() => void act('install')}>{status.previous_version ? 'Update SDK' : 'Install SDK'}</Button>
 }
 

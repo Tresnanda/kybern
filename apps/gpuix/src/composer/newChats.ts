@@ -4,9 +4,10 @@
 // "Preparing worktree…" while a worktree is being made.
 import { useSyncExternalStore } from 'react'
 import { clientThreadIds, createNewChats, type NewChat } from '../../../../packages/kybern-client/src/newChat.ts'
+import { sendFailure } from './failure.ts'
 import type { ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 
-export const newChats = createNewChats()
+export const newChats = createNewChats({ errorText: sendFailure })
 
 export function useNewChat(threadId: ThreadId | null | undefined): NewChat | undefined {
   return useSyncExternalStore(newChats.subscribe, () => newChats.get(threadId))

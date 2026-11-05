@@ -93,7 +93,7 @@ describe('scan', () => {
     store.startScan()
     await flush()
     expect(projectsStore.get().status).toBe('failed')
-    expect(projectsStore.get().scanError).toContain('no answer')
+    expect(projectsStore.get().scanError).toContain('No answer')
     answers = { 'sessions.scan_projects': () => scan([project('/a', { suggested: true })], { scan_id: 's2' }) }
     store.rescan()
     await flush()
@@ -234,7 +234,7 @@ describe('import', () => {
     store.startImport()
     await flush()
     expect(projectsStore.get().job).toBeNull()
-    expect(projectsStore.get().importError).toContain('Couldn’t start the import')
+    expect(projectsStore.get().importError).toContain("Couldn't start the import")
     expect(store.getImportSummary().phase).toBe('none')
   })
 
