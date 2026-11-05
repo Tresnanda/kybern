@@ -42,9 +42,20 @@ const MODEL_DISCOVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_s
 #[derive(Default)]
 pub struct OpencodeDriver;
 
-async fn opencode_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<ProviderModel> {
+/// `opencode models` arguments. OpenCode 2 hands CLI commands to a shared
+/// background server (`opencode serve --service`) that it starts on demand
+/// and leaves running with the user's MCP servers loaded; `--standalone`
+/// answers from a private server that exits with the command.
+fn models_args(api: Option<Api>) -> &'static [&'static str] {
+    match api {
+        Some(Api::V2) => &["models", "--standalone"],
+        _ => &["models"],
+    }
+}
+
+async fn opencode_models(bin: &std::path::Path, api: Option<Api>, context: &ProbeContext) -> Vec<ProviderModel> {
     let mut command = crate::binary::command(bin).no_window();
-    command.args(["models"]).stdin(Stdio::null()).kill_on_drop(true);
+    command.args(models_args(api)).stdin(Stdio::null()).kill_on_drop(true);
     if let Some(cwd) = &context.cwd {
         command.current_dir(cwd);
     }
@@ -247,26 +258,27 @@ impl OpencodeDriver {
         match version_of(&bin, &["--version"]).await {
             Some(v) => {
                 let support = match parse_semver(&v) {
-                    Some(version) => api_for(version).map(|_| ()),
-                    None if at_least(&v, MIN_VERSION) => Ok(()),
+                    Some(version) => api_for(version).map(Some),
+                    None if at_least(&v, MIN_VERSION) => Ok(None),
                     None => Err(format!("OpenCode {v} is older than the required {}.{}.{}", MIN_VERSION.0, MIN_VERSION.1, MIN_VERSION.2)),
                 };
-                let ok = support.is_ok();
-                status.available = ok;
-                status.unavailable_reason = support.err();
                 status.version = Some(v);
-                if ok {
-                    status.models = opencode_models(&bin, context).await;
-                    if matches!(api_of(&bin).await, Ok(Api::V2)) {
-                        let catalog = variant_catalog(&bin, context).await;
-                        merge_efforts(&mut status.models, &catalog);
-                        // Per-model efforts only: a global fallback list would
-                        // accept an effort for models without variants, and a
-                        // probe-time union changes order run to run.
-                        if status.models.iter().any(|model| !model.efforts.is_empty()) {
-                            status.supports_effort_switch = true;
+                match support {
+                    Ok(api) => {
+                        status.available = true;
+                        status.models = opencode_models(&bin, api, context).await;
+                        if api == Some(Api::V2) {
+                            let catalog = variant_catalog(&bin, context).await;
+                            merge_efforts(&mut status.models, &catalog);
+                            // Per-model efforts only: a global fallback list would
+                            // accept an effort for models without variants, and a
+                            // probe-time union changes order run to run.
+                            if status.models.iter().any(|model| !model.efforts.is_empty()) {
+                                status.supports_effort_switch = true;
+                            }
                         }
                     }
+                    Err(reason) => status.unavailable_reason = Some(reason),
                 }
             }
             None => status.unavailable_reason = Some("could not run `opencode --version`".into()),
@@ -2123,6 +2135,14 @@ mod tests {
         assert!(api_for((1, 9, 0)).unwrap_err().contains("older than the required 1.10.0"));
         assert!(api_for((2, 1, 2)).unwrap_err().contains("early 2.x server API"));
         assert!(api_for((3, 0, 0)).unwrap_err().contains("newer than this Kybern supports"));
+    }
+
+    #[test]
+    fn model_discovery_never_starts_opencodes_background_service() {
+        use super::{Api, models_args};
+        assert_eq!(models_args(Some(Api::V2)), ["models", "--standalone"]);
+        assert_eq!(models_args(Some(Api::V1)), ["models"]);
+        assert_eq!(models_args(None), ["models"]);
     }
 
     #[test]
