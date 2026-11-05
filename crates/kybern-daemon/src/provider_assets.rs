@@ -88,6 +88,7 @@ fn layout(kind: ProviderKind, env: &BTreeMap<String, String>, home: &Path) -> (P
         ProviderKind::Cursor => (home.join(".cursor"), skills),
         // Kybern links nothing into `agy`'s storage.
         ProviderKind::Antigravity => (home.join(".gemini/antigravity-cli"), vec![]),
+        ProviderKind::GrokBuild => (home.join(".grok"), vec![]),
         ProviderKind::Pi => (
             configured("PI_CODING_AGENT_DIR", home.join(".pi/agent")),
             vec![("skills", "skills", true), ("extensions", "extensions", true)],
@@ -404,8 +405,8 @@ mod tests {
 
     #[test]
     fn every_provider_links_assets_for_existing_and_new_accounts() {
-        // Antigravity has one account per machine and Kybern links nothing into `agy`'s storage.
-        for kind in ProviderKind::ALL.into_iter().filter(|kind| *kind != ProviderKind::Antigravity) {
+        // Antigravity and Grok Build have one account per machine, and Kybern links nothing into their storage.
+        for kind in ProviderKind::ALL.into_iter().filter(|kind| !matches!(kind, ProviderKind::Antigravity | ProviderKind::GrokBuild)) {
             let scratch = Scratch::new();
             let provider = scratch.provider();
             prepare(&provider, kind).unwrap();

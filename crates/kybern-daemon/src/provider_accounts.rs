@@ -21,6 +21,8 @@ pub fn validate_color(color: &str) -> Result<()> {
 pub const ANTIGRAVITY_ONE_ACCOUNT: &str =
     "Antigravity has one account per machine. Sign in from Settings → Agents → Antigravity, or use a Gemini API key.";
 
+pub const GROK_BUILD_ONE_ACCOUNT: &str = "Grok Build has one account per machine. Sign in with `grok login` or set XAI_API_KEY.";
+
 /// The first color no other account of this agent uses, cycling once all are taken.
 pub fn next_color(provider: &ProviderSettings) -> String {
     let used: Vec<&str> = provider.accounts.values().filter_map(|account| account.color.as_deref()).collect();
@@ -57,6 +59,7 @@ pub fn credential_keys(kind: ProviderKind) -> &'static [&'static str] {
         ProviderKind::Codex => &["OPENAI_API_KEY", "CODEX_API_KEY"],
         ProviderKind::Cursor => &["CURSOR_API_KEY"],
         ProviderKind::Antigravity => &["GEMINI_API_KEY"],
+        ProviderKind::GrokBuild => &["XAI_API_KEY"],
         ProviderKind::Pi | ProviderKind::Omp | ProviderKind::Opencode => &[
             "ANTHROPIC_API_KEY",
             "OPENAI_API_KEY",
@@ -121,6 +124,8 @@ fn build_environment(settings: &ProviderSettings, kind: ProviderKind, instance: 
         }
         // `agy` has no supported config-root override, so a second account cannot be isolated.
         ProviderKind::Antigravity => return Err(anyhow!(ANTIGRAVITY_ONE_ACCOUNT)),
+        // Grok Build uses XAI_API_KEY or grok login; one account per machine.
+        ProviderKind::GrokBuild => return Err(anyhow!(GROK_BUILD_ONE_ACCOUNT)),
     }
     Ok(env)
 }
@@ -128,6 +133,7 @@ fn build_environment(settings: &ProviderSettings, kind: ProviderKind, instance: 
 pub fn validate(settings: &Settings) -> Result<()> {
     for (kind, provider) in &settings.providers {
         ensure!(*kind != ProviderKind::Antigravity || provider.accounts.is_empty(), "{ANTIGRAVITY_ONE_ACCOUNT}");
+        ensure!(*kind != ProviderKind::GrokBuild || provider.accounts.is_empty(), "{GROK_BUILD_ONE_ACCOUNT}");
         for (id, account) in &provider.accounts {
             ensure!(
                 id != "default" && !id.is_empty() && id.len() <= 80 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
@@ -148,6 +154,7 @@ pub fn validate(settings: &Settings) -> Result<()> {
 
 pub fn create(state: &AppState, params: AccountsCreateParams) -> Result<ProviderInstance> {
     ensure!(params.kind != ProviderKind::Antigravity, "{ANTIGRAVITY_ONE_ACCOUNT}");
+    ensure!(params.kind != ProviderKind::GrokBuild, "{GROK_BUILD_ONE_ACCOUNT}");
     ensure!(!params.name.trim().is_empty() && params.name.len() <= 120, "Enter an account name up to 120 characters.");
     let id = uuid::Uuid::now_v7().to_string();
     let directory = match params.directory {
@@ -228,6 +235,7 @@ pub fn sign_in(state: &AppState, instance: ProviderInstance) -> Result<TerminalI
             ProviderKind::Omp => &["auth-broker", "login"],
             ProviderKind::Cursor => unreachable!(),
             ProviderKind::Antigravity => return Err(anyhow!(ANTIGRAVITY_ONE_ACCOUNT)),
+            ProviderKind::GrokBuild => return Err(anyhow!(GROK_BUILD_ONE_ACCOUNT)),
         };
         std::iter::once(binary.to_string_lossy().into_owned()).chain(args.iter().map(|s| s.to_string())).collect()
     };
@@ -799,5 +807,26 @@ exit 2
         assert!(!is_managed(&root, &root.join("accounts/../elsewhere").to_string_lossy()));
         assert!(!is_managed(&root, "/Users/someone/.claude-work"));
         std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod grok_build_tests {
+    use super::*;
+
+    #[test]
+    fn grok_build_has_one_account_per_machine() {
+        let mut provider = ProviderSettings::default();
+        let directory = std::env::temp_dir().join("grok-second").to_string_lossy().into_owned();
+        provider.accounts.insert("second".into(), ProviderAccount { name: "Second".into(), directory, ..Default::default() });
+        let error = environment(&provider, ProviderKind::GrokBuild, "second").unwrap_err();
+        assert!(error.to_string().contains("one account per machine"), "{error}");
+        // The default account is the machine's own login, with the key it may carry.
+        provider.env.insert("XAI_API_KEY".into(), "key".into());
+        assert_eq!(environment(&provider, ProviderKind::GrokBuild, "default").unwrap()["XAI_API_KEY"], "key");
+        assert_eq!(credential_keys(ProviderKind::GrokBuild), ["XAI_API_KEY"]);
+        let mut settings = Settings::default();
+        settings.providers.insert(ProviderKind::GrokBuild, provider);
+        assert!(validate(&settings).is_err(), "a named Grok Build account can't be saved");
     }
 }
