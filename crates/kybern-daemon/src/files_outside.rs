@@ -173,11 +173,20 @@ pub async fn outside(
     let refused = now.verdict == OutsideVerdict::Refused;
     Ok(ThreadFileOutsideResult {
         verdict: now.verdict,
-        path: if refused { String::new() } else { file.to_string_lossy().into_owned() },
-        folder: now.folder.filter(|_| !refused).map(|folder| folder.to_string_lossy().into_owned()),
+        path: if refused { String::new() } else { display_path(&file) },
+        folder: now.folder.filter(|_| !refused).map(|folder| display_path(&folder)),
         scratch: now.scratch && !refused,
         reason: now.reason,
     })
+}
+
+/// A canonical path as the user reads it: Windows' verbatim `\\?\C:\…` form without its prefix (`\\?\UNC\…` stays as it is).
+pub(crate) fn display_path(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest.to_string(),
+        _ => text.into_owned(),
+    }
 }
 
 /// Read an allowed file outside the workspace. The result says it is read-only.
@@ -329,6 +338,13 @@ mod tests {
         assert!(asked.folder.is_some());
         let outside_temp = dir.file("tmp2/x.txt", "x");
         assert_eq!(assess(&outside_temp, &policy, &access(&policy, &[], &[]), true).verdict, OutsideVerdict::Ask);
+    }
+
+    #[test]
+    fn windows_verbatim_prefixes_are_not_shown_to_the_user() {
+        assert_eq!(display_path(Path::new(r"\\?\D:\work\plan.md")), r"D:\work\plan.md");
+        assert_eq!(display_path(Path::new(r"\\?\UNC\host\share\plan.md")), r"\\?\UNC\host\share\plan.md");
+        assert_eq!(display_path(Path::new("/tmp/plan.md")), "/tmp/plan.md");
     }
 
     #[test]

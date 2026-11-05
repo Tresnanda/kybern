@@ -2756,7 +2756,7 @@ async fn files_outside_the_workspace_open_read_only_after_the_desktop_allows_the
     // Nothing is allowed yet: the desktop is asked, everything else is refused, and reads keep today's refusal.
     let asked = check(&desktop, id, path("plan.md"), OutsideAllow::Check).await.unwrap();
     assert_eq!(asked.verdict, OutsideVerdict::Ask);
-    assert_eq!(asked.folder.as_deref(), Some(elsewhere.to_string_lossy().as_ref()));
+    assert_eq!(asked.folder.as_deref(), Some(crate::files_outside::display_path(&elsewhere).as_str()));
     let refused = check(&phone, id, path("plan.md"), OutsideAllow::Check).await.unwrap();
     assert_eq!(refused.verdict, OutsideVerdict::Refused);
     assert!(refused.reason.unwrap().contains("outside the conversation's workspace"));
