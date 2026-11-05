@@ -73,3 +73,36 @@ test('a network.changed status is shown as is and beats a read that was already 
   expect(result.stderr.toString()).toBe('')
   expect(result.exitCode).toBe(0)
 })
+
+// A failed read or action says what to do in words: an older daemon is "unavailable" by its kind (no text matching), and an action
+// that fails is named by what the person was doing.
+test('network failures become words, and an older daemon is told by its error kind', () => {
+  const result = Bun.spawnSync(['bun', '--eval', `
+    import { expect, mock } from 'bun:test'
+    let failure
+    const active = { status: 'open', call: async () => { throw failure } }
+    mock.module('../state.ts', () => ({ getClient: () => active }))
+    mock.module('./index.ts', () => ({ machineHub: () => ({ set: { syncMembers: async () => {} } }) }))
+    const { RpcCallError } = await import('../../../../packages/kybern-client/src/client.ts')
+    const { refreshNetwork, renameMachine, getNetwork, resetNetwork } = await import('./network.ts')
+
+    // "not found: terminal" used to match /not found/ and read as an old daemon; only an unknown method does.
+    failure = new RpcCallError({ code: -32003, message: 'not found: machine' })
+    await refreshNetwork()
+    expect(getNetwork().unavailable).toBe(false)
+    expect(getNetwork().error).toMatch(/^Couldn't read the network\./)
+
+    resetNetwork()
+    failure = new RpcCallError({ code: -32601, message: 'method not found: network.status' })
+    await refreshNetwork()
+    expect(getNetwork().unavailable).toBe(true)
+
+    resetNetwork()
+    failure = new RpcCallError({ code: -32013, message: 'SatyaMas is offline.' })
+    await renameMachine('sm', 'Desk').catch(() => {})
+    expect(getNetwork().error).toStartWith('SatyaMas is offline.')
+    expect(getNetwork().error).not.toMatch(/RpcCallError|-32013/)
+  `], { cwd: import.meta.dir, stdout: 'pipe', stderr: 'pipe' })
+  expect(result.stderr.toString()).toBe('')
+  expect(result.exitCode).toBe(0)
+})
