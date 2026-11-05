@@ -1237,6 +1237,13 @@ async fn dispatch_part_13(state: &AppState, _ctx: &ConnectionCtx, method: &str, 
                 _ => crate::skills::list(cwd, p.provider, &provider_settings.env).await.map_err(internal)?,
             };
             let mut skills = skills;
+            if p.include_other_agents {
+                // What the selected agent reads itself is already listed; the rest of the homes are "other agents".
+                let homes = state.skill_homes.resolve().into_iter().filter(|(home, _)| !home.readers().contains(&p.provider)).collect();
+                let own: std::collections::HashSet<String> = skills.iter().map(|skill| skill.name.to_ascii_lowercase()).collect();
+                let others = crate::skills::list_homes(homes).await.map_err(internal)?;
+                skills.extend(others.into_iter().filter(|skill| !own.contains(&skill.name.to_ascii_lowercase())));
+            }
             if state.orchestrator.computer().offered_to(p.provider) {
                 skills.insert(0, crate::computer::ComputerUse::mention_skill());
             }

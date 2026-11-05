@@ -3486,6 +3486,8 @@ export interface SkillInfo {
   path: string;
   scope: SkillScope;
   enabled: boolean;
+  /** Set on a skill listed from another agent's folder (`include_other_agents`): the home it lives in. */
+  home?: SkillHome | null;
 }
 
 export interface SkillsListParams {
@@ -3493,6 +3495,8 @@ export interface SkillsListParams {
   instance?: string;
   project_id: ProjectId;
   provider: ProviderKind;
+  /** Also list the skills in other agents' folders, each tagged with its `home`. An older daemon ignores it. */
+  include_other_agents?: boolean;
 }
 
 export interface SkillsListResult {

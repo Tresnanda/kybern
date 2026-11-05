@@ -179,6 +179,7 @@ async fn skill_picker_explicit_account_overrides_project_and_provider_defaults()
                 project_id: thread.project_id,
                 provider: ProviderKind::ClaudeCode,
                 instance: instance.map(str::to_string),
+                include_other_agents: false,
             })
             .await
             .unwrap();
@@ -192,6 +193,7 @@ async fn skill_picker_explicit_account_overrides_project_and_provider_defaults()
                 project_id: thread.project_id,
                 provider: ProviderKind::ClaudeCode,
                 instance: instance.map(str::to_string),
+                include_other_agents: false,
             })
             .await
             .unwrap();
@@ -203,11 +205,52 @@ async fn skill_picker_explicit_account_overrides_project_and_provider_defaults()
             .call::<SkillsList>(SkillsListParams {
                 project_id: thread.project_id,
                 provider: ProviderKind::ClaudeCode,
-                instance: Some("missing".into())
+                instance: Some("missing".into()),
+                include_other_agents: false,
             })
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn skills_list_adds_other_agents_homes_only_when_asked() {
+    let host = Host::start().await;
+    let thread = host.thread();
+    let home = host.root.join("home");
+    for (folder, name) in [(".claude/skills", "from-claude"), (".agents/skills", "shared")] {
+        let skill = home.join(folder).join(name);
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(skill.join("SKILL.md"), format!("---\nname: {name}\ndescription: Fixture\n---\nBody")).unwrap();
+    }
+    host.state.skill_homes.set(Default::default(), home.clone());
+    let mut settings = host.state.settings.get();
+    let provider = settings.providers.entry(ProviderKind::Pi).or_default();
+    provider.env.insert("HOME".into(), home.to_string_lossy().into_owned());
+    provider.binary = Some(host.root.join("no-agent-binary").to_string_lossy().into_owned());
+    host.state.settings.set(settings).unwrap();
+    let client = host.client().await;
+    let list = |include_other_agents| {
+        let client = &client;
+        async move {
+            client
+                .call::<SkillsList>(SkillsListParams {
+                    project_id: thread.project_id,
+                    provider: ProviderKind::Pi,
+                    instance: None,
+                    include_other_agents,
+                })
+                .await
+                .unwrap()
+                .skills
+        }
+    };
+    // Today's call: only what pi loads itself, which is neither folder.
+    assert!(list(false).await.iter().all(|skill| skill.home.is_none() && skill.name != "from-claude"));
+    // Opt in: the other agents' folders, each skill tagged with its home.
+    let all = list(true).await;
+    let tagged: Vec<_> = all.iter().filter(|skill| skill.home.is_some()).map(|skill| (skill.name.as_str(), skill.home.unwrap())).collect();
+    assert_eq!(tagged, [("from-claude", kybern_protocol::SkillHome::Claude), ("shared", kybern_protocol::SkillHome::Agents)]);
 }
 
 // Successful cleanup requires the lsof or /proc process-ownership backend.

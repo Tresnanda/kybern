@@ -278,6 +278,7 @@ impl ComputerUse {
             path: MENTION_PATH.into(),
             scope: kybern_protocol::SkillScope::Plugin,
             enabled: true,
+            home: None,
         }
     }
 
