@@ -202,7 +202,7 @@ pub(crate) fn friendly_problem(error: anyhow::Error) -> (String, Option<Problem>
 const BRANCH_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 pub async fn branches(cwd: &Path, fetch: bool, include_remote: bool) -> Result<GitBranchesResult> {
-    if !Repo::is_repo(cwd).await {
+    if !Repo::check(cwd).await? {
         return Ok(GitBranchesResult { current: None, branches: Vec::new() });
     }
     let repo = Repo::new(cwd);
@@ -271,6 +271,10 @@ where
 
 pub async fn status(cwd: &Path) -> Result<GitStatus> {
     let state = Repo::probe(cwd).await;
+    // Git itself is missing: say so, with the typed error that offers Install Git, rather than "not a repository".
+    if let RepoState::GitUnavailable(kind) = state {
+        return Err(Repo::git_unavailable(kind).into());
+    }
     if state != RepoState::Repo {
         return Ok(GitStatus {
             is_git: false,

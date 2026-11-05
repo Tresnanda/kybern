@@ -12,7 +12,7 @@ import { FieldShell, TextField } from '../kit/Field.tsx'
 import { Checklist, ChecklistHeader } from '../groups/Checklist.tsx'
 import { folderName, isSelectable, mergeCandidates, orderCandidates, relativeInside, tildify, toggled } from '../groups/model.ts'
 import { Icon } from '../icons.tsx'
-import { errorText } from '../nav/actions.ts'
+import { problemLine } from '../problems/describe.ts'
 import { N } from '../nav/glyphs.ts'
 import { Dialog, useDialogClose } from '../nav/overlay.tsx'
 import { activeEnvironment } from '../shell/environment.ts'
@@ -64,7 +64,7 @@ function GroupSheet({ path, close, seed }: { path: string; close: () => void; se
       setScan(result)
       setCandidates(orderCandidates(result.candidates))
       if (!nameEdited.current) setName(result.name)
-    }, (e) => { if (live) setError(errorText(e)) }).finally(() => { if (live) setLoading(false) })
+    }, (e) => { if (live) setError(problemLine(e, { action: 'look for repositories' })) }).finally(() => { if (live) setLoading(false) })
     return () => { live = false }
   }, [client, path])
 
@@ -105,7 +105,7 @@ function GroupSheet({ path, close, seed }: { path: string; close: () => void; se
       setCandidates(merged)
       // The user picked this folder: it arrives ticked ("Added"), unless it can't be a member.
       if (merged.find((c) => c.path === relative && isSelectable(c))) setSelected((prev) => (prev.includes(relative) ? prev : toggled(prev, relative)))
-    } catch (e) { setAddError(errorText(e)) }
+    } catch (e) { setAddError(problemLine(e, { action: 'add that folder' })) }
   }
 
   const submit = async () => {
@@ -116,7 +116,7 @@ function GroupSheet({ path, close, seed }: { path: string; close: () => void; se
       await addProjectToCurrentSpace(folder, { kind: 'group', members: orderMemberPaths(selected), ...(trimmed !== group ? { name: trimmed } : {}) })
       if (getClient() !== client) return
       close()
-    } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
+    } catch (e) { setError(problemLine(e, { action: 'create the group' })) } finally { setBusy(false) }
   }
 
   const openExisting = () => {
