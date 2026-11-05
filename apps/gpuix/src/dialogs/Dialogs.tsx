@@ -1,5 +1,6 @@
 import { useDialog, showDialog } from './store.ts'
 import { Account } from './Account.tsx'
+import { ReportProblem } from './ReportProblem.tsx'
 import { ProjectPicker } from './ProjectPicker.tsx'
 import { GroupProject } from './GroupProject.tsx'
 import { Repositories } from './Repositories.tsx'
@@ -19,6 +20,7 @@ export function WorkspaceDialogs() {
   if (dialog?.kind === 'move') return <ForkSheet key={`move:${dialog.machineId ?? ''}:${dialog.threadId}`} mode="move" threadId={dialog.threadId} {...(dialog.machineId ? { machineId: dialog.machineId } : {})} close={close} />
   if (dialog?.kind === 'provision') return <ProvisionSheet key={`provision:${dialog.machineId ?? ''}:${dialog.projectId}`} projectId={dialog.projectId} {...(dialog.machineId ? { machineId: dialog.machineId } : {})} close={close} />
   if (dialog?.kind === 'antigravity-notice') return <AntigravityNotice proceed={dialog.proceed} close={close} />
+  if (dialog?.kind === 'report') return <ReportProblem draft={dialog.draft} close={close} />
   if (dialog?.kind === 'account') return <Account key={`${dialog.provider ?? ''}:${dialog.instance ?? ''}`} close={close} provider={dialog.provider} instance={dialog.instance} />
   return null
 }

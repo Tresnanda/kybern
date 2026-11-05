@@ -177,6 +177,12 @@ button for each action the table can run.
 toastProblem(error, { action: 'start the thread', retry, projectId })   // problems/toast.ts: the same, as a toast with Copy
 ```
 
+**Report a problem.** `problemProps` gives every Problem an `onReport`, shown as a ghost "Report a problem" inside Show details (never a
+button of its own). It builds the GitHub issue (`problems/report.ts`, redaction in `packages/kybern-client/src/report.ts`: local paths,
+the user and computer names, e-mail addresses, tokens and network addresses are replaced by `<…>` before anything is shown), opens the
+review sheet (`dialogs/ReportProblem.tsx`: the issue title and text, editable) and opens the prefilled issue only on "Open on GitHub".
+`scripts/report-problem-check.ts` drives it.
+
 **One-line and named forms (`problems/describe.ts`).** `describe(error, ctx)` is `describeProblem` that also names the machine an `OfflineError`
 came from; use it instead of calling `describeProblem` directly. Where there is no room for a card (a composer line, a form field, the
 connection banner) `problemLine(error, { action })` gives "<headline>. <what to do next>", never the raw text. A call that must run now

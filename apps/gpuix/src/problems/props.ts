@@ -36,5 +36,7 @@ export function problemProps(view: ProblemView, context: ActionContext = {}, tes
     .filter((action) => !(view.detail && isCopy(action?.id)))
     .map((action) => resolveAction(action, withDetail))
     .filter((button): button is NonNullable<typeof button> => button !== null)
-  return { ...problemLook(view.kind), title: view.title, body: view.body, primary: buttons[0], secondary: buttons[1], detail: view.detail || undefined, ...(testId ? { testId } : {}) }
+  // Reporting lives behind the details: it is the quiet way out of a problem the buttons above cannot fix.
+  const onReport = () => { void import('./report.ts').then((report) => report.reportProblem(view)).catch(() => {}) }
+  return { ...problemLook(view.kind), title: view.title, body: view.body, primary: buttons[0], secondary: buttons[1], detail: view.detail || undefined, onReport, ...(testId ? { testId } : {}) }
 }
