@@ -31,12 +31,12 @@ import { PrListRow } from './list/PrListRow.tsx'
 import { ProjectFilter } from './list/ProjectFilter.tsx'
 import { RepoChips } from './list/RepoChips.tsx'
 import { ALL_PROJECTS, groupRows, hasPullRequests, inScope, isGroup, memberName, readRepoMemory, rememberRepos, scopeTargets, type Row, type Scope } from './list/model.ts'
-import { PrLoading, Problem } from './PrStates.tsx'
+import { PartialProblem, PrLoading, Problem } from './PrStates.tsx'
 import { SwapOnChange } from '../motion/kit.tsx'
 import { isPrimaryNotAltGr } from '../platform/keys.ts'
 
 /** One project or member that didn't list: `text` names it for the partial list, `error` keeps its `Problem`. */
-interface LoadError { text: string; error: unknown; projectId: string }
+interface LoadError { /** "Project" or "Project / member", for the headline's list. */ name: string; text: string; error: unknown; projectId: string }
 interface Loaded { rows: PullRequest[]; errors: LoadError[] }
 type Filter = 'open' | 'merged' | 'closed' | 'all'
 const FILTERS = [['open', 'Open'], ['merged', 'Merged'], ['closed', 'Closed'], ['all', 'All']] as const
@@ -103,7 +103,7 @@ function PullRequestsList() {
         else {
           const result = await prCall(project.id, 'github.pr.list', { project_id: project.id, state: filter, limit: 30 })
           // A group project's members that couldn't be listed don't hide the others.
-          const errors = (result.repos ?? []).flatMap(m => m.error && !m.skipped && classifyPrError(m.error) !== 'no-remote' ? [{ text: `${project.name} / ${m.name}: ${m.error}`, error: { message: m.error, data: m.problem ? { problem: m.problem } : undefined }, projectId: project.id }] : [])
+          const errors = (result.repos ?? []).flatMap(m => m.error && !m.skipped && classifyPrError(m.error) !== 'no-remote' ? [{ name: `${project.name} / ${m.name}`, text: `${project.name} / ${m.name}: ${m.error}`, error: { message: m.error, data: m.problem ? { problem: m.problem } : undefined }, projectId: project.id }] : [])
           loaded = { rows: result.pull_requests, errors }
         }
         cache.set(key, { until: Date.now() + 30_000, ...loaded })
@@ -111,13 +111,13 @@ function PullRequestsList() {
         return { rows: loaded.rows.map(pr => ({ pr, project })), errors: loaded.errors }
       } catch (e) {
         const message = errorMessage(e)
-        return { rows: [] as Row[], errors: classifyPrError(message) === 'no-remote' ? [] : [{ text: `${project.name}: ${message}`, error: e, projectId: project.id }] }
+        return { rows: [] as Row[], errors: classifyPrError(message) === 'no-remote' ? [] : [{ name: project.name, text: `${project.name}: ${message}`, error: e, projectId: project.id }] }
       }
     }).then(results => {
       if (canceled) return
       setLoaded({ scope: loadScope, rows: results.flatMap(r => r.rows).sort((a, b) => b.pr.updated_at.localeCompare(a.pr.updated_at)), errors: results.flatMap(r => r.errors) })
       setPending(false)
-    }, e => { if (!canceled) { setLoaded({ scope: loadScope, rows: [], errors: [{ text: errorMessage(e), error: e, projectId: targets[0]?.id ?? '' }] }); setPending(false) } })
+    }, e => { if (!canceled) { setLoaded({ scope: loadScope, rows: [], errors: [{ name: targets[0]?.name ?? 'GitHub', text: errorMessage(e), error: e, projectId: targets[0]?.id ?? '' }] }); setPending(false) } })
     return () => { canceled = true }
   }, [loadScope, filter, revision, connected])
   const data = loaded?.scope === loadScope ? loaded : null
@@ -159,7 +159,7 @@ function PullRequestsList() {
       </div>
       <virtual-list {...PR_SCROLL_LAYOUT} testId="pr-list" estimatedItemHeight={72} style={{ flexGrow: 1, minHeight: 0 }}>
         {failure ? <div key="gh-error" style={{ padding: 20 }}><Problem error={failure.error} projectId={failure.projectId} refresh={() => refresh(n => n + 1)} /></div> : !data ? <div key="loading" style={{ padding: 24 }}><PrLoading label="Loading pull requests…" kind="list" rows={5} /></div> : <>
-          {data.errors.length > 0 && <div key="errors" style={{ padding: 12 }}><Problem error={data.errors.map(e => e.text).join('\n')} partial={data.rows.length > 0} refresh={() => refresh(n => n + 1)} /></div>}
+          {data.errors.length > 0 && <div key="errors" style={{ padding: 12 }}><PartialProblem failures={data.errors} anyLoaded={data.rows.length > 0} refresh={() => refresh(n => n + 1)} /></div>}
           {flat.length === 0 && <div key="empty" style={{ ...column, gap: 10, padding: 24, paddingTop: 64 }}><Label color={t.text} size={16} weight={500}>{!targets.length ? 'No GitHub projects' : query.trim() ? `No results for “${query.trim()}”` : `No ${stateWord}pull requests`}</Label><Label color={t.textSecondary} size={13}>{!targets.length ? 'Add a project with a GitHub remote to review its pull requests here.' : query.trim() ? '' : `Pull requests from ${scope.project ? targets[0]?.name : 'your GitHub projects'} appear here.`}</Label>{query.trim() && <Button size="sm" style={{ alignSelf: 'flex-start' }} onClick={() => setQuery('')}>Clear search</Button>}</div>}
           {groups.flatMap(group => [
             ...(group.label ? [<div key={`group-${group.group ?? 'done'}`} testId={`pr-group-${group.group ?? 'done'}`} style={{ ...row, gap: 6, height: 30, paddingLeft: 16, paddingRight: 8, paddingTop: 8 }}><Label color={t.textSecondary} size={12} lineHeight={16} weight={500}>{group.label}</Label><Label color={t.textTertiary} size={12} lineHeight={16}>{String(group.rows.length)}</Label></div>] : []),

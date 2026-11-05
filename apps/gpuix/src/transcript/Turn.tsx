@@ -51,6 +51,7 @@ import { over } from '../theme.ts'
 import { Collapse, Rise } from '../motion/kit.tsx'
 import { Shimmer } from './motion.tsx'
 import { agentName } from '../requests/model.ts'
+import { TurnProblem } from './TurnProblem.tsx'
 import { silenceNotice } from '../../../../packages/kybern-client/src/silence.ts'
 import { GROUP_TREE, HEADER_STEM, WorkRows, type RowContext } from './rows.tsx'
 import { markTreeOpen, TreeGroup, TreeLines } from '../tree/Tree.tsx'
@@ -280,6 +281,7 @@ export const AnswerImages = memo(function AnswerImages({ group, threadId }: { gr
 
 export const TurnFooter = memo(function TurnFooter({ group, threadId, isLast }: { group: TurnGroup; threadId: ThreadId; isLast: boolean }) {
   const t = useTheme()
+  const projectId = useApp(s => s.open.thread?.project_id)
   const subagentThread = useApp(s => s.open.thread?.subagent ? s.open.thread : null)
   const answerText = group.answer?.text ?? ''
   const cards = useMemo(() => itemCards(group), [group.work, group.answer?.text])
@@ -290,14 +292,7 @@ export const TurnFooter = memo(function TurnFooter({ group, threadId, isLast }: 
   const diff = useTurnDiff(threadId, group.turnId, !!group.end)
   return <div style={{ display: 'flex', flexDirection: 'column', paddingBottom: 10 }}>
           {group.end && cards.below.map(card => <AgentItemCard key={card.id} result={card.result} inset={false} />)}
-          {group.end?.error && (
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 8 }}>
-              <Icon source={T.alert} size={14} color={t.red} style={{ marginTop: 4 }} />
-              <Para color={t.red} selectable style={{ flexGrow: 1 }}>
-                {group.end.error}
-              </Para>
-            </div>
-          )}
+          {group.end?.error && <TurnProblem error={group.end.error} projectId={projectId} />}
           {group.end?.stopReason === 'interrupted' && <Para color={muted(t)}>Stopped.</Para>}
           {diff && diff.files.length > 0 && <EditedFilesCard diff={diff} threadId={threadId} turnId={group.turnId} canUndo={isLast} />}
           {group.outside?.map((block) => <OutsideChange key={block.id} repos={block.repos} />)}
@@ -540,8 +535,8 @@ function SendFailed({ threadId, id, error, parts }: { threadId: ThreadId; id: st
       {/* The reason wraps instead of truncating: its last clause is usually what to do next. */}
       <div testId="send-failed" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, paddingTop: 30, maxWidth: '80%' }}>
         <Label color={t.v('--destructive')} size={META.size} lineHeight={META.lineHeight} style={{ textAlign: 'right' }}>
-          {/* Daemon errors may start lowercase ("thread is no longer idle"); the reason reads as its own sentence. */}
-          {`Not sent. ${error ? error.charAt(0).toUpperCase() + error.slice(1) : 'The daemon did not answer.'}`}
+          {/* `composer/failure.ts` wrote the reason: what happened, what to do, and that the text is saved. */}
+          {error ?? "Kybern didn’t answer. Try again. Your message is saved."}
         </Label>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <Button size="sm" testId="send-retry" onClick={() => retryPending(threadId, id)}>Retry</Button>

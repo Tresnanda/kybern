@@ -18,7 +18,8 @@ import { ProjectsChips } from './ProjectsChips.tsx'
 import { ProjectsList } from './ProjectsList.tsx'
 import { finishFlow, goFrom } from './flow.ts'
 import { createPress } from './once.ts'
-import { noun } from './model.ts'
+import { hostLabel, noun } from './model.ts'
+import { useEnvironment } from '../shell/environment.ts'
 import { In, Roll, Words } from './motion.tsx'
 import { chipsFor, ctaLabel, failureLine, MODE_CAPTION, MODE_OPTIONS, totalLabel, totals, type CtaLabel } from './projects.ts'
 import { allRows, cancelScan, chooseFolder, isEmptyScan, rescan, setMode, startImport, startScan, useProjects } from './projectsStore.ts'
@@ -109,6 +110,8 @@ export function ProjectsScene() {
   const providers = useProjects((s) => s.scan?.providers)
   const found = useProjects((s) => s.scan?.sessions_found ?? 0)
   const scanError = useProjects((s) => s.scanError)
+  const env = useEnvironment()
+  const host = hostLabel(process.platform, env.local ? null : env.name)
   const empty = useProjects(isEmptyScan)
   const hasRows = useProjects((s) => s.suggested.length + s.others.length > 0)
   const mode = useProjects((s) => s.mode)
@@ -147,7 +150,7 @@ export function ProjectsScene() {
       <EmptyHeader>
         <EmptyMedia variant="icon" icon={N.folder} />
         <EmptyTitle>No past chats found</EmptyTitle>
-        <EmptyDescription>Your agents have no chat history on this Mac yet. Choose a folder to work in, or start a free chat.</EmptyDescription>
+        <EmptyDescription>{`Your agents have no chat history on ${host} yet. Choose a folder to work in, or start a free chat.`}</EmptyDescription>
       </EmptyHeader>
       <EmptyContent style={{ flexDirection: 'row', justifyContent: 'center', gap: 8 }}>
         <Button testId="projects-empty-folder" variant="secondary" size="lg" icon={N.folder} onClick={choose}>Choose a folder</Button>
@@ -160,7 +163,7 @@ export function ProjectsScene() {
       <EmptyHeader>
         <EmptyMedia variant="icon" icon={N.alert} />
         <EmptyTitle>Couldn’t read your chat history</EmptyTitle>
-        <EmptyDescription>{scanError ? `${scanError} Scan again, or choose a folder to work in.` : 'Scan again, or choose a folder to work in.'}</EmptyDescription>
+        <EmptyDescription>{scanError ? `${scanError} Or choose a folder to work in.` : 'Scan again, or choose a folder to work in.'}</EmptyDescription>
       </EmptyHeader>
       <EmptyContent style={{ flexDirection: 'row', justifyContent: 'center', gap: 8 }}>
         <Button testId="projects-rescan" variant="secondary" size="lg" onClick={() => rescan()}>Scan again</Button>

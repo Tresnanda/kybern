@@ -1,7 +1,7 @@
 // The login broker as Settings › Accounts reads it (ADE-86 S4, design §9.4): `login.broker.status` from the machine the user
 // is at, and the actions on it. One store; it reads while the page shows it. The words come from the shared client
 // (`loginBroker.ts`), which also runs "Sign in on all machines".
-import { problemSentence } from '../problems/sentence.ts'
+import { describe, problemLine } from '../problems/describe.ts'
 import { useEffect, useSyncExternalStore } from 'react'
 import type { LoginBrokerSetResult, LoginBrokerStatus, MachineId, ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
 import { planSignInAll, runSignInAll, driveLogin, type SignInAllRow } from '../../../../packages/kybern-client/src/loginBroker.ts'
@@ -32,7 +32,7 @@ export function seedBroker(status: LoginBrokerStatus) { state = { ...EMPTY, stat
 /** Tests: forget everything. */
 export function resetBroker() { state = EMPTY; reading = false }
 
-const text = (error: unknown) => problemSentence(error, { action: 'sign in on that machine' })
+const line = (error: unknown, action: string) => problemLine(error, { action })
 
 let reading = false
 export async function refreshBroker(): Promise<void> {
@@ -43,13 +43,13 @@ export async function refreshBroker(): Promise<void> {
     const status = await client.call('login.broker.status', {})
     if (getClient() === client) emit({ status, unavailable: false, error: '' })
   } catch (error) {
-    if (getClient() === client) emit({ unavailable: /not found|unknown method|-32601/i.test(text(error)), error: text(error) })
+    if (getClient() === client) emit({ unavailable: describe(error, { action: 'read the login broker' }).kind === 'update_needed', error: line(error, 'read the login broker') })
   } finally { reading = false }
 }
 
 async function act<T>(busy: string, run: () => Promise<T>): Promise<T> {
   emit({ busy, error: '' })
-  try { return await run() } catch (error) { emit({ error: text(error) }); throw error } finally { emit({ busy: null }) }
+  try { return await run() } catch (error) { emit({ error: line(error, 'change the login broker') }); throw error } finally { emit({ busy: null }) }
 }
 
 /** "Use VPS's sign-in": a named account here that signs in through the broker's account. */

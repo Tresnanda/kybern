@@ -16,6 +16,7 @@ import { useEnvironment } from './environment.ts'
 import type { PaintTransformProps } from '@gpuix/native/host'
 import { useEffect, useState } from 'react'
 import { restartLive } from '../nav/live.ts'
+import { describe } from '../problems/describe.ts'
 import { EASE } from '../motion/kit.tsx'
 import { Presence } from '../motion/Presence.tsx'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
@@ -78,11 +79,12 @@ const BANNER_EXIT = { to: { opacity: 0, translateY: -4 }, duration: 0.12, ease: 
 
 /** Mount once inside the content card; it overlays the top of the card. */
 export function ConnectionBanner() {
-  const { name: NAME } = useEnvironment()
+  const { name: NAME, local } = useEnvironment()
   const t = useTheme()
   const g = useGlass()
   const status = useApp((s) => s.status)
   const detail = useApp((s) => s.statusDetail)
+  const failure = failureLine(detail, NAME, local)
   const show = status === 'reconnecting' || status === 'failed'
   // `Presence` keeps what the banner said last, so it can finish leaving with its own words.
   const failed = status === 'failed'
@@ -117,7 +119,7 @@ export function ConnectionBanner() {
           <>
             <div style={{ width: 6, height: 6, borderRadius: 3, flexShrink: 0, backgroundColor: t.red }} />
             <Label color={t.text} size={13} lineHeight={21} style={{ flexShrink: 1, minWidth: 0 }}>
-              {`${NAME}: ${detail ?? 'Connection failed'}`}
+              {failure}
             </Label>
             <ReconnectButton />
           </>
@@ -133,6 +135,12 @@ export function ConnectionBanner() {
       </Presence>
     </div>
   )
+}
+
+/** What the banner says once the transport gave up: the outcome and what to do, never the transport's own text (that stays in `statusDetail`). */
+export function failureLine(detail: string | null, name: string, local: boolean): string {
+  const view = describe(new Error(detail ?? ''), { action: `connect to ${name}`, ...(local ? {} : { machine: name }) })
+  return view.kind === 'internal' ? `Couldn’t connect to ${name}. Check that Kybern is running there, then reconnect.` : `${view.title}. ${view.body}`
 }
 
 function ReconnectButton() {

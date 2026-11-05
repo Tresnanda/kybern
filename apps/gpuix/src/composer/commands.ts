@@ -12,9 +12,11 @@ import { archiveThread } from '../nav/actions.ts'
 import { setNav } from '../nav/store.ts'
 import { launchBrowser } from '../preview/browser.ts'
 import { toast } from '../shell/toasts.tsx'
-import { threadClient, useApp, type StateThread } from '../state.ts'
+import { callThread, useApp, type StateThread } from '../state.ts'
+import { toastProblem } from '../problems/toast.ts'
+import type { MethodName, ParamsOf } from '../../../../packages/kybern-client/src/types.ts'
 import { G } from './glyphs.ts'
-import { errorText, interruptThread } from './store.ts'
+import { interruptThread } from './store.ts'
 import type { SlashCommand } from './Completion.tsx'
 
 const EMPTY: never[] = []
@@ -27,29 +29,29 @@ export function useThreadCommands(thread: StateThread | null, attach: () => void
     if (!thread) return []
     const panel = (tab: DockTab) => () => { setDock(thread.id, { open: true }); chooseTab(thread.id, tab) }
     const sessions = () => setNav({ sessions: { projectId: freeChat ? null : thread.project_id } })
-    const client = () => threadClient(thread.id, thread.machineId)!
+    const call = <M extends MethodName>(method: M, params: ParamsOf<M>) => callThread(thread.id, method, params, thread.machineId)
     const handlers: Record<ThreadCommandId, { icon: string; run: () => void }> = {
       resume: { icon: G.clock, run: sessions },
       sessions: { icon: G.clock, run: sessions },
       compact: { icon: G.workflow, run: () => {
-        void client().call('threads.compact', { thread_id: thread.id }).catch(error => toast.error('Unable to compact context', { description: errorText(error) }))
+        void call('threads.compact', { thread_id: thread.id }).catch(error => toastProblem(error, { action: 'compact the context' }))
       } },
       new: { icon: N.newThread, run: () => newThread(freeChat ? undefined : thread.project_id) },
       reconnect: { icon: G.workflow, run: () => {
-        void client().call('threads.release', { thread_id: thread.id }).then(() => toast('Agent released', { description: 'Your next message resumes the saved conversation.' })).catch(error => toast.error('Unable to release agent', { description: errorText(error) }))
+        void call('threads.release', { thread_id: thread.id }).then(() => toast('Agent released', { description: 'Your next message resumes the saved conversation.' })).catch(error => toastProblem(error, { action: 'release the agent' }))
       } },
       stop: { icon: N.stop, run: () => void interruptThread(thread.id).catch(() => {}) },
       activity: { icon: G.workflow, run: panel('activity') },
       agents: { icon: N.users, run: panel('agents') },
       attach: { icon: G.paperclip, run: attach },
-      terminal: { icon: G.terminal, run: () => { void client().call('terminals.create', { thread_id: thread.id, cols: 100, rows: 24 }).then(info => openTab(thread.id, { kind: 'terminal', id: info.id })).catch(error => toast.error('Unable to open a terminal', { description: errorText(error) })) } },
+      terminal: { icon: G.terminal, run: () => { void call('terminals.create', { thread_id: thread.id, cols: 100, rows: 24 }).then(info => openTab(thread.id, { kind: 'terminal', id: info.id })).catch(error => toastProblem(error, { action: 'open a terminal' })) } },
       changes: { icon: G.changes, run: panel('changes') },
       files: { icon: G.folders, run: panel('explorer') },
       environment: { icon: N.branch, run: panel('changes') },
       pr: { icon: N.pullRequest, run: () => {
-        void client().call('github.pr.create', { thread_id: thread.id })
+        void call('github.pr.create', { thread_id: thread.id })
           .then(pr => toast('Pull request opened', { description: pr.title, action: { label: 'Open', onClick: () => void launchBrowser(pr.url) } }))
-          .catch(error => toast.error('Unable to create pull request', { description: errorText(error) }))
+          .catch(error => toastProblem(error, { action: 'create the pull request', goal: 'create pull requests', projectId: thread.project_id }))
       } },
       archive: { icon: N.archive, run: () => void archiveThread(thread.id) },
       settings: { icon: N.settings, run: () => setNav({ settingsOpen: true }) },

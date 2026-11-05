@@ -1,10 +1,11 @@
 // "New terminal on…" (U4): one row per other machine that can open a shell now. Nothing renders with a single machine.
-import { toastProblem } from '../problems/toast.ts'
 import { terminalMachines } from '../../../../packages/kybern-client/src/machineUtilities.ts'
+import { toastProblem } from '../problems/toast.ts'
 import { MenuSub, MenuItem } from '../nav/overlay.tsx'
 import { DOCK_ICONS } from '../dock/icons.ts'
 import { MachineBadge } from '../sidebar/MachineBadge.tsx'
 import { useApp } from '../state.ts'
+import { toast } from '../shell/toasts.tsx'
 import { glyphOfMachine, machineHub, useMachines } from './index.ts'
 import { openTerminalOn } from './utilities.ts'
 

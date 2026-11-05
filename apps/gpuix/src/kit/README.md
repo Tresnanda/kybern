@@ -177,6 +177,12 @@ button for each action the table can run.
 toastProblem(error, { action: 'start the thread', retry, projectId })   // problems/toast.ts: the same, as a toast with Copy
 ```
 
+**One-line and named forms (`problems/describe.ts`).** `describe(error, ctx)` is `describeProblem` that also names the machine an `OfflineError`
+came from; use it instead of calling `describeProblem` directly. Where there is no room for a card (a composer line, a form field, the
+connection banner) `problemLine(error, { action })` gives "<headline>. <what to do next>", never the raw text. A call that must run now
+uses `requireThreadClient` / `requireClient` (`state.ts`), which throw the offline error naming the computer instead of a `TypeError` on `null`.
+The gallery section `problem-families` (`scripts/problem-families-check.ts`) shows the phase 3 copy built from real failures.
+
 **Actions (`problems/actions.ts`).** `PROBLEM_ACTIONS` maps an action id to a flow GPUIX already has; `resolveAction(action, context)` gives
 the button or `null`. An id that isn't in the table, or that cannot run with the context (`retry` without a `retry` callback,
 `copy_details` without `detail`), renders no button; a "Copy details" action is also dropped when the details disclosure is there.

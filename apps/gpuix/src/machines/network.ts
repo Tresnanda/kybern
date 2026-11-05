@@ -5,6 +5,7 @@ import { useEffect, useSyncExternalStore } from 'react'
 import { NETWORK_CHANGED_NOTIFICATION, NETWORK_MACHINE_CHANGED_NOTIFICATION, OUTBOX_CHANGED_NOTIFICATION, type DoctorReport, type MachineId, type MachineInfo, type NetworkAddResult, type NetworkCodeCreateResult, type NetworkRemoveParams, type NetworkStatus, type NetworkUpdateAllResult, type OutboxItem } from '../../../../packages/kybern-client/src/types.ts'
 import { isNetworkStatus } from '../../../../packages/kybern-client/src/machines.ts'
 import { getClient } from '../state.ts'
+import { describe, problemLine } from '../problems/describe.ts'
 import { machineHub } from './index.ts'
 
 export interface NetworkState {
@@ -31,8 +32,6 @@ const emit = (patch: Partial<NetworkState>) => { state = { ...state, ...patch };
 export const getNetwork = () => state
 /** Tests: forget everything. */
 export function resetNetwork() { state = { status: null, unavailable: false, error: '', infos: {}, busy: null, outbox: [], updated: null, doctor: null }; reading = undefined; again = false; pushes = 0 }
-
-const text = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
 let reading: Promise<void> | undefined
 let again = false
@@ -65,7 +64,9 @@ export async function refreshNetwork(): Promise<void> {
       } catch (error) {
         if (getClient() !== client) { again = true; continue }
         // Method not found: a daemon older than the network.
-        emit({ unavailable: /not found|unknown method|-32601/i.test(text(error)), error: text(error) })
+        // An RPC the daemon doesn't have is a daemon older than the network (`update_needed`): the page says so, not a failure.
+        const unavailable = describe(error, { action: 'read the network' }).kind === 'update_needed'
+        emit({ unavailable, error: problemLine(error, { action: 'read the network' }) })
       }
     } while (again)
   })()
@@ -115,9 +116,14 @@ export function useNetwork(): NetworkState {
 
 // ---- actions: each runs on the machine the user is at (a member), then reads the network again ----
 
-async function act<T>(key: string, run: (client: NonNullable<ReturnType<typeof getClient>>) => Promise<T>): Promise<T> {
+async function act<T>(key: string, action: string, run: (client: NonNullable<ReturnType<typeof getClient>>) => Promise<T>): Promise<T> {
   const client = getClient()
-  if (!client) throw new Error('Not connected to kybernd')
+  if (!client) {
+    // Nothing ran: say so in words (the page shows this, not a crash on a missing client).
+    const notConnected = new Error('Kybern isn’t connected yet. Try again in a moment.')
+    emit({ error: problemLine(notConnected, { action }) })
+    throw notConnected
+  }
   emit({ busy: key, error: '' })
   try {
     const result = await run(client)
@@ -126,32 +132,32 @@ async function act<T>(key: string, run: (client: NonNullable<ReturnType<typeof g
     await machineHub().set.syncMembers()
     return result
   } catch (error) {
-    emit({ error: text(error) })
+    emit({ error: problemLine(error, { action }) })
     throw error
   } finally { emit({ busy: null }) }
 }
 
-export const addFound = (foundId: string): Promise<NetworkAddResult> => act(`found:${foundId}`, (c) => c.call('network.add', { found_id: foundId }))
-export const mergeFound = (foundId: string) => act(`found:${foundId}`, (c) => c.call('network.merge', { found_id: foundId }))
+export const addFound = (foundId: string): Promise<NetworkAddResult> => act(`found:${foundId}`, 'add that machine', (c) => c.call('network.add', { found_id: foundId }))
+export const mergeFound = (foundId: string) => act(`found:${foundId}`, 'merge that machine', (c) => c.call('network.merge', { found_id: foundId }))
 /** "Add by code": a member joins the machine whose code and address the user typed. */
-export const joinByCode = (code: string, address: string, migrate = false) => act('join', (c) => c.call('network.join', { code: code.trim(), address: address.trim(), ...(migrate ? { migrate } : {}) }))
-export const pauseMachine = (machineId: MachineId, paused: boolean) => act(machineId, (c) => c.call('network.pause', { machine_id: machineId, paused }))
-export const renameMachine = (machineId: MachineId, name: string) => act(machineId, (c) => c.call('network.rename', { machine_id: machineId, name }))
-export const removeFromNetwork = (params: NetworkRemoveParams) => act(params.machine_id, (c) => c.call('network.remove', params))
-export const setNetworkEnabled = (enabled: boolean) => act('enabled', async (c) => {
+export const joinByCode = (code: string, address: string, migrate = false) => act('join', 'join that machine', (c) => c.call('network.join', { code: code.trim(), address: address.trim(), ...(migrate ? { migrate } : {}) }))
+export const pauseMachine = (machineId: MachineId, paused: boolean) => act(machineId, paused ? 'pause the machine' : 'resume the machine', (c) => c.call('network.pause', { machine_id: machineId, paused }))
+export const renameMachine = (machineId: MachineId, name: string) => act(machineId, 'rename the machine', (c) => c.call('network.rename', { machine_id: machineId, name }))
+export const removeFromNetwork = (params: NetworkRemoveParams) => act(params.machine_id, 'remove the machine', (c) => c.call('network.remove', params))
+export const setNetworkEnabled = (enabled: boolean) => act('enabled', enabled ? 'turn on the network' : 'turn off the network', async (c) => {
   const setup = await import('./setupRuntime.ts')
   if (!enabled) setup.cancelMachineSetup()
   const result = await c.call('network.set_enabled', { enabled })
   if (enabled) setup.startMachineSetup()
   return result
 })
-export const updateAllMachines = (): Promise<NetworkUpdateAllResult> => act('update', async (c) => { const updated = await c.call('network.update_all', {}); emit({ updated }); return updated })
+export const updateAllMachines = (): Promise<NetworkUpdateAllResult> => act('update', 'update your machines', async (c) => { const updated = await c.call('network.update_all', {}); emit({ updated }); return updated })
 /** "Keep all machines on the same version": a member that sees a newer version updates itself when idle. */
-export const setFollowUpdates = (enabled: boolean) => act('follow', (c) => c.call('network.follow_updates.set', { enabled }))
+export const setFollowUpdates = (enabled: boolean) => act('follow', 'change the update setting', (c) => c.call('network.follow_updates.set', { enabled }))
 /** "Keep this machine reachable when Kybern is closed": the daemon registers or removes its login item before answering. */
-export const setKeepReachable = (enabled: boolean) => act('reachable', (c) => c.call('network.keep_reachable.set', { enabled }))
-export const retryOutbox = (id: string) => act(`outbox:${id}`, async (c) => { const item = await c.call('outbox.retry', { id }); await loadOutbox(); return item })
-export const cancelOutbox = (id: string) => act(`outbox:${id}`, async (c) => { const item = await c.call('outbox.cancel', { id }); await loadOutbox(); return item })
-export const doctor = (machineId?: MachineId): Promise<DoctorReport> => act('doctor', async (c) => { const report = await c.call('network.doctor', { machine_id: machineId ?? null }); emit({ doctor: report }); return report })
+export const setKeepReachable = (enabled: boolean) => act('reachable', 'change the reachability setting', (c) => c.call('network.keep_reachable.set', { enabled }))
+export const retryOutbox = (id: string) => act(`outbox:${id}`, 'retry that work', async (c) => { const item = await c.call('outbox.retry', { id }); await loadOutbox(); return item })
+export const cancelOutbox = (id: string) => act(`outbox:${id}`, 'cancel that work', async (c) => { const item = await c.call('outbox.cancel', { id }); await loadOutbox(); return item })
+export const doctor = (machineId?: MachineId): Promise<DoctorReport> => act('doctor', 'check the network', async (c) => { const report = await c.call('network.doctor', { machine_id: machineId ?? null }); emit({ doctor: report }); return report })
 /** "Show a code for this machine": the code another machine's member types, on a machine that is not in a network yet. */
-export const showCode = (): Promise<NetworkCodeCreateResult> => act('code', (c) => c.call('network.code.create', {}))
+export const showCode = (): Promise<NetworkCodeCreateResult> => act('code', 'make a code', (c) => c.call('network.code.create', {}))

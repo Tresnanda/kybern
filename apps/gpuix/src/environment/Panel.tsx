@@ -15,7 +15,11 @@ import { chooseTab, setDock, type DockTab } from '../dock/store.ts'
 import { openWeb } from '../dock/Diff.tsx'
 import { load, save } from '../shell/persist.ts'
 import { toast } from '../shell/toasts.tsx'
-import { errorText } from '../nav/actions.ts'
+import { errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
+import { ProblemRow } from '../kit/Problem.tsx'
+import { describe } from '../problems/describe.ts'
+import { problemProps } from '../problems/props.ts'
+import { toastProblem } from '../problems/toast.ts'
 import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { MatrixLoader } from '../MatrixLoader.tsx'
 import { copyText } from '../transcript/store.ts'
@@ -85,13 +89,13 @@ function EnvironmentPanel({ threadId }: { threadId: string }) {
   const [notesOpen, setNotesOpen] = useState(() => load('kybern.env.notes', true))
   const [git, setGit] = useState<GitStatus | null>(null)
   const [diff, setDiff] = useState<Diff | null>(null)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<unknown>(null)
   const [busy, setBusy] = useState(false)
   const [reload, setReload] = useState(0)
   const refresh = () => setReload((n) => n + 1)
   useEffect(() => {
     let live = true
-    setError('')
+    setError(null)
     const client = getClient()
     if (!client) return
     // A new thread has no checkpoint yet. Its diff failure must not hide valid
@@ -100,8 +104,9 @@ function EnvironmentPanel({ threadId }: { threadId: string }) {
       if (!live) return
       setGit(status.status === 'fulfilled' ? status.value : null)
       setDiff(changes.status === 'fulfilled' ? changes.value : null)
-      const failures = [status, changes].filter((result) => result.status === 'rejected' && !(result === changes && errorText(result.reason).includes('thread has no checkpoints yet')))
-      setError(failures.map((result) => errorText((result as PromiseRejectedResult).reason)).join(' · '))
+      const failures = [status, changes].filter((result): result is PromiseRejectedResult => result.status === 'rejected' && !(result === changes && errorMessage(result.reason).includes('thread has no checkpoints yet')))
+      // One cause usually fails both calls (Git missing, the machine away): the first is the one to explain.
+      setError(failures.length ? failures[0].reason ?? new Error('Unknown failure') : null)
     })
     return () => { live = false }
   }, [threadId, reload])
@@ -129,12 +134,13 @@ function EnvironmentPanel({ threadId }: { threadId: string }) {
         toast('Pull request opened', { description: result.title, action: { label: 'Open', onClick: () => openWeb(result.url) } })
       }
       refresh()
-    } catch (e) { if (getClient() !== client) return; toast.error(kind === 'commit' ? 'Unable to commit' : 'Unable to create pull request', { description: errorText(e) }) } finally { setBusy(false) }
+    } catch (e) { if (getClient() !== client) return; toastProblem(e, kind === 'commit' ? { action: 'commit', projectId: thread?.project_id } : { action: 'create the pull request', goal: 'create pull requests', projectId: thread?.project_id }) } finally { setBusy(false) }
   }
   return <>
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingLeft: 8 }}><Label color={muted(t, 0.4)} size={14} lineHeight={21}>Environment</Label>
       <Menu testId="environment-sections" align="end" width={192} trigger={() => <IconButton label="Sections" icon={N.settings} glyph={14} />}><MenuLabel>Sections</MenuLabel>{SECTIONS.map(([key, label]) => <MenuItem key={key} id={key} testId={`environment-section-${key}`} label={label} checked={!hidden[key]} keepOpen onSelect={() => { const next = { ...hidden, [key]: !hidden[key] }; setHidden(next); save('kybern.env.hidden', next) }} />)}</Menu>
     </div>
+    {error != null && <ProblemRow {...problemProps(describe(error, { action: 'read this branch', goal: 'see this branch' }), { retry: refresh, projectId: thread?.project_id }, 'environment-problem')} />}
     {!hidden.changes && <Row testId="environment-changes" icon={G.changes} label="Changes" disabled={!diff?.files.length} onClick={() => dock('changes')} trailing={(diff?.files.length ?? 0) > 0 && <><Label color={t.green} size={12}>{`+${diff?.files.reduce((n, f) => n + f.additions, 0) ?? 0}`}</Label><Label color={t.red} size={12}>{`−${diff?.files.reduce((n, f) => n + f.deletions, 0) ?? 0}`}</Label></>} />}
     <Menu testId="environment-running" width={260} trigger={() => <Row decorative icon={thread?.worktree ? N.worktree : N.laptop} label={thread?.worktree ? 'Worktree' : local ? 'Local' : 'Remote'} trailing={group ? <><Label color={t.textSecondary} size={12}>{repoBadge(included.length)}</Label>{chevron}</> : chevron} />}><MenuLabel>Running in</MenuLabel><MenuItem id="cwd" label={cwd || 'Local'} checked disabled={!local || !cwd} onSelect={() => revealQuietly(cwd)} /></Menu>
     {git?.is_git && <><Menu testId="environment-branch" width={260} trigger={() => <Row decorative icon={N.branch} label={(group ? thread?.worktree?.branch : null) ?? git.branch ?? 'detached'} trailing={group ? <><Label color={t.textSecondary} size={12}>{`in ${repoBadge(included.length)}`}</Label>{chevron}</> : chevron} />}><MenuLabel>Branch</MenuLabel><MenuItem id="branch" label={git.branch ?? 'detached'} detail={`${git.ahead ? `↑${git.ahead}` : ''}${git.behind ? ` ↓${git.behind}` : ''}`} disabled onSelect={() => {}} />{git.upstream && <MenuItem id="upstream" label={`Tracks ${git.upstream}`} disabled onSelect={() => {}} />}<MenuSeparator /><MenuItem id="copy" icon={G.copy} label="Copy branch name" onSelect={() => copyText(git.branch ?? '')} /></Menu>

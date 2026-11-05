@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { acceptLoginUpdate } from '../shared/lib/accounts.ts'
 import { ACCOUNTS_LOGIN_CHANGED_NOTIFICATION, type AccountLogin, type AccountLoginStartParams, type ProviderInstance, type TerminalInfo } from '../../../../packages/kybern-client/src/types.ts'
-import { errorText } from '../nav/actions.ts'
+import { describe } from '../problems/describe.ts'
 import { openExternal } from '../settings/external.ts'
 import { getClient } from '../state.ts'
 import { refreshAccounts } from '../usage/accounts.ts'
@@ -82,7 +82,7 @@ export function useAccountLogin(): AccountLoginApi {
       }
       adopt(next)
     } catch (error) {
-      if (!closedRef.current) setFailure(errorText(error))
+      if (!closedRef.current) setFailure(describe(error, { action: 'sign in' }).body)
     } finally {
       setStarting(false)
     }
@@ -144,7 +144,7 @@ export function useAccountLogin(): AccountLoginApi {
     try {
       setLegacyTerminal(await client.call('providers.accounts.sign_in', provider))
     } catch (error) {
-      setFailure(errorText(error))
+      setFailure(describe(error, { action: 'sign in' }).body)
     } finally {
       setStarting(false)
     }

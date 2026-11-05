@@ -8,7 +8,7 @@ import type { AccountSummary, ProviderKind, ProviderStatus } from '../../../../p
 import { Icon } from '../icons.tsx'
 import { goPage } from '../nav/history.ts'
 import { N } from '../nav/glyphs.ts'
-import { errorText } from '../nav/actions.ts'
+import { toastProblem } from '../problems/toast.ts'
 import { Dialog, Menu, MenuItem, MenuSeparator, MenuSub, Tip } from '../nav/overlay.tsx'
 import { useNav } from '../nav/store.ts'
 import { showDialog } from '../dialogs/store.ts'
@@ -185,7 +185,7 @@ function RenameField({ account, onDone }: { account: AccountSummary; onDone: () 
       onDone()
     } catch (problem) {
       saving.current = false
-      toast.error('Unable to rename the account', { description: `${errorText(problem)} Check the name, then try again.` })
+      toastProblem(problem, { action: 'rename the account' })
     }
   }
   // The desktop selects the whole name on focus and darkens the border to foreground/30.
@@ -282,7 +282,7 @@ function AccountMenu({ account, onRename, onRemove, onAssign }: { account: Accou
       await refreshAccounts()
       toast.success(`${account.name} signed out`)
     } catch (error) {
-      toast.error(`Unable to sign ${account.name} out`, { description: `${errorText(error)} Check your connection, then try again.` })
+      toastProblem(error, { action: `sign ${account.name} out` })
     }
   }
   const setColor = async (color: string) => {
@@ -292,7 +292,7 @@ function AccountMenu({ account, onRename, onRemove, onAssign }: { account: Accou
       await client.call('providers.accounts.update', { kind, instance, color })
       await refreshAccounts()
     } catch (error) {
-      toast.error('Unable to change the color', { description: `${errorText(error)} Check your connection, then try again.` })
+      toastProblem(error, { action: 'change the color' })
     }
   }
   const [open, setOpen] = useState(false)
@@ -337,7 +337,7 @@ function RemoveDialog({ account, onClose }: { account: AccountSummary; onClose: 
       onClose()
     } catch (error) {
       // The daemon says when a turn is still running ("Work is running in 2 threads. Stop them, then remove it.").
-      toast.error(`Unable to remove ${account.name}`, { description: errorText(error) })
+      toastProblem(error, { action: `remove ${account.name}` })
     } finally {
       setBusy(false)
     }
@@ -376,7 +376,7 @@ function ProjectsDialog({ account, accounts, projects, projectAccounts, onClose 
       })
       onClose()
     } catch (error) {
-      toast.error('Unable to save the projects', { description: `${errorText(error)} Check your connection, then try again.` })
+      toastProblem(error, { action: 'save the projects' })
     } finally {
       setSaving(false)
     }

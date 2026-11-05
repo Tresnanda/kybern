@@ -2,7 +2,6 @@
 // corners): what the network is with the four things it unlocks, each drawn with the app's own pieces (machine badges, the
 // composer's machine chip), the one requirement and Turn on / Not now; then, once it is on, what happens next and the machines
 // as they join. Mounted once in `App.tsx`, beside the update surface.
-import { toastProblem } from '../problems/toast.ts'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -17,6 +16,8 @@ import { Dialog, muted } from '../nav/overlay.tsx'
 import { surfaceShadow } from '../composer/Menu.tsx'
 import { Spinner } from '../shell/Connection.tsx'
 import { Button } from '../kit/Button.tsx'
+import { toast } from '../shell/toasts.tsx'
+import { toastProblem } from '../problems/toast.ts'
 import { openUrl } from '../pulls/PrStates.tsx'
 import { ink, Label, useTheme } from '../ui.tsx'
 import { riseTransform } from '../onboarding/motion.tsx'

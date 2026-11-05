@@ -15,6 +15,7 @@ import { refreshAccounts, useAccounts } from '../usage/accounts.ts'
 import { AGENT_NAMES, AGENT_ORDER, agentCommand, applyOverride, deriveAgent, pickDefault, type AgentOverride, type AgentState } from './model.ts'
 import { announce, defaultAgentAnnouncement } from './announce.ts'
 import { createStore } from './store.ts'
+import { describe } from '../problems/describe.ts'
 import { openTypedTerminal } from './typedTerminal.ts'
 
 export type SheetMode = 'install' | 'login' | 'update'
@@ -232,7 +233,7 @@ export async function openSheet(kind: ProviderKind, mode: SheetMode) {
     const info = await openTypedTerminal(client, command, { cwd: activeEnvironment().local ? homedir() : '/', wanted, later })
     if (info) agents.set((s) => ({ sheet: s.sheet ? { ...s.sheet, info } : s.sheet }))
   } catch (error) {
-    agents.set((s) => ({ sheet: s.sheet ? { ...s.sheet, error: error instanceof Error ? error.message : String(error) } : s.sheet }))
+    agents.set((s) => ({ sheet: s.sheet ? { ...s.sheet, error: describe(error, { action: 'open a terminal' }).body } : s.sheet }))
   }
 }
 

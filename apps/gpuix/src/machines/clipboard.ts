@@ -1,9 +1,9 @@
 // The explicit machine clipboard in the app (U2): "Send clipboard to…" and "Paste from…". Both calls go to this machine's daemon,
 // which relays to the other machine. Wording and limits are in `machineUtilities.ts`.
-import { toastProblem } from '../problems/toast.ts'
 import { clipboardSentNotice, clipboardTooLarge, formatBytes, type SendTarget } from '../../../../packages/kybern-client/src/machineUtilities.ts'
 import type { MachineId } from '../../../../packages/kybern-client/src/types.ts'
 import { MAX_CLIPBOARD_BYTES } from '../../../../packages/kybern-client/src/types.ts'
+import { toastProblem } from '../problems/toast.ts'
 import { toast } from '../shell/toasts.tsx'
 import { getClient } from '../state.ts'
 import { readClipboardText } from '../transcript/store.ts'
@@ -19,7 +19,7 @@ export async function sendClipboardTo(target: SendTarget): Promise<void> {
     const notice = clipboardSentNotice(target.name, await client.call('clipboard.set', { machine: target.machineId, text }))
     toast.success(notice.title, { description: notice.description })
   } catch (error) {
-    toastProblem(error, { action: `send the clipboard to ${target.name}` })
+    toastProblem(error, { action: `send the clipboard to ${target.name}`, machine: target.name })
   }
 }
 
@@ -32,7 +32,7 @@ export async function readClipboardFrom(source: SendTarget): Promise<string | nu
     if (!text) { toast.info(`${source.name} has nothing to paste`, { description: 'Its clipboard has no text.' }); return null }
     return text
   } catch (error) {
-    toastProblem(error, { action: `paste from ${source.name}` })
+    toastProblem(error, { action: `paste from ${source.name}`, machine: source.name })
     return null
   }
 }
