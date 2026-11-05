@@ -241,7 +241,7 @@ function DeviceAccess({ close }: { close: () => void }) {
 }
 
 /** Adding over SSH failed. A refused key gets its own fix (the `ssh-copy-id` line to run); anything else is worded by `describeProblem`. */
-function SshProblem({ error, target, showKeyCommand }: { error: Error; target: string; showKeyCommand: boolean }) {
+export function SshProblem({ error, target, showKeyCommand }: { error: Error; target: string; showKeyCommand: boolean }) {
   const t = useTheme()
   const refused = /Permission denied|publickey|ssh-copy-id/i.test(errorMessage(error))
   if (!refused) return <div testId="environment-setup-error"><ProblemLine error={error} action="add this machine over SSH" /></div>
@@ -252,7 +252,7 @@ function SshProblem({ error, target, showKeyCommand }: { error: Error; target: s
 }
 
 /** Adding a machine by address failed: an address on the other machine's own loopback or one that cannot be reached has a clearer sentence than the transport error. */
-function AddMachineProblem({ error, loopback, retry }: { error: Error; loopback: boolean; retry: () => void }) {
+export function AddMachineProblem({ error, loopback, retry }: { error: Error; loopback: boolean; retry: () => void }) {
   const unreachable = /error sending request|connection refused|timed out|Unable to connect|ConnectionRefused|fetch failed|Unable to reach/i.test(errorMessage(error))
   if (unreachable && loopback) return <ProblemRow tone="warning" icon="alert" title="That address only works on the other machine" body="It points at the other machine's own loopback address. For a daemon that listens on 127.0.0.1, add it over SSH instead, or bind it to an address this device can reach." detail={errorMessage(error)} testId="environment-save-error" />
   if (unreachable) return <ProblemRow tone="neutral" icon="offline" title="Can’t reach that machine" body="Check its address and network connection, then try again." primary={{ label: 'Try again', onClick: retry }} detail={errorMessage(error)} testId="environment-save-error" />
