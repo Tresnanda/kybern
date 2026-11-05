@@ -33,7 +33,7 @@ export interface MachineRowState {
 export function useRunner(onError: (message: string) => void) {
   return (work: () => Promise<unknown>) => {
     onError("");
-    work().catch((e) => onError(errorText(e)));
+    work().catch((e) => onError(errorText(e, "change that machine")));
   };
 }
 
@@ -104,7 +104,7 @@ export function machineMenu(state: MachineRowState, run: (work: () => Promise<un
 export function machineActionRows(state: MachineRowState, options: { activeId: string | null; onDeleted?: () => void }, onError: (message: string) => void) {
   const run = (work: () => Promise<unknown>) => {
     onError("");
-    work().catch((e) => onError(errorText(e)));
+    work().catch((e) => onError(errorText(e, "change that machine")));
   };
   return machineMenu(state, run, options).map((item) => (
     <ListRow key={item.title} title={item.title} leading={item.icon} destructive={item.destructive} onPress={item.onPress} />

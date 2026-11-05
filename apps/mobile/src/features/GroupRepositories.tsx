@@ -55,12 +55,12 @@ export function GroupRepositories({ project, onChanged }: { project: Project; on
   const load = () =>
     rpc("projects.members.status", { project_id: project.id })
       .then(setState)
-      .catch((e) => setError(errorText(e)));
+      .catch((e) => setError(errorText(e, "load the repositories")));
   useEffect(() => {
     let alive = true;
     void rpc("projects.members.status", { project_id: project.id })
       .then((result) => alive && setState(result))
-      .catch((e) => alive && setError(errorText(e)));
+      .catch((e) => alive && setError(errorText(e, "load the repositories")));
     return () => {
       alive = false;
     };
@@ -79,10 +79,10 @@ export function GroupRepositories({ project, onChanged }: { project: Project; on
       .then(() =>
         showToast(GROUP_COPY.removed(name), {
           title: GROUP_COPY.undo,
-          onPress: () => void setMembers(before).catch((e) => setError(errorText(e))),
+          onPress: () => void setMembers(before).catch((e) => setError(errorText(e, "restore the repository"))),
         }),
       )
-      .catch((e) => setError(errorText(e)));
+      .catch((e) => setError(errorText(e, "remove the repository")));
   }
   function explain(name: string, status: string) {
     const message =
@@ -101,7 +101,7 @@ export function GroupRepositories({ project, onChanged }: { project: Project; on
       })
       .catch((e) => {
         setCopy(before);
-        setError(errorText(e));
+        setError(errorText(e, "save the copied files"));
       });
   }
   const missing = missingInstructions(state);
@@ -119,7 +119,7 @@ export function GroupRepositories({ project, onChanged }: { project: Project; on
             showToast(instructionsCreatedText(result.created, project.name));
             return load();
           })
-          .catch((e) => setError(errorText(e)))
+          .catch((e) => setError(errorText(e, "create the instruction files")))
           .finally(() => setCreating(false));
       },
     });

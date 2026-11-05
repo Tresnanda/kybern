@@ -57,7 +57,7 @@ export function SecretRequestCard({ approval, input }: { approval: ApprovalReque
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (e) {
       // The daemon's own words when it refused the answer; otherwise the connection failed.
-      setError(e instanceof Error && "code" in e ? errorText(e) : "Unable to send your answer. Check the connection and try again.");
+      setError(e instanceof Error && "code" in e ? errorText(e, "send your answer") : "Unable to send your answer. Check the connection and try again.");
     } finally {
       setBusy(false);
     }

@@ -95,3 +95,9 @@ test("String(error) never prints the class name", () => {
   assert.deepEqual(sent.problem, { kind: "tool_missing", subject: "gh" });
   assert.equal(rpc(-32602, "x").problem, undefined);
 });
+
+test("plainSentence keeps sentences and drops method-prefixed and one-word messages", () => {
+  assert.equal(plainSentence("No agent is signed in"), "No agent is signed in.");
+  assert.equal(plainSentence("threads.rename: save thread: database is locked"), null);
+  assert.equal(plainSentence("boom"), null);
+});

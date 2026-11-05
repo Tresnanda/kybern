@@ -17,7 +17,7 @@ import { TaskToast } from "../src/features/TaskToast";
 import { useNotes } from "../src/state/notes";
 import { checklistBadge, noteTitle } from "../src/state/notesModel";
 import type { TaskItem, TaskRun } from "../src/state/protocol";
-import { activeEnvironment, errorText, useApp } from "../src/state/runtime";
+import { activeEnvironment, problemFor, useApp } from "../src/state/runtime";
 import {
   clearPendingFollowup,
   fetchTask,
@@ -105,7 +105,10 @@ function Followup({ task, run }: { task: TaskItem; run: TaskRun }) {
           });
         else showToast("Saved for the next run");
       })
-      .catch((e) => Alert.alert("Unable to send the message", errorText(e), [{ text: "OK" }]))
+      .catch((e) => {
+        const problem = problemFor(e, "send the message");
+        Alert.alert(problem.title, problem.body, [{ text: "OK" }]);
+      })
       .finally(() => setBusy(false));
   };
   return (
@@ -350,7 +353,8 @@ function TaskPage() {
           ),
         );
       }
-      Alert.alert("Unable to save the task", errorText(e), [{ text: "OK" }]);
+      const problem = problemFor(e, "save the task");
+      Alert.alert(problem.title, problem.body, [{ text: "OK" }]);
       return false;
     } finally {
       setSaving(false);

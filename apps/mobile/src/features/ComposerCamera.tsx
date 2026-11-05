@@ -82,7 +82,7 @@ export function ComposerCamera({
       setForeground(state === "active");
       setReady(false);
       if (state === "active")
-        void getPermission().catch((e) => setError(errorText(e)));
+        void getPermission().catch((e) => setError(errorText(e, "check camera access")));
     });
     return () => {
       alive.current = false;
@@ -136,7 +136,7 @@ export function ComposerCamera({
         setPhoto(result.uri);
       }
     } catch (e) {
-      if (alive.current) setError(errorText(e));
+      if (alive.current) setError(errorText(e, "take the photo"));
     } finally {
       locked.current = false;
       if (alive.current) setBusy(false);
@@ -176,7 +176,7 @@ export function ComposerCamera({
     } catch (e) {
       locked.current = false;
       if (alive.current) {
-        setError(errorText(e));
+        setError(errorText(e, "attach the photo"));
         setBusy(false);
       }
     }
@@ -330,7 +330,7 @@ export function ComposerCamera({
                           permission?.canAskAgain === false
                             ? Linking.openSettings()
                             : requestPermission()
-                        ).catch((e) => setError(errorText(e)));
+                        ).catch((e) => setError(errorText(e, "ask for camera access")));
                       }}
                     >
                       {permission?.canAskAgain === false

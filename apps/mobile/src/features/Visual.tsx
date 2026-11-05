@@ -135,7 +135,7 @@ export const InlineVisual = memo(function InlineVisual({ block, threadId }: { bl
       livePage.current = page;
       setLive(`${page.url}${fragment}`);
     } catch (e) {
-      setError(errorText(e) || "Unable to open the visual. Check the connection and try again.");
+      setError(errorText(e, "open the visual"));
     } finally {
       setOpening(false);
     }
@@ -305,7 +305,7 @@ function AnswerBar({
       if (!skip) haptics.success();
     } catch (e) {
       sent.current = false;
-      setError(errorText(e) || ANSWER_COPY.sendError);
+      setError(errorText(e, "send your answer"));
       setBusy("");
     }
   };

@@ -116,4 +116,6 @@ test("two saved machines: the phone's computer keeps its one socket, the set ope
   other.close(); other.onclose?.({ code: 1006 }); await tick();
   await assert.rejects(runtime.rpc("threads.get", { thread_id: "t-other" }), /offline/i);
   assert.equal(runtime.errorText(new (class extends Error { name = "OfflineError"; })("x"), { action: "open the thread", machine: "Other" }), "Other is offline. Kybern keeps trying. Make sure that computer is awake and online.");
+  // Several machines and no route: no name beats the wrong one.
+  assert.equal(runtime.errorText(new Error("Network request failed"), "open the thread"), "Can't reach your computer. Check your connection and that it is awake. Kybern keeps trying.");
 });

@@ -8,7 +8,7 @@ import { count } from "../src/state/format";
 import { useNotes } from "../src/state/notes";
 import { noteTitle } from "../src/state/notesModel";
 import type { ProviderKind, TaskBatchMode, TaskItem } from "../src/state/protocol";
-import { activeEnvironment, errorText, rpc, useApp } from "../src/state/runtime";
+import { activeEnvironment, problemFor, rpc, useApp } from "../src/state/runtime";
 import { fetchTask, sendTask, sendTasks, showToast, useTasks } from "../src/state/tasks";
 import {
   approxTokens,
@@ -237,11 +237,8 @@ export default function SendTask() {
       if (open) openThread(threadId);
       else showToast(text, { kind: "open", threadId });
     } catch (e) {
-      Alert.alert(
-        batch ? "Unable to start the tasks" : "Unable to start the task",
-        errorText(e),
-        [{ text: "OK" }],
-      );
+      const problem = problemFor(e, batch ? "start the tasks" : "start the task");
+      Alert.alert(problem.title, problem.body, [{ text: "OK" }]);
       setBusy("");
     }
   }

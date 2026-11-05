@@ -56,7 +56,7 @@ export default function SpaceEdit() {
       haptics.success();
       router.back();
     } catch (e) {
-      setError(errorText(e) || SPACE_COPY.saveFailure);
+      setError(errorText(e, "save the space"));
       setBusy(false);
     }
   };

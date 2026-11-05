@@ -261,7 +261,7 @@ export function ComposerOptions({
       await work();
       return true;
     } catch (cause) {
-      setError(errorText(cause));
+      setError(errorText(cause, "change that setting"));
       return false;
     } finally {
       setBusy(false);

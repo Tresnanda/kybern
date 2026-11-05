@@ -12,7 +12,7 @@ import { useEffect, useState } from "react";
 import { View } from "react-native";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 import { DURATION } from "../components/liquid/motion";
-import { problemText, type ProblemModel, type ProblemTone } from "../state/problems";
+import { problemText, visibleActions, type ProblemModel, type ProblemTone } from "../state/problems";
 import { haptics } from "./haptics";
 import { Button, Icon, IconButton, T, Tap } from "./primitives";
 import { radius, space, useTheme, type Colors } from "./theme";
@@ -39,16 +39,14 @@ interface Fix {
 /** The buttons the model names that this screen can run: retry needs an `onRetry`, Machines is always there. */
 function useFixes(problem: ProblemModel, onRetry?: () => void): Fix[] {
   const router = useRouter();
-  const fixes: Fix[] = [];
-  for (const action of problem.actions) {
-    if (action.id === "retry" && onRetry) fixes.push({ label: action.label, onPress: onRetry });
-    else if (action.id === "open_machines") fixes.push({ label: action.label, onPress: () => router.push("/machines") });
-  }
-  return fixes.slice(0, 2);
+  return visibleActions(problem, !!onRetry).map((action) => ({
+    label: action.label,
+    onPress: action.id === "retry" ? onRetry! : () => router.push("/machines"),
+  }));
 }
 
 /** "Show details", and once open the technical text with its copy button. Closed by default; the text can be selected. */
-function Details({ text }: { text: string }) {
+function Details({ text, center = false }: { text: string; center?: boolean }) {
   const { colors } = useTheme();
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -71,7 +69,7 @@ function Details({ text }: { text: string }) {
         expanded={open}
         feedback="highlight"
         onPress={() => setOpen((value) => !value)}
-        style={{ alignSelf: "center", flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.md, borderRadius: radius.full }}
+        style={{ alignSelf: center ? "center" : "flex-start", flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.md, borderRadius: radius.full }}
       >
         <T variant="footnote" tone="secondary">
           {open ? "Hide details" : "Show details"}
@@ -128,7 +126,7 @@ export function ProblemState({ problem, onRetry }: { problem: ProblemModel; onRe
             <Fixes fixes={fixes} size="medium" center />
           </View>
         )}
-        <Details text={problem.detail} />
+        <Details text={problem.detail} center />
       </View>
     </View>
   );

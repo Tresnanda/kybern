@@ -50,7 +50,7 @@ function bubbleMenu(text: string, threadId: string): MenuItem[] {
         const projectId = getState().threads.find((thread) => thread.id === threadId)?.project_id ?? null;
         void createNote({ projectId, body: text })
           .then((note) => showToast("Saved to a new note", { title: "Open", onPress: () => router.push({ pathname: "/note", params: { id: note.id } }) }))
-          .catch((e) => showToast(errorText(e) || "Unable to save the note. Try again."));
+          .catch((e) => showToast(errorText(e, "save the note")));
       },
     },
   ];

@@ -37,7 +37,7 @@ function AccountsBody() {
   // They are listed only for an extra profile (its own folder) someone added, never with a sign-in state.
   const shown = accounts.filter((a) => hasSignIn(a.provider.kind) || (!!a.provider.instance && a.provider.instance !== "default"));
   const kinds = [...new Set(shown.map((a) => a.provider.kind))] as ProviderKind[];
-  const fail = (what: string) => (e: unknown) => showToast(`${what} ${errorText(e)}`);
+  const fail = (action: string) => (e: unknown) => showToast(errorText(e, action));
   const rename = (account: AccountSummary) =>
     Alert.prompt(
       `Rename “${account.name}”`,
@@ -49,7 +49,7 @@ function AccountsBody() {
           onPress: (value?: string) => {
             const name = value?.trim();
             if (!name || name === account.name) return;
-            updateAccount(account, { name }).catch(fail("Unable to rename the account."));
+            updateAccount(account, { name }).catch(fail("rename the account"));
           },
         },
       ],
@@ -77,7 +77,7 @@ function AccountsBody() {
       children: ACCOUNT_COLORS.map((color) => ({
         title: sentence(color),
         checked: account.color === color,
-        onPress: () => void updateAccount(account, { color }).catch(fail("Unable to change the colour.")),
+        onPress: () => void updateAccount(account, { color }).catch(fail("change the colour")),
       })),
     },
   ];

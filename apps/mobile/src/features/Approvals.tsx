@@ -84,7 +84,7 @@ export function AsyncQuestions({
       await loadThread(threadId);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (e) {
-      setError(errorText(e));
+      setError(errorText(e, "send your answer"));
     } finally {
       setBusy(false);
     }
@@ -159,7 +159,7 @@ function VisualAnswerStub({ approval }: { approval: ApprovalRequest }) {
         onPress={() => {
           setBusy(true);
           respondApproval(approval, { decision: "deny" }).catch((e) => {
-            setError(errorText(e) || ANSWER_COPY.sendError);
+            setError(errorText(e, "send your answer"));
             setBusy(false);
           });
         }}
@@ -278,7 +278,7 @@ function DecisionPanel({ approval }: { approval: ApprovalRequest }) {
       await Promise.all([refresh(), loadThread(approval.thread_id)]);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (e) {
-      setError(errorText(e));
+      setError(errorText(e, "respond to the request"));
     } finally {
       setBusy(false);
     }
@@ -329,7 +329,7 @@ function DecisionPanel({ approval }: { approval: ApprovalRequest }) {
       } else response = { value };
       void respond({ decision: "submit", response });
     } catch (e) {
-      setError(errorText(e));
+      setError(errorText(e, "submit your answer"));
     }
   }
   const activity = toolLine({ id: approval.id, name: approval.tool_name, input: approval.input }, false);
@@ -444,7 +444,7 @@ function DecisionPanel({ approval }: { approval: ApprovalRequest }) {
                 if (/^https?:\/\//i.test(url))
                   void Linking.openURL(url)
                     .then(() => setUrlOpened(true))
-                    .catch((e) => setError(errorText(e)));
+                    .catch((e) => setError(errorText(e, "open the link")));
               }}
             >
               Open in browser

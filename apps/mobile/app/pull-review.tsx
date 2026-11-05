@@ -47,7 +47,7 @@ export default function PullReviewSheet() {
       showToast(DONE[kind]);
       router.back();
     } catch (e) {
-      setError(`${errorText(e)} Your review is kept.`);
+      setError(errorText(e, { action: "send your review", note: "Your review is kept." }));
     }
   }
   return (
@@ -100,7 +100,7 @@ export default function PullReviewSheet() {
                   try {
                     pr.update(reuseReviewDraftText(pr.draft, head!));
                   } catch (e) {
-                    setError(errorText(e));
+                    setError(errorText(e, "reuse your review"));
                   }
                 }}
               >

@@ -54,7 +54,7 @@ export default function SetupProject() {
           },
           (e) => {
             if (!live) return;
-            setError(errorText(e));
+            setError(errorText(e, "check the setup"));
             setChecking(false);
           },
         );
@@ -88,7 +88,7 @@ export default function SetupProject() {
         } else if (next.phase === "failed") haptics.error();
       });
     } catch (e) {
-      setError(errorText(e));
+      setError(errorText(e, "set up the project"));
     }
   };
   const done = status?.phase === "done";

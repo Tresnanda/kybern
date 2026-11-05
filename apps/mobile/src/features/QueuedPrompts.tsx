@@ -78,7 +78,7 @@ async function remove(item: QueuedMessage) {
     await rpc("queue.remove", { thread_id: item.thread_id, id: item.id });
     showToast("Removed from the queue");
   } catch (e) {
-    showToast(errorText(e));
+    showToast(errorText(e, "remove the queued message"));
   }
 }
 
@@ -95,7 +95,7 @@ function QueuedEditor({ item, onDone }: { item: QueuedMessage; onDone: () => voi
       await rpc("queue.update", { ...item, message: replacePromptText(item.message, text) });
       onDone();
     } catch (e) {
-      setError(errorText(e));
+      setError(errorText(e, "save the queued message"));
     } finally {
       setBusy(false);
     }

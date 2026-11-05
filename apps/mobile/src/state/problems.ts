@@ -122,6 +122,11 @@ export function problemModel(rawError: unknown, context: PhoneContext): ProblemM
   return make(view.title, view.body, retryButton);
 }
 
+/** The buttons a screen can show for `problem`: Retry only when it can retry, at most two, the first leads. */
+export function visibleActions(problem: Pick<ProblemModel, "actions">, canRetry: boolean): ProblemButton[] {
+  return problem.actions.filter((action) => action.id !== "retry" || canRetry).slice(0, 2);
+}
+
 /** The model as one or two plain sentences, for text that cannot hold buttons. */
 export function problemText(model: ProblemModel): string {
   // The "copy the details" advice only makes sense where Show details is.

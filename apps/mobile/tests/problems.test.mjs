@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { RpcCallError } from "../../../packages/kybern-client/src/client.ts";
 import { OfflineError } from "../../../packages/kybern-client/src/machineClient.ts";
-import { problemLook, problemModel, problemText, prProblemModel, sentenceOf } from "../src/state/problems.ts";
+import { problemLook, problemModel, problemText, prProblemModel, sentenceOf, visibleActions } from "../src/state/problems.ts";
 
 const rpc = (code, message, data) => new RpcCallError({ code, message, ...(data ? { data } : {}) });
 const JARGON = /RpcCallError|invalid params|not found:|os error|exit code|EPERM|EACCES|[A-Za-z]:\\|\/Users\/|program not found|Error:|^run \w+/i;
@@ -146,4 +146,22 @@ test("a project with no GitHub remote asks for one on the computer", () => {
   assert.equal(model.subject, "github_remote");
   assert.equal(model.title, "This project isn’t on GitHub");
   assert.equal(model.body, "Add a GitHub remote to this project on SatyaMas, then check again.");
+});
+
+test("Retry is a button only where the screen can retry; the first action leads and at most two show", () => {
+  const offline = problemModel(rpc(-32013, "SatyaMas is offline."), { action: "read notes" });
+  assert.deepEqual(visibleActions(offline, true).map((action) => action.id), ["retry", "open_machines"]);
+  assert.deepEqual(visibleActions(offline, false).map((action) => action.id), ["open_machines"]);
+  const tool = problemModel(rpc(-32602, "run gh"), { action: "load pull requests" });
+  assert.deepEqual(visibleActions(tool, true), [{ id: "retry", label: "Check again" }]);
+  assert.deepEqual(visibleActions(tool, false), []);
+  assert.equal(visibleActions({ actions: [{ id: "retry", label: "a" }, { id: "open_machines", label: "b" }, { id: "retry", label: "c" }] }, true).length, 2);
+});
+
+test("every model a screen draws has a headline, one sentence and details to copy", () => {
+  for (const error of CASES) {
+    const model = problemModel(error, { action: "save the file", machine: "SatyaMas" });
+    assert.ok(model.title && model.body && model.icon && model.tone);
+    assert.ok(model.detail.length > 0, "Show details always has something to copy");
+  }
 });

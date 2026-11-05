@@ -69,7 +69,7 @@ export function ChildThreadBar({ thread }: { thread?: Thread | null }) {
       await rpc("threads.interrupt", { thread_id: thread!.id });
       showToast(`Stopped ${thread!.title || "the agent"}`);
     } catch (e) {
-      showToast(`Couldn't stop ${thread!.title || "the agent"}. ${errorText(e)}`);
+      showToast(errorText(e, `stop ${thread!.title || "the agent"}`));
     } finally {
       setStopping(false);
     }

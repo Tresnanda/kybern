@@ -70,7 +70,7 @@ export async function openPreview(threadId: string, input: string, allowFolder =
       page: { address, uri: opened.url, scope, ticket: result.ticket, machineId: ownerMachine(owner), closePage: opened.close },
     };
   } catch (e) {
-    return { kind: "error", message: errorText(e) };
+    return { kind: "error", message: errorText(e, "open the preview") };
   }
 }
 

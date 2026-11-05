@@ -1,6 +1,6 @@
 import { Stack, type ErrorBoundaryProps } from "expo-router";
 import { MachinesSettings } from "../src/features/settings/Machines";
-import { errorText } from "../src/state/runtime";
+import { problemFor } from "../src/state/runtime";
 import { ErrorBanner, Page } from "../src/ui/primitives";
 import { useTheme } from "../src/ui/theme";
 
@@ -20,7 +20,7 @@ export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
   return (
     <Page grouped>
       <Stack.Screen options={{ title: "Machines", headerStyle: { backgroundColor: colors.grouped } }} />
-      <ErrorBanner error={`Unable to show your machines: ${errorText(error)}`} onRetry={() => void retry()} />
+      <ErrorBanner error={problemFor(error, "show your machines")} onRetry={() => void retry()} />
     </Page>
   );
 }

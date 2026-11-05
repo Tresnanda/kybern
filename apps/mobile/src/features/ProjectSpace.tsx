@@ -150,7 +150,7 @@ function BriefSwitch({ projectId }: { projectId: string }) {
     setPending(next);
     setError("");
     rpc("projects.update", { project_id: projectId, brief_in_all_threads: next })
-      .catch((e) => setError(`${PROJECT_SPACE_COPY.switchFailed} ${errorText(e)}`))
+      .catch((e) => setError(errorText(e, "change that setting")))
       .finally(() => setPending(null));
   };
   return (
