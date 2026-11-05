@@ -4,20 +4,27 @@ import { openOwner } from './machines/openOwner.ts'
 import { ListMerger, byPinnedThenNewest, type StateThread } from './machines/merged.ts'
 import { scopedKey } from '../../../packages/kybern-client/src/machineMerge.ts'
 import { createGpuixSocket } from './machines/socket.ts'
-import { startupMark } from './perf/startup.ts'
+import { startupMark, traceThreadClick, traceThreadContent } from './perf/startup.ts'
 import { addMemoryContext, memoryStep } from './perf/memoryLog.ts'
 import { HistoryPrefetch } from './shell/historyPrefetch.ts'
 import { EARLIER_HISTORY_PAGE } from '../../../packages/kybern-client/src/historyPaging.ts'
 import { onFrame } from './native/frame.ts'
 import { isWindowVisible, onWindowVisibility } from './native/visibility.ts'
 import { eventFrame } from './transcript/eventFrame.ts'
+import { environmentKey } from './shell/environment.ts'
+import { gpuixConfigDir } from './platform/os.ts'
+import { backgroundTimers, cacheableState, transcriptCache } from './transcript/diskCache.ts'
+import { openThreadStream, type OpenStream } from './transcript/openFlow.ts'
+import { disposeSyncing, forgetWarm, isCapable, learnCapable, noteCachedSeq, startSyncing, stopSyncing, takePrefetched } from './transcript/warm.ts'
+import { createThreadPrefetch, keepsRunningInBackground, sessionsToDrop } from './transcript/warmPolicy.ts'
+import { createLinger } from '../../../packages/kybern-client/src/threadWarmth.ts'
+import { applyThreadList, hasListCursor, moreParams, refreshParams, FIRST_LIST_SETTLED_LIMIT, type ThreadListState } from '../../../packages/kybern-client/src/threadListCursor.ts'
 // App state: one daemon connection, the project and thread lists, and the open
 // thread's transcript. Transport and transcript folding come from the shared
 // `packages/kybern-client` sources, the same ones desktop and mobile use.
 import { createContext, createElement, useContext, useMemo, useSyncExternalStore, type ReactNode } from 'react'
 import { KybernClient, type ConnectionStatus } from '../../../packages/kybern-client/src/client.ts'
 import {
-  applyEvent,
   compactThreadState,
   emptyThreadState,
   seedFromGet,
@@ -52,6 +59,8 @@ export interface AppState {
   sidebarOpen: boolean
   /** The project and thread lists have arrived at least once (the Welcome screen waits for them). */
   listsLoaded: boolean
+  /** Settled threads per project the bounded list left out (`threads.list {settled_limit}`); "Show more" pages them in. */
+  omitted: Record<string, number>
 }
 
 let state: AppState = {
@@ -65,6 +74,7 @@ let state: AppState = {
   collapsed: {},
   sidebarOpen: true,
   listsLoaded: false,
+  omitted: {},
 }
 const listeners = new Set<() => void>()
 
@@ -108,6 +118,8 @@ const publication = eventFrame(flush => {
   return () => { stop(); stopVisibility() }
 }, () => { for (const listener of listeners) listener() })
 function emit() { publication.now() }
+/** Run once on the next native frame (the open timeline's `thread-content-frame`). */
+const afterFrame = (run: () => void) => { const stop = onFrame(() => { stop(); run() }) }
 function mirrorFocus() {
   const pane = panes.get(focusedPaneId)!
   state = { ...state, selectedId: pane.selectedId, selectedMachineId: pane.machineId, open: pane.open, draft: pane.draft }
@@ -222,11 +234,13 @@ export async function callThread<M extends MethodName>(id: ThreadId | null | und
 /** A thread's own project id on its machine (listed threads of other machines were moved onto the merged project row). */
 export const ownProjectId = (thread: { project_id: string; ownProjectId?: string }) => thread.ownProjectId ?? thread.project_id
 
-type Session = { threadId: ThreadId; machineId?: MachineId; open: ThreadState; history: HistoryPrefetch; historyTimer?: ReturnType<typeof setTimeout>; stop?: () => void; ready?: Promise<void> }
+type Session = { threadId: ThreadId; machineId?: MachineId; open: ThreadState; history: HistoryPrefetch; historyTimer?: ReturnType<typeof setTimeout>; stop?: () => void; ready?: Promise<void>; stream?: OpenStream }
 /** Open transcripts, keyed by `(machine, thread)`: ids are unique per machine, not across machines. The machine the user is at is `local`. */
 const sessions = new Map<string, Session>()
 const LOCAL_KEY = 'local'
 const sessionKey = (id: ThreadId, machineId?: MachineId) => scopedKey(machineId ?? LOCAL_KEY, id)
+/** The key `transcript/warm.ts` keeps a pane's delayed sync state under. */
+export const threadSyncKey = (id: ThreadId, machineId?: MachineId) => sessionKey(id, machineId)
 const paneSessionKey = (pane: Pick<PaneState, 'selectedId' | 'machineId'>) => sessionKey(pane.selectedId!, pane.machineId)
 const samePaneThread = (a: Pick<PaneState, 'selectedId' | 'machineId'>, b: Pick<PaneState, 'selectedId' | 'machineId'>) => a.selectedId === b.selectedId && a.machineId === b.machineId
 /** The session of a thread; by id alone when the caller does not know the machine (it resolves like `threadClient`). */
@@ -256,10 +270,97 @@ function sessionClient(session: Session | undefined): KybernClient | null {
   if (!session.machineId) return client
   try { return machineHub().clientFor(session.machineId) } catch { return null }
 }
+// ---- sessions kept warm after their pane moves on (#248) ----
+
+/** Session keys, most recently viewed first: which running threads stay subscribed in the background. */
+let viewed: string[] = []
+function noteViewed(key: string) { viewed = [key, ...viewed.filter(k => k !== key)].slice(0, 64) }
+const isRunning = (open: ThreadState) => open.thread?.status === 'running' || open.thread?.status === 'awaiting-approval'
+const runningSessions = () => new Set([...sessions].filter(([, s]) => isRunning(s.open)).map(([key]) => key))
+let draining = false
+function dropSession(key: string) {
+  const session = sessions.get(key)
+  if (!session) return
+  sessions.delete(key); session.stop?.(); disposeSyncing(key)
+}
+/** A closed thread keeps its session, subscription and cursor for 5 minutes, so reopening it costs nothing. */
+const linger = createLinger({
+  timers: backgroundTimers,
+  expire: key => {
+    // The 8 most recently viewed running threads stay subscribed past their linger.
+    if (!draining && !isShown(key) && keepsRunningInBackground(key, viewed, runningSessions())) { linger.release(key); return }
+    if (!isShown(key)) dropSession(key)
+  },
+})
+const isShown = (key: string) => [...panes.values()].some(p => p.selectedId && paneSessionKey(p) === key)
 function releaseUnused() {
-  for (const [key, session] of sessions) if (![...panes.values()].some(p => p.selectedId && paneSessionKey(p) === key)) {
-    sessions.delete(key); session.stop?.()
+  const hidden: string[] = []
+  for (const [key, session] of [...sessions]) if (!isShown(key)) {
+    // One that never drew the daemon's content (left before it loaded) is not worth keeping.
+    if (!session.stream?.fresh) { linger.hold(key); dropSession(key); continue }
+    hidden.push(key)
+    if (!linger.has(key)) linger.release(key)
   }
+  // Too many closed threads: the least recently viewed go first (running ones kept in the background stay).
+  for (const key of sessionsToDrop(hidden, viewed, runningSessions())) { linger.hold(key); dropSession(key) }
+}
+/** Every session, lingering ones included (disconnect, hidden-window compaction). */
+function dropAllSessions() {
+  draining = true
+  try { linger.expireAll() } finally { draining = false }
+  for (const key of [...sessions.keys()]) dropSession(key)
+}
+
+// ---- the disk cache of opened transcripts ----
+
+/** The cache's machine key: another machine's id, or this environment for the machine the user is at. */
+const cacheMachine = (machineId?: MachineId) => machineId ?? `env:${environmentKey()}`
+const cache = () => transcriptCache(gpuixConfigDir)
+function scheduleCacheWrite(key: string, session: Session) {
+  if (!session.open.loaded || !session.open.thread || !session.stream?.fresh) return
+  cache().schedule(cacheMachine(session.machineId), session.threadId, () => {
+    const open = session.open
+    if (!open.loaded || !open.thread || open.thread.status === 'archived') return undefined
+    noteCachedSeq(key, open.lastSeq)
+    return { lastSeq: open.lastSeq, data: cacheableState(open) }
+  })
+}
+/** Write pending cache records now (the window closing). */
+export function flushTranscriptCache() { return cache().flush() }
+/** An archived thread of the machine the user is at: its cached copy is never drawn again. */
+export function forgetThreadTranscript(id: ThreadId) {
+  forgetWarm(sessionKey(id))
+  void cache().forget(cacheMachine(), id)
+}
+/** Forget what is cached for a machine that was removed or forgotten. */
+export function wipeMachineTranscripts(machineId: MachineId) {
+  forgetWarm(scopedKey(machineId, ''))
+  void cache().wipeMachine(cacheMachine(machineId))
+}
+
+// ---- first pages fetched ahead of a click (#248) ----
+
+const prefetch = createThreadPrefetch({
+  keyOf: (id, machineId) => sessionKey(id, machineId),
+  clientFor: (machineId) => {
+    if (!machineId) return client
+    try { return machineHub().clientFor(machineId) } catch { return null }
+  },
+  listed: (id, machineId) => state.threads.find(t => t.id === id && t.machineId === machineId),
+  hasSession: (key) => sessions.has(key),
+})
+const PREFETCH_AFTER_LAUNCH_MS = 1500
+/** Fetch a thread's first page ahead of a click (a hovered sidebar row). */
+export function prefetchThread(id: ThreadId, machineId?: MachineId) {
+  if (process.env.KYBERN_THREAD_PREFETCH !== '0') prefetch.hover(id, machineOfThreadId(id, machineId))
+}
+/** The rows on screen, top first, waiting for launch to settle (`PREFETCH_AFTER_LAUNCH_MS`). */
+let visibleRows: readonly StateThread[] = []
+let prefetchSettled = false
+/** The sidebar's rows on screen are fetched ahead: at most 6, two at a time, never before launch settled. */
+export function prefetchVisible(threads: readonly StateThread[]) {
+  visibleRows = threads
+  if (prefetchSettled && process.env.KYBERN_THREAD_PREFETCH !== '0') prefetch.top(threads.filter(t => t.status !== 'archived'))
 }
 export function closePaneState(id: string) {
   if (panes.size <= 1 || !panes.has(id)) return
@@ -271,7 +372,8 @@ export function closePaneState(id: string) {
 export const getThreadSession = (id: string) => sessionOf(id)
 export async function reloadPaneThread(paneId: string, threadId: string) {
   const machineId = panes.get(paneId)?.machineId
-  sessionOf(threadId, machineId)?.stop?.(); sessions.delete(sessionKey(threadId, machineId ?? machineOfThreadId(threadId)))
+  const key = sessionKey(threadId, machineId ?? machineOfThreadId(threadId))
+  linger.hold(key); dropSession(key)
   return selectPaneThread(paneId, threadId, false, machineId)
 }
 /** Characters of text in a transcript, visiting at most `budget` values (the memory log's size estimate). */
@@ -290,8 +392,8 @@ addMemoryContext('sessions', () => sessions.size)
 export function getThreadOpen(id: string) { return sessionOf(id)?.open ?? [...panes.values()].find(p => p.selectedId === id)?.open }
 export function setThreadOpen(id: string, open: ThreadState, textOnly = false, machineId?: MachineId) {
   const session = sessionOf(id, machineId)
-  if (session) session.open = open
   const owner = machineId ?? machineOfThreadId(id)
+  if (session) { session.open = open; scheduleCacheWrite(sessionKey(id, owner), session) }
   for (const [paneId, pane] of panes) if (pane.selectedId === id && pane.machineId === owner) panes.set(paneId, { ...pane, open })
   mirrorFocus()
   if (textOnly && isWindowVisible() && process.env.KYBERN_STREAM_EVENT_FRAME !== '0') publication.next()
@@ -302,8 +404,8 @@ export function setThreadOpen(id: string, open: ThreadState, textOnly = false, m
 let connectionAttempt = 0
 export function resetClient() {
   connectionAttempt++
-  for (const session of sessions.values()) session.stop?.()
-  sessions.clear()
+  dropAllSessions()
+  listState = undefined
   for (const [id, pane] of panes) panes.set(id, { ...pane, open: emptyThreadState(), generation: pane.generation + 1 })
   mirrorFocus(); emit()
   const previous = client
@@ -350,7 +452,7 @@ export async function connect() {
       if (activeEnvironment().local) void import('./platform/update.ts').then(({ takeUpdateRequests }) => takeUpdateRequests(owner)).catch(() => {})
     }
   })
-  client.onNotification('projects.changed', () => void refreshLists())
+  client.onNotification('projects.changed', () => { gitRefreshWanted = true; void refreshLists() })
   client.onNotification('threads.changed', () => void refreshLists())
   client.connect()
 }
@@ -520,10 +622,18 @@ function refreshMerged() {
     if (owner && owner !== pane.machineId) void selectPaneThread(paneId, pane.selectedId, false, owner).catch(error => console.error('[pane] Unable to load thread:', error))
   }
 }
+/** Machines the set listed; one that leaves it (removed, forgotten, re-keyed) takes its cached transcripts along. */
+let knownMachines = new Set<string>()
+function forgetRemovedMachines(ids: readonly string[]) {
+  const now = new Set(ids)
+  for (const id of knownMachines) if (!now.has(id)) wipeMachineTranscripts(id)
+  knownMachines = now
+}
 /** Follow the machine set: with more than one machine the merged view is kept up to date, with one nothing is read. */
 function watchMachines() {
   const hub = machineHub()
   const sync = () => {
+    forgetRemovedMachines(hub.connections().map(c => c.record.machineId))
     const several = hub.machineCount > 1
     if (several && !viewStop) viewStop = hub.subscribe(remoteChanged)
     if (!several && viewStop) { viewStop(); viewStop = undefined }
@@ -541,19 +651,34 @@ function notifyOffline(error: unknown) {
   void import('./shell/toasts.tsx').then(({ toast }) => toast.info(message.includes('offline') ? message : 'That machine is offline. Its threads show from the last time it was online.')).catch(() => {})
 }
 
+/** A `projects.changed` asked for the projects' Git state to be read again on the next list refresh. */
+let gitRefreshWanted = false
+const takeGitRefresh = () => { const wanted = gitRefreshWanted; gitRefreshWanted = false; return wanted }
+/** The thread list as the daemon's cursor sees it (`threadListCursor.ts`); unset until the first read of a connection. */
+let listState: ThreadListState | undefined
+let listOwner: KybernClient | undefined
+
 async function loadLists() {
   if (!client) return
   const owner = client
   const initial = !state.listsLoaded
-  startupMark('lists-start')
+  const previous = listOwner === owner ? listState : undefined
+  // The first read of a connection is bounded (active and pinned threads plus the newest 25 settled per project);
+  // later reads ask only for rows changed since the cursor. Daemons without cursors answer the full list either way.
+  const request = previous ? refreshParams(previous) : { settled_limit: FIRST_LIST_SETTLED_LIMIT }
+  startupMark('lists-start', { since: request.since_seq ?? null })
   const [p, t] = await Promise.all([
-    owner.call('projects.list', initial ? { refresh_git: false } : {}),
-    owner.call('threads.list', {}).then(result => {
-      if (owner === client) {
-        lastActivity = { owner, activity: result.activity ?? [] }
-        for (const listener of activityListeners) listener(lastActivity.activity)
-      }
-      return result
+    // Git probes (one subprocess per project, ~0.6 s for 20 projects on Windows) run when projects changed and once
+    // after launch, not on every thread change: with a list cursor the thread side of a refresh costs milliseconds.
+    owner.call('projects.list', initial || !(takeGitRefresh() || !hasListCursor(previous)) ? { refresh_git: false } : {}),
+    owner.call('threads.list', request).then(result => {
+      if (owner !== client) return result
+      learnCapable(owner, result.head_seq !== undefined)
+      listState = applyThreadList(listOwner === owner ? listState : undefined, request, result)
+      listOwner = owner
+      lastActivity = { owner, activity: listState.activity }
+      for (const listener of activityListeners) listener(lastActivity.activity)
+      return { ...result, threads: listState.threads, activity: listState.activity }
     }),
   ])
   if (owner !== client) return
@@ -565,7 +690,10 @@ async function loadLists() {
   // The set learns this machine's lists first, so a project the user has here is not listed again for another machine's checkout.
   machineHub().ingestPrimary(owner, p.projects, t.threads, t.activity)
   const composed = composeLists(p.projects, listedThreads)
-  set({ projects: composed.projects, threads: withNewChats(composed.threads), listsLoaded: true })
+  const omitted = listState?.omitted ?? {}
+  set({ projects: composed.projects, threads: withNewChats(composed.threads), listsLoaded: true, ...(JSON.stringify(omitted) !== JSON.stringify(state.omitted) ? { omitted } : {}) })
+  // At launch the restored threads and the sidebar go first; the rows on screen are fetched ahead once they had their turn.
+  if (initial && !prefetchSettled) backgroundTimers.setTimeout(() => { prefetchSettled = true; if (owner === client) prefetchVisible(visibleRows) }, PREFETCH_AFTER_LAUNCH_MS)
   if (initial) {
     // Preserve the usual Git self-heal without putting one subprocess per
     // project on the first sidebar paint's critical path. Notifications may
@@ -587,6 +715,26 @@ async function loadLists() {
   }
 }
 
+/** "Show more" on a project the bounded list cut: its next older settled threads. */
+export async function loadMoreThreads(projectId: string) {
+  const owner = client
+  if (!owner || listOwner !== owner || !listState || !(listState.omitted[projectId] > 0)) return
+  const request = moreParams(listState, projectId)
+  const result = await owner.call('threads.list', request)
+  if (owner !== client || listOwner !== owner || !listState) return
+  listState = applyThreadList(listState, request, result)
+  await refreshLists()
+}
+/**
+ * Activity changed (runtime tasks, children): with a list cursor this is a `threads.list {since_seq}` read merged into
+ * the list, which also notifies `onThreadActivity`. Returns false when the daemon has no cursor (the caller re-reads).
+ */
+export async function refreshListActivity(): Promise<boolean> {
+  if (!client || listOwner !== client || !hasListCursor(listState)) return false
+  await refreshLists()
+  return true
+}
+
 const openEventListeners = new Set<(event: ThreadEvent) => void>()
 /** Observe the open thread's live events after they are folded in (earlier-history replay). */
 export function onOpenEvent(listener: (event: ThreadEvent) => void): () => void {
@@ -602,11 +750,14 @@ export async function selectPaneThread(paneId: string, id: ThreadId | null, keep
   const generation = pane.generation + 1
   const machine = id ? machineOfThreadId(id, machineId) : undefined
   const key = id ? sessionKey(id, machine) : ''
-  // A repeat explicit selection refreshes a sole owner, retaining race protection.
-  if (id && pane.selectedId === id && pane.machineId === machine && ![...panes].some(([other, p]) => other !== paneId && p.selectedId === id && p.machineId === machine)) {
-    sessions.get(key)?.stop?.(); sessions.delete(key)
-  }
+  // A repeat explicit selection refreshes a sole owner, retaining race protection; a refresh reads the daemon, not the cache.
+  // A pane restored on a thread at launch is not a refresh: only an open session is.
+  const refresh = !!id && sessions.has(key) && pane.selectedId === id && pane.machineId === machine && ![...panes].some(([other, p]) => other !== paneId && p.selectedId === id && p.machineId === machine)
+  if (refresh) { linger.hold(key); dropSession(key) }
   const existing = id ? sessions.get(key) : undefined
+  // A lingering session (closed less than 5 minutes ago, or running in the background) is current: it shows at once.
+  if (existing) { linger.hold(key); noteViewed(key) }
+  if (id) traceThreadClick(id, 'select')
   // A new chat the daemon has not made yet opens on its own record: its first message shows as a pending bubble, and the
   // transcript loads when the create answers (`newChats.subscribe` above).
   const uncreated = id && !existing && newChats.uncreated(id) ? newChats.get(id)!.thread : null
@@ -617,6 +768,7 @@ export async function selectPaneThread(paneId: string, id: ThreadId | null, keep
     return
   }
   setPane(paneId, { selectedId: id, machineId: machine, open: existing?.open ?? (keepOpen ? pane.open : emptyThreadState()), generation })
+  if (id) traceThreadContent(id, panes.get(paneId)!.open, existing ? 'session' : 'pane', afterFrame)
   releaseUnused()
   if (!id || !client) return
   if (existing) { await existing.ready; return }
@@ -646,34 +798,48 @@ export async function selectPaneThread(paneId: string, id: ThreadId | null, keep
   const discardHistory = () => { clearTimeout(session.historyTimer); session.history.clear() }
   session.stop = discardHistory
   sessions.set(key, session)
+  noteViewed(key)
   const valid = () => (machine ? true : owner === client) && sessions.get(key) === session
   session.ready = (async () => {
     startupMark('thread-start', { id })
-    const res = await owner.call('threads.get', { thread_id: id, transcript_limit: 120, include_tool_output: false })
+    // A first page fetched ahead of the click, else the disk copy: either is drawn before any round trip.
+    const warm = refresh ? undefined : takePrefetched(key) ?? await cache().load(cacheMachine(machine), id)
     if (!valid()) return
-    startupMark('thread-page-ready', { id, entries: res.transcript.length })
-    const seeded = seedFromGet(res)
-    startupMark('thread-projected', { id, blocks: seeded.blocks.length })
-    setThreadOpen(id, seeded, false, machine)
-    startupMark('thread-ready', { id, entries: res.transcript.length })
-    memoryStep('thread-open', { id, entries: res.transcript.length, blocks: seeded.blocks.length })
-    const sub = owner.subscribeEvents(
-      { thread_id: id, after_seq: res.thread.last_seq, include_tool_output: false },
-      event => {
+    if (warm) noteCachedSeq(key, warm.lastSeq)
+    else startSyncing(key)
+    const stream = openThreadStream(owner, { threadId: id, ...(warm ? { cached: warm } : {}), capable: isCapable(owner) }, {
+      get: () => session.open,
+      learned: value => learnCapable(owner, value),
+      set: (next, source, event) => {
         if (!valid()) return
-        // A snapshot from before this event cannot repair newly exposed older
-        // rows. Demand loading keeps its existing in-flight event replay.
-        session.history.clear()
-        setThreadOpen(id, applyEvent(session.open, event), event.kind === 'assistant_text_delta' || event.kind === 'assistant_thinking_delta', machine)
-        for (const listener of threadEventListeners) listener(id, event)
-        if (state.selectedId === id && state.selectedMachineId === machine) for (const listener of openEventListeners) listener(event)
+        if (source === 'event') {
+          // A snapshot from before this event cannot repair newly exposed older
+          // rows. Demand loading keeps its existing in-flight event replay.
+          session.history.clear()
+          setThreadOpen(id, next, event!.kind === 'assistant_text_delta' || event!.kind === 'assistant_thinking_delta', machine)
+          for (const listener of threadEventListeners) listener(id, event!)
+          if (state.selectedId === id && state.selectedMachineId === machine) for (const listener of openEventListeners) listener(event!)
+          return
+        }
+        if (source !== 'cache') { session.history.clear(); stopSyncing(key) }
+        setThreadOpen(id, next, false, machine)
+        traceThreadContent(id, next, source, afterFrame)
+        if (source !== 'cache') {
+          startupMark('thread-ready', { id, from: source, blocks: next.blocks.length })
+          memoryStep('thread-open', { id, from: source, blocks: next.blocks.length })
+        }
       },
-    )
-    session.stop = () => { discardHistory(); sub.unsubscribe() }
+    })
+    session.stream = stream
+    session.stop = () => { discardHistory(); stream.stop() }
+    if (!valid()) { stream.stop(); return }
+    try { await stream.ready } finally { stopSyncing(key) }
+    if (!valid()) return
+    scheduleCacheWrite(key, session)
     primeThreadHistory(id)
   })()
   try { await session.ready } catch (error) {
-    if (valid()) { sessions.delete(key); throw error }
+    if (valid()) { dropSession(key); throw error }
   }
 }
 /**
@@ -683,8 +849,8 @@ export async function selectPaneThread(paneId: string, id: ThreadId | null, keep
  * composer and its drafts are untouched.
  */
 export function releaseOpenTranscripts() {
-  for (const session of sessions.values()) session.stop?.()
-  sessions.clear()
+  void flushTranscriptCache()
+  dropAllSessions()
   for (const [id, pane] of panes) panes.set(id, { ...pane, open: compactThreadState(pane.open), generation: pane.generation + 1 })
   mirrorFocus(); emit()
 }

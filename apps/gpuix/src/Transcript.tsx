@@ -15,7 +15,8 @@ import { createTurnGrouper, type TurnGroup } from '../../../packages/kybern-clie
 import { calendarDateKey } from './shared/lib/format.ts'
 import { Icon } from './icons.tsx'
 import { MatrixLoader } from './MatrixLoader.tsx'
-import { subscribe, useApp, usePaneAccess, usePaneCompact } from './state.ts'
+import { subscribe, threadSyncKey, useApp, usePaneAccess, usePaneCompact } from './state.ts'
+import { useSyncingVisible } from './transcript/warm.ts'
 import { Label, REDUCED_MOTION, useTheme } from './ui.tsx'
 import { BLUR, DISTANCE, DURATION, EASE } from './motion/kit.tsx'
 import { Presence } from './motion/Presence.tsx'
@@ -73,6 +74,7 @@ export function Transcript() {
   const thread = useApp(s => s.open.thread)
   const blocks = usePacedBlocks()
   const loaded = useApp((s) => s.open.loaded)
+  const syncing = useSyncingVisible(useApp((s) => (s.selectedId ? threadSyncKey(s.selectedId, 'generation' in s ? (s as { machineId?: string }).machineId : s.selectedMachineId) : null)))
   const hasEarlier = useApp((s) => s.open.nextBeforeSeq != null)
   const loadingEarlier = useApp((s) => !!s.open.loadingEarlier)
   const threadRunning = useApp((s) => s.open.thread?.status === 'running' || s.open.thread?.status === 'awaiting-approval')
@@ -376,13 +378,16 @@ export function Transcript() {
     return stop
   }, [jump, renderer, paneHeight])
 
-  if (!loaded)
+  if (!loaded || syncing)
     return (
       <div testId="transcript-loading" style={{ display: 'flex', flexGrow: 1, alignItems: 'center', justifyContent: 'center' }}>
-        {/* `chat-mount-loader-in`: a quick load never flashes the loader (200 ms fade after 150 ms). */}
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: REDUCED_MOTION ? 0 : 0.2, delay: 0.15, ease: 'easeOut' }} style={{ display: 'flex' }}>
-          <MatrixLoader />
-        </motion.div>
+        {/* The loader is the delayed sync state (`transcript/warm.ts`): only after 400 ms without anything to draw, then
+            at least 400 ms, so a quick load never flashes it and a cached copy never shows it. */}
+        {syncing && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: REDUCED_MOTION ? 0 : 0.2, ease: 'easeOut' }} style={{ display: 'flex' }}>
+            <MatrixLoader />
+          </motion.div>
+        )}
       </div>
     )
 

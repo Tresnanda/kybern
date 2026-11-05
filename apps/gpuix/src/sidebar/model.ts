@@ -109,6 +109,8 @@ export interface SidebarInput {
   draft: { projectId?: string; purpose?: string } | null
   collapsed: Record<string, boolean>
   showAll: Record<string, boolean>
+  /** Settled threads per project the bounded list left out; they count in "Show N more" and load when it is pressed. */
+  omitted?: Record<string, number>
   expanded: Record<string, boolean>
   nav: Pick<
     NavState,
@@ -251,8 +253,13 @@ export function buildRows(input: SidebarInput): Row[] {
             : { kind: 'thread', key: row.thread.id, thread: row.thread, depth: row.depth, childCount: row.childCount, childrenOpen: row.open, nested: true },
         )
       }
-      if (!shown && topRows > MAX_PROJECT_THREADS)
-        rows.push({ kind: 'more', key: `${project.id}:more`, projectId: project.id, count: topRows - MAX_PROJECT_THREADS, showAll: !!input.showAll[project.id] })
+      const left = input.omitted?.[project.id] ?? 0
+      if (!shown && (topRows > MAX_PROJECT_THREADS || left > 0)) {
+        // Opened, with rows still on the daemon: the row offers those next instead of "Show less".
+        const open = !!input.showAll[project.id]
+        const count = open && left > 0 ? left : Math.max(0, topRows - MAX_PROJECT_THREADS) + left
+        rows.push({ kind: 'more', key: `${project.id}:more`, projectId: project.id, count, showAll: open && left === 0 })
+      }
       if (threads.length === 0) rows.push({ kind: 'no-threads', key: `${project.id}:empty` })
     })
   }

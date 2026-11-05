@@ -37,7 +37,8 @@ import { newThread, openThread } from '../nav/history.ts'
 import { ContextMenu, Menu, MenuItem, MenuLabel, MenuSeparator, muted, Tip } from '../nav/overlay.tsx'
 import { DEFAULT_FILTER, getNav, setNav, useNav } from '../nav/store.ts'
 import { parentMachineOf } from '../nav/remoteChildren.ts'
-import { callThread, getState, toggleProject as toggleProjectState, type StateThread } from '../state.ts'
+import { callThread, getState, prefetchThread, toggleProject as toggleProjectState, type StateThread } from '../state.ts'
+import { PREFETCH_HOVER_MS } from '../../../../packages/kybern-client/src/threadWarmth.ts'
 import { glyphOfMachine, machineHub } from '../machines/index.ts'
 import { MachineBadge } from './MachineBadge.tsx'
 import { forkTargetsOf } from '../fork/targets.ts'
@@ -547,6 +548,12 @@ export const ThreadRow = memo(function ThreadRow({
   const menu = useContextMenu()
   const [renaming, setRenaming] = useState(false)
   useSidebarRowLease(renaming)
+  // A row hovered for a moment fetches its thread's first page, so the click draws it at once (#248).
+  useEffect(() => {
+    if (!hover) return
+    const timer = setTimeout(() => prefetchThread(thread.id, (thread as StateThread).machineId), PREFETCH_HOVER_MS)
+    return () => clearTimeout(timer)
+  }, [hover, thread.id])
   const [title, setTitle] = useState(thread.title)
   // A thread another machine owns: its glyph, and greyed while that machine is offline (design §5.2). The machine the user is at has neither.
   const remote = thread as StateThread

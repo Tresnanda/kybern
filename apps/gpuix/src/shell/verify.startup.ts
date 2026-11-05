@@ -14,17 +14,23 @@ KybernClient.prototype.call = ((method: string, input: unknown) => {
   params.push(input)
   return new Promise(resolve => { if (method === 'threads.get') resolveThread = resolve; if (method === 'threads.list') resolveList = resolve; if(method === 'projects.list')resolveProjects=resolve })
 }) as typeof KybernClient.prototype.call
-KybernClient.prototype.subscribeEvents = (() => ({ unsubscribe() {}, lastSeq: 20 })) as typeof KybernClient.prototype.subscribeEvents
+// Like the real client: a subscription is acknowledged with its head right after it is sent.
+KybernClient.prototype.subscribeEvents = ((_params: unknown, _handler: unknown, onSubscribed?: (head: number, replay: { resumed: boolean; supported: boolean }) => void) => {
+  queueMicrotask(() => onSubscribed?.(20, { resumed: false, supported: false }))
+  return { unsubscribe() {}, lastSeq: 20 }
+}) as typeof KybernClient.prototype.subscribeEvents
 const { connect, getState, onThreadActivity, resetClient, setPane } = await import('../state.ts')
 await connect()
 setPane('main', { selectedId: 'last-open-thread' })
 status('open')
+// The open looks in the transcript cache first (microtasks only), then reads the page with the lists still pending.
+await Bun.sleep(0)
 assert.ok(calls.includes('threads.get'), 'the restored thread must hydrate before project/thread lists return')
 assert.ok(calls.includes('projects.list'))
 assert.ok(calls.includes('threads.list'))
 assert.ok(calls.indexOf('projects.list') < calls.indexOf('threads.get'), 'queue the project index before transcript reconstruction')
 assert.deepEqual(params[calls.indexOf('projects.list')], {refresh_git:false}, 'first sidebar index does not wait for Git subprocesses')
-resolveThread({ thread: { id: 'last-open-thread', last_seq: 20 }, transcript: [], pending_approvals: [], notes: { text: '', revision: 0 } } as unknown as ThreadsGetResult)
+resolveThread({ thread: { id: 'last-open-thread', last_seq: 20 }, transcript: [], pending_approvals: [], notes: { text: '', revision: 0 }, as_of_seq: 20 } as unknown as ThreadsGetResult)
 await Bun.sleep(0)
 assert.equal(getState().open.loaded, true)
 assert.equal(getState().listsLoaded, false, 'thread content is independent of a slow project Git refresh')
