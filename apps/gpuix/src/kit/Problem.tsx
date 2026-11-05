@@ -74,22 +74,30 @@ function useDetails(detail: string | undefined, testId: string): { toggle: React
   return { toggle, box }
 }
 
-/** The tint of the icon card: the tone laid over the card base so the card stays opaque, and the two cards fanned behind it. */
-function tint(t: ReturnType<typeof useTheme>, tone: ProblemTone) {
-  const color = t.problem[tone]
+/** A tone's glyph colour and its tint at a step, for fills and for edges: the neutral tone tints from opaque ink, weighted, so its edge can rise under Increase contrast. */
+function toneOf(t: ReturnType<typeof useTheme>, name: ProblemTone) {
   const p = t.problem
-  return { fill: over(alpha(color, p.iconFill), p.cardBase), edge: alpha(color, p.iconEdge), backFill: over(alpha(color, p.backFill), p.cardBase), backEdge: alpha(color, p.backEdge), icon: color }
+  const neutral = name === 'neutral'
+  const base = neutral ? p.neutralInk : p[name]
+  return { glyph: p[name], fill: (step: number) => alpha(base, neutral ? step * p.neutralFill : step), edge: (step: number) => alpha(base, neutral ? step * p.neutralEdge : step) }
+}
+
+/** The tint of the icon card: the tone laid over the card base so the card stays opaque, and the two cards fanned behind it. */
+function tint(t: ReturnType<typeof useTheme>, name: ProblemTone) {
+  const p = t.problem
+  const c = toneOf(t, name)
+  return { fill: over(c.fill(p.iconFill), p.cardBase), edge: c.edge(p.iconEdge), backFill: over(c.fill(p.backFill), p.cardBase), backEdge: c.edge(p.backEdge), icon: c.glyph }
 }
 
 /** A page or pane that couldn't load or run. Fills its parent and centres: give it a parent with a size. */
-export function ProblemState({ tone = 'danger', icon = 'alert', title, body, primary, secondary, detail, testId = 'problem' }: ProblemProps) {
+export function ProblemState({ tone: name = 'danger', icon = 'alert', title, body, primary, secondary, detail, testId = 'problem' }: ProblemProps) {
   const t = useTheme()
   const details = useDetails(detail, testId)
   return (
     <div role="alert" testId={testId} style={{ ...column, flexGrow: 1, width: '100%' }}>
       <Empty style={{ gap: 16, padding: 24 }}>
         <EmptyHeader>
-          <EmptyMedia variant="icon" icon={glyphSource(icon)} tint={tint(t, tone)} />
+          <EmptyMedia variant="icon" icon={glyphSource(icon)} tint={tint(t, name)} />
           <Label color={t.text} size={15} lineHeight={22} weight={600} style={{ textAlign: 'center', maxWidth: 320 }}>{title}</Label>
           {body && <Label color={t.problem.help} size={13} lineHeight={20} style={{ textAlign: 'center', maxWidth: 300, marginTop: 4 }}>{body}</Label>}
         </EmptyHeader>
@@ -111,13 +119,13 @@ export function ProblemState({ tone = 'danger', icon = 'alert', title, body, pri
 }
 
 /** A failure inside a section: the `Card` in the tone, a leading glyph, the headline and one sentence, then the fix. */
-export function ProblemRow({ tone = 'danger', icon = 'alert', title, body, primary, secondary, detail, testId = 'problem' }: ProblemProps) {
+export function ProblemRow({ tone: name = 'danger', icon = 'alert', title, body, primary, secondary, detail, testId = 'problem' }: ProblemProps) {
   const t = useTheme()
   const details = useDetails(detail, testId)
-  const color = t.problem[tone]
+  const c = toneOf(t, name)
   return (
-    <Card testId={testId} style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10, backgroundColor: alpha(color, t.problem.rowFill), borderColor: alpha(color, t.problem.rowEdge) }}>
-      <Icon source={glyphSource(icon)} size={16} color={color} style={{ marginTop: 2 }} />
+    <Card testId={testId} style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10, backgroundColor: c.fill(t.problem.rowFill), borderColor: c.edge(t.problem.rowEdge) }}>
+      <Icon source={glyphSource(icon)} size={16} color={c.glyph} style={{ marginTop: 2 }} />
       <div role="alert" style={{ ...column, flexGrow: 1, flexShrink: 1, gap: 2 }}>
         <Label color={t.text} size={13} lineHeight={20} weight={500}>{title}</Label>
         {body && <Label color={t.problem.help} size={13} lineHeight={18}>{body}</Label>}

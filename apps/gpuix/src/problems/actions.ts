@@ -30,6 +30,12 @@ const text = (action: ProblemViewAction, key: string): string | undefined => {
 }
 const done = (context: ActionContext) => context.done ?? context.retry ?? (() => {})
 
+/** The fix would run on a computer that can't be reached: say so, since the terminal can't open. */
+async function unreachable() {
+  const { toast } = await import('../shell/toasts.tsx')
+  toast.problem('That computer is offline', { tone: 'neutral', icon: 'offline', description: 'Try again when it is back.' })
+}
+
 const installTool: ProblemActionHandler = {
   available: (action) => {
     // Whether Kybern knows any way to install it; which way (a command here, a page for a remote machine) is decided when it runs.
@@ -42,8 +48,10 @@ const installTool: ProblemActionHandler = {
     const projectId = context.projectId ?? ''
     void (async () => {
       const setup = await import('../pulls/ghSetup.ts')
-      const plan = installPlan(tool, setup.machineFor(projectId).local)
+      const machine = setup.machineFor(projectId)
+      const plan = installPlan(tool, machine.local)
       if (!plan) return
+      if (plan.kind === 'command' && !machine.client) return unreachable()
       if (plan.kind === 'page') return void (await import('../settings/external.ts')).openExternal(plan.url).catch(() => {})
       if (plan.kind === 'cursor') return void (await import('../onboarding/agentsStore.ts')).cursorSetup('install')
       setup.runInSetupSheet(projectId, plan.title, plan.command, done(context))
@@ -56,7 +64,12 @@ const signIn: ProblemActionHandler = {
   run: (action, context) => {
     const provider = text(action, 'provider')
     void (async () => {
-      if (provider === 'gh') return (await import('../pulls/ghSetup.ts')).signInGh(context.projectId ?? '', done(context))
+      if (provider === 'gh') {
+        const setup = await import('../pulls/ghSetup.ts')
+        return setup.machineFor(context.projectId ?? '').client ? setup.signInGh(context.projectId ?? '', done(context)) : unreachable()
+      }
+      // A machine that isn't paired is fixed where machines are managed, not with an account.
+      if (provider === 'machine') return (await import('../settings/SettingsScreen.tsx')).openSettingsTab('machines')
       const kind = provider ? providerOf(provider) : null
       // The same Add account sheet Settings opens: it runs `useAccountLogin` (browser, pasted code, terminal).
       if (kind) return (await import('../dialogs/store.ts')).showDialog({ kind: 'account', provider: kind })
@@ -85,10 +98,13 @@ const copyDetails: ProblemActionHandler = {
 const update: ProblemActionHandler = {
   available: () => true,
   run: () => {
-    void import('../platform/update.ts').then(async ({ checkForAppUpdate, openUpdateDetails }) => {
+    void (async () => {
+      const { checkForAppUpdate, getAppUpdate, openUpdateDetails } = await import('../platform/update.ts')
       await checkForAppUpdate({ manual: true })
-      openUpdateDetails()
-    }).catch(() => {})
+      // This app may already be current (the older Kybern is another computer's), or unable to update itself: About says which.
+      if (getAppUpdate().version) openUpdateDetails()
+      else (await import('../settings/SettingsScreen.tsx')).openSettingsTab('about')
+    })().catch(() => {})
   },
 }
 
