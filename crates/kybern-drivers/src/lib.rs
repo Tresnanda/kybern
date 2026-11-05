@@ -50,6 +50,7 @@ pub mod codex;
 pub mod codex_integrations;
 pub mod cursor;
 pub mod edit_paths;
+pub mod grok;
 pub mod login_lend;
 pub mod login_recipes;
 pub mod models;
@@ -639,7 +640,8 @@ mod lifecycle_tests {
                 model: None,
                 effort: None,
                 permission_mode: match kind {
-                    ProviderKind::Cursor => PermissionMode::Auto,
+                    // Grok Build advertises only Auto and Full access.
+                    ProviderKind::Cursor | ProviderKind::GrokBuild => PermissionMode::Auto,
                     ProviderKind::Antigravity => PermissionMode::FullAccess,
                     _ => PermissionMode::Supervised,
                 },
