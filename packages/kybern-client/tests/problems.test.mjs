@@ -31,6 +31,7 @@ const CASES = [
   ["terminal gone", rpc(-32003, "not found: terminal"), "type in the terminal", "not_found", "terminal", "retry"],
   ["machine offline, daemon", rpc(-32013, "SatyaMas is offline."), "read notes", "offline", "SatyaMas", "retry"],
   ["machine offline, client", new OfflineError("m-1", false), "open the thread", "offline", undefined, "retry"],
+  ["machine offline, named client", new OfflineError("m-1", false, "SatyaMas is offline. Try again when it reconnects."), "open the thread", "offline", "SatyaMas", "retry"],
   ["machine error code", { code: "unreachable", message: "Unable to connect to SatyaMas: Network request failed" }, "connect", "offline", undefined, "retry"],
   ["EPERM on Windows", new Error("EPERM: operation not permitted, symlink 'C:\\Program Files\\Kybern\\kybern.exe' -> 'C:\\Users\\Bagus\\bin\\kybern.exe'"), "add kybern to PATH", "permission", undefined, "retry"],
   ["Windows access denied", rpc(-32602, "write C:\\work\\a.txt: Access is denied. (os error 5)"), "save the file", "permission", undefined, "retry"],

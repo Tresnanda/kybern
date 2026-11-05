@@ -178,7 +178,11 @@ export function plainSentence(text: string): string | null {
 /** The problem an error from an older daemon, or from the client itself, most likely is. */
 function legacyProblem(error: unknown, message: string): Problem {
   const name = error && typeof error === "object" ? (error as { name?: unknown }).name : undefined
-  if (name === "OfflineError" || name === "ConnectionClosedError") return { kind: "offline", detail: message, retryable: true }
+  if (name === "OfflineError" || name === "ConnectionClosedError") {
+    // An `OfflineError` from the machine set says whose it is: "SatyaMas is offline. Try again when it reconnects."
+    const machine = name === "OfflineError" ? /^(.+?) is offline\b/i.exec(message)?.[1] : undefined;
+    return { kind: "offline", ...(machine && machine.length <= 64 && machine !== "This machine" ? { subject: machine } : {}), detail: message, retryable: true };
+  }
   const code = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined
   if (typeof code === "string") {
     const machine = machineProblem(code, message)
