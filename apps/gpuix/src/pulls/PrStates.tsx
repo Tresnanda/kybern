@@ -1,6 +1,7 @@
 import { ghProblem } from '@/state/prReviewModel'
 import { errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
-import { ProblemState } from '../kit/ProblemState.tsx'
+import { ProblemState } from '../kit/Problem.tsx'
+import { problemLook } from '../problems/props.ts'
 import { TerminalSheetView } from '../onboarding/TerminalSheet.tsx'
 import { closeGhSheet, GH_INSTALL_URL, ghSheet, ghSheetExited, installGh, signInGh } from './ghSetup.ts'
 import { problemCopy } from './problemCopy.ts'
@@ -25,7 +26,7 @@ export function Problem({ error, refresh, partial = false, projectId, noun = 'pu
   const copy = problemCopy(problem, noun)
   const fix = copy.action === 'install-gh' ? () => projectId ? installGh(projectId, refresh) : openUrl(GH_INSTALL_URL)
     : copy.action === 'sign-in-gh' && projectId ? () => signInGh(projectId, refresh) : undefined
-  return <ProblemState testId="pr-problem" title={copy.title} body={copy.body} detail={problem.detail}
+  return <ProblemState testId="pr-problem" {...problemLook(problem.kind)} title={copy.title} body={copy.body} detail={problem.detail}
     primary={fix && copy.primaryLabel ? { label: copy.primaryLabel, onClick: fix } : undefined}
     secondary={{ label: copy.retryLabel, onClick: refresh }} />
 }

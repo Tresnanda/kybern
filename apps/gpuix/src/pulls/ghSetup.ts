@@ -32,7 +32,7 @@ const timers = new Set<ReturnType<typeof setTimeout>>()
 const later = (ms: number, fn: () => void) => { const id = setTimeout(() => { timers.delete(id); fn() }, ms); timers.add(id) }
 
 /** The project's machine runs the command; only this computer's own OS and installers are known. */
-function machineFor(projectId: string) {
+export function machineFor(projectId: string) {
   const client = prClient(projectId)
   return { client, local: !!client && machineOfProjectId(projectId) === undefined && activeEnvironment().local }
 }
@@ -49,6 +49,14 @@ async function open(projectId: string, title: string, command: string, done: () 
   } catch (error) {
     ghSheet.set((s) => ({ sheet: s.sheet ? { ...s.sheet, error: error instanceof Error ? error.message : String(error) } : s.sheet }))
   }
+}
+
+/**
+ * Type `command` into a terminal sheet on the project's machine, for any fix that runs a command (`problems/actions.ts` installs
+ * Git, Node.js, Tailscale and the agents this way). The sheet is the one `GhSetupSheet` mounts for the window; `done` runs when it closes.
+ */
+export function runInSetupSheet(projectId: string, title: string, command: string, done: () => void): void {
+  void open(projectId, title, command, done)
 }
 
 /** "Install GitHub CLI": winget on Windows, Homebrew on a Mac that has it, else the install guide. `done` runs when the sheet closes. */

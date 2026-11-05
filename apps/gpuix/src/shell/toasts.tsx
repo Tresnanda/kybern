@@ -1,10 +1,11 @@
-import { Button } from '../kit/Button.tsx'
+import { Button, glyphSource } from '../kit/Button.tsx'
 import { NOTIFICATION_INSET } from './toastPlacement.ts'
 // Toasts (issue #108 §23): the desktop's sonner `Toaster` at the bottom right
 // (`components/ui/sonner.tsx`, `views/AppUpdate.tsx`), on GPUIX.
 //
 //   toast('Saved to “Notes”', { action: { label: 'Open', onClick } })
 //   toast.error('Unable to load thread', { description })
+//   toast.problem('Couldn’t start the thread on SatyaMas', { tone: 'neutral', icon: 'offline', description, action, secondary: { label: 'Copy', onClick } })
 //   toast.dismiss(id)
 //   toast('Enjoying Kybern?', { description, icon: { source, tone: 'warning' }, cancel: { label: 'Dismiss' }, action, duration: Infinity, onClose })
 //
@@ -42,6 +43,7 @@ import { EASE } from '../motion/kit.tsx'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { GlassEdge } from '../kit/GlassEdge.tsx'
+import type { ProblemTone } from '../kit/Problem.tsx'
 import { toneColor, type Tone } from '../kit/tone.ts'
 import { frostBackdrop, frostFill, useGlass } from '../platform/glass.ts'
 
@@ -54,6 +56,8 @@ export interface ToastOptions {
   action?: { label: string; onClick: () => void }
   /** A quiet second button before `action` (the toast becomes a prompt with its buttons under the text). It closes the toast. */
   cancel?: { label: string; onClick?: () => void }
+  /** One ghost button before `action`, for a failure: "Details" or "Copy". Like `cancel` it closes the toast (the toast becomes a prompt). */
+  secondary?: { label: string; onClick: () => void }
   /** A glyph source for the leading icon, in the tone's colour, instead of the kind's icon. */
   icon?: { source: string; tone?: Tone }
   /** Runs once when the toast closes by any path: its close button, either button, `toast.dismiss`, its timer. */
@@ -73,7 +77,10 @@ interface Item {
   description?: string
   action?: { label: string; onClick: () => void }
   cancel?: { label: string; onClick?: () => void }
+  secondary?: { label: string; onClick: () => void }
   icon?: { source: string; tone?: Tone }
+  /** A failure's tone (`toast.problem`): the icon takes the problem colour of the theme. */
+  problemTone?: ProblemTone
   onClose?: () => void
   progress?: number
   duration: number
@@ -160,7 +167,7 @@ function setHeight(key: string, height: number) {
   commit()
 }
 
-function show(kind: ToastKind, title: string, options: ToastOptions = {}): string {
+function show(kind: ToastKind, title: string, options: ToastOptions & { problemTone?: ProblemTone } = {}): string {
   const id = options.id ?? `toast-${nextId++}`
   const duration = options.duration ?? DEFAULT_DURATION
   const existing = items.find((i) => i.id === id && !i.leaving)
@@ -170,7 +177,9 @@ function show(kind: ToastKind, title: string, options: ToastOptions = {}): strin
     description: options.description,
     action: options.action,
     cancel: options.cancel,
+    secondary: options.secondary,
     icon: options.icon,
+    problemTone: options.problemTone,
     onClose: options.onClose,
     progress: options.progress,
     duration,
@@ -180,7 +189,7 @@ function show(kind: ToastKind, title: string, options: ToastOptions = {}): strin
     // A progress toast moving on: update the card in place.
     existing.description = options.description
     existing.progress = options.progress
-  } else if (existing && existing.kind === kind && existing.title === title && existing.description === options.description && existing.action?.label === options.action?.label && existing.progress === options.progress) {
+  } else if (existing && existing.kind === kind && existing.title === title && existing.description === options.description && existing.action?.label === options.action?.label && existing.secondary?.label === options.secondary?.label && existing.progress === options.progress) {
     // The same toast again: the timer starts over and nothing changes on screen.
     clearTimeout(existing.timer)
     Object.assign(existing, fields, { startedAt: null })
@@ -203,7 +212,22 @@ function show(kind: ToastKind, title: string, options: ToastOptions = {}): strin
   return id
 }
 
+/** A failed command or background job (never a page that failed to load: that is a `ProblemState`). */
+export interface ProblemToastOptions extends Omit<ToastOptions, 'icon' | 'cancel'> {
+  /** `danger` (default) a failure, `warning` something to sign in or allow, `info` a setup step, `neutral` a machine that is away. */
+  tone?: ProblemTone
+  /** A kit icon name or SVG source. Default `alert`. */
+  icon?: string
+}
+
+function showProblem(title: string, { tone = 'danger', icon = 'alert', ...options }: ProblemToastOptions = {}): string {
+  const actionable = !!(options.action || options.secondary)
+  // A failure stays long enough to act on; the pointer pauses it like any toast.
+  return show(tone === 'danger' ? 'error' : tone === 'warning' ? 'warning' : 'info', title, { duration: actionable ? 10_000 : 6000, ...options, icon: { source: glyphSource(icon) }, problemTone: tone })
+}
+
 export const toast = Object.assign((title: string, options?: ToastOptions) => show('default', title, options), {
+  problem: showProblem,
   success: (title: string, options?: ToastOptions) => show('success', title, options),
   info: (title: string, options?: ToastOptions) => show('info', title, options),
   warning: (title: string, options?: ToastOptions) => show('warning', title, options),
@@ -407,9 +431,9 @@ function ToastCard({ item }: { item: Item }) {
   const g = useGlass()
   const [hover, setHover] = useState(false)
   const icon = item.icon?.source ?? ICONS[item.kind]
-  const iconColor = item.icon?.tone ? toneColor(t, item.icon.tone) : t.text
+  const iconColor = item.problemTone ? t.problem[item.problemTone] : item.icon?.tone ? toneColor(t, item.icon.tone) : t.text
   // A prompt (two buttons): text on top, the buttons on their own trailing row.
-  const prompt = !!item.cancel
+  const prompt = !!item.cancel || !!item.secondary
   const text = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexGrow: 1, flexShrink: 1, minWidth: 0 }}>
       <Label color={t.text} size={13} weight={500} lineHeight={20}>
@@ -461,7 +485,8 @@ function ToastCard({ item }: { item: Item }) {
             {text}
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8 }}>
-            <Button testId="toast-cancel" size="sm" variant="ghost" onClick={() => { item.cancel!.onClick?.(); dismiss(item.id) }}>{item.cancel!.label}</Button>
+            {item.cancel && <Button testId="toast-cancel" size="sm" variant="ghost" onClick={() => { item.cancel!.onClick?.(); dismiss(item.id) }}>{item.cancel.label}</Button>}
+            {item.secondary && <Button testId="toast-secondary" size="sm" variant="ghost" onClick={() => { item.secondary!.onClick(); dismiss(item.id) }}>{item.secondary.label}</Button>}
             {item.action && <Button testId="toast-action" size="sm" variant="primary" onClick={() => { dismiss(item.id); item.action!.onClick() }}>{item.action.label}</Button>}
           </div>
         </>

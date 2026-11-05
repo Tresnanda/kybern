@@ -164,9 +164,37 @@ function build(variant: ThemeVariant, scope: WindowScope = 'none', contrast = fa
     fullAccess: variant === 'dark' ? '#fe8549' : '#e25505',
     /** `--app-card-edge` (`kit.css:139-150`): the border under Increase contrast. */
     cardEdge: contrast ? resolve('var(--color-border)', raw) : variant === 'dark' ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.10)',
+    /** Problem surfaces (`kit/Problem.tsx`). */
+    problem: problemTokens(variant, contrast, { info: v('--color-accent-blue'), warning: v('--warning'), red: v('--color-accent-red'), text: v('--color-text-foreground'), help: v('--color-text-foreground-secondary'), faint: v('--color-text-foreground-tertiary') }),
     /** Accessibility › Display, so a change re-renders every themed view (src/platform/material.ts). */
     contrast,
     reduceTransparency,
+  }
+}
+
+/**
+ * What a problem looks like (the tone colours, the tint steps of its icon card and row, the help and detail text) in one place, so
+ * Increase contrast is a token and not a branch in the component: the tone edges rise from 22 % / 17 % to 40 %, the help text takes
+ * full ink and the technical text steps up to 72 %. In dark the danger tone is lifted (`#ff6b63`) to keep its glyph legible on the
+ * tinted card. `cardBase` is the opaque colour the icon card's tint is laid over.
+ */
+function problemTokens(variant: ThemeVariant, contrast: boolean, c: { info: string; warning: string; red: string; text: string; help: string; faint: string }) {
+  const dark = variant === 'dark'
+  const ink = dark ? '252, 252, 252' : '13, 13, 13'
+  return {
+    info: c.info,
+    warning: c.warning,
+    danger: dark ? '#ff6b63' : c.red,
+    neutral: `rgba(${ink}, 0.42)`,
+    cardBase: dark ? '#131313' : '#ffffff',
+    iconFill: 0.11,
+    iconEdge: contrast ? 0.4 : 0.22,
+    backFill: 0.06,
+    backEdge: 0.14,
+    rowFill: 0.07,
+    rowEdge: contrast ? 0.4 : 0.17,
+    help: contrast ? c.text : c.help,
+    detail: contrast ? `rgba(${ink}, 0.72)` : c.faint,
   }
 }
 

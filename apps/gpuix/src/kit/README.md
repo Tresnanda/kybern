@@ -146,9 +146,49 @@ All take `testId` and (except the popups) `style`.
 on one native tween, attached to the window like `background-attachment: fixed`), `Spinner` (`size` 24, `color`, `spinning`),
 `Empty` + `EmptyHeader`, `EmptyMedia` (`variant` default/icon, `icon`), `EmptyTitle`, `EmptyDescription`, `EmptyContent`
 (the header children rise in together, 12 px, 500 ms; `play={false}` for none).
-`ProblemState` (`title`, `body`, `primary`, `secondary`, `detail`): a page that couldn't load, in plain words, with the
-action that fixes it and the technical text behind "Show details" and a copy button, never as the headline. The pull
-request surfaces map an RPC error's `data.problem` to it (`pulls/PrStates.tsx`, copy in `pulls/problemCopy.ts`).
+`ProblemState`, `ProblemRow` and `toast.problem()`: see Problems, below.
+
+## Problems (`Problem.tsx`, `problems/`, `shell/toasts.tsx`)
+
+A failure in plain words, in the three places one shows up: a headline that states the outcome or the fix (no period, never "Error", a
+class name or a path), one sentence on what to do next, the fix as the primary button, and the technical text behind a ghost "Show
+details" with a copy button. Never a toast for a page that failed to load. The gallery section `problem` shows all three in light,
+dark, glass and increased contrast (`bun scripts/kit-problem-shots.ts <out> all`); `scripts/kit-problem-check.ts` asserts them.
+
+| Form | Where | Props |
+| --- | --- | --- |
+| `ProblemState` | a page or pane that couldn't load or run; built on `Empty`, fills its parent (give it a size) and centres | `tone`, `icon`, `title`, `body?`, `primary?`, `secondary?`, `detail?`, `testId` |
+| `ProblemRow` | a failure inside a section; the `Card` geometry in the tone, buttons `sm` | the same |
+| `toast.problem(title, options)` | a failed command or background job | `ToastOptions` plus `tone`, `icon`; `action` is the fix, `secondary` the one ghost button ("Details" or "Copy"), which closes the toast |
+
+`tone` is `info` (a setup step), `warning` (sign in, allow), `danger` (a failure) or `neutral` (a machine that is away); `icon` is a kit
+icon name or SVG source (`alert`, `lock`, `offline`, `failed`, `download`, `console`). `primary` and `secondary` are
+`{ label, onClick, testId?, busy? }`; test ids default to `<testId>-primary`, `-secondary`, `-details`, `-detail` (the text) and `-copy`.
+The colours, the tint steps of the icon card and row, and the Increase contrast treatment (tone edges 22 % / 17 % → 40 %, help text in
+full ink, the technical text at 72 %) are `theme.problem`; nothing in the component branches on contrast. `EmptyMedia` gained `tint` for
+the coloured icon card.
+
+**Using it.** The words come from `describeProblem(error, { action, goal?, machine? })` (`packages/kybern-client/src/problems.ts`) and
+`problemProps(view, context, testId?)` (`problems/props.ts`) turns the view into these props: the look of its kind (`problemLook`) and a
+button for each action the table can run.
+
+```tsx
+<ProblemState {...problemProps(describeProblem(error, { action: 'load pull requests' }), { retry: refresh, projectId })} />
+toastProblem(error, { action: 'start the thread', retry, projectId })   // problems/toast.ts: the same, as a toast with Copy
+```
+
+**Actions (`problems/actions.ts`).** `PROBLEM_ACTIONS` maps an action id to a flow GPUIX already has; `resolveAction(action, context)` gives
+the button or `null`. An id that isn't in the table, or that cannot run with the context (`retry` without a `retry` callback,
+`copy_details` without `detail`), renders no button; a "Copy details" action is also dropped when the details disclosure is there.
+
+| Id | Does |
+| --- | --- |
+| `install_tool` (`params.tool`) | types the installer into a terminal sheet on the project's machine (`problems/install.ts`: winget on Windows, Homebrew on a Mac that has it, `npm install -g` for the agents; Cursor runs its own setup); opens the download page only when there is no installer |
+| `sign_in` (`params.provider`) | `gh auth login` in the terminal sheet for `gh`; the Add account sheet (`useAccountLogin`) for an agent; Settings › Accounts otherwise |
+| `open_settings` (`params.section`), `open_machines` | `openSettingsTab` |
+| `retry` | the surface's own `context.retry` |
+| `copy_details`, `copy_detail` | `writeClipboardText(context.detail)` |
+| `update` | checks for an app update and opens its details (`platform/update.ts`) |
 
 ## Resize (`Resize.tsx`)
 
