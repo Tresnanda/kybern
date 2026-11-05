@@ -1,6 +1,7 @@
 // Settings › Agent providers › Antigravity (ADE-111). One account per machine, two ways in: a Gemini API key first (the provider
 // environment `GEMINI_API_KEY`, which the daemon keeps in its secret store), then Google sign-in through `agy` in a terminal,
 // behind the one-time notice.
+import { toastProblem } from '../problems/toast.ts'
 import { useState } from 'react'
 import { GEMINI_API_KEY_ENV } from '../../../../packages/kybern-client/src/antigravity.ts'
 import { requestAntigravitySignIn } from '../antigravity/notice.ts'
@@ -8,7 +9,6 @@ import { showDialog } from '../dialogs/store.ts'
 import { Button } from '../kit/Button.tsx'
 import { Switch } from '../kit/Switch.tsx'
 import { TextField } from '../kit/Field.tsx'
-import { errorText } from '../nav/actions.ts'
 import { useNav } from '../nav/store.ts'
 import { toast } from '../shell/toasts.tsx'
 import { updateProviderSettings, useAccounts } from '../usage/accounts.ts'
@@ -38,7 +38,7 @@ export function AntigravitySetup() {
       setKey('')
       toast.success(value ? 'Gemini API key saved' : 'Gemini API key removed')
     } catch (error) {
-      toast.error('Unable to update the Gemini API key', { description: `${errorText(error)} Check the connection, then try again.` })
+      toastProblem(error, { action: 'update the Gemini API key' })
     } finally {
       setBusy(false)
     }
@@ -49,7 +49,7 @@ export function AntigravitySetup() {
     await updateSettings({ antigravity: { ...(latestSettings()?.antigravity ?? {}), kybern_tools } })
     // The daemon refuses the switch when another program already uses the name `kybern`; say why.
     const failed = latestError()
-    if (failed) toast.error('Unable to change Kybern tools', { description: failed.replace(/^.*?try again\.\s*(Error:\s*)?/, '') })
+    if (failed) toastProblem(failed.error, { action: 'change Kybern tools' })
   }
 
   return (

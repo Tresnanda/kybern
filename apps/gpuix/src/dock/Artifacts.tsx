@@ -17,6 +17,8 @@ import { cachedMarkdownTheme } from '../transcript/kit.tsx'
 import { TaskWindow, type TaskWindowEntry } from '../tasks/TaskWindow.tsx'
 import { Label, useTheme } from '../ui.tsx'
 import { ErrorLine, Section } from './parts.tsx'
+import { asError } from '../../../../packages/kybern-client/src/problem.ts'
+import { ProblemLine } from '../problems/Line.tsx'
 import { Button } from '../kit/Button.tsx'
 import { artifactBrowserCopy, type ArtifactBrowserPhase } from './artifactFallback.ts'
 import { TextField } from '../kit/Field.tsx'
@@ -29,7 +31,8 @@ export function ArtifactsPane({ thread }: { thread: Thread }) {
   const t = useTheme()
   const [items, setItems] = useState<ArtifactTool[]>([])
   const [before, setBefore] = useState<number | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<Error | null>(null)
+  const failed = useRef<'load' | 'older' | 'publish'>('load')
   const [busy, setBusy] = useState(false)
   const [refresh, setRefresh] = useState(0)
   const [path, setPath] = useState('')
@@ -38,14 +41,14 @@ export function ArtifactsPane({ thread }: { thread: Thread }) {
   useEffect(() => {
     let alive = true
     setBusy(true)
-    void threadClient(thread.id)!.call('threads.artifacts.list', { thread_id: thread.id }).then(result => { if (alive) { setItems(result.artifacts); setBefore(result.next_before_seq); setError(null) } }, e => { if (alive) setError(String(e)) }).finally(() => { if (alive) setBusy(false) })
+    void threadClient(thread.id)!.call('threads.artifacts.list', { thread_id: thread.id }).then(result => { if (alive) { setItems(result.artifacts); setBefore(result.next_before_seq); setError(null) } }, e => { if (alive) { failed.current = 'load'; setError(asError(e)) } }).finally(() => { if (alive) setBusy(false) })
     return () => { alive = false }
   }, [thread.id, thread.status, refresh])
   const older = async () => {
     if (before === null || busy) return
     setBusy(true)
     try { const result = await threadClient(thread.id)!.call('threads.artifacts.list', { thread_id: thread.id, before_seq: before }); setItems(old => [...old, ...result.artifacts.filter(a => !old.some(b => a.seq === b.seq))]); setBefore(result.next_before_seq) }
-    catch (e) { setError(String(e)) } finally { setBusy(false) }
+    catch (e) { failed.current = 'older'; setError(asError(e)) } finally { setBusy(false) }
   }
   const publish = async (artifact: Pick<ArtifactView, 'path' | 'url'>) => {
     if (busy) return
@@ -57,7 +60,7 @@ export function ArtifactsPane({ thread }: { thread: Thread }) {
         await client.call('queue.add', { id: crypto.randomUUID(), thread_id: thread.id, message })
         setNotice('Publishing capability check queued.')
       } else { await client.call('threads.send', { thread_id: thread.id, message }); setNotice('Claude is checking which publishing tools are available.') }
-    } catch (e) { setError(String(e)) } finally { setBusy(false) }
+    } catch (e) { failed.current = 'publish'; setError(asError(e)) } finally { setBusy(false) }
   }
   const entries: TaskWindowEntry[] = items.flatMap(item => {
     const artifact = artifactView(item)
@@ -69,7 +72,7 @@ export function ArtifactsPane({ thread }: { thread: Thread }) {
   })
   return <div testId="dock-artifacts" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 12, paddingRight: 12, paddingTop: 12, marginBottom: 12 }}><Label color={t.text} size={14} lineHeight={20} weight={500} style={{ flexGrow: 1 }}>Artifacts</Label><Button size="sm" variant="ghost" disabled={busy} onClick={() => setRefresh(n => n + 1)}>Refresh</Button></div>
-    <ErrorLine error={error} />{notice && <Section label={notice} />}
+    <ErrorLine error={error} action={failed.current === 'older' ? 'load earlier artifacts' : failed.current === 'publish' ? 'check the publishing tools' : 'load the artifacts'} retry={failed.current === 'older' ? () => void older() : failed.current === 'load' ? () => setRefresh((n) => n + 1) : undefined} projectId={thread.project_id} />{notice && <Section label={notice} />}
     {thread.provider.kind === 'claude-code' && <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 12, paddingRight: 12, paddingBottom: 16 }}><TextField testId="artifact-path" label="Artifact file path" placeholder="artifacts/dashboard.html" value={path} onChange={setPath} width="100%" /><div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}><Button size="sm" testId="artifact-preview" disabled={!path.trim()} onClick={() => setSelected({ id: 'local', seq: 0, title: path.split('/').pop() || 'Artifact', path: path.trim(), url: null, status: 'completed' })}>Preview file</Button><Button size="sm" disabled={!path.trim() || busy} onClick={() => void publish({ path: path.trim(), url: null })}>Check publishing options</Button></div></div>}
     {entries.length ? <TaskWindow entries={entries} card testId="artifacts-list" /> : <Label color={t.textSecondary} size={12} lineHeight={19.5} style={{ paddingLeft: 12, paddingRight: 12, whiteSpace: 'normal' }}>{busy ? 'Loading artifacts…' : thread.provider.kind === 'claude-code' ? 'Preview a local file or check whether Claude has a publishing tool available.' : 'Local previews stay on your computer. Hosting requires a publishing tool available to the agent.'}</Label>}
     {before !== null && <div style={{ display: 'flex', paddingLeft: 12, paddingTop: 12 }}><Button size="sm" variant="ghost" disabled={busy} onClick={() => void older()}>Load earlier artifacts</Button></div>}
@@ -79,7 +82,7 @@ export function ArtifactsPane({ thread }: { thread: Thread }) {
 /** An artifact's file and, for HTML, its preview ticket's page: on another machine, a loopback relay that closes with the tab or dialog. */
 function useArtifactFile(threadId: string, path: string) {
   const [file, setFile] = useState<FilesReadResult | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<Error | null>(null)
   const [url, setUrl] = useState<string | null>(null)
   const markdown = /\.(md|markdown)$/i.test(path)
   useEffect(() => {
@@ -97,7 +100,7 @@ function useArtifactFile(threadId: string, path: string) {
         const page = await client.openPage(`/artifact-preview/${encodeURIComponent(preview.ticket)}`)
         if (alive) { close = page.close; setUrl(page.url) } else page.close()
       }
-    }).catch(e => { if (alive) setError(String(e).replace(/^Error: /, '')) })
+    }).catch(e => { if (alive) setError(asError(e)) })
     return () => { alive = false; close() }
   }, [threadId, path])
   return { file, error, setError, url, markdown }
@@ -143,7 +146,7 @@ export function ArtifactTab({ threadId, path, url: hosted }: { threadId: string;
       {hosted && <Button size="sm" variant="ghost" onClick={() => openUrl(hosted)}>Open in Claude</Button>}
     </div>
     <div ref={setHost} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
-      {error ? <Label color={t.red} size={14}>{error}</Label>
+      {error ? <ProblemLine error={error} action="open the artifact" testId="artifact-problem" />
         : !file ? <Label color={t.textSecondary} size={14}>Loading preview…</Label>
         : <>
           {source && <div testId="artifact-source-text" style={{ height, overflow: 'scroll' }}><Label color={t.text} size={12} lineHeight={16} font={FONT_CODE} style={{ whiteSpace: 'normal', width: '100%' }}>{file.content}</Label></div>}
@@ -156,7 +159,7 @@ export function ArtifactTab({ threadId, path, url: hosted }: { threadId: string;
 }
 
 /** The desktop's sandboxed `<iframe sandbox="allow-scripts">`: one native web document in a slot, shared with inline visuals. */
-function ArtifactFrame({ id, url, height, hidden, onFailed }: { id: string; url: string; height: number; hidden: boolean; onFailed: (message: string) => void }) {
+function ArtifactFrame({ id, url, height, hidden, onFailed }: { id: string; url: string; height: number; hidden: boolean; onFailed: (error: Error) => void }) {
   const renderer = useGpuixRequired(), ref = useRef<PublicInstance | null>(null), layer = useWebLayer(), t = useTheme()
   const hiddenRef = useRef(hidden); hiddenRef.current = hidden
   const theme = useRef(visualTheme(t)); theme.current = visualTheme(t)
@@ -172,11 +175,11 @@ function ArtifactFrame({ id, url, height, hidden, onFailed }: { id: string; url:
     const stop = webHost.subscribe(event => {
       if (event.id !== id || (event.generation !== undefined && event.generation !== generation)) return
       if (event.type === 'created' || event.type === 'loaded') { ready.current = true; place.current(); webHost.theme(id, theme.current) }
-      if (event.type === 'failed' || event.type === 'terminated') onFailed(event.message ?? 'The page stopped responding.')
-      if (event.type === 'message' && event.data?.kind === 'kybern-visual-link') { const link = visualLink(event.data.url); if (link) void launchBrowser(link).catch(error => onFailed(String(error))) }
+      if (event.type === 'failed' || event.type === 'terminated') onFailed(new Error(event.message ?? 'The page stopped responding.'))
+      if (event.type === 'message' && event.data?.kind === 'kybern-visual-link') { const link = visualLink(event.data.url); if (link) void launchBrowser(link).catch(error => onFailed(asError(error))) }
     })
     const bounds = observeElementBounds(renderer, ref.current.id, next => { latest = next; place.current() })
-    try { generation = webHost.create(id, url, 'visual') } catch (error) { onFailed(String(error)) }
+    try { generation = webHost.create(id, url, 'visual') } catch (error) { onFailed(asError(error)) }
     return () => { bounds(); stop(); ready.current = false; webHost.destroy(id) }
   }, [renderer, id, url, layer])
   useEffect(() => { if (ready.current) webHost.theme(id, theme.current) }, [id, t])
@@ -198,7 +201,7 @@ function ArtifactPreview({ thread, artifact, close }: { thread: Thread; artifact
         <Button size="sm" testId="artifact-source" onClick={() => setSource(!source)}>{source ? 'Preview' : 'Source'}</Button>
         {artifact.url && <Button size="sm" variant="ghost" onClick={() => openUrl(artifact.url!)}>Open in Claude</Button>}
       </div>
-      {error ? <Label color={t.red} size={14}>{error}</Label>
+      {error ? <ProblemLine error={error} action="open the artifact" testId="artifact-problem" />
         : !file ? <Label color={t.textSecondary} size={14}>Loading preview…</Label>
         : <>
           {/* Desktop `<pre className="text-xs whitespace-pre-wrap">`: the raw file in the mono family, wrapped. */}

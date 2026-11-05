@@ -25,7 +25,7 @@ import { revealTransform } from '../motion/kit.tsx'
 import { pressRow } from '../shell/motion.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { Floating } from '../live/Floating.tsx'
-import { DockEmpty, ErrorLine } from '../dock/parts.tsx'
+import { DockEmpty } from '../dock/parts.tsx'
 import { disposePreview, floatingPreview, openPreview, openRemoteServer, previewState, previewThreads, previewUses, setPreview, showPreview, subscribePreviews, usePreview } from './store.ts'
 import { watchPreviewLifetime } from './lifetime.ts'
 import { createPortsStore, type PortsClient } from './ports.ts'
@@ -99,7 +99,7 @@ export function PreviewPane({ threadId }: { threadId: string }) {
   return <div testId="dock-preview" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
     <PreviewChrome threadId={threadId} />
     {entry && s.device && <DeviceToolbar threadId={threadId} />}
-    <ErrorLine error={s.error} />
+    {s.error && <div testId="preview-error" style={{ padding: 12 }}><Label color={t.red} size={12}>{s.error}</Label></div>}
     {s.forwardOpen && <PortForwardBar threadId={threadId} />}
     {entry?.machine && <SlowLoadStrip threadId={threadId} />}
     {!entry && <ServersBar threadId={threadId} chosenId={s.serversOn} />}

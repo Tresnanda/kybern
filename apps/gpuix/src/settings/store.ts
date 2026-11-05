@@ -1,10 +1,11 @@
 import { useEffect, useSyncExternalStore } from 'react'
+import { failure, type Failure } from '../problems/Line.tsx'
 import type { Settings } from '../../../../packages/kybern-client/src/types.ts'
 import { changedSharedFields } from '../../../../packages/kybern-client/src/sharedState.ts'
 import { getClient, useApp } from '../state.ts'
 import { shareSettings } from './shared.ts'
 
-let state: { settings: Settings | null; error: string; saving: boolean } = { settings: null, error: '', saving: false }
+let state: { settings: Settings | null; error: Failure | null; saving: boolean } = { settings: null, error: null, saving: false }
 const listeners = new Set<() => void>()
 const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } }
 const emit = (patch: Partial<typeof state>) => { state = { ...state, ...patch }; for (const listener of listeners) listener() }
@@ -16,7 +17,7 @@ export const latestError = () => state.error
 export async function updateSettings(patch: Partial<Settings>) {
   const client = getClient()
   if (!client || !state.settings || state.saving) return
-  emit({ saving: true, error: '' })
+  emit({ saving: true, error: null })
   try {
     const before = state.settings
     const saved = await client.call('settings.update', { settings: { ...before, ...patch } })
@@ -27,12 +28,12 @@ export async function updateSettings(patch: Partial<Settings>) {
     void shareSettings(changedSharedFields(before, saved))
   } catch (error) {
     if (getClient() !== client) return
-    emit({ error: `Unable to save settings. Check the connection and try again. ${String(error)}` })
+    emit({ error: failure('save the settings', error) })
   } finally { if (getClient() === client) emit({ saving: false }) }
 }
 
 /** Adopt a settings document the daemon just returned (another surface changed it). */
-export function setSettings(settings: Settings) { revision++; emit({ settings, error: '' }) }
+export function setSettings(settings: Settings) { revision++; emit({ settings, error: null }) }
 
 /** Read the daemon's settings again (a page whose values another surface may have changed, like "Always allow" on an approval). */
 export async function refreshSettings() {
@@ -41,7 +42,7 @@ export async function refreshSettings() {
   const at = revision
   try {
     const settings = await client.call('settings.get', {})
-    if (getClient() === client && revision === at) emit({ settings, error: '' })
+    if (getClient() === client && revision === at) emit({ settings, error: null })
   } catch { /* the page keeps what it has */ }
 }
 
@@ -57,11 +58,11 @@ export function useSettingsConnection() {
     const at = revision
     const off = client.onNotification('settings.changed', (params) => {
       const settings = (params as { settings?: Settings })?.settings
-      if (live && settings) { revision++; emit({ settings, error: '' }) }
+      if (live && settings) { revision++; emit({ settings, error: null }) }
     })
     void client.call('settings.get', {}).then((settings) => {
-      if (live && revision === at) emit({ settings, error: '' })
-    }, (error) => { if (live) emit({ error: `Unable to read settings. Reconnect and try again. ${String(error)}` }) })
+      if (live && revision === at) emit({ settings, error: null })
+    }, (error) => { if (live) emit({ error: failure('read the settings', error) }) })
     return () => { live = false; off() }
   }, [status])
 }

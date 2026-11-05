@@ -1,4 +1,7 @@
 import { activeEnvironment } from '../shell/environment.ts'
+import { toastProblem } from '../problems/toast.ts'
+import { problemSentence } from '../problems/sentence.ts'
+import { actionPhrase } from '../problems/action.ts'
 import { DeferredReads } from '../shell/deferredReads.ts'
 import { startupMark } from '../perf/startup.ts'
 import { memoryStep } from '../perf/memoryLog.ts'
@@ -117,15 +120,13 @@ export async function answerQuestions(threadId: ThreadId, requestId: string, ans
   await rpc(threadId).call('threads.answer', { thread_id: threadId, request_id: requestId, answers })
 }
 
-/** Surface errors from an action that has no inline place to show them. */
-export const actionError = createCell<string | null>(null)
-let actionErrorTimer: ReturnType<typeof setTimeout> | undefined
-export function reportError(title: string, error: unknown) {
-  actionError.set(`${title}. ${errorText(error)}`)
-  clearTimeout(actionErrorTimer)
-  actionErrorTimer = setTimeout(() => actionError.set(null), 6000)
+/**
+ * Surface a failure from an action that has no inline place to show it: a toast with the plain headline, one sentence and Copy
+ * (`toastProblem`). `action` is what was being done, in the old title form too ("Unable to open link" reads as "open link").
+ */
+export function reportError(action: string, error: unknown) {
+  toastProblem(error, { action: actionPhrase(action) })
 }
-export const useActionError = () => useSyncExternalStore(actionError.subscribe, actionError.get)
 
 // ---- saved tool output (`hydrateToolOutput`) ----
 
@@ -295,7 +296,7 @@ export function loadEarlier(paneId = getFocusedPaneId()): Promise<boolean> {
     return next.nextBeforeSeq != null && historyPageShowedNothing(historyTop(base.blocks), historyTop(next.blocks))
   }).catch(reason => {
     if (!valid()) return false
-    error.set(errorText(reason))
+    error.set(problemSentence(reason, { action: 'load earlier messages' }))
     setThreadOpen(threadId, { ...getThreadOpen(threadId)!, loadingEarlier: false })
     return false
   }).finally(() => { stop(); if (earlierLoads.get(threadId) === pendingLoad) earlierLoads.delete(threadId) })

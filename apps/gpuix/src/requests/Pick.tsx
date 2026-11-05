@@ -19,7 +19,7 @@ import { DropHighlight } from '../motion/DropHighlight.tsx'
 import { Button } from '../kit/Button.tsx'
 import { SearchField } from '../kit/SearchField.tsx'
 import { Spinner } from '../kit/Spinner.tsx'
-import { errorText } from '../nav/actions.ts'
+import { problemSentence } from '../problems/sentence.ts'
 import { callThread, ownProjectId, useApp } from '../state.ts'
 import { FONT_MONO } from '../theme.ts'
 import { respondApproval } from '../transcript/store.ts'
@@ -234,7 +234,7 @@ function PathPick({ approval, input, badge }: { approval: ApprovalRequest; input
     if (path === null || busy) return
     setBusy(true); setError('')
     try { await respondApproval(approval.id, { decision: 'submit', response: { path: path || '.' } }) }
-    catch (e) { setBusy(false); setError(errorText(e)) }
+    catch (e) { setBusy(false); setError(problemSentence(e, { action: 'send your choice' })) }
   }
   const chooseInFinder = async () => {
     const paths = await renderer.promptForPaths?.({ files: !folder, directories: folder, multiple: false, prompt: 'Choose' })
@@ -310,12 +310,12 @@ function ImagePick({ approval, input, badge }: { approval: ApprovalRequest; inpu
 
   const hold = async (name: string, mediaType: string, bytes: Uint8Array) => {
     setBusy(true); setError('')
-    try { setHeld(await uploadImage(name, mediaType, bytes)) } catch (e) { setError(`Unable to attach that. ${errorText(e)}`) }
+    try { setHeld(await uploadImage(name, mediaType, bytes)) } catch (e) { setError(problemSentence(e, { action: 'attach that' })) }
     finally { setBusy(false) }
   }
   const addPath = async (path: string) => {
     setBusy(true); setError('')
-    try { setHeld(await uploadImageFile(path)) } catch (e) { setError(`Unable to attach that. ${errorText(e)}`) }
+    try { setHeld(await uploadImageFile(path)) } catch (e) { setError(problemSentence(e, { action: 'attach that' })) }
     finally { setBusy(false) }
   }
   const choose = async () => {
@@ -326,14 +326,14 @@ function ImagePick({ approval, input, badge }: { approval: ApprovalRequest; inpu
     if (!held || sending) return
     setSending(true); setError('')
     try { await respondApproval(approval.id, { decision: 'submit', response: { asset_id: held.assetId, name: held.name } }) }
-    catch (e) { setSending(false); setError(errorText(e)) }
+    catch (e) { setSending(false); setError(problemSentence(e, { action: 'send your answer' })) }
   }
   const paste = () => {
     try {
       const clip = clipboardAttachments(renderer)
       if (clip.paths[0]) { void addPath(clip.paths[0]); return true }
       if (clip.image) { void hold(clip.image.name ?? 'pasted-image.png', clip.image.mediaType, clip.image.data); return true }
-    } catch (e) { setError(`Unable to paste. ${errorText(e)}`) }
+    } catch (e) { setError(problemSentence(e, { action: 'paste that' })) }
     return false
   }
   return (
@@ -442,13 +442,13 @@ function WindowPick({ approval, input, badge }: { approval: ApprovalRequest; inp
       if (!bytes) return
       const image = await uploadImage('window.png', 'image/png', bytes)
       setHeld({ assetId: image.assetId, preview: image.preview ?? '', size: image.size })
-    }).catch(e => setError(`Unable to save the capture. ${errorText(e)} Try again, or decline and describe the window.`)).finally(() => setCapturing(false))
+    }).catch(e => setError(`${problemSentence(e, { action: 'save the capture' })} You can also decline and describe the window.`)).finally(() => setCapturing(false))
   }
   const send = async () => {
     if (!held || sending) return
     setSending(true); setError('')
     try { await respondApproval(approval.id, { decision: 'submit', response: { asset_id: held.assetId, name: 'window.png' } }) }
-    catch (e) { setSending(false); setError(errorText(e)) }
+    catch (e) { setSending(false); setError(problemSentence(e, { action: 'send your answer' })) }
   }
   if (blocked && !held) return <ScreenRecordingStep approval={approval} input={input} badge={badge} onReady={(anyway) => { unchecked.current = anyway; setBlocked(false) }} />
   return (

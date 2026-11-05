@@ -14,7 +14,8 @@ import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } f
 import type { FileEntry, FilesReadResult } from '../../../../packages/kybern-client/src/types.ts'
 
 import { ISLAND } from '../MatrixLoader.tsx'
-import { errorText } from '../nav/actions.ts'
+import { asError } from '../../../../packages/kybern-client/src/problem.ts'
+import { toastProblem } from '../problems/toast.ts'
 import { N } from '../nav/glyphs.ts'
 import { ContextMenu, Menu, MenuCheckboxItem, MenuItem, MenuLabel, MenuSeparator, MenuSub } from '../nav/overlay.tsx'
 import { sendTargets } from '../../../../packages/kybern-client/src/machineUtilities.ts'
@@ -58,7 +59,7 @@ export function Explorer({ projectId, thread, width }: { projectId: string; thre
   const reveal = useRef<string | null>(null)
   const [menu, setMenu] = useState<{ row: TreeRow; at: { x: number; y: number } } | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
-    const [error, setError] = useState<string | null>(null)
+    const [error, setError] = useState<Error | null>(null)
   const requested = useRef(new Set<string>())
   const live = useRef(true)
   useEffect(() => { live.current = true; return () => { live.current = false } }, [])
@@ -69,7 +70,7 @@ export function Explorer({ projectId, thread, width }: { projectId: string; thre
     void threadClient(thread.id)!.call('files.list', { project_id: ownProjectId(thread), path: dir }).then((result) => {
       if (live.current) setListings((previous) => ({ ...previous, [dir]: result.entries }))
     }, (e) => {
-      if (live.current) { setError(errorText(e)); setListings((previous) => ({ ...previous, [dir]: 'error' })) }
+      if (live.current) { setError(asError(e)); setListings((previous) => ({ ...previous, [dir]: 'error' })) }
     })
   }, [thread.id, ownProjectId(thread)])
   useEffect(() => { load('') }, [load])
@@ -85,7 +86,7 @@ export function Explorer({ projectId, thread, width }: { projectId: string; thre
     let current = true
     if (!query.trim()) { setResults(null); return }
     const timer = setTimeout(() => {
-      void threadClient(thread.id)!.call('files.search', { project_id: ownProjectId(thread), query: query.trim(), limit: 80 }).then((result) => { if (current) setResults(result.files) }, (e) => { if (current) setError(errorText(e)) })
+      void threadClient(thread.id)!.call('files.search', { project_id: ownProjectId(thread), query: query.trim(), limit: 80 }).then((result) => { if (current) setResults(result.files) }, (e) => { if (current) setError(asError(e)) })
     }, 200)
     return () => { current = false; clearTimeout(timer) }
   }, [query, thread.id, ownProjectId(thread)])
@@ -94,7 +95,7 @@ export function Explorer({ projectId, thread, width }: { projectId: string; thre
     const out: TreeRow[] = []
     const append = (dir: string, depth: number) => {
       const listing = listings[dir]
-      if (!Array.isArray(listing)) { out.push({ key: `${dir}:state`, path: dir, depth, kind: listing ?? 'loading', name: listing === 'error' ? 'Could not read folder · Retry' : 'Loading…', position: 1, setSize: 1 }); return }
+      if (!Array.isArray(listing)) { out.push({ key: `${dir}:state`, path: dir, depth, kind: listing ?? 'loading', name: listing === 'error' ? 'Couldn’t read this folder · Retry' : 'Loading…', position: 1, setSize: 1 }); return }
       if (!listing.length) out.push({ key: `${dir}:empty`, path: dir, depth, kind: 'empty', name: 'Empty folder', position: 1, setSize: 1 })
       const sorted = [...listing].sort((a, b) => Number(b.kind === 'directory') - Number(a.kind === 'directory') || a.name.localeCompare(b.name))
       for (const [index, file] of sorted.entries()) {
@@ -153,7 +154,7 @@ export function Explorer({ projectId, thread, width }: { projectId: string; thre
       <div {...ISLAND} style={{ display: 'flex', width: '100%', height: 44, flexShrink: 0, alignItems: 'center', padding: 8 }}>
         <SearchField testId="dock-file-search" placeholder="Search files…" label="Search files" value={query} onChange={setQuery} width="100%" />
       </div>
-      <ErrorLine error={error} />
+      <ErrorLine error={error} action="read the project files" retry={() => { setError(null); load('', true) }} projectId={ownProjectId(thread)} />
       <div ref={tree} testId="dock-file-tree-focus" tabIndex={0} role="tree" aria-label="Project files" onKeyDown={event => {
         byKey.current = true
         const index = Math.min(focus, rows.length - 1), row = rows[index]
@@ -212,7 +213,7 @@ export const FileViewer = memo(function FileViewer({ projectId, threadId, path, 
   // A file shown before (`fileCache.ts`) draws at once and is re-read behind it; an unchanged read keeps the same object, so its
   // syntax document is not rebuilt.
   const [file, setFile] = useState<FilesReadResult | null>(() => cachedRead(owner, path) ?? null)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<Error | null>(null)
   const [preview, setPreview] = useState(() => markdownFile && !line)
   const [reload, setReload] = useState(0)
   const editable = !!file && !file.binary && !file.truncated && file.size <= EDITABLE_BYTES
@@ -233,7 +234,7 @@ export const FileViewer = memo(function FileViewer({ projectId, threadId, path, 
       const before = getBuffer(key)
       openBuffer(root, path, result)
       if (before) { const shown = adoptRead(key, result); if (shown != null) editor.current?.replace(shown) }
-    }, (e) => { if (current) setError(errorText(e)) })
+    }, (e) => { if (current) setError(asError(e)) })
     return () => { current = false }
   }, [owner, root, key, path, reload])
   // Changes on disk (an agent edited the file): a cheap version check every 2 s while this tab shows and the window is visible.
@@ -259,7 +260,7 @@ export const FileViewer = memo(function FileViewer({ projectId, threadId, path, 
   const preferred = defaultEditor()
   const openIn = useCallback((target: Editor | null) => {
     if (!target || !absolutePath || !activeEnvironment().local) return
-    openInEditor(target, absolutePath, editor.current?.caretLine() ?? line ?? 1).catch((e: Error) => toast.error(e.message))
+    openInEditor(target, absolutePath, editor.current?.caretLine() ?? line ?? 1).catch((e: unknown) => toastProblem(e, { action: `open the file in ${target.name}` }))
   }, [absolutePath, line])
   const canPreview = markdownFile && editable
   const showPreview = preview && canPreview
@@ -307,7 +308,7 @@ export const FileViewer = memo(function FileViewer({ projectId, threadId, path, 
       <Button size="sm" testId="file-conflict-keep" onClick={() => { if (key) keepMine(key) }}>Keep mine</Button>
       <Button size="sm" variant="primary" testId="file-conflict-reload" onClick={() => { if (!key) return; const shown = reloadBuffer(key); if (shown != null) editor.current?.replace(shown) }}>Reload</Button>
     </div>}
-    <ErrorLine error={error ?? buffer?.error ?? null} retry={error ? () => setReload((n) => n + 1) : undefined} />
+    <ErrorLine error={error ?? buffer?.error ?? null} action={error ? 'open the file' : `save ${path.split('/').pop()}`} retry={error ? () => setReload((n) => n + 1) : save} />
     {file ? <Rise kind="pane" play={play} style={{ flexGrow: 1, minHeight: 0, minWidth: 0 }}>{file.binary ? <DockEmpty icon={N.note} title="Binary file" body="Open this file in your editor to view it." /> : <>
       {!editable && <ReadOnlyNote size={file.size} />}
       {showPreview && key ? <virtual-list testId="dock-file-content" {...EXPLORER_SCROLL_LAYOUT} overdraw={0} style={{ flexGrow: 1, minHeight: 0, overflowX: 'scroll' }}>
@@ -348,7 +349,7 @@ export function FileCode({ content, path, line, wrap = false }: { content: strin
     const document = peekSyntax(renderer, path, content)
     return document ? { content, path, document } : null
   })
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<Error | null>(null)
   const [retry, setRetry] = useState(0)
   useEffect(() => {
     let live = true
@@ -356,7 +357,7 @@ export function FileCode({ content, path, line, wrap = false }: { content: strin
     const lease = acquireSyntax(renderer, path, content)
     void lease.pending.then(next => {
       if (live) setReady((prev) => prev?.document.id === next.id && prev.content === content && prev.path === path ? prev : { content, path, document: next })
-    }, error => { if (live) setError(String(error)) })
+    }, error => { if (live) setError(asError(error)) })
     return () => { live = false; lease.release() }
   }, [renderer, content, path, retry])
   const document = ready?.content === content && ready.path === path ? ready.document : null
@@ -381,7 +382,7 @@ export function FileCode({ content, path, line, wrap = false }: { content: strin
     native.scrollToItem?.(id, item, offset)
     return () => clearInterval(timer)
   }, [document, line, renderer])
-  if (error) return <ErrorLine error={error} retry={() => setRetry(n => n + 1)} />
+  if (error) return <ErrorLine error={error} action="open the file" retry={() => setRetry(n => n + 1)} />
   if (!document) return <LoadingLines testId="dock-source-loading" />
   // Wrapped, a chunk is as tall as its wrapped rows (the list measures it) and the native gutter keeps each number on its line.
   return <div testId="dock-file-horizontal" style={{ display: 'flex', flexGrow: 1, minHeight: 0, minWidth: 0, overflowX: wrap ? 'hidden' : 'scroll' }}><virtual-list key={wrap ? 'wrap' : 'scroll'} ref={list} testId="dock-file-content" {...EXPLORER_SCROLL_LAYOUT} estimatedItemHeight={1280} overdraw={0} style={{ flexGrow: 1, flexShrink: wrap ? 1 : 0, minHeight: 0, minWidth: 0, height: '100%', width: wrap ? '100%' : sourceWidth }}>
