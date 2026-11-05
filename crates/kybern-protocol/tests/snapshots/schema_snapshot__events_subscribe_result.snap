@@ -20,10 +20,3092 @@ expression: schema_for!(EventsSubscribeResult)
       "description": "This daemon sends `events.ready` after replay, before live delivery resumes.",
       "type": "boolean",
       "default": false
+    },
+    "snapshot": {
+      "description": "Sent instead of a replay when `gap_snapshot` was asked for and the gap was too large. It reflects\nexactly the events through `head_seq`; live events after it follow.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ThreadsGetResult"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [
     "subscription_id",
     "head_seq"
-  ]
+  ],
+  "$defs": {
+    "ThreadsGetResult": {
+      "type": "object",
+      "properties": {
+        "notes": {
+          "$ref": "#/$defs/ThreadNotes",
+          "default": {
+            "text": "",
+            "revision": 0
+          }
+        },
+        "pending_questions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AsyncQuestionRequest"
+          },
+          "default": []
+        },
+        "provider_commands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProviderCommand"
+          },
+          "default": []
+        },
+        "provider_usage": {
+          "$ref": "#/$defs/ProviderUsage",
+          "default": {}
+        },
+        "thread": {
+          "$ref": "#/$defs/Thread"
+        },
+        "transcript": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TranscriptEntry"
+          }
+        },
+        "next_before_seq": {
+          "description": "Cursor for the next older page; absent when all earlier entries are present.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "pending_approvals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApprovalRequest"
+          }
+        },
+        "runtime_tasks": {
+          "description": "Durable latest-state task projection for this thread.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RuntimeTask"
+          }
+        },
+        "as_of_seq": {
+          "description": "The event head read before this snapshot was projected: every event at or below it is reflected.\nOn one connection, a `threads.get` sent after an `events.subscribe` reads at or after that subscribe's\n`head_seq`. Older daemons leave it out.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "required": [
+        "thread",
+        "transcript",
+        "pending_approvals"
+      ]
+    },
+    "ThreadNotes": {
+      "description": "A user-owned notepad, separate from the agent's conversation.",
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "text",
+        "revision"
+      ]
+    },
+    "AsyncQuestionRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "questions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AsyncQuestion"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "questions"
+      ]
+    },
+    "AsyncQuestion": {
+      "description": "A provider question that does not pause the running turn.",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "title"
+      ]
+    },
+    "ProviderCommand": {
+      "description": "A command advertised by a live harness's native protocol.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description"
+      ]
+    },
+    "ProviderUsage": {
+      "description": "Authoritative context occupancy, distinct from cumulative billable tokens.",
+      "type": "object",
+      "properties": {
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContextUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limits": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/UsageLimit"
+          }
+        }
+      }
+    },
+    "ContextUsage": {
+      "type": "object",
+      "properties": {
+        "used_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "window_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "used_tokens",
+        "window_tokens"
+      ]
+    },
+    "UsageLimit": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "used_percent": {
+          "type": "number",
+          "format": "double"
+        },
+        "window_minutes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "resets_at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "required": [
+        "name",
+        "used_percent"
+      ]
+    },
+    "Thread": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "title": {
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/$defs/ProviderInstance"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_mode": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "status": {
+          "$ref": "#/$defs/ThreadStatus"
+        },
+        "worktree": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorktreeInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cwd": {
+          "description": "Working directory the agent runs in: the worktree path or the project path.",
+          "type": "string"
+        },
+        "provider_session_id": {
+          "description": "The provider's own session id once bound, used for resume and fork.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pinned": {
+          "type": "boolean"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "last_seq": {
+          "description": "Sequence of the last event on this thread. Clients use it to detect gaps.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "parent_thread_id": {
+          "description": "Immutable parent for a Kybern-managed helper thread.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "coordinator_project_id": {
+          "description": "Set when this thread is the project's Coordinator, the lead thread that\nplans and delegates. At most one non-archived thread per project.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "subagent": {
+          "description": "Set when this thread mirrors one provider-native subagent. Such a thread\nis read-only: it records what the subagent said and did, and its\n`parent_thread_id` is the thread (or subagent thread) that launched it.\nClients that do not know about subagent threads must hide them from\nthread lists.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubagentInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "delegation": {
+          "description": "Set when this thread is a child another thread delegated work to with\n`kybern_agent_delegate`. Unlike `subagent` it is a normal, writable\nthread; `parent_thread_id` is the delegating thread. Clients that do\nnot know about delegation hide such threads from thread lists the same\nway they hide subagents.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DelegationInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "members": {
+          "description": "Group threads: the members this thread started with, in project order. Never\nchanges when the project's members change. Empty for single-repo threads.\nFor a group worktree thread `worktree.path` and `cwd` are the container\nthat holds one worktree per included member.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ThreadMember"
+          }
+        },
+        "origin": {
+          "description": "Set when another machine started this thread (a remote delegation, a forwarded call). Only a\ndaemon sets it, from the live session, and it never changes. Absent for work the user started here.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Origin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "inbound": {
+          "description": "Set on the hidden, read-only thread a machine keeps for one thread of another machine: it records\nthat thread's forwarded tool calls (`peer.tool.call`). Written once and never changes. Clients\nkeep such threads out of lists.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InboundInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "moved": {
+          "description": "Set while \"Continue on…\" is moving this thread to another machine (`departing`: it refuses sends\nuntil the target confirms) and after it moved (`departed`: read-only, with a link to the thread\nthat continues the work). Only the daemon writes it, and a stale copy of the thread never changes it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MoveInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "project_id",
+        "title",
+        "provider",
+        "permission_mode",
+        "status",
+        "cwd",
+        "pinned",
+        "created_at",
+        "updated_at",
+        "last_seq"
+      ]
+    },
+    "ProviderInstance": {
+      "description": "A configured account/instance of a provider. `default` is created implicitly.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ProviderKind"
+        },
+        "instance": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "instance"
+      ]
+    },
+    "ProviderKind": {
+      "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex",
+        "opencode",
+        "pi",
+        "omp",
+        "cursor",
+        "antigravity"
+      ]
+    },
+    "PermissionMode": {
+      "description": "The four permission modes.",
+      "oneOf": [
+        {
+          "description": "Every tool call that mutates or executes asks for approval.",
+          "type": "string",
+          "const": "supervised"
+        },
+        {
+          "description": "File edits proceed; shell and network still ask.",
+          "type": "string",
+          "const": "accept-edits"
+        },
+        {
+          "description": "The provider decides with its own safety heuristics; asks only when unsure.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Nothing asks. Sandboxing is the provider's problem.",
+          "type": "string",
+          "const": "full-access"
+        }
+      ]
+    },
+    "ThreadStatus": {
+      "type": "string",
+      "enum": [
+        "idle",
+        "running",
+        "awaiting-approval",
+        "failed",
+        "archived"
+      ]
+    },
+    "WorktreeInfo": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "branch"
+      ]
+    },
+    "SubagentInfo": {
+      "description": "Provider-native subagent metadata carried by a read-only child [`Thread`].\n\nThe title, model and effort live on the thread itself. This struct holds\nthe rest of what a subagent page needs and is refreshed (through\n`thread_updated`) whenever the parent's runtime task for it changes.",
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "description": "Provider-stable id of the runtime task in the parent thread. Together\nwith the root thread it identifies this child thread.",
+          "type": "string"
+        },
+        "root_thread_id": {
+          "description": "The thread that owns the provider session. For a subagent launched by\nanother subagent this is the root, not `Thread::parent_thread_id`.\n`tasks.stop` and `tasks.background` accept the child thread id and\nresolve the session through it.",
+          "type": "string",
+          "format": "uuid"
+        },
+        "parent_turn_id": {
+          "description": "Turn of the root thread that launched the subagent.",
+          "type": "string",
+          "format": "uuid"
+        },
+        "tool_call_id": {
+          "description": "Tool call in the parent that launched it, when the provider has one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider_thread_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Provider agent type or role (`Explore`, `worker`, `task:general`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/RuntimeTaskStatus"
+        },
+        "backgrounded": {
+          "type": "boolean",
+          "default": false
+        },
+        "last_tool_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detail": {
+          "description": "Latest progress or final result summary from the provider, as reported\n(see `progress` and `result` for the normalized one-line forms).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "progress": {
+          "description": "One live line while the subagent works: the provider's latest activity\ntext, else the last tool it used (`Using Read`). Cleared once it settles.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "result": {
+          "description": "First line of the subagent's final answer once it settled (its last\nmessage, else the provider's result summary, else the failure message).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stats": {
+          "$ref": "#/$defs/RuntimeTaskStats",
+          "default": {}
+        },
+        "capabilities": {
+          "description": "Whether `tasks.stop` / `tasks.background` currently work for it.",
+          "$ref": "#/$defs/RuntimeTaskCapabilities",
+          "default": {
+            "stop": false,
+            "background": false
+          }
+        },
+        "transcript": {
+          "description": "False when the harness only reports lifecycle (Pi/OMP and providers\nwithout native subagent forwarding): the transcript holds just the\nprompt and the outcome.",
+          "type": "boolean",
+          "default": false
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "completed_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "task_id",
+        "root_thread_id",
+        "parent_turn_id",
+        "status",
+        "started_at"
+      ]
+    },
+    "RuntimeTaskStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "running",
+        "waiting",
+        "stopping",
+        "completed",
+        "failed",
+        "stopped",
+        "interrupted"
+      ]
+    },
+    "Usage": {
+      "type": "object",
+      "properties": {
+        "input_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cache_read_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 0
+        },
+        "cache_write_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 0
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens"
+      ]
+    },
+    "RuntimeTaskStats": {
+      "type": "object",
+      "properties": {
+        "token_count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "tool_uses": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "duration_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cpu_percent": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "rss_kb": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      }
+    },
+    "RuntimeTaskCapabilities": {
+      "type": "object",
+      "properties": {
+        "stop": {
+          "description": "The provider exposes a targeted stop operation for this task.",
+          "type": "boolean",
+          "default": false
+        },
+        "background": {
+          "description": "The provider can detach this foreground task without interrupting it.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "DelegationInfo": {
+      "description": "Delegation metadata carried by a child [`Thread`] created with\n`kybern_agent_delegate`. Refreshed through `thread_updated`.",
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "description": "Stable id agents use to refer to this delegation.",
+          "type": "string",
+          "format": "uuid"
+        },
+        "operation_id": {
+          "description": "Idempotency key of the delegate call.",
+          "type": "string",
+          "format": "uuid"
+        },
+        "parent_thread_id": {
+          "description": "Duplicate of `Thread::parent_thread_id` for convenience.",
+          "type": "string",
+          "format": "uuid"
+        },
+        "depth": {
+          "description": "1 for a direct child of a top-level thread.",
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "role": {
+          "$ref": "#/$defs/DelegationRole",
+          "default": "general"
+        },
+        "workspace": {
+          "$ref": "#/$defs/DelegationWorkspace",
+          "default": "shared"
+        },
+        "default_override": {
+          "description": "Set when a Coordinator chose another harness or model than the default\nconfigured for this child's role.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DefaultOverride"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "owns": {
+          "description": "Globs relative to the checkout root this child owns (shared only).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "status": {
+          "$ref": "#/$defs/DelegationStatus"
+        },
+        "result": {
+          "description": "The child's final assistant text of the completing turn (at most\n16 KiB, truncated with a marker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "files_touched": {
+          "description": "Repo-relative paths the child edited, deduplicated, at most 200.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DelegationConflict"
+          }
+        },
+        "base_commit": {
+          "description": "Worktree: the snapshot commit the worktree was seeded from.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "branch": {
+          "description": "Worktree: `kybern/<child-id>`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "head_commit": {
+          "description": "Worktree: HEAD when the child completed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "diffstat": {
+          "description": "Worktree: `base_commit..head_commit`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DiffStat"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worktree_state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorktreeState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "completed_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "parent_notified": {
+          "description": "Whether the delegating parent has been handed this outcome (delivered,\nsteered or queued). Cleared when the delegation reaches a terminal state\nand set once its `AgentResultItem` is out, so a restart can re-send an\noutcome that was still waiting in the debounce window. Rows written\nbefore this field existed read as `true`: nothing is re-sent.",
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "task_id",
+        "operation_id",
+        "parent_thread_id",
+        "depth",
+        "status",
+        "started_at"
+      ]
+    },
+    "DelegationRole": {
+      "description": "What the delegating agent asked this child to be.",
+      "type": "string",
+      "enum": [
+        "implementation",
+        "research",
+        "review",
+        "design",
+        "test",
+        "general"
+      ]
+    },
+    "DelegationWorkspace": {
+      "description": "Where a delegated child works.",
+      "oneOf": [
+        {
+          "description": "The parent's checkout and branch.",
+          "type": "string",
+          "const": "shared"
+        },
+        {
+          "description": "Its own git worktree on `kybern/<child-id>`, seeded from the parent's\ncurrent uncommitted state.",
+          "type": "string",
+          "const": "worktree"
+        }
+      ]
+    },
+    "DefaultOverride": {
+      "description": "A Coordinator delegation that used another harness or model than the\ndefault configured for its role. `provider` and `model` are the default that\nwas set aside (the child's own are on its thread), so a client can write\n\"Claude Opus 5.5 · instead of the Sonnet default: <reason>\".",
+      "type": "object",
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/ProviderInstance"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "The Coordinator's reason, as it passed it in `override_reason`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "reason"
+      ]
+    },
+    "DelegationStatus": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "running",
+            "completed",
+            "failed",
+            "cancelled"
+          ]
+        },
+        {
+          "description": "Cut off by a daemon restart.",
+          "type": "string",
+          "const": "interrupted"
+        }
+      ]
+    },
+    "DelegationConflict": {
+      "description": "A shared-checkout edit that landed on a path a sibling delegation owns.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Repo-relative path that was edited.",
+          "type": "string"
+        },
+        "owner_thread_id": {
+          "description": "The sibling thread whose `owns` globs cover `path`.",
+          "type": "string",
+          "format": "uuid"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "path",
+        "owner_thread_id",
+        "at"
+      ]
+    },
+    "DiffStat": {
+      "description": "Files and lines changed between two commits.",
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "additions": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "deletions": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "files",
+        "additions",
+        "deletions"
+      ]
+    },
+    "WorktreeState": {
+      "description": "State of a delegated child's own worktree (`DelegationWorkspace::Worktree`).",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "active",
+            "removed"
+          ]
+        },
+        {
+          "description": "Left on disk because it was dirty or its branch is unmerged.",
+          "type": "string",
+          "const": "kept"
+        }
+      ]
+    },
+    "ThreadMember": {
+      "description": "A group thread's record of one member, fixed when the thread starts.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Member path, relative to the project folder and to the thread cwd.",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "included": {
+          "description": "False when the user left this member out of a worktree chat: it has no\nworktree and the agent is told to treat `source_path` as read-only.",
+          "type": "boolean"
+        },
+        "source_path": {
+          "description": "Absolute path of the member's checkout when the thread started.",
+          "type": "string"
+        },
+        "worktree": {
+          "description": "Worktree mode: this member's worktree (path inside the container, branch `kybern/<thread-id>`).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorktreeInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "base_branch": {
+          "description": "Branch the worktree forked from (worktree) or the branch checked out at start (local).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "base_commit": {
+          "description": "Commit the worktree forked from.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "worktree_state": {
+          "description": "Set once cleanup has run for this member.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorktreeState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "missing": {
+          "description": "The member was missing or not a repository when the thread started, so\nit is not available to this thread.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path",
+        "name",
+        "included",
+        "source_path"
+      ]
+    },
+    "Origin": {
+      "description": "Where work that another machine started came from. Only a daemon sets it, and it never changes.",
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "machine_name": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "operation_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "kind": {
+          "$ref": "#/$defs/OriginKind"
+        },
+        "permission_cap": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "hops": {
+          "description": "Machine ids, oldest first; at most one in v1.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "machine_id",
+        "machine_name",
+        "operation_id",
+        "kind",
+        "permission_cap"
+      ]
+    },
+    "OriginKind": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "composer"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "task_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "delegation"
+            }
+          },
+          "required": [
+            "kind",
+            "task_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "tool_call"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "fork"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "move"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "InboundInfo": {
+      "description": "A hidden, read-only thread on the target that records one origin thread's forwarded tool calls.",
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "machine_id",
+        "thread_id",
+        "title"
+      ]
+    },
+    "MoveInfo": {
+      "description": "A thread moved with \"Continue on…\" (design §7.2). `departing` holds the lease: the thread refuses\nsends until the target confirms (`departed`, read-only with a link to `peer_thread_id`) or the move\nis aborted (the field goes away). The daemon sets it; a stale copy of the thread never changes it.",
+      "type": "object",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/MoveState"
+        },
+        "peer": {
+          "type": "string"
+        },
+        "peer_name": {
+          "description": "The target's name when the move started, for the banner while it is offline.",
+          "type": "string"
+        },
+        "peer_thread_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "lease_until": {
+          "description": "While `departing`: when the lease ends unless it is renewed.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "operation_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "branch": {
+          "description": "The branch and snapshot commit the move carries.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uncertain": {
+          "description": "The commit request went out and no answer came back, so the target may or may not have the\nthread. The lease no longer expires; Retry asks the target, Abandon gives up.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "state",
+        "peer",
+        "operation_id"
+      ]
+    },
+    "MoveState": {
+      "type": "string",
+      "enum": [
+        "departing",
+        "departed",
+        "arrived"
+      ]
+    },
+    "TranscriptEntry": {
+      "description": "Rendered transcript entries, projected from events by the daemon.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "turn_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "visual": {
+              "$ref": "#/$defs/HtmlVisual"
+            },
+            "answer": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/VisualAnswerRecord"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "role": {
+              "type": "string",
+              "const": "visual"
+            }
+          },
+          "required": [
+            "role",
+            "turn_id",
+            "seq",
+            "at",
+            "visual"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "turn_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "origin": {
+              "$ref": "#/$defs/EventOrigin"
+            },
+            "source": {
+              "type": "string"
+            },
+            "role": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "required": [
+            "role",
+            "id",
+            "turn_id",
+            "seq",
+            "at",
+            "origin",
+            "source"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "turn_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0
+            },
+            "message": {
+              "$ref": "#/$defs/UserMessage"
+            },
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "role": {
+              "type": "string",
+              "const": "user"
+            }
+          },
+          "required": [
+            "role",
+            "id",
+            "turn_id",
+            "message",
+            "at"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "turn_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0
+            },
+            "origin": {
+              "$ref": "#/$defs/EventOrigin",
+              "default": {
+                "kind": "root"
+              }
+            },
+            "segment": {
+              "description": "Segment index within one `message_id`. A provider can keep a single\nmessage id across a tool call (Claude streams preamble → tool →\nanswer under one id); the projection splits the text at each\nrow-making event so post-tool prose is its own entry, ordered after\nthe tool. `0` is the first/only segment. `(id, segment)` is the\nstable identity a client keys on.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "default": 0
+            },
+            "text": {
+              "type": "string"
+            },
+            "thinking": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "thinking_complete": {
+              "description": "The provider closed this segment's reasoning before the message\ncompleted. Only meaningful while `complete` is false.",
+              "type": "boolean"
+            },
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "complete": {
+              "type": "boolean"
+            },
+            "role": {
+              "type": "string",
+              "const": "assistant"
+            }
+          },
+          "required": [
+            "role",
+            "id",
+            "turn_id",
+            "text",
+            "at",
+            "complete"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "turn_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0
+            },
+            "origin": {
+              "$ref": "#/$defs/EventOrigin",
+              "default": {
+                "kind": "root"
+              }
+            },
+            "call": {
+              "$ref": "#/$defs/ToolCall"
+            },
+            "output": true,
+            "output_omitted": {
+              "description": "Settled result exists in the event log but was not inlined here.",
+              "type": "boolean"
+            },
+            "stream_omitted": {
+              "description": "Settled output-delta stream exists in the event log but was not\ninlined here. Fetch it through `threads.tool_output`.",
+              "type": "boolean"
+            },
+            "is_error": {
+              "type": "boolean"
+            },
+            "complete": {
+              "type": "boolean"
+            },
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "role": {
+              "type": "string",
+              "const": "tool_call"
+            }
+          },
+          "required": [
+            "role",
+            "turn_id",
+            "call",
+            "is_error",
+            "complete",
+            "at"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "turn_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0
+            },
+            "approval": {
+              "$ref": "#/$defs/ApprovalRequest"
+            },
+            "decision": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ApprovalDecision"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "auto": {
+              "description": "Allowed by Full access without asking the user.",
+              "type": "boolean"
+            },
+            "answered_by": {
+              "description": "The delegating agent that answered for the user.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RequestAnswerer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "role": {
+              "type": "string",
+              "const": "approval"
+            }
+          },
+          "required": [
+            "role",
+            "turn_id",
+            "approval"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "turn_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0
+            },
+            "stop_reason": {
+              "$ref": "#/$defs/StopReason"
+            },
+            "usage": {
+              "$ref": "#/$defs/Usage"
+            },
+            "cost_usd": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "duration_ms": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "terminal_message_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            },
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": "string",
+              "const": "turn_summary"
+            }
+          },
+          "required": [
+            "role",
+            "turn_id",
+            "stop_reason",
+            "usage",
+            "duration_ms",
+            "at"
+          ]
+        },
+        {
+          "description": "Stable launch row for a provider-owned task. Later snapshots update the\ntask in place; `seq` remains the first event that made it visible.",
+          "type": "object",
+          "properties": {
+            "turn_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0
+            },
+            "task": {
+              "$ref": "#/$defs/RuntimeTask"
+            },
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "role": {
+              "type": "string",
+              "const": "runtime_task"
+            }
+          },
+          "required": [
+            "role",
+            "turn_id",
+            "task",
+            "at"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "turn_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0
+            },
+            "level": {
+              "$ref": "#/$defs/NoticeLevel"
+            },
+            "text": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "data": {
+              "description": "What the provider notice carried (a fork notice names its machine and thread). Absent for plain notices."
+            },
+            "role": {
+              "type": "string",
+              "const": "notice"
+            }
+          },
+          "required": [
+            "role",
+            "turn_id",
+            "level",
+            "text",
+            "at"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "turn_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0
+            },
+            "commit": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "role": {
+              "type": "string",
+              "const": "reverted"
+            }
+          },
+          "required": [
+            "role",
+            "turn_id",
+            "commit",
+            "at"
+          ]
+        },
+        {
+          "description": "Deselected repositories of a group worktree thread changed outside its\nworktree during this turn. Kybern never reverts them; clients show a quiet warning.",
+          "type": "object",
+          "properties": {
+            "turn_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0
+            },
+            "repos": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/OutsideRepoChange"
+              }
+            },
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "role": {
+              "type": "string",
+              "const": "outside_repo_changed"
+            }
+          },
+          "required": [
+            "role",
+            "turn_id",
+            "repos",
+            "at"
+          ]
+        },
+        {
+          "description": "A Coordinator context refresh. `pending` while the old session is still\nwriting its handoff; then the outcome, with the handoff the user may edit.",
+          "type": "object",
+          "properties": {
+            "turn_id": {
+              "description": "The turn the refresh followed (nil before the first turn).",
+              "type": "string",
+              "format": "uuid"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0
+            },
+            "rotation_id": {
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/RotationReason"
+            },
+            "pending": {
+              "type": "boolean"
+            },
+            "used_tokens": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "window_tokens": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0
+            },
+            "handoff": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "handoff_status": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/HandoffStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "edited": {
+              "description": "The user edited the handoff after the refresh.",
+              "type": "boolean"
+            },
+            "carried": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RotationCarried"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "from": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/HarnessRef"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "to": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/HarnessRef"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "role": {
+              "type": "string",
+              "const": "rotation"
+            }
+          },
+          "required": [
+            "role",
+            "turn_id",
+            "rotation_id",
+            "reason",
+            "pending",
+            "used_tokens",
+            "at"
+          ]
+        },
+        {
+          "description": "What a thread moved here with \"Continue on…\" said and did on its first machine.",
+          "type": "object",
+          "properties": {
+            "turn_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0
+            },
+            "from_machine": {
+              "type": "string"
+            },
+            "from_machine_name": {
+              "type": "string"
+            },
+            "from_thread": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "from_title": {
+              "type": "string"
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HistoryItem"
+              }
+            },
+            "omitted": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "role": {
+              "type": "string",
+              "const": "history"
+            }
+          },
+          "required": [
+            "role",
+            "turn_id",
+            "from_machine",
+            "from_machine_name",
+            "from_thread",
+            "from_title",
+            "items",
+            "at"
+          ]
+        }
+      ]
+    },
+    "HtmlVisual": {
+      "description": "A durable, sandboxed HTML reply. Source bytes are stored separately from events.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "title": {
+          "type": "string"
+        },
+        "height": {
+          "description": "Agent-requested height cap in CSS pixels.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "heights": {
+          "description": "Content heights measured at publish, ascending by width. Empty when the\npreview browser was not installed or measuring exceeded its budget.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VisualHeight"
+          }
+        },
+        "ask": {
+          "description": "Set when the agent waits for the reader's answer (`kybern_html_publish`\nwith `await_answer`). The pending question is a [`VISUAL_ANSWER_TOOL`] card.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VisualAsk"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "height"
+      ]
+    },
+    "VisualHeight": {
+      "description": "One content height measured at a frame width, in CSS pixels.",
+      "type": "object",
+      "properties": {
+        "width": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "width",
+        "height"
+      ]
+    },
+    "VisualAsk": {
+      "description": "What a visual asks the reader.",
+      "type": "object",
+      "properties": {
+        "schema": {
+          "description": "JSON Schema the answer must match, when the agent gave one."
+        }
+      }
+    },
+    "VisualAnswerRecord": {
+      "description": "The receipt under an answered visual.",
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/VisualAnswerStatus"
+        },
+        "answer": true,
+        "label": {
+          "description": "The words the visual gave the answer (\"Layout B · Side panel\").",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "status",
+        "at"
+      ]
+    },
+    "VisualAnswerStatus": {
+      "description": "How a visual's question ended.",
+      "oneOf": [
+        {
+          "description": "The reader sent an answer from the visual.",
+          "type": "string",
+          "const": "answered"
+        },
+        {
+          "description": "The reader typed a message instead.",
+          "type": "string",
+          "const": "replied"
+        },
+        {
+          "description": "The reader chose Skip.",
+          "type": "string",
+          "const": "skipped"
+        },
+        {
+          "description": "The turn ended first.",
+          "type": "string",
+          "const": "cancelled"
+        },
+        {
+          "description": "Nobody answered in time.",
+          "type": "string",
+          "const": "timed_out"
+        }
+      ]
+    },
+    "EventOrigin": {
+      "description": "Ownership of provider output after it has been normalized by a driver.\nRoot output is eligible for the parent transcript; agent-owned output is\nretained as activity metadata and must never be promoted to the root answer.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "root"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "task_id": {
+              "type": "string"
+            },
+            "provider_thread_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "agent"
+            }
+          },
+          "required": [
+            "kind",
+            "task_id"
+          ]
+        }
+      ]
+    },
+    "UserMessage": {
+      "type": "object",
+      "properties": {
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContentPart"
+          }
+        }
+      },
+      "required": [
+        "parts"
+      ]
+    },
+    "ContentPart": {
+      "description": "One piece of a user message.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "Inline image. `data` is base64 of the raw bytes.",
+          "type": "object",
+          "properties": {
+            "media_type": {
+              "type": "string"
+            },
+            "data": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "required": [
+            "type",
+            "media_type",
+            "data"
+          ]
+        },
+        {
+          "description": "Uploaded attachment served by the daemon's HTTP asset route.",
+          "type": "object",
+          "properties": {
+            "asset_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "name": {
+              "type": "string"
+            },
+            "media_type": {
+              "type": "string"
+            },
+            "size": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "attachment"
+            }
+          },
+          "required": [
+            "type",
+            "asset_id",
+            "name",
+            "media_type",
+            "size"
+          ]
+        },
+        {
+          "description": "`@path` mention resolved relative to the thread cwd.",
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "file_mention"
+            }
+          },
+          "required": [
+            "type",
+            "path"
+          ]
+        },
+        {
+          "description": "Inert reference to an existing Kybern thread. Selecting or rendering it\nnever reads, wakes, or sends to the referenced thread.",
+          "type": "object",
+          "properties": {
+            "thread_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "title": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            },
+            "type": {
+              "type": "string",
+              "const": "thread_reference"
+            }
+          },
+          "required": [
+            "type",
+            "thread_id",
+            "title"
+          ]
+        },
+        {
+          "description": "A user-selected agent skill. Drivers translate this into the provider's\nnative invocation syntax instead of treating a lookalike `$NAME` as a\nskill accidentally.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "path": {
+              "description": "Canonical `SKILL.md` path returned by the provider catalog. Codex\nrequires it for its structured `skill` turn input; other drivers\nmay use only the name.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "skill"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "path"
+          ]
+        },
+        {
+          "description": "A provider plugin or app the user pulled in with `@name`, such as\nCodex's Computer Use. `path` is the provider's own id for it\n(`plugin://name@marketplace` or `app://connector-id`); drivers without\na structured form send the mention as text.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "display_name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "mention"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "path"
+          ]
+        },
+        {
+          "description": "A message from another thread (or from Kybern itself when\n`from_thread_id` is `None`). Providers receive it as flattened text; see\n[`thread_message_text`].",
+          "type": "object",
+          "properties": {
+            "message_id": {
+              "description": "The `thread_messages` row id; also the queued or steered message id.",
+              "type": "string",
+              "format": "uuid"
+            },
+            "from_thread_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            },
+            "from_title": {
+              "type": "string"
+            },
+            "purpose": {
+              "$ref": "#/$defs/ThreadMessagePurpose"
+            },
+            "reply_to": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            },
+            "body": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "thread_message"
+            }
+          },
+          "required": [
+            "type",
+            "message_id",
+            "from_title",
+            "purpose",
+            "body"
+          ]
+        },
+        {
+          "description": "A batch of delegated-agent outcomes delivered to the delegating thread.\nProviders receive it as flattened text; see [`agent_results_text`].",
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AgentResultItem"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "agent_results"
+            }
+          },
+          "required": [
+            "type",
+            "items"
+          ]
+        },
+        {
+          "description": "A row Kybern itself adds to a conversation, such as \"Setup started\".\nClients draw it as a small system row, never a user bubble; it may sit in\nfront of the user's own parts. Providers never receive it as written:\nthe daemon swaps in its own instructions for the provider's copy, and a\ndriver that meets one flattens `text`.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "$ref": "#/$defs/SystemRowKind"
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "system_row"
+            }
+          },
+          "required": [
+            "type",
+            "kind",
+            "text"
+          ]
+        }
+      ]
+    },
+    "ThreadMessagePurpose": {
+      "description": "Why a message exists. `Task` is a delegation brief; `Warning` comes from\nKybern itself (for example a file ownership clash).",
+      "type": "string",
+      "enum": [
+        "task",
+        "message",
+        "question",
+        "reply",
+        "warning"
+      ]
+    },
+    "AgentResultItem": {
+      "description": "One delegated agent's outcome inside an [`ContentPart::AgentResults`] batch.",
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "thread_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "title": {
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/$defs/ProviderKind"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "$ref": "#/$defs/DelegationRole",
+          "default": "general"
+        },
+        "status": {
+          "$ref": "#/$defs/DelegationStatus"
+        },
+        "result": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspace": {
+          "$ref": "#/$defs/DelegationWorkspace",
+          "default": "shared"
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "head_commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "base_commit": {
+          "description": "Worktree: the commit the worktree was seeded from.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "diffstat": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DiffStat"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "files_touched": {
+          "description": "At most 50.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DelegationConflict"
+          }
+        }
+      },
+      "required": [
+        "task_id",
+        "thread_id",
+        "title",
+        "provider",
+        "status"
+      ]
+    },
+    "SystemRowKind": {
+      "description": "What a [`ContentPart::SystemRow`] announces.",
+      "oneOf": [
+        {
+          "description": "The Coordinator's setup interview began (a new Coordinator without a\nbrief, or \"Redo setup\").",
+          "type": "string",
+          "const": "coordinator_setup"
+        },
+        {
+          "description": "The user chose \"Tidy notes\": the Coordinator was asked to check outdated\nmemory notes. The provider's copy carries the instructions.",
+          "type": "string",
+          "const": "coordinator_tidy_notes"
+        }
+      ]
+    },
+    "ToolCall": {
+      "description": "A tool invocation as shown in the transcript.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "input": true,
+        "parent_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "input"
+      ]
+    },
+    "ApprovalRequest": {
+      "description": "A pending or resolved request for the user to approve a tool call.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "thread_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "turn_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "tool_call_id": {
+          "description": "Provider's tool-call id, when the provider exposes one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "input": {
+          "description": "Provider-native input, rendered by the client (command, file path, diff, ...)."
+        },
+        "summary": {
+          "description": "Human-readable one-line summary, e.g. `bash: git status`.",
+          "type": "string"
+        },
+        "suggestions": {
+          "description": "Provider-suggested \"always allow\" rules the client may offer.",
+          "type": "array",
+          "items": true,
+          "default": []
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "questions": {
+          "description": "The request's questions in one shape for every harness (see\n[`crate::user_input_questions`]); empty when it is not a question.\nOlder clients keep reading `input`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UserInputQuestion"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "thread_id",
+        "turn_id",
+        "tool_name",
+        "input",
+        "summary",
+        "created_at"
+      ]
+    },
+    "UserInputQuestion": {
+      "description": "One question of a request, whatever harness asked it.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The key the answer goes under: the question text for Claude, the harness's id otherwise.",
+          "type": "string"
+        },
+        "header": {
+          "description": "A very short label, e.g. \"Layout\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "question": {
+          "description": "The question. Markdown.",
+          "type": "string"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UserInputOption"
+          },
+          "default": []
+        },
+        "multi_select": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_custom": {
+          "description": "The user may write their own answer.",
+          "type": "boolean",
+          "default": false
+        },
+        "secret": {
+          "description": "The answer is hidden in the transcript (Codex `isSecret`).",
+          "type": "boolean",
+          "default": false
+        },
+        "attachments": {
+          "description": "The harness can take files and images with the answer (as paths in the text).",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "id",
+        "question"
+      ]
+    },
+    "UserInputOption": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "preview": {
+          "description": "Text or code to show while the option is focused (Claude's `preview`). Markdown.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "description": "The harness's own id for the option, when it answers with ids (Cursor).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "label"
+      ]
+    },
+    "ApprovalDecision": {
+      "oneOf": [
+        {
+          "description": "Answer a structured question or form using the provider-native payload.",
+          "type": "object",
+          "properties": {
+            "response": true,
+            "decision": {
+              "type": "string",
+              "const": "submit"
+            }
+          },
+          "required": [
+            "decision",
+            "response"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "type": "string",
+              "const": "allow_once"
+            }
+          },
+          "required": [
+            "decision"
+          ]
+        },
+        {
+          "description": "Allow and, where the provider supports it, remember for the session.",
+          "type": "object",
+          "properties": {
+            "decision": {
+              "type": "string",
+              "const": "allow_always"
+            }
+          },
+          "required": [
+            "decision"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "decision": {
+              "type": "string",
+              "const": "deny"
+            }
+          },
+          "required": [
+            "decision"
+          ]
+        }
+      ]
+    },
+    "RequestAnswerer": {
+      "description": "Who answered a request when it was not the user: a delegating agent.",
+      "type": "object",
+      "properties": {
+        "thread_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "title"
+      ]
+    },
+    "StopReason": {
+      "type": "string",
+      "enum": [
+        "completed",
+        "interrupted",
+        "max_turns",
+        "error"
+      ]
+    },
+    "RuntimeTask": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Provider-stable task, child-thread, tool-call, or process id.",
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "origin_turn_id": {
+          "description": "Kybern turn that launched this task. Background work can outlive it.",
+          "type": "string",
+          "format": "uuid"
+        },
+        "started_seq": {
+          "description": "Event sequence that first anchored this task in the transcript. Older\nstored payloads use zero and are repaired by the event projector.",
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        },
+        "updated_seq": {
+          "description": "Sequence of the latest accepted task snapshot. Progress updates change\nthis value without changing `started_seq` or the row's visual position.",
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        },
+        "kind": {
+          "$ref": "#/$defs/RuntimeTaskKind"
+        },
+        "status": {
+          "$ref": "#/$defs/RuntimeTaskStatus"
+        },
+        "title": {
+          "type": "string"
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider_thread_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "backgrounded": {
+          "type": "boolean",
+          "default": false
+        },
+        "last_tool_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stats": {
+          "$ref": "#/$defs/RuntimeTaskStats",
+          "default": {}
+        },
+        "capabilities": {
+          "$ref": "#/$defs/RuntimeTaskCapabilities",
+          "default": {
+            "stop": false,
+            "background": false
+          }
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "completed_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "thread_id",
+        "origin_turn_id",
+        "kind",
+        "status",
+        "title",
+        "started_at",
+        "updated_at"
+      ]
+    },
+    "RuntimeTaskKind": {
+      "description": "A durable unit of work started by the provider while handling a thread.\n\nProviders expose different names for these (subagent, task, background\ncommand, monitor). Kybern preserves the provider type while normalizing the\nlifecycle so every client can render the same activity surface.",
+      "type": "string",
+      "enum": [
+        "agent",
+        "process",
+        "monitor"
+      ]
+    },
+    "NoticeLevel": {
+      "type": "string",
+      "enum": [
+        "info",
+        "warning",
+        "error"
+      ]
+    },
+    "OutsideRepoChange": {
+      "description": "A deselected member whose original checkout changed during a turn of a\ngroup worktree thread (see `EventPayload::OutsideRepoChanged`).",
+      "type": "object",
+      "properties": {
+        "repo": {
+          "description": "Member path, relative to the project folder.",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "source_path": {
+          "description": "Absolute path of the original checkout that changed.",
+          "type": "string"
+        },
+        "dirty_files": {
+          "description": "Files `git status --porcelain` reported changed at the end of the turn.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 0
+        },
+        "head_moved": {
+          "description": "HEAD moved during the turn (a commit, checkout or reset).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "repo",
+        "name",
+        "source_path"
+      ]
+    },
+    "RotationReason": {
+      "description": "Why a Coordinator's provider session was replaced (`ContextRotationStarted`).",
+      "oneOf": [
+        {
+          "description": "The session's context passed the rotation budget at the end of a turn.",
+          "type": "string",
+          "const": "budget"
+        },
+        {
+          "description": "The session was released for idleness past half the budget.",
+          "type": "string",
+          "const": "idle"
+        },
+        {
+          "description": "The user asked for a refresh (`coordinator.refresh_context`).",
+          "type": "string",
+          "const": "manual"
+        },
+        {
+          "description": "The Coordinator moved to another harness, model or account.",
+          "type": "string",
+          "const": "harness_switch"
+        }
+      ]
+    },
+    "HandoffStatus": {
+      "description": "Whether the old session wrote a handoff that passed validation.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "written"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "description": "No usable handoff; the fresh session gets the facts and recent messages only.",
+          "type": "object",
+          "properties": {
+            "why": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "const": "missing"
+            }
+          },
+          "required": [
+            "status",
+            "why"
+          ]
+        }
+      ]
+    },
+    "RotationCarried": {
+      "description": "Counts of what the daemon carried into a fresh Coordinator session.",
+      "type": "object",
+      "properties": {
+        "children": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "pull_requests": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "tasks": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "commits": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "head": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RepoHead"
+          }
+        }
+      },
+      "required": [
+        "children",
+        "pull_requests",
+        "tasks",
+        "commits"
+      ]
+    },
+    "RepoHead": {
+      "description": "One repository's HEAD when a rotation happened.",
+      "type": "object",
+      "properties": {
+        "repo": {
+          "type": "string"
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "repo",
+        "sha"
+      ]
+    },
+    "HarnessRef": {
+      "description": "The harness and model on one side of a rotation.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ProviderKind"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "HistoryItem": {
+      "description": "One entry of the conversation a moved thread brings along.",
+      "type": "object",
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/HistoryRole"
+        },
+        "text": {
+          "type": "string"
+        },
+        "at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "tool": {
+          "description": "The tool's name, for `tool` items.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "role",
+        "text"
+      ]
+    },
+    "HistoryRole": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "user",
+            "assistant"
+          ]
+        },
+        {
+          "description": "A tool call, as a one-line summary without its output.",
+          "type": "string",
+          "const": "tool"
+        },
+        {
+          "description": "A notice the thread showed (compaction, a fork or move link).",
+          "type": "string",
+          "const": "notice"
+        }
+      ]
+    }
+  }
 }

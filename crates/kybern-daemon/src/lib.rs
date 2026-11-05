@@ -44,6 +44,8 @@ mod remote_tests;
 mod requests;
 mod rpc;
 #[cfg(test)]
+mod sync_tests;
+#[cfg(test)]
 mod test_support;
 // S3: the encrypted secret store. Its RPC, push transport and outbox hooks arrive with N3/R1.
 mod plugins;

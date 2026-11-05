@@ -8311,7 +8311,7 @@ mod tests {
         let client = Client::connect(&endpoint).await.unwrap();
         client.call::<ThreadsGet>(ThreadsGetParams { thread_id: thread.id, ..Default::default() }).await.unwrap();
         client
-            .call::<EventsSubscribe>(EventsSubscribeParams { thread_id: Some(thread.id), after_seq: None, include_tool_output: None })
+            .call::<EventsSubscribe>(EventsSubscribeParams { thread_id: Some(thread.id), after_seq: None, ..Default::default() })
             .await
             .unwrap();
         client.call::<DaemonActivityMethod>(Empty {}).await.unwrap();

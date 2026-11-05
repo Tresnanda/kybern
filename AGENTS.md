@@ -342,6 +342,10 @@ replay events received during hydration; preserve row identity and reading posit
   handling in `store/projection.rs` and the shared transcript projection in
   `packages/kybern-client` (which GPUIX and mobile use). Clients ignore
   unknown kinds.
+- Fast loads: `threads.list {since_seq}` returns rows whose `threads.change_seq` (store triggers on threads, approvals
+  and remote children) passed the cursor; `settled_limit` keeps active threads plus the newest settled ones. A
+  `threads.get` `page_budget` sizes pages by turns, rows and bytes; `events.subscribe` `gap_snapshot` answers a gap over
+  128 events or 1 MiB with a snapshot through `head_seq`. `POST /threads/{id}/snapshot` is the same page gzipped.
 - Thread anchors for rewind are recorded on `TurnCompleted` (`TurnAnchors`).
 - `serde_json` has `preserve_order` on for deterministic schemas. Keep it.
 - Copy: sentence case, verb-first buttons, errors say what to do next.

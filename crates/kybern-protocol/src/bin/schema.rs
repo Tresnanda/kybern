@@ -55,6 +55,8 @@ fn main() {
     add::<TerminalExitedNotification>(&mut types, "TerminalExitedNotification");
     add::<RuntimeTask>(&mut types, "RuntimeTask");
     add::<ThreadActivitySummary>(&mut types, "ThreadActivitySummary");
+    add::<TranscriptPageBudget>(&mut types, "TranscriptPageBudget");
+    add::<ProjectThreadCount>(&mut types, "ProjectThreadCount");
     add::<CoordinatorOpenResult>(&mut types, "CoordinatorOpenResult");
     add::<ThreadReadMessage>(&mut types, "ThreadReadMessage");
     add::<ThreadSearchHit>(&mut types, "ThreadSearchHit");
