@@ -577,6 +577,14 @@ enum Cmd {
         #[arg(required = true)]
         paths: Vec<String>,
     },
+    /// Whether a file outside a conversation's workspace opens read-only, and allow it (this computer's desktop client only).
+    ThreadOutside {
+        thread: String,
+        path: String,
+        /// Open this file now: `once`, or its `folder` for good.
+        #[arg(long, value_parser = ["once", "folder"])]
+        allow: Option<String>,
+    },
     /// Commit everything in a thread's working directory.
     Commit {
         thread: String,
@@ -2682,6 +2690,15 @@ pub async fn run() -> Result<()> {
             for (path, resolved) in paths.iter().zip(r.paths) {
                 println!("{path}\t{}", resolved.as_deref().unwrap_or("(no file)"));
             }
+        }
+        Cmd::ThreadOutside { thread, path, allow } => {
+            let allow = match allow.as_deref() {
+                Some("once") => OutsideAllow::Once,
+                Some(_) => OutsideAllow::Folder,
+                None => OutsideAllow::Check,
+            };
+            let r = client.call::<ThreadFileOutside>(ThreadFileOutsideParams { thread_id: thread.parse()?, path, allow }).await?;
+            println!("{}", serde_json::to_string_pretty(&r)?);
         }
         Cmd::Write { project, path, from, expected_version } => {
             let content = read_input(&from)?;

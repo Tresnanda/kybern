@@ -262,6 +262,7 @@ fn main() {
     method::<ThreadFileRead>(&mut methods);
     method::<ThreadFileWrite>(&mut methods);
     method::<ThreadFilesResolve>(&mut methods);
+    method::<ThreadFileOutside>(&mut methods);
     method::<SkillsList>(&mut methods);
     method::<IntegrationsList>(&mut methods);
     method::<HtmlPublish>(&mut methods);

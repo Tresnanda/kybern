@@ -33,6 +33,8 @@ pub struct Inner {
     pub native_tools: crate::native_tools_mcp::NativeToolsGateway,
     pub terminals: TerminalManager,
     pub file_indexes: crate::files::FileIndexCache,
+    /// Files outside a workspace the desktop user opened once.
+    pub file_once: crate::files_outside::OnceFiles,
     pub settings: SettingsStore,
     pub provider_catalogs: Arc<ProviderCatalogCache>,
     pub thread_projections: crate::thread_projection::ThreadProjectionCache,
@@ -200,6 +202,7 @@ impl AppState {
                 native_tools,
                 terminals,
                 file_indexes: crate::files::FileIndexCache::default(),
+                file_once: Default::default(),
                 settings,
                 provider_catalogs,
                 thread_projections: crate::thread_projection::ThreadProjectionCache::default(),

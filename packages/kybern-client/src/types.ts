@@ -3464,6 +3464,27 @@ export interface ThreadFilesResolveResult {
   paths: (string | null)[];
 }
 
+export type OutsideAllow = "check" | "once" | "folder";
+export type OutsideVerdict = "open" | "ask" | "refused";
+export interface ThreadFileOutsideParams {
+  thread_id: ThreadId;
+  /** As written in the link: absolute, or relative to the thread cwd. */
+  path: string;
+  /** `once` / `folder`: allow it (the desktop app on the daemon's own machine only). Absent: only ask. */
+  allow?: OutsideAllow;
+}
+export interface ThreadFileOutsideResult {
+  verdict: OutsideVerdict;
+  /** What `threads.files.read` opens. */
+  path?: string;
+  /** The folder "Always allow this folder" would add; absent when it can never be allowed. */
+  folder?: string;
+  /** In the system's temporary folder, where agents keep scratch files. */
+  scratch?: boolean;
+  /** Why the file cannot open from this client. */
+  reason?: string;
+}
+
 export interface FilesReadResult {
   content: string;
   truncated: boolean;
@@ -3473,6 +3494,8 @@ export interface FilesReadResult {
   version?: string;
   /** True when `if_version` still matched; `content` is empty. */
   unchanged?: boolean;
+  /** A file outside the workspace the user allowed Kybern to open: nothing writes to it. */
+  read_only?: boolean;
 }
 
 export type SkillScope =
@@ -4696,6 +4719,7 @@ export interface Methods {
   "threads.files.read": [ThreadFileReadParams, FilesReadResult];
   "threads.files.write": [ThreadFileWriteParams, FilesWriteResult];
   "threads.files.resolve": [ThreadFilesResolveParams, ThreadFilesResolveResult];
+  "threads.files.outside": [ThreadFileOutsideParams, ThreadFileOutsideResult];
   "skills.list": [SkillsListParams, SkillsListResult];
   "threads.visuals.publish": [{ thread_id: ThreadId; html: string; title: string; height: number; await_answer?: boolean | null; answer_schema?: JsonValue | null; timeout_seconds?: number | null }, { visual: HtmlVisual }];
   "threads.visuals.snapshot": [{ thread_id: ThreadId; visual_id: Uuid; width: number; theme: JsonValue; lock?: JsonValue | null }, HtmlSnapshotResult];

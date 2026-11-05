@@ -344,6 +344,8 @@ expression: scopes
   - "orchestration:operate"
 - - threads.files.resolve
   - "orchestration:read"
+- - threads.files.outside
+  - "orchestration:read"
 - - skills.list
   - "orchestration:read"
 - - integrations.list

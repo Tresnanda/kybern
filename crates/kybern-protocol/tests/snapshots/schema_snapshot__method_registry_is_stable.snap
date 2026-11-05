@@ -173,6 +173,7 @@ expression: names
 - threads.files.read
 - threads.files.write
 - threads.files.resolve
+- threads.files.outside
 - skills.list
 - integrations.list
 - threads.visuals.publish

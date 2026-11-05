@@ -151,7 +151,7 @@ expression: schema_for!(Settings)
       }
     },
     "preview_allowed_folders": {
-      "description": "Folders outside a project the user allowed the Preview panel to serve\nfiles from. Canonical absolute paths; a grant covers descendants.",
+      "description": "Folders outside a project the user allowed the Preview panel to serve\nfiles from, and chat links to open read-only (`threads.files.outside`).\nCanonical absolute paths; a grant covers descendants.",
       "type": "array",
       "items": {
         "type": "string"

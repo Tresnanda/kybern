@@ -1081,15 +1081,23 @@ async fn dispatch_part_12(state: &AppState, ctx: &ConnectionCtx, method: &str, s
         ThreadFileRead::NAME => {
             let p: ThreadFileReadParams = parse(params)?;
             let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            let outside = crate::files_outside::access(state, thread.id, crate::auth::is_bootstrap(state, &ctx.principal));
             ok(crate::files::read_thread_file(
                 &state.file_indexes,
                 std::path::Path::new(&thread.cwd),
                 &p.path,
                 p.max_bytes,
                 p.if_version.as_deref(),
+                &outside,
             )
             .await
             .map_err(bad)?)
+        }
+        ThreadFileOutside::NAME => {
+            let p: ThreadFileOutsideParams = parse(params)?;
+            let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            let local = crate::auth::is_bootstrap(state, &ctx.principal);
+            ok(crate::files_outside::outside(state, local, &thread, &p).await.map_err(bad)?)
         }
         ThreadFileWrite::NAME => {
             let p: ThreadFileWriteParams = parse(params)?;

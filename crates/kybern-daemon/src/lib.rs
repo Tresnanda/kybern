@@ -17,6 +17,7 @@ mod cursor_setup;
 mod discovery;
 mod exposure;
 mod files;
+mod files_outside;
 mod gh_locate;
 mod github;
 mod github_actions;

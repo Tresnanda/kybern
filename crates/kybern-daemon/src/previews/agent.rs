@@ -78,7 +78,7 @@ mod tests {
         let dir = dir.canonicalize().unwrap();
         std::fs::write(dir.join("mock.html"), "<p>x</p>").unwrap();
         let home = dir.parent().unwrap().to_path_buf();
-        let policy = GrantPolicy { home: Some(home.clone()), data_dir: home.join(".kybern"), system: Vec::new() };
+        let policy = GrantPolicy { home: Some(home.clone()), data_dir: home.join(".kybern"), system: Vec::new(), temp: Vec::new() };
         (dir.clone(), ThreadRoots { cwd: dir, project: None }, policy)
     }
 

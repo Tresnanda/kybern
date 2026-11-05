@@ -3430,6 +3430,9 @@ pub struct FilesReadResult {
     /// True when `if_version` still matched; `content` is then empty.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unchanged: bool,
+    /// True for a file outside the workspace the user allowed Kybern to open: no write reaches it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
 }
 method!(FilesRead, "files.read", Some(Scope::OrchestrationRead), FilesReadParams, FilesReadResult);
 
@@ -3501,6 +3504,57 @@ pub struct ThreadFilesResolveResult {
     pub paths: Vec<Option<String>>,
 }
 method!(ThreadFilesResolve, "threads.files.resolve", Some(Scope::OrchestrationRead), ThreadFilesResolveParams, ThreadFilesResolveResult);
+
+/// What the user decided about a file outside the workspace.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OutsideAllow {
+    /// Only ask whether it opens.
+    #[default]
+    Check,
+    /// Open this file, read-only, until the daemon restarts.
+    Once,
+    /// Open every file in the file's folder, read-only, from now on.
+    Folder,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OutsideVerdict {
+    /// `threads.files.read` opens it.
+    Open,
+    /// It opens once the user allows it.
+    Ask,
+    /// It cannot open from this client; see `reason`.
+    Refused,
+}
+/// A link to a file outside the conversation's workspace. Read-only whatever the answer; only the desktop app on the
+/// daemon's own machine can allow a file or folder, other clients see today's refusal unless the folder is allowed.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadFileOutsideParams {
+    pub thread_id: ThreadId,
+    /// As written in the link: absolute, or relative to the thread cwd. A `:line` or `#L10` suffix is ignored.
+    pub path: String,
+    #[serde(default)]
+    pub allow: OutsideAllow,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadFileOutsideResult {
+    pub verdict: OutsideVerdict,
+    /// What `threads.files.read` opens: the file's absolute path outside the workspace, or the workspace-relative path
+    /// when the link turned out to name a workspace file.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub path: String,
+    /// The folder "Always allow" would add; absent when that folder can never be allowed (the file can still open once).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    /// The file is in the system's temporary folder, where agents keep scratch files.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub scratch: bool,
+    /// Why the file cannot open from here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+method!(ThreadFileOutside, "threads.files.outside", Some(Scope::OrchestrationRead), ThreadFileOutsideParams, ThreadFileOutsideResult);
 
 // ---- skills ----
 
@@ -4990,6 +5044,7 @@ registry!(
     ThreadFileRead,
     ThreadFileWrite,
     ThreadFilesResolve,
+    ThreadFileOutside,
     SkillsList,
     IntegrationsList,
     HtmlPublish,
