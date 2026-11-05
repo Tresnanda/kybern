@@ -28,7 +28,7 @@ export interface NoteSessionDeps {
   subscribeChanges: (fn: (change: NotesChangedNotification) => void) => () => void;
   /** Namespaces drafts, usually by computer. */
   scope: string;
-  errorText?: (e: unknown) => string;
+  errorText?: (e: unknown, context?: string) => string;
 }
 
 export interface NoteSnapshot {
@@ -107,8 +107,8 @@ export class NoteSession {
       id: base?.id ?? (this.target.kind === "id" ? this.target.id : null),
     };
   }
-  private message(e: unknown) {
-    return this.deps.errorText?.(e) ?? (e instanceof Error ? e.message : String(e));
+  private message(e: unknown, action: string) {
+    return this.deps.errorText?.(e, action) ?? (e instanceof Error ? e.message : String(e));
   }
   private isConflict(e: unknown) {
     return (e as { code?: number } | null)?.code === NOTES_CONFLICT;
@@ -170,7 +170,7 @@ export class NoteSession {
       }
       this.loadError = "";
     } catch (e) {
-      this.loadError = this.message(e);
+      this.loadError = this.message(e, "load this note");
     }
     this.loaded = true;
     this.emit();
@@ -288,7 +288,7 @@ export class NoteSession {
         this.conflict = true;
         this.status = "conflict";
       } else {
-        this.error = this.message(e);
+        this.error = this.message(e, "save your changes");
         this.status = "error";
       }
     }
@@ -320,7 +320,7 @@ export class NoteSession {
       this.emit();
       await this.save();
     } catch (e) {
-      this.error = this.message(e);
+      this.error = this.message(e, "save your changes");
       this.status = "error";
       this.emit();
     }
@@ -337,7 +337,7 @@ export class NoteSession {
       this.status = "idle";
       this.error = "";
     } catch (e) {
-      this.error = this.message(e);
+      this.error = this.message(e, "load their version");
       this.status = "error";
     }
     this.emit();

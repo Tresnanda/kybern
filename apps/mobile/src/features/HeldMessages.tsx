@@ -113,7 +113,7 @@ function useResolve(message: ThreadMessageRecord, name: string, onResolved: () =
       requestAnimationFrame(onResolved);
     } catch (e) {
       haptics.error();
-      showToast(`Couldn't ${action} the ${kind}. ${errorText(e)}`);
+      showToast(errorText(e, `${action} the ${kind}`));
       setBusy(null);
     }
   }
@@ -351,7 +351,7 @@ function HeldStackHeader({
         onResolved(message.id);
       } catch (e) {
         haptics.error();
-        showToast(`Couldn't ${action} every message. ${errorText(e)}`);
+        showToast(errorText(e, `${action} every message`));
         return;
       }
     }

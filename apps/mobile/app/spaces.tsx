@@ -50,7 +50,7 @@ export default function SpacesScreen() {
       onConfirm: () => {
         void deleteSpace(id)
           .then(() => showToast(SPACE_COPY.deletedToast(space.name)))
-          .catch((e) => setError(errorText(e) || SPACE_COPY.deleteFailure));
+          .catch((e) => setError(errorText(e, "delete the space")));
       },
     });
   };
@@ -89,13 +89,13 @@ export default function SpacesScreen() {
                   title: SPACE_COPY.menuMoveUp,
                   icon: "arrow.up",
                   disabled: index === 0,
-                  onPress: () => void moveSpace(space.id, -1).catch((e) => setError(errorText(e))),
+                  onPress: () => void moveSpace(space.id, -1).catch((e) => setError(errorText(e, "move the space"))),
                 },
                 {
                   title: SPACE_COPY.menuMoveDown,
                   icon: "arrow.down",
                   disabled: index === s.spaces.length - 1,
-                  onPress: () => void moveSpace(space.id, 1).catch((e) => setError(errorText(e))),
+                  onPress: () => void moveSpace(space.id, 1).catch((e) => setError(errorText(e, "move the space"))),
                 },
                 canDeleteSpace(space)
                   ? { title: SPACE_COPY.menuDelete, icon: "trash", destructive: true, onPress: () => remove(space.id) }

@@ -7,10 +7,11 @@ import { showToast } from "../ui/Toast";
 import { deleteNote, pinNote, purgeNote, restoreNote } from "../state/notes";
 import { noteMarkdown, noteTitle } from "../state/notesModel";
 import type { NoteSummary } from "../state/protocol";
-import { errorText, rpc } from "../state/runtime";
+import { problemFor, rpc } from "../state/runtime";
 
 function fail(e: unknown) {
-  Alert.alert("Unable to update the note", errorText(e), [{ text: "OK" }]);
+  const problem = problemFor(e, "update the note");
+  Alert.alert(problem.title, problem.body, [{ text: "OK" }]);
 }
 /** Run an action and tell the reader what to do if it fails. */
 export function attempt(work: () => Promise<unknown>, after?: () => void) {

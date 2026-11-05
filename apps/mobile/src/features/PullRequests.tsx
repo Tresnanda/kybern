@@ -1,8 +1,7 @@
 // Pull request pieces shared by the list, the detail page and the thread's "…" menu
-// (parity P1-2): the state glyph, a list row, and the GitHub CLI problem state.
+// (parity P1-2): the state glyph, a list row, and what counts as a setup problem.
 import * as Clipboard from "expo-clipboard";
 import { Linking, View } from "react-native";
-import { classifyPrError } from "../../../../packages/kybern-client/src/prReview";
 import {
   PR_STATE_WORDS,
   checksDotLabel,
@@ -12,10 +11,11 @@ import {
   type PrStateKind,
 } from "../../../../packages/kybern-client/src/pullRequests";
 import type { PullRequest } from "../state/protocol";
+import type { ProblemModel } from "../state/problems";
 import type { StatusPhase } from "../state/status";
 import { relativeTime } from "../state/threadList";
 import { ListRow } from "../ui/List";
-import { Button, Empty, Icon } from "../ui/primitives";
+import { Icon } from "../ui/primitives";
 import { StatusGlyph } from "../ui/TaskGlyphs";
 import { showToast } from "../ui/Toast";
 import { useTheme, type Colors } from "../ui/theme";
@@ -100,30 +100,6 @@ export function PrRow({ pr, repoName, onPress, separator }: { pr: PullRequest; r
   );
 }
 
-/** The GitHub CLI is missing or signed out on the computer: say how to fix it there. */
-export function GhProblem({ error, onRetry }: { error: string; onRetry: () => void }) {
-  const kind = classifyPrError(error);
-  if (kind !== "gh-missing" && kind !== "gh-auth") return null;
-  const missing = kind === "gh-missing";
-  return (
-    <Empty
-      icon="arrow.triangle.pull"
-      title={missing ? "Install the GitHub CLI" : "Sign in to the GitHub CLI"}
-      detail={
-        missing
-          ? "Kybern reads pull requests through gh on your computer. Install it there, run gh auth login, then try again."
-          : "Run gh auth login in a terminal on your computer, then try again."
-      }
-      action={
-        <Button role="tinted" size="medium" onPress={onRetry}>
-          Try again
-        </Button>
-      }
-    />
-  );
-}
-
-export const isGhProblem = (error: string) => {
-  const kind = classifyPrError(error);
-  return kind === "gh-missing" || kind === "gh-auth";
-};
+/** The GitHub CLI is missing or signed out on the computer, or the project has no GitHub remote: a fix to make there, then check again. */
+export const isSetupProblem = (problem: ProblemModel) =>
+  problem.kind === "tool_missing" || problem.kind === "signed_out" || problem.subject === "github_remote";

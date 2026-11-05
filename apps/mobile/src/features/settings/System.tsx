@@ -52,7 +52,7 @@ function SystemBody() {
         setActivity(a);
         setUpdate(u);
       })
-      .catch((e) => live && setError(errorText(e)));
+      .catch((e) => live && setError(errorText(e, "load this computer's status")));
     return () => {
       live = false;
     };
@@ -62,7 +62,7 @@ function SystemBody() {
     setError("");
     rpc(update?.status === "available" ? "daemon_update.run" : "daemon_update.check", {})
       .then(setUpdate)
-      .catch((e) => setError(`Unable to update Kybern. ${errorText(e)}`))
+      .catch((e) => setError(errorText(e, "update Kybern")))
       .finally(() => setBusy(false));
   };
   return (

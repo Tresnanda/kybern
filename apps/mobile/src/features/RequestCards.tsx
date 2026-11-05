@@ -57,7 +57,7 @@ export async function respondApproval(approval: Pick<ApprovalRequest, "id" | "th
 }
 
 /** A sentence for an action that failed: the daemon's own when it gave one. */
-const failed = (e: unknown) => errorText(e) || "Unable to reach your computer. Check the connection and try again.";
+const failed = (e: unknown) => errorText(e, "send your answer");
 
 /** The frame every request card shares: `card` fill, hairline, `lg` radius, 16 pt padding. */
 export function RequestCardShell({ children, label, live = true }: { children: ReactNode; label?: string; live?: boolean }) {

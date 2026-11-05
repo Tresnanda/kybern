@@ -46,7 +46,7 @@ export function Artifacts({ thread }: { thread: Thread }) {
         }
       })
       .catch((e) => {
-        if (alive) setError(errorText(e));
+        if (alive) setError(errorText(e, "load the artifacts"));
       })
       .finally(() => {
         if (alive) {
@@ -72,7 +72,7 @@ export function Artifacts({ thread }: { thread: Thread }) {
       }
       await refresh();
     } catch (e) {
-      setError(errorText(e));
+      setError(errorText(e, "ask Claude to publish"));
     } finally {
       setBusy(false);
     }
@@ -85,14 +85,14 @@ export function Artifacts({ thread }: { thread: Thread }) {
       setItems((items) => [...items, ...r.artifacts.filter((i) => !items.some((old) => old.seq === i.seq))]);
       setBefore(r.next_before_seq);
     } catch (e) {
-      setError(errorText(e));
+      setError(errorText(e, "load more artifacts"));
     } finally {
       setBusy(false);
     }
   }
   const preview = (path: string, title: string) =>
     router.push({ pathname: "/artifact", params: { threadId: thread.id, path, title } });
-  const open = (url: string) => void Linking.openURL(url).catch((e) => setError(errorText(e)));
+  const open = (url: string) => void Linking.openURL(url).catch((e) => setError(errorText(e, "open the link")));
   const views = items.flatMap((tool) => {
     const item = artifactView(tool);
     return item ? [{ seq: tool.seq, item }] : [];

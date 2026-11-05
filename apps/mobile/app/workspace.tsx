@@ -65,7 +65,7 @@ export default function Workspace() {
         }
       })
       .catch((e) => {
-        if (alive) setError(errorText(e));
+        if (alive) setError(errorText(e, "load this workspace"));
       });
     return () => {
       alive = false;
@@ -80,7 +80,7 @@ export default function Workspace() {
       await refresh();
       if (threadId) await loadThread(threadId);
     } catch (e) {
-      setError(errorText(e));
+      setError(errorText(e, "refresh this workspace"));
     } finally {
       setBusy(false);
     }

@@ -17,11 +17,7 @@ import {
   type TextProps,
   type ViewStyle,
 } from "react-native";
-import Animated, {
-  FadeIn,
-  FadeOut,
-  useReducedMotion,
-} from "react-native-reanimated";
+import Animated, { useReducedMotion } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { CSS_EASE_OUT, DURATION } from "../components/liquid/motion";
 import {
@@ -621,51 +617,8 @@ export function Empty({
   );
 }
 
-/** A failure that blocks the screen's purpose. Says what to do next; offers a retry. */
-export function ErrorBanner({
-  error,
-  onRetry,
-}: {
-  error?: string | null;
-  onRetry?: () => void;
-}) {
-  const { colors } = useTheme();
-  if (!error) return null;
-  return (
-    <Animated.View
-      entering={FadeIn.duration(DURATION.enter)}
-      exiting={FadeOut.duration(DURATION.exit)}
-      accessibilityLiveRegion="polite"
-      accessibilityRole="alert"
-      style={{
-        flexDirection: "row",
-        alignItems: "flex-start",
-        gap: 10,
-        paddingVertical: space.md,
-        paddingHorizontal: 14,
-        marginVertical: space.sm,
-        borderRadius: radius.md,
-        backgroundColor: colors.negativeSoft,
-      }}
-    >
-      <View style={{ paddingTop: 1 }}>
-        <Icon name="exclamationmark.triangle" size={18} color={colors.negative} />
-      </View>
-      <View style={{ flex: 1, gap: space.xs }}>
-        <T variant="subhead" tone="negative">
-          {error}
-        </T>
-        {onRetry && (
-          <View style={{ alignSelf: "flex-start" }}>
-            <Button role="plain" size="medium" onPress={onRetry}>
-              Try again
-            </Button>
-          </View>
-        )}
-      </View>
-    </Animated.View>
-  );
-}
+// ErrorBanner lives with the other forms of a failure (ui/Problem.tsx); it is exported here so screens keep one import.
+export { ErrorBanner } from "./Problem";
 export const styles = StyleSheet.create({
   line: { flexDirection: "row", alignItems: "center", gap: 10 },
   spread: {

@@ -125,7 +125,7 @@ export function ComposerSuggestions({
       })
       .catch((e) => {
         if (alive) {
-          setError(errorText(e));
+          setError(errorText(e, "find commands"));
           setSkillsLoading(false);
         }
       });
@@ -153,7 +153,7 @@ export function ComposerSuggestions({
           if (alive) setFiles(r.files);
         })
         .catch((e) => {
-          if (alive) setError(errorText(e));
+          if (alive) setError(errorText(e, "find files"));
         })
         .finally(() => {
           if (alive) setLoading(false);

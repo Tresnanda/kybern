@@ -73,7 +73,7 @@ export function TaskControls({ task }: { task: RuntimeTask }) {
       await rpc(method, { thread_id: task.thread_id, task_id: task.id });
       await loadThread(task.thread_id);
     } catch (e) {
-      setError(errorText(e));
+      setError(errorText(e, "stop that task"));
     } finally {
       setBusy(false);
     }
