@@ -165,12 +165,6 @@ function need(client: ReturnType<typeof localClient>) {
 /** The client of the machine that owns the thread. Pass `machineId` when the thread is not listed (a child another machine runs), else the owner is guessed from the id. */
 function rpc(threadId?: ThreadId, machineId?: string) { return need(threadId ? threadClient(threadId, machineId) : localClient()) }
 
-/** `errorText` from `state/rpc.ts`: the daemon's message, or the thrown text. */
-export function errorText(e: unknown): string {
-  if (e && typeof e === 'object' && 'message' in e && typeof (e as { message: unknown }).message === 'string')
-    return (e as { message: string }).message
-  return String(e)
-}
 
 // ---- catalog, settings, accounts ----
 

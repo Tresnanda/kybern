@@ -1,6 +1,7 @@
 // "Fix with agent" on a failed job (ADE-97), the pull request page's Send to agent popover (`PrSend.tsx`) for CI: choose the
 // conversation on the run's branch or a new one, see what will be sent, and send. The prompt names the job, the failed step,
 // the run's link and a bounded excerpt of the log (`fixPrompt`); a new conversation gets a worktree from the run's branch.
+import { problemSentence } from '../../problems/sentence.ts'
 import { useEffect, useState } from 'react'
 import { failedStep, fixPrompt, type ActionsRepo } from '../../../../../packages/kybern-client/src/actions.ts'
 import type { WorkflowJob, WorkflowRun } from '../../../../../packages/kybern-client/src/types.ts'
@@ -58,7 +59,7 @@ export function FixPopover({ target, run, job, close }: { target: ActionsRepo; r
   const step = failedStep(job)
   const send = () => {
     setBusy(true); setError(null)
-    void sendFailure(target, run, job, linked?.id).then(id => { close(); openThread(id) }, e => { setError(String(e)); setBusy(false) })
+    void sendFailure(target, run, job, linked?.id).then(id => { close(); openThread(id) }, e => { setError(problemSentence(e, { action: 'send the failure to an agent' })); setBusy(false) })
   }
   return <PopupLayer still={getNav().keyboardNav} testId="actions-fix-popover" side="bottom" align="end" sideOffset={6} tabIndex={0} onKeyDown={e => { if (e.key === 'escape') close() }} onMouseDownOutside={close} style={{ ...popoverStyle(t), ...column, width: 384, padding: 16, gap: 12 }}>
     <Label color={t.text} size={13} weight={500}>Fix with agent</Label>

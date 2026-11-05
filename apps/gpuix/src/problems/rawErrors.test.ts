@@ -14,29 +14,7 @@ import { join, relative, sep } from 'node:path'
  * Files and folders (relative to `src/`, with `/`) that still show raw errors. Each belongs to a lane of #232 that has not merged yet; when
  * its rewrite lands the entry goes. Nothing is added here for new code: use the Problem API.
  */
-export const RAW_ERROR_ALLOWLIST: string[] = [
-  // Family 1: agents and first run
-  'Composer.tsx',
-  'composer/',
-  'onboarding/',
-  'dialogs/Account',
-  'dialogs/useAccountLogin.ts',
-  'settings/InstalledAgents.tsx',
-  'settings/Cursor.tsx',
-  // Family 2: git and PRs
-  'environment/Panel.tsx',
-  'dock/Review.tsx',
-  'dock/Diff.tsx',
-  'pulls/',
-  'dialogs/Repositories.tsx',
-  'dialogs/GroupProject.tsx',
-  // Family 3: machines
-  'settings/Accounts.tsx',
-  'settings/LoginBroker.tsx',
-  'settings/Machines.tsx',
-  'machines/network.ts',
-  'state.ts', // statusDetail, shown by shell/Connection.tsx
-]
+export const RAW_ERROR_ALLOWLIST: string[] = []
 
 const SRC = join(import.meta.dir, '..')
 /** A variable a `catch` or `.catch(` hands out. */

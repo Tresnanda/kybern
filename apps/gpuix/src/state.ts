@@ -1,3 +1,4 @@
+import { problemSentence } from './problems/sentence.ts'
 import { activeEnvironment, environmentEndpoint } from './shell/environment.ts'
 import { machineHub } from './machines/index.ts'
 import { OfflineError } from '../../../packages/kybern-client/src/machineClient.ts'
@@ -342,7 +343,7 @@ export async function connect() {
     startupMark('endpoint-ready')
   } catch (error) {
     if (attempt !== connectionAttempt) return
-    set({ status: 'failed', statusDetail: error instanceof Error ? error.message : 'Start kybernd, then reconnect' })
+    set({ status: 'failed', statusDetail: problemSentence(error, { action: 'connect to kybernd' }) })
     return
   }
   // Native sockets authenticate the upgrade with a header and use the trusted
@@ -553,8 +554,8 @@ function watchMachines() {
 }
 /** A machine that cannot be reached is a notice, not an error screen. */
 function notifyOffline(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error)
-  void import('./shell/toasts.tsx').then(({ toast }) => toast.info(message.includes('offline') ? message : 'That machine is offline. Its threads show from the last time it was online.')).catch(() => {})
+  console.warn('[machines] offline:', error)
+  void import('./shell/toasts.tsx').then(({ toast }) => toast.info('That machine is offline. Its threads show from the last time it was online.')).catch(() => {})
 }
 
 async function loadLists() {
