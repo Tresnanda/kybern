@@ -1,4 +1,6 @@
 import { homeClient, sharesHome, watchGlobalNotesHome } from './home.ts'
+import { failure, type Failure } from '../problems/Line.tsx'
+import { toastProblem } from '../problems/toast.ts'
 import { useEffect, useSyncExternalStore } from 'react'
 import type { Federation, Note, NoteSummary } from '../../../../packages/kybern-client/src/types.ts'
 import type { NotesFilter, NotesGroupBy, NotesSortBy } from '@/state/notesModel'
@@ -15,7 +17,7 @@ import { foreignOwner, MACHINE_ALL, ownerClient, recordFederation } from '../mac
 
 export interface Capture { text: string; threadTitle: string; threadId: string }
 interface Display { layout: 'gallery' | 'list'; group: NotesGroupBy; sort: NotesSortBy; hints: boolean; outline: boolean }
-interface State { /** "All machines": notes of every machine in the list; the footer names the ones left out. */ allMachines: boolean; federation: Federation | null; notes: NoteSummary[]; /** When categories began (`notes.list` `history_since`): undated notes predate it. */ historySince: string | null; loaded: boolean; error: string | null; selected: string | null; filter: NotesFilter; display: Display; quick: boolean; capture: Capture | null; query: string }
+interface State { /** "All machines": notes of every machine in the list; the footer names the ones left out. */ allMachines: boolean; federation: Federation | null; notes: NoteSummary[]; /** When categories began (`notes.list` `history_since`): undated notes predate it. */ historySince: string | null; loaded: boolean; error: Failure | null; selected: string | null; filter: NotesFilter; display: Display; quick: boolean; capture: Capture | null; query: string }
 const defaults: Display = { layout: 'gallery', group: 'none', sort: 'edited', hints: true, outline: true }
 const initialState = (): State => ({ allMachines: false, federation: null, notes: [], historySince: null, loaded: false, error: null, selected: load<string | null>('kybern.notes.lastOpenId', null), filter: { kind: 'all' }, display: { ...defaults, ...load<Partial<Display>>('kybern.notes.display', {}) }, quick: false, capture: null, query: '' })
 let state: State = initialState()
@@ -63,7 +65,7 @@ export function refreshNotes(): Promise<void> {
           setNotes({ notes: result.notes, federation: result.federation ?? null, historySince: result.history_since ?? null, loaded: true, error: null })
         } else if (sharesHome()) {
           const home = await homeClient(() => void refreshNotes()).call('notes.list', {}).catch((error) => {
-            if (owner === activeEnvironment()) setNotes({ notes: [...result.notes.filter((note) => note.scope !== 'global'), ...state.notes.filter((note) => homeIds.has(note.id))], loaded: true, error: `Global notes ${osLabels().onThisComputer} are unavailable. Reconnect and try again. ${String(error)}` })
+            if (owner === activeEnvironment()) setNotes({ notes: [...result.notes.filter((note) => note.scope !== 'global'), ...state.notes.filter((note) => homeIds.has(note.id))], loaded: true, error: failure(`load your global notes ${osLabels().onThisComputer}`, error) })
             return null
           })
           if (!home) return
@@ -78,7 +80,7 @@ export function refreshNotes(): Promise<void> {
         }
       } catch (e) {
         if (owner !== activeEnvironment()) return
-        setNotes({ error: String(e) })
+        setNotes({ error: failure('load the notes', e) })
       }
     } while (again)
   })().finally(() => { if (fetching === run) fetching = null })
@@ -112,16 +114,16 @@ export async function createNote(body = '', title = '', projectId?: string): Pro
     if (!project && sharesHome()) homeIds.add(note.id)
     recordNote(note)
     return note
-  } catch (e) { toast.error('Couldn’t create note', { description: String(e) }); return null }
+  } catch (e) { toastProblem(e, { action: 'create the note' }); return null }
 }
 export async function newNote() { const note = await createNote(); if (note) openNote(note.id) }
 export async function deleteNote(id: string) {
   try { recordNote(await rpc(id).call('notes.delete', { id })); if (state.selected === id) gallery(); toast('Note deleted', { action: { label: 'Undo', onClick: () => void restoreNote(id) } }) }
-  catch (e) { toast.error('Couldn’t delete note', { description: String(e) }) }
+  catch (e) { toastProblem(e, { action: 'delete the note' }) }
 }
 export async function restoreNote(id: string) {
   try { recordNote(await rpc(id).call('notes.restore', { id })) }
-  catch (e) { toast.error('Couldn’t restore note', { description: String(e) }) }
+  catch (e) { toastProblem(e, { action: 'restore the note' }) }
 }
 
 export async function searchNotes(query: string) {

@@ -2,13 +2,13 @@
 // files come along, then follow it to "Added to os-kdi". Every call goes to the SOURCE machine (the one that sends it, any
 // member that has the project); the folder chooser browses the TARGET. The work is an outbox item, so closing the sheet or
 // an offline target does not stop it.
+import { problemSentence } from '../problems/sentence.ts'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { PROVISION_CHANGED_NOTIFICATION, type ProvisionStatus } from '../../../../packages/kybern-client/src/types.ts'
 import {
   PROVISION_COPY as COPY, defaultEnvFiles, defaultPath, expandPath, displayPath, pathAccepted, provisionFraction, partialGroupDetail, provisionAddLabel, provisionSettled, provisionStatusText, targetDetail, type ProvisionTarget,
 } from '../../../../packages/kybern-client/src/provision.ts'
 import { Dialog } from '../nav/overlay.tsx'
-import { errorText } from '../nav/actions.ts'
 import { Button } from '../kit/Button.tsx'
 import { PickerChip } from '../kit/PickerChip.tsx'
 import { Radio } from '../kit/Radio.tsx'
@@ -60,7 +60,7 @@ export function ProvisionSheet({ projectId, machineId, close, inline = false }: 
     try {
       const started = await sourceClient.call('projects.provision', { project_id: source.projectId, machine: target.machineId, path: expandPath(path!, plan?.target_home, plan?.target.os), env_files: env ?? [] })
       setStatus(started)
-    } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
+    } catch (e) { setError(problemSentence(e, { action: 'set up this machine' })) } finally { setBusy(false) }
   }
   const dismiss = () => { if (!busy) close() }
   const running = !!status && !provisionSettled(status)

@@ -1,4 +1,5 @@
 import { activeEnvironment } from '../shell/environment.ts'
+import { errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
 import { toastProblem } from '../problems/toast.ts'
 import { problemSentence } from '../problems/sentence.ts'
 import { actionPhrase } from '../problems/action.ts'
@@ -24,9 +25,7 @@ export type ToolBlock = Extract<Block, { kind: 'tool' }>
 
 /** Daemon errors as one readable line (`errorText` in the desktop). */
 export function errorText(error: unknown): string {
-  if (error instanceof Error) return error.message
-  if (error && typeof error === 'object' && 'message' in error) return String((error as { message: unknown }).message)
-  return String(error)
+  return errorMessage(error)
 }
 
 function rpc(threadId?: ThreadId) {

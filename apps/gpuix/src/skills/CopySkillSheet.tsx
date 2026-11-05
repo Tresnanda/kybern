@@ -1,13 +1,13 @@
 // "Copy <skill>…" (ADE-86): pick the machine that sends it, the machines it goes to and the harness folders it lands in, then
 // see what happened on each. A machine with a different version is never preselected; choosing it turns the action into
 // "Replace on <machine>" with a note that the old copy is kept there. Offline machines get it when they return (outbox).
+import { problemSentence } from '../problems/sentence.ts'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { OUTBOX_CHANGED_NOTIFICATION, SKILL_HOMES, type OutboxItem, type SkillHome, type SkillNetworkEntry, type SkillsCopyResult, type SkillsNetworkView } from '../../../../packages/kybern-client/src/types.ts'
 import {
   copyButtonLabel, copyOutcomeText, copyRequest, copyTargets, defaultSource, readersText, SKILL_HOME_DETAILS, skippedOf, sourceHomes, sourcesOf, type CopyTargetModel,
 } from '../../../../packages/kybern-client/src/skillSync.ts'
 import { Dialog } from '../nav/overlay.tsx'
-import { errorText } from '../nav/actions.ts'
 import { Button } from '../kit/Button.tsx'
 import { Card } from '../kit/Card.tsx'
 import { Checkbox } from '../kit/Checkbox.tsx'
@@ -59,7 +59,7 @@ export function CopySkillSheet({ view, entry, close, inline = false }: { view: S
       // Folders the source lacks are added on the source too, at once.
       if (extra.length) request.to.push({ machine: source.id, homes: folders })
       setResult(await copySkill(request))
-    } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
+    } catch (e) { setError(problemSentence(e, { action: 'copy the skills' })) } finally { setBusy(false) }
   }
 
   if (result) return <Frame onClose={close} width={560} testId="skill-copy-sheet">

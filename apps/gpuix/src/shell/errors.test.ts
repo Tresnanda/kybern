@@ -18,7 +18,9 @@ test('a throw from a timer or promise becomes a logged error toast, and GPUIX do
     const handlers = Reflect.get(globalThis, '__gpuixRuntimeErrorHandlers') as { uncaughtException(e: unknown): void; unhandledRejection(e: unknown): void }
     handlers.uncaughtException(new Error('Selection must use ordered UTF-16 character boundaries'))
     handlers.unhandledRejection(new Error('second, within the toast interval'))
-    expect(shown).toEqual([{ title: 'Something went wrong', description: 'Selection must use ordered UTF-16 character boundaries. Kybern kept running; if this repeats, restart the app.' }])
+    expect(shown).toEqual([{ title: 'Something went wrong', description: 'Kybern kept running. If this repeats, restart the app.' }])
+    // The message is for the log, not the toast.
+    expect(String(logged[0]![1])).toContain('Selection must use ordered UTF-16 character boundaries')
     expect(logged.length).toBe(2)
     expect(String(logged[1]![1])).toContain('second, within the toast interval')
   } finally {

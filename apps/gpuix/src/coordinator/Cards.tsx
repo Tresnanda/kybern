@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { problemSentence } from '../problems/sentence.ts'
 import { AiMagicIcon } from '@hugeicons/core-free-icons'
 import type { ApprovalDecision, ApprovalRequest, TidyOffer } from '../../../../packages/kybern-client/src/types.ts'
 import { briefProposalInput, settingsProposalInput, noteChangesProposalInput, noteChangesTitle, tidyOfferTitle, leadGitCardInput, COORDINATOR_CARD_COPY as COPY, gitCardCopy, cardPartsText, checksLabel, mergeMethodLabel } from '../../../../packages/kybern-client/src/coordinatorCards.ts'
@@ -12,7 +13,7 @@ import { Button } from '../kit/Button.tsx'
 import { Checkbox } from '../kit/Checkbox.tsx'
 import { TextArea } from '../kit/TextArea.tsx'
 import { useControls } from '../kit/controls.ts'
-import { errorText, respondApproval } from '../transcript/store.ts'
+import { respondApproval } from '../transcript/store.ts'
 import { T } from '../transcript/glyphs.ts'
 import { glyph, ICONS } from '../icons.tsx'
 import { NOTE_CATEGORIES } from '../../../../packages/kybern-client/src/notesHistory.ts'
@@ -37,7 +38,7 @@ export function CoordinatorCard({ approval, count }: { approval: ApprovalRequest
   const respond = async (decision: ApprovalDecision) => {
     if (busy) return
     setBusy(true); setError('')
-    try { await respondApproval(approval.id, decision) } catch (e) { setError(`Unable to send your answer: ${errorText(e).replace(/\.$/, '')}. Try again.`); setBusy(false) }
+    try { await respondApproval(approval.id, decision) } catch (e) { setError(problemSentence(e, { action: 'send your answer' })); setBusy(false) }
   }
   const accept = () => respond(brief ? { decision: 'submit', response: { text } } : changes ? { decision: 'submit', response: { accepted: changes.map(c => c.path).filter(path => accepted.has(path)) } } : { decision: 'allow_once' })
   useEffect(() => addWindowKeyHandler(e => {
@@ -116,7 +117,7 @@ export function TidyNotesCard({ projectId, offer, onOffer }: { projectId: string
       const client = getClient()!
       if (kind === 'snooze') onOffer(await client.call('notes.tidy_snooze', { project_id: projectId }))
       else { await client.call('notes.tidy_start', { project_id: projectId }); onOffer({ ...offer, offer: false }) }
-    } catch (e) { setError(`${kind === 'start' ? 'Unable to start tidying' : 'Unable to snooze this'}: ${errorText(e).replace(/\.$/, '')}. Try again.`) } finally { setBusy(null) }
+    } catch (e) { setError(problemSentence(e, { action: kind === 'start' ? 'start tidying' : 'snooze this' })) } finally { setBusy(null) }
   }
   return <CardShell testId="tidy-notes-card" stealFocus={false}>
     <RequestHeader glyph={MAGIC} title={tidyOfferTitle(offer.stale.length)} meta={COPY.tidyMeta} />

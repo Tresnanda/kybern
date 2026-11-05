@@ -1,4 +1,5 @@
 import { memo, useRef, useState } from 'react'
+import { toastProblem } from '../problems/toast.ts'
 import { isOpenStatus, sortTasks, splitTaskBody, STATUS_LABEL } from '@/state/tasksModel'
 import { isFreeChatProject, type TaskItem, type Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { goPage } from '../nav/history.ts'
@@ -12,7 +13,6 @@ import { IconButton } from '../kit/IconButton.tsx'
 import { Button } from '../kit/Button.tsx'
 import { TextField } from '../kit/Field.tsx'
 import { Label, useTheme } from '../ui.tsx'
-import { toast } from '../shell/toasts.tsx'
 import { DockFooter, DockSection, ScopeHeader } from './Notes.tsx'
 import { DockEmpty, ErrorLine, Section } from './parts.tsx'
 import { isPrimary } from '../platform/keys.ts'
@@ -37,7 +37,7 @@ export function TasksPane({ thread }: { thread: Thread }) {
     <ScopeHeader thread={thread} action={<IconButton icon={N.plus} size="sm" label="New task" testId="dock-new-task" onClick={() => setAdding(true)} />} />
     {own && <><Section label="This thread" /><TaskRow task={own} /><Section label={`${splitTaskBody(own.body).criteria.filter(c => c.checked).length} of ${splitTaskBody(own.body).criteria.length} done`}><Button variant="ghost" size="sm" onClick={() => open(own.id)}>Open task</Button></Section></>}
     {adding && <QuickAdd project={project} done={() => setAdding(false)} />}
-    <ErrorLine error={error} retry={() => void refreshTasks()} />
+    <ErrorLine error={error?.error} action={error?.action} retry={() => void refreshTasks()} />
     {!loaded ? <Section label="Loading tasks…" /> : entries.length ? <TaskWindow entries={entries} testId="dock-tasks-list" /> : <DockEmpty icon={N.tasks} title="No open tasks" body="Tasks for this project appear here." />}
   </div>
 }
@@ -55,7 +55,7 @@ function QuickAdd({ project, done }: { project: string | null; done: () => void 
     if (!value) { if (after !== 'keep') done(); return }
     draft.current.busy = true; draft.current.title = ''; setTitle('')
     try { const task = await createTask({ scope: project ? 'project' : 'global', project_id: project, title: value, status: 'inbox' }); if (after === 'open') open(task.id); if (after !== 'keep') done() }
-    catch (error) { draft.current.title ||= value; setTitle(draft.current.title); toast.error('Unable to add the task', { description: String(error) }) }
+    catch (error) { draft.current.title ||= value; setTitle(draft.current.title); toastProblem(error, { action: 'add the task' }) }
     finally { draft.current.busy = false }
   }
   return <div style={{ display: 'flex', padding: 8, gap: 8, alignItems: 'center' }}><StatusGlyph status="inbox" /><TextField autoFocus testId="dock-task-title" label="New task title" placeholder="Task title" value={title} onChange={v => { draft.current.title = v; setTitle(v) }} onSubmit={e => void commit(isPrimary(e.modifiers) ? 'open' : 'keep')} onBlur={() => void commit('close')} onKeyDown={e => { if (e.key === 'escape') { draft.current.canceled = true; done() } }} theme={{ text: t.text, caret: t.text }} shell={{ flexGrow: 1 }} /></div>

@@ -9,7 +9,10 @@ import { getClient } from '../state.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { DURATION, EASE } from '../motion/tokens.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
-import { copyText, errorText } from '../transcript/store.ts'
+import { copyText } from '../transcript/store.ts'
+import { asError, errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
+import { ProblemRow } from '../kit/Problem.tsx'
+import { failure, ProblemLine, type Failure } from '../problems/Line.tsx'
 import { toast } from '../shell/toasts.tsx'
 import { saveMachine, setupSshEnvironment } from './actions.ts'
 import { pairingQrSvg } from './qr.ts'
@@ -65,17 +68,17 @@ function SshForm({ close, chooser, busy, setBusy, initialTarget, initialName }: 
   const controller = useRef<AbortController | null>(null)
   useEffect(() => () => controller.current?.abort(), [])
   const [steps, setSteps] = useState<Partial<Record<BootstrapStep, BootstrapProgress>>>({})
-  const [error, setError] = useState('')
+  const [error, setError] = useState<Error | null>(null)
   useEffect(() => { let live = true; void listSshHosts(process.env.KYBERN_SSH_CONFIG).then(found => { if (live) setHosts(found) }); return () => { live = false } }, [])
   const ready = !!name.trim() && !!target.trim()
   const submit = async () => {
     if (busy || !ready) return
-    setBusy(true); setError(''); setSteps({}); controller.current = new AbortController()
+    setBusy(true); setError(null); setSteps({}); controller.current = new AbortController()
     try {
       const saved = await setupSshEnvironment({ name, target, data_dir: dataDir }, progress => setSteps(old => ({ ...old, [progress.step]: progress })), controller.current.signal)
       toast.success(`Added ${saved.name}`); close()
     }
-    catch (e) { setError(errorText(e)) } finally { setBusy(false) }
+    catch (e) { setError(asError(e)) } finally { setBusy(false) }
   }
   const suggestions = !!target && hosts.some(host => host.startsWith(target) && host !== target) ? hosts.filter(host => host.startsWith(target) && host !== target).slice(0, 4) : []
   const host = target.trim().replace(/^ssh:\/\//, '').replace(/^[^@]*@/, '')
@@ -91,7 +94,7 @@ function SshForm({ close, chooser, busy, setBusy, initialTarget, initialName }: 
       <Disclosure testId="environment-advanced" label="Advanced" open={advanced} toggle={() => setAdvanced(!advanced)} />
       {advanced && <Field label="Data directory on that machine (optional)"><TextField size="lg" width="100%" testId="environment-data-dir" label="Data directory on that machine (optional)" value={dataDir} onChange={setDataDir} disabled={busy} placeholder="~/.kybern" onSubmit={() => void submit()} /></Field>}
       {!!Object.keys(steps).length && <div testId="environment-setup-progress" aria-label="Setup progress" style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: ink(t, t.variant === 'dark' ? .06 : .08) }}>{BOOTSTRAP_STEPS.map(step => { const state = steps[step.id]?.state ?? 'pending'; return <div key={step.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}><div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, marginTop: 2 }}>{state === 'running' ? <Spinner size={13} color={t.text} /> : state === 'done' ? <Icon source={N.check} size={14} color="#10b981" /> : state === 'failed' ? <div style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: t.red }} /> : <div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: ink(t, .4 * .58) }} />}</div><div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><Label color={state === 'pending' ? t.textSecondary : t.text} size={13} lineHeight={17.5}>{step.label}</Label>{steps[step.id]?.detail && state !== 'failed' && <Hint>{steps[step.id]!.detail!}</Hint>}</div></div> })}</div>}
-      {error && <div testId="environment-setup-error" role="alert" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}><Label color={t.red} size={13} lineHeight={21.125}>{error}</Label>{/Permission denied|ssh-copy-id/.test(error) && !!host && <Label color={t.text} size={13} lineHeight={21.125} font={FONT_MONO}>{`ssh-copy-id ${target.trim()}`}</Label>}</div>}
+      {error && <SshProblem error={error} target={target.trim()} showKeyCommand={!!host} />}
     </DialogBody>
     <DialogFooter><Button size="lg" variant="primary" testId="environment-save" disabled={!ready} busy={busy} onClick={() => void submit()}>{busy ? 'Setting up' : 'Set up and connect'}</Button></DialogFooter>
   </>
@@ -106,7 +109,7 @@ function AddressForm({ close, chooser, busy, setBusy }: { close: () => void; cho
   const [token, setToken] = useState('')
   const [expectedIdentity, setExpectedIdentity] = useState<string | undefined>(undefined)
   const [advanced, setAdvanced] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<Error | null>(null)
   const [addressError, setAddressError] = useState('')
   const validateAddress = () => {
     try { normalizeDaemonUrl(address); setAddressError(''); return true }
@@ -122,16 +125,12 @@ function AddressForm({ close, chooser, busy, setBusy }: { close: () => void; cho
   const ready = !!name.trim() && !!address.trim() && (code.length === 6 || !!token.trim())
   const submit = async () => {
     if (busy || !ready || !validateAddress()) return
-    setBusy(true); setError('')
+    setBusy(true); setError(null)
     try {
       const saved = await saveMachine({ name, address, code: code || undefined, token: token || undefined, expectedIdentity })
       toast.success(`Added ${saved.name}`); close()
     } catch (e) {
-      const detail = errorText(e)
-      const unreachable = /error sending request|connection refused|timed out|Unable to connect|ConnectionRefused|fetch failed|Unable to reach/i.test(detail)
-      setError(unreachable && isLoopback(address)
-        ? "This invitation points at the other machine's own loopback address, which only works on that machine. For a daemon that listens on 127.0.0.1, add it over SSH instead, or bind it to an address this device can reach."
-        : unreachable ? 'Unable to reach this machine. Check its address and network connection, then try again.' : detail)
+      setError(asError(e))
     } finally { setBusy(false) }
   }
   return <>
@@ -145,7 +144,7 @@ function AddressForm({ close, chooser, busy, setBusy }: { close: () => void; cho
       <Hint>On the other machine, open Settings → Paired devices and choose Pair a device. For a server or VPS, run kybern pair over SSH.</Hint>
       <Disclosure testId="environment-token-toggle" label="Use an existing device token" open={advanced} toggle={() => setAdvanced(!advanced)} />
       {advanced && <Field label="Device token"><TextField size="lg" width="100%" secure testId="environment-token" label="Device token" value={token} onChange={value => { setToken(value); setCode('') }} disabled={busy} placeholder="Device token" onSubmit={() => void submit()} /></Field>}
-      {!!error && <ErrorText testId="environment-save-error">{error}</ErrorText>}
+      {!!error && <AddMachineProblem error={error} loopback={isLoopback(address)} retry={() => void submit()} />}
     </DialogBody>
     <DialogFooter><Button size="lg" variant="primary" testId="environment-save" disabled={!ready} busy={busy} onClick={() => void submit()}>{busy ? 'Connecting' : 'Save and connect'}</Button></DialogFooter>
   </>
@@ -182,7 +181,7 @@ function DeviceAccess({ close }: { close: () => void }) {
   const [expired, setExpired] = useState(false)
   const [busy, setBusy] = useState(false)
   const [exposureBusy, setExposureBusy] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<Failure | null>(null)
   useEffect(() => {
     let live = true
     void client.call('access.exposure.get', {}).then((value) => { if (live) setExposure(value) }, () => { /* Older daemons have no exposure control; the row stays hidden. */ })
@@ -194,7 +193,7 @@ function DeviceAccess({ close }: { close: () => void }) {
     const refresh = () => {
       if (loading || client.status !== 'open') return
       loading = true
-      void client.call('access.tokens.list', {}).then((value) => { if (live) setDevices(value.tokens) }, (e) => { if (live) setError(errorText(e)) }).finally(() => { loading = false })
+      void client.call('access.tokens.list', {}).then((value) => { if (live) setDevices(value.tokens) }, (e) => { if (live) setError(failure('list the paired devices', e)) }).finally(() => { loading = false })
     }
     refresh()
     const timer = setInterval(refresh, DEVICES_POLL_MS)
@@ -215,14 +214,14 @@ function DeviceAccess({ close }: { close: () => void }) {
     setInvitation(next)
     setAddress(suggestedAddress(next.endpoints, nextExposure, activeEnvironment().local ? null : client.endpoint.url))
   }
-  const run = async (action: () => Promise<void>) => { setBusy(true); setError(''); try { await action() } catch (e) { setError(errorText(e)) } finally { setBusy(false) } }
+  const run = async (action: () => Promise<void>) => { setBusy(true); setError(null); try { await action() } catch (e) { setError(failure('create the invitation', e)) } finally { setBusy(false) } }
   const paired = devices.filter(d => d.label !== 'bootstrap')
   // `bg-muted/40`, measured in the desktop frontend: one level over the popover in dark (46 → 47), 1.6% black in light (255 → 251).
   const card = { display: 'flex', borderRadius: 14, backgroundColor: t.variant === 'dark' ? ink(t, .005) : ink(t, .016) }
   return <>
     <DialogHeader title="Pair a device" description={`Give another device access to ${activeEnvironment().name}${machineHub().machineCount > 1 ? ' and, through it, your other machines' : ''}.`} onClose={close} />
     <DialogBody testId="environment-access-body" scroll>
-      {exposure && <div style={{ ...card, alignItems: 'center', gap: 16, paddingLeft: 16, paddingRight: 16, paddingTop: 12, paddingBottom: 12 }}><div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexGrow: 1, minWidth: 0 }}><Label color={t.text} size={14} lineHeight={21} weight={500}>Reachable over Tailscale</Label><Hint>{exposure.tailscale_ip ? exposure.tailscale ? `Devices on your tailnet connect to ${exposure.tailscale_ip} directly.` : 'Lets phones and other devices on your tailnet pair without a tunnel.' : 'Tailscale is not running on this machine.'}</Hint></div><Switch testId="environment-tailscale" aria-label="Reachable over Tailscale" checked={exposure.tailscale} disabled={exposureBusy || (!exposure.tailscale && !exposure.tailscale_ip)} onCheckedChange={tailscale => { setExposureBusy(true); setError(''); void (async () => { try { const value = await client.call('access.exposure.set', { tailscale }); setExposure(value); if (invitation) await create(value) } catch (e) { setError(errorText(e)) } finally { setExposureBusy(false) } })() }} /></div>}
+      {exposure && <div style={{ ...card, alignItems: 'center', gap: 16, paddingLeft: 16, paddingRight: 16, paddingTop: 12, paddingBottom: 12 }}><div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexGrow: 1, minWidth: 0 }}><Label color={t.text} size={14} lineHeight={21} weight={500}>Reachable over Tailscale</Label><Hint>{exposure.tailscale_ip ? exposure.tailscale ? `Devices on your tailnet connect to ${exposure.tailscale_ip} directly.` : 'Lets phones and other devices on your tailnet pair without a tunnel.' : 'Tailscale is not running on this machine.'}</Hint></div><Switch testId="environment-tailscale" aria-label="Reachable over Tailscale" checked={exposure.tailscale} disabled={exposureBusy || (!exposure.tailscale && !exposure.tailscale_ip)} onCheckedChange={tailscale => { setExposureBusy(true); setError(null); void (async () => { try { const value = await client.call('access.exposure.set', { tailscale }); setExposure(value); if (invitation) await create(value) } catch (e) { setError(failure('change how this machine is reached', e)) } finally { setExposureBusy(false) } })() }} /></div>}
       {invitation && <>
         {qr && <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}><div role="img" aria-label="Pairing QR code" style={{ width: 176, height: 176, padding: 12, borderRadius: 14, backgroundColor: '#ffffff' }}><svg testId="pairing-qr" source={qr} style={{ width: 152, height: 152, color: '#000000' }} /></div><Hint center>Scan with the Kybern mobile app, or copy the invitation below.</Hint></div>}
         <div style={{ ...card, flexDirection: 'column', alignItems: 'center', gap: 8, padding: 16 }}><CodeDigits code={invitation.code} /><Hint>{expired ? 'Code expired. Create a new invitation.' : `Use once before ${new Date(invitation.expires_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}</Hint></div>
@@ -236,7 +235,26 @@ function DeviceAccess({ close }: { close: () => void }) {
         {!paired.length && <div style={{ paddingTop: 8, paddingBottom: 8 }}><Hint>Create an invitation, then open it on the device you want to connect.</Hint></div>}
         {paired.map(device => <div key={device.id} style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 8, paddingBottom: 8 }}><Label color={t.text} size={13} lineHeight={21.125} style={{ flexGrow: 1, minWidth: 0 }}>{device.label}</Label>{device.revoked ? <Label color={t.textSecondary} size={12} lineHeight={16}>Revoked</Label> : <Button variant="ghost" size="sm" testId={`revoke-${device.id}`} onClick={() => void run(async () => { await client.call('access.tokens.revoke', { token_id: device.id }); setDevices(list => list.map(d => d.id === device.id ? { ...d, revoked: true } : d)) })}>Revoke access</Button>}</div>)}
       </div>
-      {!!error && <ErrorText testId="environment-access-error">{error}</ErrorText>}
+      {!!error && <ProblemLine error={error.error} action={error.action} retry={() => void run(() => create())} testId="environment-access-error" />}
     </DialogBody>
   </>
+}
+
+/** Adding over SSH failed. A refused key gets its own fix (the `ssh-copy-id` line to run); anything else is worded by `describeProblem`. */
+function SshProblem({ error, target, showKeyCommand }: { error: Error; target: string; showKeyCommand: boolean }) {
+  const t = useTheme()
+  const refused = /Permission denied|publickey|ssh-copy-id/i.test(errorMessage(error))
+  if (!refused) return <div testId="environment-setup-error"><ProblemLine error={error} action="add this machine over SSH" /></div>
+  return <div testId="environment-setup-error" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <ProblemRow tone="warning" icon="lock" title="That machine didn’t accept your SSH key" body={showKeyCommand ? 'Copy your key to it with the command below, then try again.' : 'Copy your key to it with ssh-copy-id, then try again.'} detail={errorMessage(error)} testId="environment-setup-problem" />
+    {showKeyCommand && <Label color={t.text} size={13} lineHeight={21.125} font={FONT_MONO}>{`ssh-copy-id ${target}`}</Label>}
+  </div>
+}
+
+/** Adding a machine by address failed: an address on the other machine's own loopback or one that cannot be reached has a clearer sentence than the transport error. */
+function AddMachineProblem({ error, loopback, retry }: { error: Error; loopback: boolean; retry: () => void }) {
+  const unreachable = /error sending request|connection refused|timed out|Unable to connect|ConnectionRefused|fetch failed|Unable to reach/i.test(errorMessage(error))
+  if (unreachable && loopback) return <ProblemRow tone="warning" icon="alert" title="That address only works on the other machine" body="It points at the other machine's own loopback address. For a daemon that listens on 127.0.0.1, add it over SSH instead, or bind it to an address this device can reach." detail={errorMessage(error)} testId="environment-save-error" />
+  if (unreachable) return <ProblemRow tone="neutral" icon="offline" title="Can’t reach that machine" body="Check its address and network connection, then try again." primary={{ label: 'Try again', onClick: retry }} detail={errorMessage(error)} testId="environment-save-error" />
+  return <div testId="environment-save-error"><ProblemLine error={error} action="add this machine" retry={retry} /></div>
 }

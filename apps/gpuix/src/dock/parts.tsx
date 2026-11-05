@@ -4,7 +4,6 @@ import { Icon } from '../icons.tsx'
 import { EASE_OUT, ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { muted } from '../nav/overlay.tsx'
 import { Rise } from '../motion/kit.tsx'
-import { Button } from '../kit/Button.tsx'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { ProblemLine, type ProblemLineProps } from '../problems/Line.tsx'
 

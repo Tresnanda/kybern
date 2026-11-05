@@ -7,7 +7,6 @@ import { defaultEditor, installedEditors, openInEditor, type Editor } from './ed
 import { setWrapLines, useWrapLines } from './filePrefs.ts'
 import { DocumentKeys, type DocumentKey } from '../tabs/hidden.ts'
 import { isWindowVisible } from '../native/visibility.ts'
-import { toast } from '../shell/toasts.tsx'
 import { activeEnvironment } from '../shell/environment.ts'
 import { useGpuix, useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'

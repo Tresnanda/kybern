@@ -1,6 +1,7 @@
 // The pieces the "Add to another machine" sheet, the agent card and the fork sheet share: the plan hook (asked of the SOURCE
 // machine, re-checked on the target as the folder changes), the folder field with its inline chooser (it browses the TARGET
 // machine's folders with `projects.browse` on that machine's own connection) and the env file list.
+import { problemSentence } from '../problems/sentence.ts'
 import { useEffect, useRef, useState } from 'react'
 export { useProvisionPlan } from './plan.ts'
 import type { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
@@ -12,7 +13,6 @@ import { TextField } from '../kit/Field.tsx'
 import { RADIUS, useControls } from '../kit/controls.ts'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
-import { errorText } from '../nav/actions.ts'
 import { machineHub } from '../machines/index.ts'
 import { fixtureClient } from './targets.ts'
 import { Label, useTheme } from '../ui.tsx'
@@ -63,7 +63,7 @@ function FolderChooser({ plan, start, disabled, onPick, onCancel }: { plan: Prov
     try { const next = await client.call('projects.browse', path ? { path } : {}); if (attempt === sequence.current) setListing(next) }
     catch (e) {
       // The proposed parent may not exist yet: start in the machine's home instead.
-      if (attempt === sequence.current) { if (path) return browse(); setError(errorText(e)) }
+      if (attempt === sequence.current) { if (path) return browse(); setError(problemSentence(e, { action: 'open that folder' })) }
     }
     finally { if (attempt === sequence.current) setBusy(false) }
   }

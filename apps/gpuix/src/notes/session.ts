@@ -1,5 +1,6 @@
 // Native counterpart of desktop noteSession: 500 ms debounce, serialized saves,
 // persistent drafts, conservative line merge and explicit conflict resolution.
+import { asError } from '../../../../packages/kybern-client/src/problem.ts'
 import type { Note, NoteCategory } from '../../../../packages/kybern-client/src/types.ts'
 import { mergeNoteBodies } from '@/state/noteLines'
 import { activeEnvironment } from '../shell/environment.ts'
@@ -7,7 +8,7 @@ import { load, save } from '../shell/persist.ts'
 import { getNotes, recordNote, rpc, subscribeNotes } from './store.ts'
 export const AUTOSAVE_MS = 500
 interface Draft { title: string; body: string; baseRevision: number }
-interface Snapshot { note: Note | null; title: string; body: string; phase: 'loading' | 'ready' | 'missing' | 'error'; status: 'saved' | 'dirty' | 'saving' | 'error' | 'conflict'; error: string | null; conflict: Note | null; epoch: number }
+interface Snapshot { note: Note | null; title: string; body: string; phase: 'loading' | 'ready' | 'missing' | 'error'; status: 'saved' | 'dirty' | 'saving' | 'error' | 'conflict'; error: Error | null; conflict: Note | null; epoch: number }
 export class NoteSession {
   private snap: Snapshot = { note: null, title: '', body: '', phase: 'loading', status: 'saved', error: null, conflict: null, epoch: 0 }
   private listeners = new Set<() => void>()
@@ -53,7 +54,7 @@ export class NoteSession {
         this.persist()
         if (!this.snap.conflict && !note.deleted_at) this.schedule()
       }
-    } catch (e) { this.set({ phase: 'error', error: String(e) }) }
+    } catch (e) { this.set({ phase: 'error', error: asError(e) }) }
   }
   private adopt(note: Note) { this.generation++; this.set({ note, title: note.title, body: note.body, phase: 'ready', status: 'saved', conflict: null, error: null, epoch: this.snap.epoch + 1 }); save(this.draftKey, undefined) }
   edit(patch: { title?: string; body?: string }) {
@@ -107,9 +108,9 @@ export class NoteSession {
         if (!this.live) return
         if ((e as { code?: number }).code === -32004) {
           try { const { note } = await this.client.call('notes.get', { id: this.id }); if (note) this.merge(note); else this.set({ phase: 'missing' }) }
-          catch (error) { this.set({ status: 'error', error: String(error) }) }
+          catch (error) { this.set({ status: 'error', error: asError(error) }) }
         } else {
-          this.set({ status: 'error', error: String(e) })
+          this.set({ status: 'error', error: asError(e) })
           // Only pending network failures retry. A daemon refusal waits for a
           // new edit or Retry; saved documents never arm a timer.
           if (!(e as { code?: number }).code && this.mounted) {

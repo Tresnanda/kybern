@@ -1,4 +1,5 @@
 import { splitFocusedPane, splitPane, closePane, maximizePane, canSplitPane, useSplitRoot, useGroup, collectThreadPanes } from '../split/store.ts'
+import { toastProblem } from '../problems/toast.ts'
 import { isLowerLeaf, usePaneNarrower, usePaneRects } from '../split/Workspace.tsx'
 import { GroupStrip, useThreadRecord } from '../tabs/Strip.tsx'
 import { useWindowWidth } from '../shell/layout.ts'
@@ -35,7 +36,7 @@ import { Button } from '../kit/Button.tsx'
 import { IconButton } from '../kit/IconButton.tsx'
 import { callThread, getState, set, useApp, usePaneAccess, focusPane, getFocusedPaneId } from '../state.ts'
 import { ink, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
-import { archiveThread, errorText, updateThread } from './actions.ts'
+import { archiveThread, updateThread } from './actions.ts'
 import { N } from './glyphs.ts'
 import { goBack, goForward, newThread, openThread, useNavigationAvailability } from './history.ts'
 import { Menu, MenuItem, MenuSeparator, muted, Tip } from './overlay.tsx'
@@ -301,7 +302,7 @@ export const ThreadHeader = memo(function ThreadHeader({ leafId: given, size = '
   const commitRename = () => {
     setRenaming(false)
     const next = title.trim()
-    if (next && next !== thread.title) void updateThread(thread.id, { title: next }).catch((e) => console.error('[titlebar] Unable to rename:', errorText(e)))
+    if (next && next !== thread.title) void updateThread(thread.id, { title: next }).catch((e) => toastProblem(e, { action: 'rename the thread', projectId: thread.project_id }))
   }
   const strip = group.threadId === thread.id && !thread.subagent
   return (
@@ -407,7 +408,7 @@ export const ThreadHeader = memo(function ThreadHeader({ leafId: given, size = '
               <MenuSeparator />
               <MenuItem id="parent" icon={N.backToParent} label="Open parent" shortcut={SHORTCUT.openParent} onSelect={() => thread.parent_thread_id && openThread(thread.parent_thread_id, parentMachineOf(thread))} />
               {subagentPhase(thread.subagent.status) === 'working' && thread.subagent.capabilities?.stop !== false && (
-                <MenuItem id="stop" icon={N.stop} label="Stop" onSelect={() => void callThread(thread.id, 'tasks.stop', { thread_id: thread.id }).catch(() => {})} />
+                <MenuItem id="stop" icon={N.stop} label="Stop" onSelect={() => void callThread(thread.id, 'tasks.stop', { thread_id: thread.id }).catch((e) => toastProblem(e, { action: 'stop the agent', projectId: thread.project_id }))} />
               )}
             </>
           )}
@@ -432,7 +433,7 @@ export const ThreadHeader = memo(function ThreadHeader({ leafId: given, size = '
                 id="pin"
                 icon={thread.pinned ? N.pinFilled : N.pin}
                 label={thread.pinned ? 'Unpin' : 'Pin'}
-                onSelect={() => void updateThread(thread.id, { pinned: !thread.pinned }).catch((e) => console.error('[titlebar] Unable to pin:', errorText(e)))}
+                onSelect={() => void updateThread(thread.id, { pinned: !thread.pinned }).catch((e) => toastProblem(e, { action: thread.pinned ? 'unpin the thread' : 'pin the thread', projectId: thread.project_id }))}
               />
               <MenuSeparator />
               <MenuItem
@@ -441,7 +442,7 @@ export const ThreadHeader = memo(function ThreadHeader({ leafId: given, size = '
                 label="Archive"
                 destructive
                 testId="header-archive"
-                onSelect={() => void archiveThread(thread.id).catch((e) => console.error('[titlebar] Unable to archive:', errorText(e)))}
+                onSelect={() => void archiveThread(thread.id).catch((e) => toastProblem(e, { action: 'archive the thread', projectId: thread.project_id }))}
               />
             </>
           )}

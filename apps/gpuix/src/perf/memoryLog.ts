@@ -8,6 +8,7 @@
 // census (object types, a full heap walk) runs only after a jump of
 // CENSUS_JUMP_MB, at most once every CENSUS_GAP_MS. `KYBERN_MEMORY_LOG=0` turns
 // it off; `KYBERN_MEMORY_LOG_MS` changes the interval.
+import { errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
 import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { dlopen, FFIType, ptr } from 'bun:ffi'
@@ -82,7 +83,7 @@ export function sampleMemory(reason = 'tick') {
     allocator: { currentMb: mb(jsc.current), peakMb: mb(jsc.peak), commitMb: mb(jsc.currentCommit), peakCommitMb: mb(jsc.peakCommit) },
   }
   for (const [name, read] of contexts) {
-    try { line[name] = read() } catch (error) { line[name] = { error: String(error) } }
+    try { line[name] = read() } catch (error) { line[name] = { error: errorMessage(error) } }
   }
   if (steps.length) line.steps = steps.splice(0)
   const now = Date.now()

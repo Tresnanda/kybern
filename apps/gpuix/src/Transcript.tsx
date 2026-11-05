@@ -26,7 +26,7 @@ import { MermaidBlock } from './transcript/MermaidBlock.tsx'
 import { MessageRail, type RailItem } from './transcript/rail.tsx'
 import { createTranscriptNavigation } from './shared/lib/transcriptNavigation.ts'
 import { T } from './transcript/glyphs.ts'
-import { alpha, muted, Para } from './transcript/kit.tsx'
+import { alpha, muted } from './transcript/kit.tsx'
 import { over } from './theme.ts'
 import { AnswerImages, DateSeparator, Turn, TurnFooter, turnTimestamp } from './transcript/Turn.tsx'
 import { RotationRow } from './transcript/Rotation.tsx'
@@ -67,7 +67,6 @@ const scrollAnchors = new Map<string, SavedAnchor>()
 export function Transcript() {
   const pane = usePaneAccess()
   const t = useTheme()
-  const g = useGlass()
   const renderer = useGpuixRequired()
   const threadId = useApp((s) => s.selectedId)
   const thread = useApp(s => s.open.thread)

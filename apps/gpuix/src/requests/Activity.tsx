@@ -1,4 +1,5 @@
 import { Icon } from '../icons.tsx'
+import { problemSentence } from '../problems/sentence.ts'
 import { G } from '../composer/glyphs.ts'
 import { accountNeedsSignIn } from '../shared/lib/accountUi.ts'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
@@ -18,7 +19,7 @@ import { Para, muted } from '../transcript/kit.tsx'
 import { Button } from '../kit/Button.tsx'
 import { PickerChip } from '../kit/PickerChip.tsx'
 import { Collapse, Rise } from '../motion/kit.tsx'
-import { errorText, reportError } from '../transcript/store.ts'
+import { reportError } from '../transcript/store.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { PanelEnter, PanelPresence } from './Panel.tsx'
 import { PickerMenu, PickerItem } from '../composer/Menu.tsx'
@@ -109,7 +110,7 @@ const HeldRow = memo(function HeldRow({ message, onDone }: { message: ThreadMess
   const t = useTheme(); const [expanded, setExpanded] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('')
   const sender = useApp(s => s.threads.find(t => t.id === message.from_thread_id)?.title)
   const name = messageSenderName({ from_thread_id: message.from_thread_id, from_title: sender ?? '' })
-  const act = async (deliver: boolean) => { setBusy(true); setError(''); try { await threadClient(message.to_thread_id)!.call(deliver ? 'threads.messages.deliver' : 'threads.messages.dismiss', { message_id: message.id }); onDone() } catch(e) { setError(errorText(e)); setBusy(false) } }
+  const act = async (deliver: boolean) => { setBusy(true); setError(''); try { await threadClient(message.to_thread_id)!.call(deliver ? 'threads.messages.deliver' : 'threads.messages.dismiss', { message_id: message.id }); onDone() } catch(e) { setError(problemSentence(e, { action: deliver ? 'deliver the message' : 'dismiss the message' })); setBusy(false) } }
   return <ActivityBody testId={`held-message-${message.id}`}><div style={{ display: 'flex', gap: 8 }}><Icon source={G.hand} size={14} color={t.variant === 'dark' ? '#fcd34d' : '#d97706'} /><div onClick={() => setExpanded(!expanded)} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, cursor: 'pointer' }}><Para color={t.text} size={12} weight={500}>{heldHeadline(name, message.purpose)}</Para><Para color={muted(t)} size={12} style={{ lineClamp: expanded ? 8 : 2 }}>{expanded ? message.body : plainLine(message.body, 200)}</Para><Collapse open={expanded}><Para color={muted(t)} size={11}>{`${purposeLabel(message.purpose)}${message.held_reason ? ` · ${message.held_reason}` : ''}`}</Para></Collapse></div><Button variant="ghost" size="sm" testId={`held-dismiss-${message.id}`} disabled={busy} onClick={() => void act(false)}>Dismiss</Button><Button variant="primary" size="sm" testId={`held-deliver-${message.id}`} disabled={busy} onClick={() => void act(true)}>Deliver</Button></div>{error && <Para color={t.red} size={11}>{error}</Para>}</ActivityBody>
 })
 function LimitRecovery({ thread }: { thread: StateThread }) {

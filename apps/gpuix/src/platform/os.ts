@@ -6,6 +6,7 @@
 // (`setOsHost`), else a system command. The table of what to add to the addon is in PORTING-PLATFORMS.md ("Native bindings
 // wanted"). Everything that chooses a command or a folder is a pure function of an `OsContext`, so the tests simulate
 // each platform by passing one instead of touching `process`.
+import { errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
 import { execFile, spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -362,7 +363,7 @@ function spawnCmd(cmd: Cmd, options: RunOptions): Promise<RunResult | 'missing'>
     const timer = options.timeout ? setTimeout(() => { child.kill(); finish({ status: null, stdout, stderr: `${stderr}timed out` }) }, options.timeout) : undefined
     child.stdout?.on('data', chunk => { stdout += chunk })
     child.stderr?.on('data', chunk => { stderr += chunk })
-    child.on('error', error => finish((error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : { status: null, stdout, stderr: String(error.message) }))
+    child.on('error', error => finish((error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : { status: null, stdout, stderr: errorMessage(error) }))
     // `xclip -in` and `wl-copy` fork a background owner of the selection that keeps inherited pipes open for as long as the
     // clipboard holds the text, so a discarding run settles on the program's own exit; a capturing run waits for its output.
     child.on(options.discardOutput ? 'exit' : 'close', status => finish({ status, stdout, stderr }))
@@ -417,7 +418,7 @@ export function observeLaunch(child: ChildProcess, settleMs: number): Promise<La
     const finish = (value: Launch) => { if (done) return; done = true; clearTimeout(timer); resolve(value) }
     // Still running after the settle time: it started, and whatever it shows is its own to finish (never kill it).
     child.on('spawn', () => { child.unref(); if (!done) timer = setTimeout(() => finish('running'), settleMs) })
-    child.on('error', error => finish((error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : { status: null, stdout: '', stderr: String(error.message) }))
+    child.on('error', error => finish((error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : { status: null, stdout: '', stderr: errorMessage(error) }))
     child.on('exit', status => finish({ status, stdout: '', stderr: '' }))
   })
 }

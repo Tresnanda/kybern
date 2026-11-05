@@ -1,11 +1,11 @@
 import { Icon } from '../icons.tsx'
+import { asError, errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
 import { DOCK_ICONS } from './icons.ts'
 import { muted } from '../nav/overlay.tsx'
 import { memo, useEffect, useState } from 'react'
 import type { RuntimeTask, Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { findSubagentFor } from '../../../../packages/kybern-client/src/subagents.ts'
 import { FILL_ISLAND } from '../MatrixLoader.tsx'
-import { errorText } from '../nav/actions.ts'
 import { N } from '../nav/glyphs.ts'
 import { useNav } from '../nav/store.ts'
 import { onOpenEvent, threadClient } from '../state.ts'
@@ -17,7 +17,7 @@ import { Button } from '../kit/Button.tsx'
 export const isActiveTask = (task: RuntimeTask) => ['pending', 'running', 'waiting', 'stopping'].includes(task.status)
 export function useRuntimeTasks(threadId: string) {
   const [tasks, setTasks] = useState<RuntimeTask[]>([])
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<Error | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [reload, setReload] = useState(0)
   useEffect(() => {
@@ -37,7 +37,7 @@ export function useRuntimeTasks(threadId: string) {
       const merged = new Map(result.tasks.map((task) => [task.id, task]))
       for (const [id, task] of updates) merged.set(id, task)
       setTasks([...merged.values()]); setLoaded(true)
-    }, (e) => { if (current) { setError(errorText(e)); setLoaded(true) } })
+    }, (e) => { if (current) { setError(asError(e)); setLoaded(true) } })
     return () => { current = false; unsubscribe() }
   }, [threadId, reload])
   return { tasks, error, loaded, retry: () => setReload((n) => n + 1) }
@@ -51,7 +51,7 @@ export function Activity({ tasks, error, loaded, retry }: ReturnType<typeof useR
     { label: 'Recent', tasks: tasks.filter((task) => !isActiveTask(task)) },
   ]
   return <>
-    <ErrorLine error={error} retry={retry} />
+    <ErrorLine error={error} action="load the background tasks" retry={retry} />
     {tasks.length === 0 ? loaded && !error ? <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingLeft: 32, paddingRight: 32 }}><div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, borderRadius: 8, backgroundColor: t.buttonSecondary, marginBottom: 12 }}><Icon source={DOCK_ICONS.activity} size={16} color={muted(t, 0.7)} /></div><Label color={ink(t, 0.8)} size={14} weight={500}>No background work</Label><Label color={muted(t, 0.6)} size={13} lineHeight={16} style={{ marginTop: 4, maxWidth: 256, textAlign: 'center' }}>Agents and processes started by this thread appear here.</Label></div> : null :
       <div {...FILL_ISLAND} style={{ display: 'flex', flexGrow: 1, minHeight: 0 }}>
         <virtual-list testId="dock-activity-list" style={{ width: '100%', height: '100%' }}>
@@ -67,7 +67,7 @@ export function Activity({ tasks, error, loaded, retry }: ReturnType<typeof useR
 const Task = memo(function Task({ task, thread }: { task: RuntimeTask; thread?: Thread }) {
   const t = useTheme()
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<Error | null>(null)
   const active = isActiveTask(task)
   const elapsed = task.stats.duration_ms ?? Math.max(0, Date.parse(task.completed_at ?? task.updated_at) - Date.parse(task.started_at))
   const metrics = [clockDuration(elapsed),
@@ -78,7 +78,7 @@ const Task = memo(function Task({ task, thread }: { task: RuntimeTask; thread?: 
   const run = async (kind: 'stop' | 'background') => {
     setBusy(true); setError(null)
     try { await threadClient(task.thread_id)!.call(kind === 'stop' ? 'tasks.stop' : 'tasks.background', { thread_id: task.thread_id, task_id: task.id }) }
-    catch (e) { setError(errorText(e)) } finally { setBusy(false) }
+    catch (e) { setError(asError(e)) } finally { setBusy(false) }
   }
   return <div testId={`dock-task-${task.id}`} style={{ display: 'flex', flexDirection: 'column', paddingLeft: task.parent_id ? 22 : 8, paddingRight: 8, paddingBottom: 10 }}>
     <RuntimeTaskRow task={task} thread={thread} />
@@ -88,6 +88,6 @@ const Task = memo(function Task({ task, thread }: { task: RuntimeTask; thread?: 
       {task.capabilities.background && <Button size="sm" disabled={busy} onClick={() => void run('background')} testId={`dock-task-background-${task.id}`}>Move to background</Button>}
       {task.capabilities.stop && <Button size="sm" danger disabled={busy || task.status === 'stopping'} onClick={() => void run('stop')} testId={`dock-task-stop-${task.id}`}>{busy || task.status === 'stopping' ? 'Stopping…' : 'Stop'}</Button>}
     </div>}
-    <ErrorLine error={error} />
+    <ErrorLine error={error} action="stop that task" />
   </div>
 })

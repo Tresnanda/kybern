@@ -1,4 +1,5 @@
 import { createConnection, createServer, isIP, type Socket } from 'node:net'
+import { asError, errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
 import { connect as connectTLS, checkServerIdentity } from 'node:tls'
 
 /** The desktop's preview_relay.rs transport: a ticket owns an isolated loopback
@@ -124,7 +125,7 @@ export async function openRelay(upstream: string, daemon: string, options?: { ca
         try { head = rewriteRelayHead(pending.subarray(0, end + 4).toString('latin1'), target.host, prefix, (server.address() as { port: number }).port, extra, document) }
         catch (error) {
           // A refused request after an earlier one on this connection: that response may still be in flight, so close.
-          if (used) client.destroy(); else refuse(error instanceof Error ? error.message : '400 Bad Request')
+          if (used) client.destroy(); else refuse(error instanceof Error ? errorMessage(error) : '400 Bad Request')
           pending = Buffer.alloc(0); return
         }
         pending = pending.subarray(end + 4)

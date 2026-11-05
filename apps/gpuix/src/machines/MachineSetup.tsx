@@ -1,11 +1,11 @@
 import { useEffect } from 'react'
+import { toastProblem } from '../problems/toast.ts'
 import { Button } from '../kit/Button.tsx'
 import { Label, useTheme } from '../ui.tsx'
 import { Section } from '../settings/controls.tsx'
 import { Spinner } from '../kit/Spinner.tsx'
 import { ErrorText } from '../environments/kit.tsx'
 import { showEnvironmentDialog } from '../environments/Dialogs.tsx'
-import { toast } from '../shell/toasts.tsx'
 import { machineSetup, useMachineSetup } from './setupRuntime.ts'
 import { setupBusy, type SetupRow, type SetupState } from './setup.ts'
 import { MachineSymbol, SETUP_ICONS, SetupStatus } from './SetupVisuals.tsx'
@@ -15,7 +15,7 @@ import { N } from '../nav/glyphs.ts'
 export function MachineSetupSection() {
   const state = useMachineSetup()
   useEffect(() => { void machineSetup().start() }, [])
-  const retry = (row: SetupRow, install: boolean) => { void machineSetup().retry(row.target.id, install).catch(error => toast.error('Unable to set up this machine', { description: String(error) })) }
+  const retry = (row: SetupRow, install: boolean) => { void machineSetup().retry(row.target.id, install).catch(error => toastProblem(error, { action: 'set up this machine', retry: () => retry(row, install) })) }
   return <MachineSetupPanel state={state} onCheck={() => { void machineSetup().start(true) }} onRetry={row => retry(row, false)} onInstall={row => retry(row, true)} onCancel={row => machineSetup().cancel(row.target.id)} onAccess={row => showEnvironmentDialog({ kind: 'add', target: row.target.address ?? row.target.target, name: row.target.name })} />
 }
 

@@ -1,6 +1,7 @@
 // Kybern on GPUIX: the desktop client's look, painted by Zed's GPUI instead of
 // a web view. Run with `pnpm dev` (hot reload) or `pnpm start`.
 // Must stay the first import: it picks the native module before @gpuix loads.
+import { errorMessage } from '../../../packages/kybern-client/src/problem.ts'
 import './native/local-build.ts'
 import { startupMark } from './perf/startup.ts'
 import { fstatSync, readFileSync, writeFileSync } from 'node:fs'
@@ -90,7 +91,7 @@ if (process.env.KYBERN_GPUIX_SMOKE === '1') {
     readFileSync(new URL(`./assets/fonts/${FONTS[0]}`, import.meta.url))
     if (out) writeFileSync(out, 'ok')
   } catch (error) {
-    if (out) writeFileSync(out, error instanceof Error ? error.stack ?? error.message : String(error))
+    if (out) writeFileSync(out, error instanceof Error ? error.stack ?? errorMessage(error) : errorMessage(error))
     process.exit(1)
   }
   process.exit(0)

@@ -1,6 +1,7 @@
 // The login broker as Settings › Accounts reads it (ADE-86 S4, design §9.4): `login.broker.status` from the machine the user
 // is at, and the actions on it. One store; it reads while the page shows it. The words come from the shared client
 // (`loginBroker.ts`), which also runs "Sign in on all machines".
+import { problemSentence } from '../problems/sentence.ts'
 import { useEffect, useSyncExternalStore } from 'react'
 import type { LoginBrokerSetResult, LoginBrokerStatus, MachineId, ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
 import { planSignInAll, runSignInAll, driveLogin, type SignInAllRow } from '../../../../packages/kybern-client/src/loginBroker.ts'
@@ -31,7 +32,7 @@ export function seedBroker(status: LoginBrokerStatus) { state = { ...EMPTY, stat
 /** Tests: forget everything. */
 export function resetBroker() { state = EMPTY; reading = false }
 
-const text = (error: unknown) => (error instanceof Error ? error.message : String(error))
+const text = (error: unknown) => problemSentence(error, { action: 'sign in on that machine' })
 
 let reading = false
 export async function refreshBroker(): Promise<void> {

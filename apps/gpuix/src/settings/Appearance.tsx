@@ -3,6 +3,7 @@
 // section with Sidebar opacity, Content opacity, Surface opacity and Blur. The variant in use comes first. Everything
 // applies live: the theme re-themes the app and the window, and the sliders preview while held and save on release
 // (`settings/appearance.ts`).
+import { problemSentence } from '../problems/sentence.ts'
 import { useRef, useState } from 'react'
 import type { PaintTransformProps } from '@gpuix/native/host'
 import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
@@ -153,7 +154,7 @@ export function Appearance() {
   const prefs = useAppearance()
   const [error, setError] = useState('')
   // `apply` is a `setAppearance` / `setWindowMaterial` call; both throw when the file cannot be written.
-  const run = (apply: () => void) => { try { apply(); setError('') } catch (e) { setError(`Unable to save appearance. ${String(e)}`) } }
+  const run = (apply: () => void) => { try { apply(); setError('') } catch (e) { setError(problemSentence(e, { action: 'save the appearance' })) } }
   const save = (patch: Parameters<typeof setAppearance>[0]) => run(() => setAppearance(patch))
   const order: ThemeVariant[] = t.variant === 'dark' ? ['dark', 'light'] : ['light', 'dark']
   return <>
