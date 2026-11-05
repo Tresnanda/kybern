@@ -37,6 +37,7 @@ import { InsetGroup, SectionHeader } from "../src/ui/List";
 import {
   Button,
   Empty,
+  ErrorBanner,
   Icon,
   IconButton,
   T,
@@ -486,11 +487,7 @@ export default function Tasks() {
             }
             ListEmptyComponent={empty}
             ListFooterComponent={
-              error ? (
-                <T variant="footnote" tone="negative" style={{ paddingVertical: space.md, paddingHorizontal: space.lg }}>
-                  {error}
-                </T>
-              ) : null
+              <ErrorBanner error={error} onRetry={() => void loadTasks()} />
             }
           />
         </PullRefresh>

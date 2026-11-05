@@ -1,4 +1,5 @@
 // The words and groupings of the Machines screens added for the network (ADE-99 §2.1). Pure, so they are tested without a phone.
+import { plainReason } from "../state/problems.ts";
 import { doctorRows, outboxRows, type DoctorRow } from "../../../../packages/kybern-client/src/networkSettings";
 import type { DoctorReport, MachineId, OutboxItem, TokenInfo } from "../../../../packages/kybern-client/src/types";
 
@@ -69,7 +70,7 @@ export function outboxEntries(lists: readonly { holder: MachineId; items: readon
     if (!row) return [];
     const targetName = names.get(item.target) ?? "that machine";
     // The spec's words for a failure: "Failed: <error>".
-    const detail = item.state === "failed" ? `Failed: ${item.last_error || `${targetName} did not answer`}` : row.detail;
+    const detail = item.state === "failed" ? `Failed: ${plainReason(item.last_error) ?? `${targetName} did not answer`}` : row.detail;
     return [{ id: item.id, holder, title: row.title, detail, targetName, canRetry: row.canRetry, canCancel: row.canCancel }];
   });
 }

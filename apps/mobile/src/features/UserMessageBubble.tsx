@@ -253,7 +253,7 @@ export function UserMessageBubble({
         {failed?.state === "failed" && (
           <View style={{ alignItems: "flex-end", gap: space.xs }} accessibilityLiveRegion="polite">
             <T variant="footnote" tone="negative" style={{ textAlign: "right" }}>
-              {`Not sent. ${failed.error ?? "Check the connection and try again."}`}
+              {failed.error ?? "Couldn't send your message. Check the connection and try again."}
             </T>
             <View style={{ flexDirection: "row", gap: space.sm }}>
               <Button size="medium" role="plain" onPress={() => editPending(failed)}>

@@ -32,7 +32,8 @@ import { threadMachineLine } from "../../src/state/threadMachineModel";
 import { QueuedCapsule } from "../../src/features/QueuedPrompts";
 import { useLayout } from "../../src/state/layout";
 import {
-  errorText,
+  connect,
+  problemFor,
   loadThread,
   ensureThread,
   loadEarlier,
@@ -45,6 +46,8 @@ import {
   useNewChat,
   useThread,
 } from "../../src/state/runtime";
+import type { ProblemModel } from "../../src/state/problems";
+import { ProblemState } from "../../src/ui/Problem";
 import { NEW_CHAT_FAILED, type NewChat } from "../../../../packages/kybern-client/src/newChat";
 import { partToken } from "../../../../packages/kybern-client/src/composerTokens";
 import { newThreadId } from "../../src/state/ids";
@@ -87,7 +90,7 @@ function NewChatFailed({ chat, onEdit }: { chat: NewChat; onEdit: () => void }) 
   return (
     <View>
       <ErrorBanner
-        error={`Not sent. ${chat.error || NEW_CHAT_FAILED}`}
+        error={chat.error || NEW_CHAT_FAILED}
         onRetry={() => void newChats.retry(chat.threadId)}
       />
       <Tap label="Edit message" onPress={onEdit} style={{ alignSelf: "flex-start", paddingVertical: 8, paddingHorizontal: 16 }}>
@@ -259,14 +262,19 @@ function ThreadScreenBody() {
   const { width } = useWindowDimensions();
   const chrome = useChromeInsets();
   const scrollY = useSharedValue(0);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<ProblemModel | "">("");
   const [away, setAway] = useState(false);
   const [focused, setFocused] = useState(true);
   const [following, setFollowing] = useState(true);
-  const [historyError, setHistoryError] = useState("");
+  const [historyError, setHistoryError] = useState<ProblemModel | "">("");
   const expansions = useRef(new Map<string, boolean>()).current;
   const [expandedTurns, setExpandedTurns] = useState<ReadonlySet<string>>(
     () => new Set(),
+  );
+  // The computer is away: it reconnects by itself, and Try again asks it to now.
+  const disconnected = useMemo(
+    () => problemFor(Object.assign(new Error(app.error ?? "Disconnected"), { name: "ConnectionClosedError" }), "reach your computer", { machineId: app.activeId ?? undefined }),
+    [app.error, app.activeId],
   );
   const projectRows = useMemo(() => createTurnRows(id), [id]);
   // Failed follow-ups stay as bubbles with Retry and Edit until the real message arrives.
@@ -330,13 +338,13 @@ function ThreadScreenBody() {
     useCallback(() => {
       setFocused(true);
       if (app.status === "open")
-        void ensureThread(id).catch((e) => setError(errorText(e)));
+        void ensureThread(id).catch((e) => setError(problemFor(e, "open this conversation", { params: { thread_id: id } })));
       return () => setFocused(false);
     }, [id, app.status]),
   );
   const stop = useCallback(() => {
     void rpc("threads.interrupt", { thread_id: id }).catch((e) =>
-      setError(errorText(e)),
+      setError(problemFor(e, "stop the agent", { params: { thread_id: id } })),
     );
   }, [id]);
   const renderItem = useCallback(
@@ -458,7 +466,7 @@ function ThreadScreenBody() {
   const earlier = () => {
     setFollowing(false);
     setHistoryError("");
-    void loadEarlier(id).catch((e) => setHistoryError(errorText(e)));
+    void loadEarlier(id).catch((e) => setHistoryError(problemFor(e, "load earlier messages", { params: { thread_id: id } })));
   };
   const prefetchEarlier = () => {
     const geometry = scrollGeometry.current;
@@ -494,13 +502,17 @@ function ThreadScreenBody() {
           <View
             style={{ paddingTop: chrome.top + 50, paddingHorizontal: side }}
           >
-            <Working label="Loading conversation" active={focused} />
-            <ErrorBanner
-              error={error}
-              onRetry={() => {
-                void loadThread(id).catch((e) => setError(errorText(e)));
-              }}
-            />
+            {error ? (
+              <ProblemState
+                problem={error}
+                onRetry={() => {
+                  setError("");
+                  void loadThread(id).catch((e) => setError(problemFor(e, "load this conversation", { params: { thread_id: id } })));
+                }}
+              />
+            ) : (
+              <Working label="Loading conversation" active={focused} />
+            )}
           </View>
         ) : (
           <LegendList
@@ -592,7 +604,7 @@ function ThreadScreenBody() {
                   error={error}
                   onRetry={() => {
                     setError("");
-                    void loadThread(id).catch((e) => setError(errorText(e)));
+                    void loadThread(id).catch((e) => setError(problemFor(e, "load this conversation", { params: { thread_id: id } })));
                   }}
                 />
                 {snapshot.pendingApprovals
@@ -637,14 +649,11 @@ function ThreadScreenBody() {
           <ThreadHeader thread={thread} threadId={id} />
           {app.status !== "open" && (
             <View style={{ paddingHorizontal: side, paddingBottom: space.sm }}>
-              <ErrorBanner
-                error={
-                  app.status === "connecting" || app.status === "reconnecting"
-                    ? "Reconnecting to your computer…"
-                    : "Your computer is disconnected. Reconnect in settings."
-                }
-                onRetry={() => router.push("/settings")}
-              />
+              {app.status === "connecting" || app.status === "reconnecting" ? (
+                <ErrorBanner error="Reconnecting to your computer…" />
+              ) : (
+                <ErrorBanner error={disconnected} onRetry={() => connect(app.activeId)} />
+              )}
             </View>
           )}
         </ChromeBar>

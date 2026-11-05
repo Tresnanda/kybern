@@ -17,7 +17,9 @@ import { showToast } from "../ui/Toast";
 import { IconButton } from "../ui/primitives";
 import { radius, useTheme } from "../ui/theme";
 import type { Diff, GitStatus, Thread } from "../state/protocol";
-import { activeEnvironment, errorText, refresh, rpc, useApp } from "../state/runtime";
+import { activeEnvironment, refresh, rpc, useApp } from "../state/runtime";
+import type { PhoneContext } from "../state/problems";
+import { failedToast } from "../ui/failedToast";
 import { type InspectorTab, useLayout } from "../state/layout";
 import { prPlan, repoPullRows } from "../state/groups";
 import { useThreadMachineItems } from "./threadActions";
@@ -80,13 +82,13 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
     else if (tab === "Preview") router.push({ pathname: "/preview", params: { threadId } });
     else router.push({ pathname: "/workspace", params: { threadId, tab } });
   }
-  async function run(action: () => Promise<unknown>, done: string) {
+  async function run(action: () => Promise<unknown>, done: string, failed: string | PhoneContext) {
     try {
       await action();
       showToast(done);
       await Promise.all([reload(), refresh()]);
     } catch (e) {
-      showToast(errorText(e));
+      failedToast(e, failed, { params: { thread_id: threadId }, retry: () => void run(action, done, failed) });
     }
   }
 
@@ -113,7 +115,7 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
       message: "Commits every current change in this workspace with a generated message.",
       confirm: "Commit",
       destructive: false,
-      onConfirm: () => void run(() => rpc("git.commit", { thread_id: threadId! }), "Changes committed"),
+      onConfirm: () => void run(() => rpc("git.commit", { thread_id: threadId! }), "Changes committed", "commit your changes"),
     });
   }
   function createPr() {
@@ -129,7 +131,7 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
             showToast(`Opened pull request #${pr.number}`, { title: "View", onPress: () => void Linking.openURL(pr.url) });
             await Promise.all([reload(), refresh()]);
           } catch (e) {
-            showToast(errorText(e));
+            failedToast(e, { action: "open the pull request", goal: "open a pull request" }, { params: { thread_id: threadId } });
           }
         })(),
     });
@@ -141,7 +143,7 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
       confirm: "Create",
       destructive: false,
       onConfirm: () =>
-        void run(() => rpc("github.pr.create_group", { thread_id: threadId!, commit_first: true }), "Pull requests opened"),
+        void run(() => rpc("github.pr.create_group", { thread_id: threadId!, commit_first: true }), "Pull requests opened", { action: "open the pull requests", goal: "open pull requests" }),
     });
   }
   async function removeWorktree() {
@@ -163,10 +165,11 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
           void run(
             () => rpc("threads.worktree.remove", { thread_id: threadId!, delete_branch: info.merged }),
             "Worktree removed",
+            "remove the worktree",
           ),
       });
     } catch (e) {
-      showToast(errorText(e));
+      failedToast(e, "check the worktree", { params: { thread_id: threadId } });
     }
   }
 
@@ -235,6 +238,7 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
             void run(
               () => rpc("threads.update", { thread_id: threadId!, pinned: !thread?.pinned }),
               thread?.pinned ? "Thread unpinned" : "Thread pinned",
+              thread?.pinned ? "unpin the thread" : "pin the thread",
             ),
         },
         ...machineMoves,

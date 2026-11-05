@@ -169,8 +169,8 @@ const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1
  */
 export function plainSentence(text: string): string | null {
   const t = text.trim()
-  if (!t || t.length > 240 || t.includes("\n")) return null
-  if (/RpcCallError|invalid params|^not found:|method not found|missing scope|os error \d|exit (code|status)|errno|EPERM|EACCES|ENOENT|panicked|\bat .+:\d+:\d+|^\w*Error:|^run \S+:|^\S+ \S+.*failed:|program not found|\(code -?\d+\)/i.test(t)) return null
+  if (!t || t.length > 240 || t.includes("\n") || !/\s/.test(t)) return null
+  if (/RpcCallError|invalid params|^not found:|method not found|missing scope|os error \d|exit (code|status)|errno|EPERM|EACCES|ENOENT|panicked|\bat .+:\d+:\d+|^\w*Error:|^run \S+:|^\S+ \S+.*failed:|program not found|\(code -?\d+\)|^[a-z_]+\.[a-z_.]+:/i.test(t)) return null
   if (/[A-Za-z]:\\|\\\\\?\\|(^|[\s"'(])\/(Users|home|usr|tmp|var|opt|private|etc)\//.test(t)) return null
   return /[.!?]$/.test(t) ? t : `${t}.`
 }

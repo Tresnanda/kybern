@@ -28,6 +28,7 @@ import {
 import { buildLists, singleMachineLists, type ListsView } from "./machineLists";
 import type { MachineId } from "./protocol";
 import { setDraft } from "./draft";
+import { contextOf, prProblemModel, problemModel, sentenceOf, type PhoneContext, type ProblemModel } from "./problems";
 import { applyIndexEvent } from "./indexProjection";
 import { ThreadCache } from "./threadCache";
 import { attachNotes, loadNotes, resetNotes } from "./notes";
@@ -157,7 +158,7 @@ export function isThreadOpen(id: string) {
 // ---- optimistic new chats (`packages/kybern-client/src/newChat.ts`) ----
 
 /** New chats started here whose threads the daemon may not have made yet. */
-export const newChats = createNewChats({ errorText: (e) => errorText(e) });
+export const newChats = createNewChats({ errorText: (e) => errorText(e, "start the chat") });
 /** Ids the daemon's last thread list held: a new chat it does not list yet is shown from its own record. */
 let listedThreadIds = new Set<string>();
 newChats.subscribe(() => {
@@ -369,17 +370,28 @@ export function supportsOptimisticCreate() {
 export function supportsGroupProjects() {
   return versionAtLeast(client?.info?.version);
 }
-export function errorText(e: unknown) {
-  const message = e instanceof Error ? e.message : String(e);
-  if (e instanceof Error && e.name === "OfflineError")
-    return "That machine is offline. Open it again when it is back; threads you already loaded stay readable.";
-  if (
-    /network request failed|fetch failed|app transport security/i.test(message)
-  )
-    return "Unable to reach this computer. Check its address and that Kybern is running.";
-  if (/abort|timed? ?out/i.test(message))
-    return "The computer did not respond. Check your connection and try again.";
-  return message;
+/**
+ * An error as one or two plain sentences, for text that cannot hold buttons. Never the raw message: the shared
+ * `describeProblem` words it (`state/problems.ts`). `context` is what the person was doing ("send your message");
+ * screens that can show a fix and Show details use `problemFor` instead.
+ */
+export function errorText(e: unknown, context?: string | PhoneContext) {
+  return sentenceOf(e, context);
+}
+/** The words, fix and details for `e`, for `ErrorBanner`, `ProblemState` and `showProblemToast`. */
+export function problemFor(e: unknown, context: string | PhoneContext, on?: { params?: unknown; machineId?: MachineId; pr?: boolean }): ProblemModel {
+  const base = contextOf(context);
+  const machine = base.machine ?? (on ? machineNameFor(on.params, on.machineId) : undefined);
+  return (on?.pr ? prProblemModel : problemModel)(e, machine ? { ...base, machine } : base);
+}
+/** The error's own message, for code that decides what to do (never for showing). */
+export function rawErrorMessage(e: unknown) {
+  return e instanceof Error ? e.message : String(e);
+}
+/** The name of the computer a call with `params` (or `machineId`) runs on, for error copy; the paired computer when unsure. */
+export function machineNameFor(params?: unknown, machineId?: MachineId) {
+  const id = machineId ?? (params && hub ? hub.routeFor(params) : undefined) ?? hub?.primaryMachineId;
+  return (id && hub ? hub.view().machines.find((m) => m.machineId === id)?.name : undefined) ?? activeEnvironment()?.name;
 }
 export function clearError() {
   publish({ error: null });

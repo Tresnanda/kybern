@@ -6,7 +6,6 @@ import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useMemo, useState } from "react";
 import { Linking, RefreshControl, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { classifyPrError } from "../../../packages/kybern-client/src/prReview";
 import {
   PR_STATE_WORDS,
   checkBucket,
@@ -17,7 +16,8 @@ import {
   sortChecks,
   summarizeChecks,
 } from "../../../packages/kybern-client/src/pullRequests";
-import { CHECK_PHASE, GhProblem, PrStateGlyph, isGhProblem, prStateColor } from "../src/features/PullRequests";
+import { CHECK_PHASE, PrStateGlyph, prStateColor } from "../src/features/PullRequests";
+import { ProblemState } from "../src/ui/Problem";
 import { count } from "../src/state/format";
 import type { PrReviewEntry } from "../src/state/protocol";
 import { usePrPage, usePullRequest } from "../src/state/pulls";
@@ -132,14 +132,9 @@ export default function PullRequestScreen() {
           />
         }
       >
-        {pr.error && isGhProblem(pr.error) ? (
-          <GhProblem error={pr.error} onRetry={pr.reload} />
-        ) : !detail ? (
+        {!detail ? (
           pr.error ? (
-            <ErrorBanner
-              error={classifyPrError(pr.error) === "no-remote" ? "This project has no GitHub remote." : pr.error}
-              onRetry={pr.reload}
-            />
+            <ProblemState problem={pr.error} onRetry={pr.reload} />
           ) : (
             <Working label="Loading pull request" />
           )
