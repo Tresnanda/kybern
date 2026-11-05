@@ -4,7 +4,8 @@ import { useSyncExternalStore } from 'react'
 import type { ActionsRepo } from '../../../../../packages/kybern-client/src/actions.ts'
 
 export type PullsTab = 'pulls' | 'actions'
-export interface ActionsFocus extends ActionsRepo { branch?: string; runId?: number }
+/** `jobId` and `attempt` open the run on that job's log (a link to a job, or an earlier attempt). */
+export interface ActionsFocus extends ActionsRepo { branch?: string; runId?: number; jobId?: number; attempt?: number }
 interface State { tab: PullsTab; focus: ActionsFocus | null; seq: number }
 
 let state: State = { tab: 'pulls', focus: null, seq: 0 }

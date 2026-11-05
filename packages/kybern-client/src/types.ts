@@ -3332,7 +3332,7 @@ export interface BranchPull { branch: string; number: number; state: string }
 export interface WorkflowStep { number: number; name: string; status: string; conclusion?: string; started_at?: DateTime; completed_at?: DateTime }
 export interface WorkflowJob { id: number; name: string; status: string; conclusion?: string; started_at?: DateTime; completed_at?: DateTime; url: string; labels?: string[]; steps: WorkflowStep[] }
 /** `attempt`: an earlier attempt instead of the latest. */
-export interface ActionsRunParams { project_id: ProjectId; repo?: string; run_id: number; attempt?: number }
+export interface ActionsRunParams { project_id: ProjectId; repo?: string; run_id?: number; job_id?: number; attempt?: number }
 export interface ActionsRunResult {
   run: WorkflowRun
   jobs: WorkflowJob[]

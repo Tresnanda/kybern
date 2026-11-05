@@ -241,6 +241,15 @@ pub(crate) fn parse_branch_pulls(v: &Value) -> Vec<BranchPull> {
         .collect()
 }
 
+/// The run a job belongs to: a check-run link carries only the job's id.
+pub async fn run_of_job(gh: &str, cwd: &Path, job_id: u64) -> Result<u64> {
+    let job = api(gh, cwd, &format!("repos/{{owner}}/{{repo}}/actions/jobs/{job_id}")).await.map_err(friendly)?;
+    job.get("run_id")
+        .and_then(Value::as_u64)
+        .filter(|id| *id > 0)
+        .ok_or_else(|| anyhow!("GitHub returned no workflow run for job {job_id}."))
+}
+
 pub async fn run_detail(gh: &str, cwd: &Path, run_id: u64, attempt: Option<u32>) -> Result<ActionsRunResult> {
     ensure!(run_id > 0, "Choose a workflow run.");
     let base = format!("repos/{{owner}}/{{repo}}/actions/runs/{run_id}");
@@ -1114,7 +1123,7 @@ case "$*" in
   *"actions/runs/5/jobs"*) echo '{{"jobs":[{{"id":9,"name":"test","status":"completed","conclusion":"failure","html_url":"u","steps":[{{"number":1,"name":"cargo test","status":"completed","conclusion":"failure"}}]}}]}}' ;;
   *"actions/runs/5") echo '{run}' ;;
   *"actions/jobs/9/logs") printf '2026-10-31T00:00:00.0000000Z one\n2026-10-31T00:00:00.0000000Z ##[error]boom\n2026-10-31T00:00:00.0000000Z three\n' ;;
-  *"actions/jobs/9") echo '{{"id":9,"status":"completed"}}' ;;
+  *"actions/jobs/9") echo '{{"id":9,"run_id":5,"status":"completed"}}' ;;
   *"actions/jobs/10") echo '{{"id":10,"status":"in_progress"}}' ;;
   *"contents/.github/workflows/ci.yml?ref=abc") echo '{{"content":"am9iczoKICBhOgo=","encoding":"base64"}}' ;;
   "pr list"*) echo '[{{"number":7,"headRefName":"main","state":"OPEN"}}]' ;;
@@ -1158,6 +1167,13 @@ esac
         assert_eq!(detail.workflow_jobs[0].id, "a", "the workflow file at the run's commit");
         assert!(detail.attempts.is_empty(), "one attempt");
         call(ActionsRun::NAME, json!({"project_id": id, "run_id": 5})).await.unwrap();
+        // A check-run link names only the job (its id is the check run's): the run it belongs to opens.
+        let by_job: ActionsRunResult =
+            serde_json::from_value(call(ActionsRun::NAME, json!({"project_id": id, "job_id": 9})).await.unwrap()).unwrap();
+        assert_eq!((by_job.run.id, by_job.jobs[0].id), (5, 9));
+        // A job GitHub gives no run for (another app's check run) is an error, not run 0.
+        assert!(call(ActionsRun::NAME, json!({"project_id": id, "job_id": 10})).await.is_err());
+        assert!(call(ActionsRun::NAME, json!({"project_id": id})).await.is_err(), "neither a run nor a job");
 
         let page: ActionsLogResult =
             serde_json::from_value(call(ActionsLog::NAME, json!({"project_id": id, "job_id": 9, "offset": 1, "limit": 5})).await.unwrap())

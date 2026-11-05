@@ -3104,7 +3104,12 @@ pub struct ActionsRunParams {
     pub project_id: ProjectId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
+    /// The run to read; 0 with `job_id` reads the run that job belongs to.
+    #[serde(default)]
     pub run_id: u64,
+    /// Instead of `run_id`: a job (a check run of GitHub Actions has the job's id) whose run to read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<u64>,
     /// An earlier attempt to read instead of the latest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempt: Option<u32>,

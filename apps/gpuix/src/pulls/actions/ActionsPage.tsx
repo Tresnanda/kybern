@@ -101,6 +101,7 @@ function ActionsTab() {
   const [workflows, setWorkflows] = useState<{ key: string; result: ActionsWorkflowsResult } | null>(null)
   const [current, setCurrent] = useState<{ key: string; branch: string | null } | null>(null)
   const [selected, setSelected] = useState<number | null>(null)
+  const [opened, setOpened] = useState<{ jobId?: number; attempt?: number } | null>(null)
   const [dispatching, setDispatching] = useState(false)
   const [selectedActive, setSelectedActive] = useState(false)
   const visible = useWindowVisible()
@@ -126,6 +127,7 @@ function ActionsTab() {
     pick(focus)
     setStatus(''); setBranch(focus.branch ?? '')
     setSelected(focus.runId ?? null)
+    setOpened(focus.runId && (focus.jobId || focus.attempt) ? { ...(focus.jobId ? { jobId: focus.jobId } : {}), ...(focus.attempt ? { attempt: focus.attempt } : {}) } : null)
   }, [focusSeq])
 
   useEffect(() => {
@@ -168,7 +170,7 @@ function ActionsTab() {
   const workflowList = workflows?.key === key ? workflows.result.workflows : []
   const workflowName = workflowList.find(w => String(w.id) === workflow)?.name ?? 'All workflows'
   const failure = shown?.error
-  const open = useCallback((id: number) => { setSelected(id); setDispatching(false) }, [])
+  const open = useCallback((id: number) => { setSelected(id); setOpened(null); setDispatching(false) }, [])
   const selectedRun = runs.find(r => r.id === selected)
   const detailWidth = available - (wide ? list.width : 0)
   const listWidth = wide ? list.width : available
@@ -235,7 +237,7 @@ function ActionsTab() {
     </div>}
     {dispatching ? <Dispatch key={`dispatch-${key}`} target={choice} workflows={workflowList} defaultBranch={workflows?.key === key ? workflows.result.default_branch ?? '' : ''} ownBranch={ownBranch ?? null} initial={workflow} showBack={!wide}
         onClose={() => setDispatching(false)} onStarted={() => { setDispatching(false); refresh(n => n + 1) }} />
-      : selected !== null ? <RunDetail key={`${key}:${selected}`} target={choice} runId={selected} listed={selectedRun} {...(reference ? { reference } : {})} usual={usual} width={detailWidth} height={windowHeight} showBack={!wide} visible={visible} onBack={() => setSelected(null)} onActive={setSelectedActive} onChanged={() => refresh(n => n + 1)} />
+      : selected !== null ? <RunDetail key={`${key}:${selected}${opened ? `:${focusSeq}` : ''}`} target={choice} runId={selected} {...(opened ? { initial: opened } : {})} listed={selectedRun} {...(reference ? { reference } : {})} usual={usual} width={detailWidth} height={windowHeight} showBack={!wide} visible={visible} onBack={() => setSelected(null)} onActive={setSelectedActive} onChanged={() => refresh(n => n + 1)} />
       : wide && <div style={{ ...column, flexGrow: 1, alignItems: 'center', justifyContent: 'center', gap: 16, padding: 24 }}>
         <Icon source={PLAY} size={24} color={t.textSecondary} />
         <Label color={t.text} size={16} weight={500}>Select a run</Label>

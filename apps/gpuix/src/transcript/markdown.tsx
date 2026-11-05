@@ -1,4 +1,5 @@
 import { knownPullTarget } from '../pulls/OpenPullRequest.tsx'
+import { knownRunTarget, openRunTarget } from '../pulls/openRun.ts'
 import { openTabFromPane } from '../tabs/open.ts'
 import { resolveWorkspaceFile } from './fileLinks.ts'
 import { useTranscriptRowLease } from './Window.tsx'
@@ -272,6 +273,9 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
       if (link.kind === 'external') {
         const target = await knownPullTarget(link.url)
         if (target && openTabFromPane(pane.id, {kind:'pr', ...target})) return
+        // A GitHub Actions run or job of a known repository opens in the Actions view; other links go to the browser.
+        const run = await knownRunTarget(link.url)
+        if (run) { openRunTarget(run); return }
         openTarget(link.url).catch(e => reportError('Unable to open link', e)); return
       }
       const client = threadClient(threadId, pane.get().selectedMachineId)

@@ -2751,7 +2751,7 @@ pub async fn run() -> Result<()> {
             }
             ActionsCmd::View { project, run, attempt, repo } => {
                 let project_id = resolve_project(&client, &project, false).await?;
-                let r = client.call::<ActionsRun>(ActionsRunParams { project_id, repo, run_id: run, attempt }).await?;
+                let r = client.call::<ActionsRun>(ActionsRunParams { project_id, repo, run_id: run, job_id: None, attempt }).await?;
                 println!("{}", serde_json::to_string_pretty(&r)?);
             }
             ActionsCmd::Log { project, job, offset, limit, excerpt, repo } => {

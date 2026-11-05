@@ -13,6 +13,31 @@ export function githubPull(value: string): { remote: string; number: number } | 
   const number = m ? Number(m[2]) : 0
   return m && Number.isSafeInteger(number) ? { remote: m[1]!.toLowerCase(), number } : null
 }
+/** A GitHub Actions run or job link. A check-run link (`/runs/<id>`) names a job only: for Actions the check run's id is the job's. */
+export interface ActionsLink { remote: string; runId?: number; jobId?: number; attempt?: number }
+const positive = (value: string | undefined) => { const n = Number(value); return Number.isSafeInteger(n) && n > 0 ? n : undefined }
+export function githubActions(value: string): ActionsLink | null {
+  const url = /^https:\/\/github\.com\/([^/?#]+\/[^/?#]+)\/(.*)$/i.exec(value.trim())
+  if (!url) return null
+  const remote = url[1]!.toLowerCase()
+  const path = url[2]!.replace(/[?#].*$/, '').replace(/\/$/, '')
+  const check = /^runs\/([1-9]\d*)$/.exec(path)
+  if (check) { const jobId = positive(check[1]); return jobId ? { remote, jobId } : null }
+  const run = /^actions\/runs\/([1-9]\d*)(?:\/attempts\/([1-9]\d*))?(?:\/job\/([1-9]\d*))?$/.exec(path)
+  const runId = positive(run?.[1])
+  if (!run || !runId) return null
+  const attempt = positive(run[2]), jobId = positive(run[3])
+  return { remote, runId, ...(jobId ? { jobId } : {}), ...(attempt ? { attempt } : {}) }
+}
+/** Where an Actions link opens: the project (and group member) that owns the repository, and what to show of it. */
+export interface ActionsTarget { projectId: string; repo?: string; runId?: number; jobId?: number; attempt?: number }
+export function resolveActions(value: string, repos: readonly KnownRepo[]): ActionsTarget | null {
+  const link = githubActions(value)
+  const known = link && repos.find(r => r.remote === link.remote)
+  if (!link || !known) return null
+  const { remote: _, ...rest } = link
+  return { projectId: known.projectId, ...(known.repo ? { repo: known.repo } : {}), ...rest }
+}
 export function resolvePull(value: string, repos: readonly KnownRepo[]): PrTarget | null {
   const pull = githubPull(value)
   const known = pull && repos.find(r => r.remote === pull.remote)

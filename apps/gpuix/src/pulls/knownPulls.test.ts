@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test'
-import {loadKnownPulls as knownPulls, resolveKnownPull} from './knownPulls.ts'
+import {loadKnownPulls as knownPulls, resolveKnownPull, resolveKnownRun} from './knownPulls.ts'
 import {resolvePull} from './tabTargets.ts'
 import type {Project} from '../../../../packages/kybern-client/src/types.ts'
 
@@ -36,4 +36,17 @@ test('a failed project says what to do, never the raw daemon error', async () =>
   const call = (async () => { throw new RpcCallError({ code: -32602, message: 'run gh' }) }) as Parameters<typeof knownPulls>[1]
   const data = await knownPulls(projects, call)
   expect(data.errors).toEqual(['Kybern: Install GitHub CLI to load pull requests'])
+})
+
+test('an Actions link opens its run; a check-run link asks the daemon which run its job belongs to',async()=>{
+ const projects=[{id:'solo',is_git:true,repo:{remote:'github.com/acme/solo'}}] as Project[]
+ const calls:unknown[]=[]
+ const call=(async(_project:string,method:string,params:unknown)=>{calls.push([method,params]);return {run:{id:555}}}) as Parameters<typeof knownPulls>[1]
+ expect(await resolveKnownRun('https://github.com/acme/solo/actions/runs/9/job/10',projects,call)).toEqual({projectId:'solo',runId:9,jobId:10})
+ expect(calls).toEqual([])
+ expect(await resolveKnownRun('https://github.com/acme/solo/runs/10',projects,call)).toEqual({projectId:'solo',jobId:10,runId:555})
+ expect(calls).toEqual([['github.actions.run',{project_id:'solo',job_id:10}]])
+ expect(await resolveKnownRun('https://github.com/stranger/repo/actions/runs/9',projects,call)).toBeNull()
+ const failing=(async()=>{throw Error('not an Actions job')}) as Parameters<typeof knownPulls>[1]
+ expect(await resolveKnownRun('https://github.com/acme/solo/runs/11',projects,failing)).toBeNull()
 })
