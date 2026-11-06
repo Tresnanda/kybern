@@ -182,7 +182,8 @@ mod tests {
     #[tokio::test]
     async fn create_delete_cycles_remain_bounded() {
         let Some(cluster) = super::super::harness::Cluster::new(&[super::super::harness::NodeSpec::owner("prefs")]) else { return };
-        let node = cluster.start("prefs", true).await;
+        let node = cluster.start("prefs", false).await;
+        cluster.form(&node, &[], JoinVia::Auto).await;
         let dir = node.state.settings.dir().join("themes");
         std::fs::create_dir_all(&dir).unwrap();
         for i in 0..100 {
@@ -191,7 +192,7 @@ mod tests {
             observe(&node.state).unwrap();
             std::fs::remove_file(path).unwrap();
             let all = observe(&node.state).unwrap();
-            assert!(all.len() <= 65);
+            assert_eq!(all.len(), (i + 1).min(65));
             assert!(all.values().all(|e| parse(e).unwrap().value.is_null()));
             merge(&node.state, all, &[]).unwrap();
         }
