@@ -73,7 +73,8 @@ each machine's last lists for "Offline · last seen".
 
 - Storage: records in SecureStore `kybern.ink.machines`, one token per machine in
   `kybern.ink.token.<id>`, the machine the phone is at in `kybern.ink.active`, and the
-  bounded list cache in `kybern-machine-cache.json`. The first start after the update
+  bounded list cache in `kybern-machine-cache.json`; notes and tasks in `kybern-list-cache.json`
+  and opened transcripts in `kybern-transcripts.db`. The first start after the update
   migrates `kybern.ink.environments` (tokens move out of the JSON, the old item is deleted).
 - Lists: with two or more machines Home, Threads and the iPad sidebar read the merged
   lists (`state/machineLists.ts`, `state/useLists.ts`); a thread on a machine other than the
@@ -83,6 +84,22 @@ each machine's last lists for "Offline · last seen".
   machine nothing changes.
 - Requests: `rpc()` and `mutate()` route by `thread_id`/`project_id` to the machine that
   owns it (or by an explicit machine id); a write refreshes the machine it went to.
+- Every thread uses its own machine: approvals, terminals, Changes/Files, held messages and
+  the live view go to the thread's machine (`threadMachine`, `respondApproval` in `runtime.ts`),
+  and its connection (`useThreadConnection`) drives the thread's loading, composer and
+  reconnect banner, which names that machine; its queued prompts come from that machine.
+  Spaces, notes and tasks go through the network client (`networkClient`): the paired
+  computer while it answers, else the nearest member. Notes and tasks list every machine's
+  items (`machine: "all"`) and each is written on the machine that holds it
+  (`state/federated.ts`). An away machine's threads, projects, notes and tasks show from the
+  phone's copies, read-only. A fresh connection's empty lists never replace the
+  cached ones before its first refresh (`MachineHub.primaryListsReady`).
+- Instant loading (#248): opened transcripts are kept on the phone in SQLite
+  (`state/transcriptDisk.ts`, expo-sqlite, 64 threads / 64 MB) and shown at once, then resumed
+  from their cursor; lists of every machine (one machine included) and the last notes and
+  tasks (`state/listCache.ts`) show before the first refresh; the thread list loads by cursor;
+  the top rows of a list prefetch their first page. Removing a machine deletes its copies;
+  removing the last one deletes all of them. See `perf/instant-load-2026-11.md`.
 - Screen: Settings → Machines (`app/machines.tsx`): status, Pause, Remove (forget on this
   phone, remove from the network, lost or stolen), Found on your tailnet · Add, Add by code.
 

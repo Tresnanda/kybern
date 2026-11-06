@@ -283,6 +283,15 @@ enum Cmd {
         /// Include archived threads in the list (they are hidden by default).
         #[arg(long)]
         archived: bool,
+        /// Only threads that changed after this cursor (the `head_seq` of an earlier `--json` list).
+        #[arg(long)]
+        since_seq: Option<i64>,
+        /// Per project, every active or pinned thread plus at most this many of the newest settled ones.
+        #[arg(long)]
+        settled_limit: Option<u32>,
+        /// With --settled-limit: skip this many of the newest settled threads.
+        #[arg(long, requires = "settled_limit")]
+        settled_offset: Option<u32>,
     },
     /// Create a thread and send the first message, streaming the turn.
     New {
@@ -350,10 +359,22 @@ enum Cmd {
         /// Show only the newest N entries; JSON output includes an older-page cursor.
         #[arg(long)]
         limit: Option<u32>,
-        #[arg(long, requires = "limit")]
+        #[arg(long)]
         before_seq: Option<i64>,
         #[arg(long)]
         through_seq: Option<i64>,
+        /// Size the page by turns instead of --limit (with --max-rows and --max-bytes).
+        #[arg(long)]
+        turns: Option<u32>,
+        /// With --turns: at most this many rows.
+        #[arg(long, requires = "turns", default_value_t = 500)]
+        max_rows: u32,
+        /// With --turns: at most this many serialized row bytes.
+        #[arg(long, requires = "turns", default_value_t = 1024 * 1024)]
+        max_bytes: u32,
+        /// Leave large settled tool results out of the page (fetch them with tool-output).
+        #[arg(long)]
+        omit_tool_output: bool,
     },
     /// Recover a historical OMP answer from exact retained native block boundaries.
     RecoverOmpAnswer { thread: String, turn: String },
@@ -2020,12 +2041,21 @@ pub async fn run() -> Result<()> {
         Cmd::Continue(args) => continue_on::run(&client, args, json).await?,
         Cmd::ContinueAbandon(args) => continue_on::abandon(&client, args, json).await?,
         Cmd::Outbox { cmd } => outbox::run(&client, cmd, json).await?,
-        Cmd::Threads { project, archived } => {
+        Cmd::Threads { project, archived, since_seq, settled_limit, settled_offset } => {
             let project_id = match project {
                 Some(p) => Some(resolve_project(&client, &p, false).await?),
                 None => None,
             };
-            let r = client.call::<ThreadsList>(ThreadsListParams { project_id, include_archived: archived, ..Default::default() }).await?;
+            let r = client
+                .call::<ThreadsList>(ThreadsListParams {
+                    project_id,
+                    include_archived: archived,
+                    since_seq,
+                    settled_limit,
+                    settled_offset,
+                    ..Default::default()
+                })
+                .await?;
             if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::threads(&r.threads) }
         }
         Cmd::New { project, provider, model, effort, mode, worktree, branch, detach, prompt } => {
@@ -2036,7 +2066,12 @@ pub async fn run() -> Result<()> {
             } else {
                 Some(
                     client
-                        .call::<EventsSubscribe>(EventsSubscribeParams { thread_id: None, after_seq: None, include_tool_output: None })
+                        .call::<EventsSubscribe>(EventsSubscribeParams {
+                            thread_id: None,
+                            after_seq: None,
+                            include_tool_output: None,
+                            gap_snapshot: None,
+                        })
                         .await?,
                 )
             };
@@ -2075,6 +2110,7 @@ pub async fn run() -> Result<()> {
                             thread_id: Some(thread_id),
                             after_seq: None,
                             include_tool_output: None,
+                            gap_snapshot: None,
                         })
                         .await?,
                 )
@@ -2234,13 +2270,19 @@ pub async fn run() -> Result<()> {
                 }
             }
         },
-        Cmd::Show { thread, limit, before_seq, through_seq } => {
+        Cmd::Show { thread, limit, before_seq, through_seq, turns, max_rows, max_bytes, omit_tool_output } => {
+            if before_seq.is_some() && limit.is_none() && turns.is_none() {
+                anyhow::bail!("--before-seq needs --limit or --turns");
+            }
+            let page_budget = turns.map(|turns| TranscriptPageBudget { turns, max_rows, max_bytes });
             let r = client
                 .call::<ThreadsGet>(ThreadsGetParams {
                     thread_id: thread.parse()?,
                     transcript_limit: limit,
                     before_seq,
                     through_seq,
+                    page_budget,
+                    include_tool_output: omit_tool_output.then_some(false),
                     ..Default::default()
                 })
                 .await?;
@@ -2266,8 +2308,14 @@ pub async fn run() -> Result<()> {
         }
         Cmd::Watch { thread, after } => {
             let thread_id = thread.map(|t| t.parse::<ThreadId>()).transpose()?;
-            let sub =
-                client.call::<EventsSubscribe>(EventsSubscribeParams { thread_id, after_seq: after, include_tool_output: None }).await?;
+            let sub = client
+                .call::<EventsSubscribe>(EventsSubscribeParams {
+                    thread_id,
+                    after_seq: after,
+                    include_tool_output: None,
+                    gap_snapshot: None,
+                })
+                .await?;
             render::watch(&client, sub.subscription_id, json).await?;
         }
         Cmd::Release { thread } => {

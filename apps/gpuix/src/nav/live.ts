@@ -27,7 +27,7 @@ import {
   type ThreadId,
   type UsageLimitsResult,
 } from '../../../../packages/kybern-client/src/types.ts'
-import { forgetOriginChild, getClient, getState, noteOriginChild, onThreadActivity, set, subscribe } from '../state.ts'
+import { forgetOriginChild, forgetThreadTranscript, getClient, getState, noteOriginChild, onThreadActivity, refreshListActivity, set, subscribe } from '../state.ts'
 import { DEFAULT_FILTER, getNav, setNav, subscribeNav, type NavState } from './store.ts'
 import { followSpaces, loadSpaces } from '../spaces/store.ts'
 import { followWorkspaceProgress } from '../groups/store.ts'
@@ -57,7 +57,7 @@ export function markArchived(id: ThreadId) {
 }
 
 function upsertThread(thread: Thread) {
-  if (thread.status === 'archived') archived.add(thread.id)
+  if (thread.status === 'archived') { archived.add(thread.id); forgetThreadTranscript(thread.id) }
   else if (archived.has(thread.id)) return
   if (isChildThread(thread)) {
     // A child a thread of another machine started here is nested under that thread with the merged lists (`state.ts`).
@@ -114,6 +114,7 @@ function onEvent(event: ThreadEvent) {
       return upsertThread(event.thread)
     case 'thread_archived': {
       archived.add(event.thread_id)
+      forgetThreadTranscript(event.thread_id)
       forgetOriginChild(event.thread_id)
       const threads = getState().threads
       if (threads.some((t) => t.id === event.thread_id && !t.machineId)) set({ threads: threads.filter((t) => t.id !== event.thread_id || t.machineId) })
@@ -216,6 +217,8 @@ async function refreshActivity() {
   const client = getClient()
   if (!client) return
   try {
+    // A daemon with list cursors answers only the changed rows; the merged list notifies `onThreadActivity`.
+    if (await refreshListActivity()) return
     const result = await client.call('threads.list', {})
     if (getClient() === client) applyActivity(result.activity)
   } catch {

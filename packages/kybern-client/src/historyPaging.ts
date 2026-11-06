@@ -2,6 +2,11 @@
 export const EARLIER_HISTORY_ENTRIES = 120;
 export const HISTORY_PREFETCH_SCREENS = 2;
 
+/** The first page of a thread: about ten user turns, at most 500 rows and 1 MiB
+ * (#248). Sent as `page_budget`; daemons before it use the client's
+ * `transcript_limit` instead. */
+export const FIRST_PAGE_BUDGET = { turns: 10, max_rows: 500, max_bytes: 1024 * 1024 } as const;
+
 /** An older page: whole turns (a page that ends inside a turn adds nothing a
  * turn-per-row transcript can show) and only the transcript (the first page
  * already carried the thread's tasks, usage and commands). Older daemons

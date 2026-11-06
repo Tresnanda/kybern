@@ -35,6 +35,7 @@ import { showToast } from "../src/ui/Toast";
 import { CONTENT_MAX_WIDTH, gutter, radius, space, useTheme } from "../src/ui/theme";
 import { Working } from "../src/ui/Working";
 import { useWindowDimensions } from "react-native";
+import { useLists } from "../src/state/useLists";
 
 const CHECKS_SHOWN = 5;
 const BUCKET_WORD = { passed: "Passed", failed: "Failing", pending: "Running", skipped: "Skipped" } as const;
@@ -43,10 +44,12 @@ export default function PullRequestScreen() {
   const { projectId = "", number: raw = "0", repo } = useLocalSearchParams<{ projectId: string; number: string; repo?: string }>();
   const number = Number(raw);
   const app = useApp();
+  // Every machine's projects: the computer the phone is at may be away (#245).
+  const lists = useLists(null);
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
-  const project = app.projects.find((p) => p.id === projectId);
+  const project = lists.projects.find((p) => p.id === projectId);
   const pr = usePullRequest(projectId, number, repo);
   const detail = pr.detail;
   const head = detail?.head_sha;

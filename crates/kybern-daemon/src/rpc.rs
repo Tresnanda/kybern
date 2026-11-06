@@ -394,74 +394,7 @@ async fn dispatch_part_4(state: &AppState, _ctx: &ConnectionCtx, method: &str, s
 async fn dispatch_part_5(state: &AppState, _ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
     let params = slot.take().unwrap_or_default();
     match method {
-        ThreadsList::NAME => {
-            let p: ThreadsListParams = parse_or_default(params)?;
-            let mut threads = state.store.threads_list(p.project_id, p.include_archived).map_err(internal)?;
-            // Counted before the children are filtered out: a parent whose delegated children still run must say so, or a
-            // client that starts while they work never lists them.
-            let mut running_children: std::collections::HashMap<ThreadId, u32> = std::collections::HashMap::new();
-            for thread in &threads {
-                if let Some(delegation) = &thread.delegation
-                    && delegation.status == DelegationStatus::Running
-                    && thread.status != ThreadStatus::Archived
-                {
-                    *running_children.entry(delegation.parent_thread_id).or_default() += 1;
-                }
-            }
-            // Children on other machines count too: a client reads their records (`delegations.remote_list`) for these parents.
-            for child in state.store.remote_children_active().map_err(internal)? {
-                if !child.state.is_terminal() {
-                    *running_children.entry(child.parent_thread_id).or_default() += 1;
-                }
-            }
-            // Subagent and delegated threads are opt-in: older clients must never list one as a normal thread.
-            if let Some(parent) = p.parent_thread_id {
-                threads
-                    .retain(|thread| (thread.subagent.is_some() || thread.delegation.is_some()) && thread.parent_thread_id == Some(parent));
-            } else if !p.include_subagents {
-                // A child another machine delegated here has no parent on this machine, so it lists as a thread of its own;
-                // clients nest it under the thread that started it (`Thread::origin`).
-                threads.retain(|thread| (thread.subagent.is_none() && thread.delegation.is_none()) || thread.is_remote_child());
-            }
-            // The hidden threads that record other machines' tool calls are opt-in too.
-            if !p.include_inbound {
-                threads.retain(|thread| thread.inbound.is_none());
-            }
-            let (own_pending, child_pending) = pending_request_kinds(&state.store).map_err(internal)?;
-            let mut activity: Vec<ThreadActivitySummary> = threads
-                .iter()
-                .map(|thread| {
-                    let tasks = state.store.runtime_tasks_for_thread(thread.id).map_err(internal)?;
-                    let mut summary = kybern_store::project_thread_activity(thread.id, &tasks);
-                    summary.active_children = running_children.get(&thread.id).copied().unwrap_or(0);
-                    summary.pending_request = own_pending.get(&thread.id).copied();
-                    summary.pending_child_request = child_pending.get(&thread.id).copied();
-                    Ok(summary)
-                })
-                .collect::<Result<Vec<_>, RpcError>>()?
-                .into_iter()
-                .filter(|summary| {
-                    summary.state.is_some()
-                        || summary.active_children > 0
-                        || summary.pending_request.is_some()
-                        || summary.pending_child_request.is_some()
-                })
-                .collect();
-            // Delegated agents are left out of the list, but their rows say what they wait on: add their kinds alone.
-            let mut waiting: Vec<_> = own_pending.iter().filter(|(id, _)| !threads.iter().any(|thread| thread.id == **id)).collect();
-            waiting.sort_by_key(|(id, _)| **id);
-            activity.extend(waiting.into_iter().map(|(id, kind)| ThreadActivitySummary {
-                thread_id: *id,
-                state: None,
-                active_agents: 0,
-                active_processes: 0,
-                active_monitors: 0,
-                active_children: 0,
-                pending_request: Some(*kind),
-                pending_child_request: child_pending.get(id).copied(),
-            }));
-            ok(ThreadsListResult { threads, activity })
-        }
+        ThreadsList::NAME => ok(threads_list(state, parse_or_default(params)?)?),
         ThreadsSearch::NAME => {
             let p: ThreadsSearchParams = parse_or_default(params)?;
             let project_id = (!p.all_projects).then_some(p.project_id).flatten();
@@ -516,62 +449,7 @@ async fn dispatch_part_6(state: &AppState, _ctx: &ConnectionCtx, method: &str, s
             let p: ThreadsCreateParams = parse(params)?;
             ok(state.orchestrator.create_thread(p).await.map_err(bad)?)
         }
-        ThreadsGet::NAME => {
-            let p: ThreadsGetParams = parse(params)?;
-            if p.transcript_limit.is_some_and(|limit| !(1..=500).contains(&limit))
-                || (p.before_seq.is_some() && p.transcript_limit.is_none())
-                || p.before_seq.is_some_and(|seq| seq < 0)
-                || p.through_seq.is_some_and(|seq| seq < 0)
-            {
-                return Err(RpcError::invalid_params("use transcript_limit 1..500 and nonnegative history cursors"));
-            }
-            let mut thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
-            thread = state.orchestrator.migrate_cursor_model(thread).map_err(internal)?;
-            let through_seq = p.through_seq.map_or(thread.last_seq, |seq| seq.min(thread.last_seq));
-            thread.last_seq = through_seq;
-            let id = p.thread_id;
-            let projection = state.thread_projections.transcript(state.store.clone(), id, through_seq).await.map_err(internal)?;
-            let (mut transcript, next_before_seq) = kybern_store::transcript_page_ref_with(
-                projection.transcript.rows(),
-                p.transcript_limit,
-                p.before_seq,
-                p.whole_turns.unwrap_or(false),
-            );
-            if p.defer_tool_stream.unwrap_or(false) {
-                projection.transcript.mark_tool_streams_omitted(&mut transcript);
-            }
-            if p.include_tool_output.unwrap_or(true) {
-                state.store.hydrate_tool_outputs_through(id, &mut transcript, through_seq).map_err(internal)?;
-            }
-            // An older page only extends the transcript the client already
-            // holds. Its runtime tasks alone were 1.1 MB of a 1.2 MB page.
-            if p.transcript_only.unwrap_or(false) && p.before_seq.is_some() {
-                return ok(ThreadsGetResult {
-                    notes: Default::default(),
-                    thread,
-                    transcript,
-                    next_before_seq,
-                    pending_approvals: Vec::new(),
-                    runtime_tasks: Vec::new(),
-                    provider_usage: Default::default(),
-                    provider_commands: Vec::new(),
-                    pending_questions: Vec::new(),
-                });
-            }
-            let side = state.thread_projections.side_state(&projection, state.store.clone(), id, through_seq).await.map_err(internal)?;
-            let pending_approvals = state.store.approvals_pending(Some(id)).map_err(internal)?;
-            ok(ThreadsGetResult {
-                notes: state.store.thread_notes(thread.id).map_err(internal)?,
-                thread,
-                transcript,
-                next_before_seq,
-                pending_approvals,
-                runtime_tasks: side.runtime_tasks.clone(),
-                provider_usage: side.provider_usage.clone(),
-                provider_commands: side.provider_commands.clone(),
-                pending_questions: side.pending_questions.clone(),
-            })
-        }
+        ThreadsGet::NAME => ok(thread_snapshot(state, parse(params)?).await?),
         ThreadsRecoverOmpAnswer::NAME => {
             let p: ThreadsRecoverOmpAnswerParams = parse(params)?;
             ok(state.orchestrator.recover_omp_answer(p).await.map_err(bad)?)
@@ -1861,6 +1739,199 @@ type PendingKinds = std::collections::HashMap<ThreadId, PendingRequestKind>;
 
 /// Each thread's oldest waiting request kind, and for each delegating ancestor what its
 /// delegated descendants wait on (a question outranks an approval).
+/// `threads.list`. `head_seq` is read before the rows, so a change the rows miss has a later `change_seq` and
+/// is returned by the next `since_seq` call.
+fn threads_list(state: &AppState, p: ThreadsListParams) -> Result<ThreadsListResult, RpcError> {
+    let head_seq = state.store.events_head_seq().map_err(internal)?;
+    let mut threads = match p.since_seq {
+        // Archived rows come back too: the client drops them.
+        Some(since) => state.store.threads_changed_since(since, p.project_id).map_err(internal)?,
+        None => state.store.threads_list(p.project_id, p.include_archived).map_err(internal)?,
+    };
+    // A parent whose delegated children still run must say so, or a client that starts while they work never
+    // lists them. Counted in the store, before the children are filtered out below.
+    let mut running_children = state.store.delegations_running_by_parent().map_err(internal)?;
+    // Children on other machines count too: a client reads their records (`delegations.remote_list`) for these parents.
+    for child in state.store.remote_children_active().map_err(internal)? {
+        if !child.state.is_terminal() {
+            *running_children.entry(child.parent_thread_id).or_default() += 1;
+        }
+    }
+    let changed: Vec<ThreadId> = threads.iter().map(|thread| thread.id).collect();
+    // Subagent and delegated threads are opt-in: older clients must never list one as a normal thread.
+    if let Some(parent) = p.parent_thread_id {
+        threads.retain(|thread| (thread.subagent.is_some() || thread.delegation.is_some()) && thread.parent_thread_id == Some(parent));
+    } else if !p.include_subagents {
+        // A child another machine delegated here has no parent on this machine, so it lists as a thread of its own;
+        // clients nest it under the thread that started it (`Thread::origin`).
+        threads.retain(|thread| (thread.subagent.is_none() && thread.delegation.is_none()) || thread.is_remote_child());
+    }
+    // The hidden threads that record other machines' tool calls are opt-in too.
+    if !p.include_inbound {
+        threads.retain(|thread| thread.inbound.is_none());
+    }
+    let (own_pending, child_pending) = pending_request_kinds(&state.store).map_err(internal)?;
+    let mut activity: Vec<ThreadActivitySummary> = threads
+        .iter()
+        .map(|thread| {
+            let tasks = state.store.runtime_tasks_for_thread(thread.id).map_err(internal)?;
+            let mut summary = kybern_store::project_thread_activity(thread.id, &tasks);
+            summary.active_children = running_children.get(&thread.id).copied().unwrap_or(0);
+            summary.pending_request = own_pending.get(&thread.id).copied();
+            summary.pending_child_request = child_pending.get(&thread.id).copied();
+            Ok(summary)
+        })
+        .collect::<Result<Vec<_>, RpcError>>()?
+        .into_iter()
+        .filter(|summary| {
+            summary.state.is_some()
+                || summary.active_children > 0
+                || summary.pending_request.is_some()
+                || summary.pending_child_request.is_some()
+        })
+        .collect();
+    let mut omitted = Vec::new();
+    if let (Some(limit), None) = (p.settled_limit, p.since_seq) {
+        omitted = limit_settled(&mut threads, &activity, limit, p.settled_offset.unwrap_or(0));
+        activity.retain(|summary| threads.iter().any(|thread| thread.id == summary.thread_id));
+    }
+    // Delegated agents are left out of the list, but their rows say what they wait on: add their kinds alone. A
+    // cursor result adds them only for changed agents, so it never replaces a listed row's summary.
+    let mut waiting: Vec<_> = own_pending
+        .iter()
+        .filter(|(id, _)| !threads.iter().any(|thread| thread.id == **id))
+        .filter(|(id, _)| p.since_seq.is_none() || changed.contains(id))
+        .collect();
+    waiting.sort_by_key(|(id, _)| **id);
+    activity.extend(waiting.into_iter().map(|(id, kind)| ThreadActivitySummary {
+        thread_id: *id,
+        state: None,
+        active_agents: 0,
+        active_processes: 0,
+        active_monitors: 0,
+        active_children: 0,
+        pending_request: Some(*kind),
+        pending_child_request: child_pending.get(id).copied(),
+    }));
+    Ok(ThreadsListResult { threads, activity, head_seq: Some(head_seq), omitted })
+}
+
+/// `settled_limit`: per project keep every active thread (pinned, running, awaiting approval, or with an activity
+/// summary, the client's `threadListCursor` definition) and the `limit` newest settled ones after `offset`. The
+/// rows arrive newest first. Returns how many older settled threads each project left out.
+fn limit_settled(threads: &mut Vec<Thread>, activity: &[ThreadActivitySummary], limit: u32, offset: u32) -> Vec<ProjectThreadCount> {
+    let active: std::collections::HashSet<ThreadId> = activity.iter().map(|summary| summary.thread_id).collect();
+    let is_settled = |thread: &Thread| {
+        !thread.pinned && !matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) && !active.contains(&thread.id)
+    };
+    let mut seen: std::collections::HashMap<ProjectId, u32> = std::collections::HashMap::new();
+    let mut omitted: Vec<ProjectThreadCount> = Vec::new();
+    threads.retain(|thread| {
+        if !is_settled(thread) {
+            return true;
+        }
+        let index = seen.entry(thread.project_id).or_default();
+        let position = *index;
+        *index += 1;
+        if position < offset {
+            return false;
+        }
+        if position - offset < limit {
+            return true;
+        }
+        match omitted.iter_mut().find(|count| count.project_id == thread.project_id) {
+            Some(count) => count.count += 1,
+            None => omitted.push(ProjectThreadCount { project_id: thread.project_id, count: 1 }),
+        }
+        false
+    });
+    omitted
+}
+
+/// The largest page a `page_budget` may ask for; larger values are clamped.
+const MAX_BUDGET_ROWS: u32 = 5000;
+const MAX_BUDGET_BYTES: u32 = 16 * 1024 * 1024;
+
+/// `threads.get`. `as_of_seq` is the event head read before the thread row, so every event at or below it is
+/// reflected (the projection runs through the row's `last_seq`, or `through_seq` when that is lower). Also
+/// builds the `events.subscribe` gap snapshot, with `through_seq` set to the subscription's head.
+pub(crate) async fn thread_snapshot(state: &AppState, p: ThreadsGetParams) -> Result<ThreadsGetResult, RpcError> {
+    if p.transcript_limit.is_some_and(|limit| !(1..=500).contains(&limit))
+        || (p.before_seq.is_some() && p.transcript_limit.is_none() && p.page_budget.is_none())
+        || p.before_seq.is_some_and(|seq| seq < 0)
+        || p.through_seq.is_some_and(|seq| seq < 0)
+    {
+        return Err(RpcError::invalid_params("use transcript_limit 1..500 and nonnegative history cursors"));
+    }
+    if p.page_budget.is_some_and(|budget| budget.turns == 0 || budget.max_rows == 0 || budget.max_bytes == 0) {
+        return Err(RpcError::invalid_params("use a page_budget with at least one turn, one row and one byte"));
+    }
+    let as_of_seq = state.store.events_head_seq().map_err(internal)?;
+    let mut thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+    thread = state.orchestrator.migrate_cursor_model(thread).map_err(internal)?;
+    // A row written from a stale copy can lag its own log for a moment; every event read below the head counts.
+    thread.last_seq = thread.last_seq.max(state.store.thread_head_seq(thread.id).map_err(internal)?);
+    let through_seq = p.through_seq.map_or(thread.last_seq, |seq| seq.min(thread.last_seq));
+    // A frozen projection leaves this thread's later events out: the snapshot is only as of its own barrier.
+    let as_of_seq = if through_seq < thread.last_seq { as_of_seq.min(through_seq) } else { as_of_seq };
+    thread.last_seq = through_seq;
+    let id = p.thread_id;
+    let projection = state.thread_projections.transcript(state.store.clone(), id, through_seq).await.map_err(internal)?;
+    let (mut transcript, next_before_seq) = match p.page_budget {
+        Some(budget) => kybern_store::transcript_page_budget_ref(
+            projection.transcript.rows(),
+            TranscriptPageBudget {
+                turns: budget.turns,
+                max_rows: budget.max_rows.min(MAX_BUDGET_ROWS),
+                max_bytes: budget.max_bytes.min(MAX_BUDGET_BYTES),
+            },
+            p.before_seq,
+        ),
+        None => kybern_store::transcript_page_ref_with(
+            projection.transcript.rows(),
+            p.transcript_limit,
+            p.before_seq,
+            p.whole_turns.unwrap_or(false),
+        ),
+    };
+    if p.defer_tool_stream.unwrap_or(false) {
+        projection.transcript.mark_tool_streams_omitted(&mut transcript);
+    }
+    if p.include_tool_output.unwrap_or(true) {
+        state.store.hydrate_tool_outputs_through(id, &mut transcript, through_seq).map_err(internal)?;
+    }
+    // An older page only extends the transcript the client already
+    // holds. Its runtime tasks alone were 1.1 MB of a 1.2 MB page.
+    if p.transcript_only.unwrap_or(false) && p.before_seq.is_some() {
+        return Ok(ThreadsGetResult {
+            notes: Default::default(),
+            thread,
+            transcript,
+            next_before_seq,
+            pending_approvals: Vec::new(),
+            runtime_tasks: Vec::new(),
+            provider_usage: Default::default(),
+            provider_commands: Vec::new(),
+            pending_questions: Vec::new(),
+            as_of_seq: Some(as_of_seq),
+        });
+    }
+    let side = state.thread_projections.side_state(&projection, state.store.clone(), id, through_seq).await.map_err(internal)?;
+    let pending_approvals = state.store.approvals_pending(Some(id)).map_err(internal)?;
+    Ok(ThreadsGetResult {
+        notes: state.store.thread_notes(thread.id).map_err(internal)?,
+        thread,
+        transcript,
+        next_before_seq,
+        pending_approvals,
+        runtime_tasks: side.runtime_tasks.clone(),
+        provider_usage: side.provider_usage.clone(),
+        provider_commands: side.provider_commands.clone(),
+        pending_questions: side.pending_questions.clone(),
+        as_of_seq: Some(as_of_seq),
+    })
+}
+
 fn pending_request_kinds(store: &kybern_store::Store) -> anyhow::Result<(PendingKinds, PendingKinds)> {
     let mut own = PendingKinds::new();
     let mut below = PendingKinds::new();

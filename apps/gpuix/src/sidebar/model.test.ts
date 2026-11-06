@@ -59,3 +59,25 @@ describe('buildRows in a space', () => {
     expect(kinds(buildRows(input(null))).filter((k) => k.startsWith('project:'))).toEqual(['project:a', 'project:b', 'project:c'])
   })
 })
+
+describe('"Show more" with a bounded list (#248)', () => {
+  const project = { id: 'p', name: 'p', path: '/p', is_git: false, brief_in_all_threads: false, space_id: null } as unknown as Project
+  const thread = (i: number) => ({ id: `t${i}`, title: `t${i}`, project_id: 'p', status: 'idle', updated_at: `2026-10-${String(28 - i).padStart(2, '0')}T00:00:00Z`, last_seq: 1, provider: { kind: 'claude-code', instance: 'default' } }) as unknown as Thread
+  const nav = { children: {}, activity: {}, unread: {}, dismissed: {}, filter: DEFAULT_FILTER, attentionFilter: false, projectOrder: [] as string[], composerDrafts: {}, attentionDismissals: {} }
+  const more = (count: number, omitted: Record<string, number>, showAll = false) => {
+    const rows = buildRows({ projects: [project], threads: Array.from({ length: count }, (_, i) => thread(i)), selectedId: null, draft: null, collapsed: {}, showAll: { p: showAll }, omitted, expanded: {}, nav, now: 0 })
+    return rows.find((row) => row.kind === 'more') as Extract<Row, { kind: 'more' }> | undefined
+  }
+
+  test('counts the rows the daemon left out', () => {
+    expect(more(12, {})).toMatchObject({ count: 4, showAll: false })
+    expect(more(12, { p: 30 })).toMatchObject({ count: 34, showAll: false })
+    // Fewer listed rows than the panel shows, but more on the daemon: the row is still offered.
+    expect(more(3, { p: 5 })).toMatchObject({ count: 5, showAll: false })
+  })
+
+  test('once opened it offers the rows still on the daemon, then "Show less"', () => {
+    expect(more(12, { p: 30 }, true)).toMatchObject({ count: 30, showAll: false })
+    expect(more(12, {}, true)).toMatchObject({ count: 4, showAll: true })
+  })
+})

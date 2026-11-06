@@ -7,7 +7,7 @@ const at = '2026-10-18T00:00:00Z'
 const response = (before: number, through: number, id: string, text: string, complete = true) => ({
   thread: { id: 'history', last_seq: through }, next_before_seq: before,
   transcript: [{ role: 'assistant', id, turn_id: 'turn', seq: before, at, origin: { kind: 'root' }, text, thinking: null, complete }],
-  pending_approvals: [], notes: { text: '', revision: 0 },
+  pending_approvals: [], notes: { text: '', revision: 0 }, as_of_seq: through,
 }) as unknown as ThreadsGetResult
 KybernClient.prototype.connect = () => {}
 KybernClient.prototype.call = ((_method: string, params: { before_seq?: number; through_seq?: number; whole_turns?: boolean; transcript_only?: boolean }) => {
@@ -15,8 +15,11 @@ KybernClient.prototype.call = ((_method: string, params: { before_seq?: number; 
   assert.ok(params.whole_turns && params.transcript_only, 'older pages ask for whole turns and only the transcript')
   return new Promise(resolve => reads.push({ before: params.before_seq, through: params.through_seq, resolve }))
 }) as typeof KybernClient.prototype.call
-KybernClient.prototype.subscribeEvents = ((_params: unknown, callback: typeof live) => {
-  live = callback; return { unsubscribe() {}, lastSeq: 10000 }
+// Like the real client: a subscription is acknowledged with its head right after it is sent.
+KybernClient.prototype.subscribeEvents = ((_params: unknown, callback: typeof live, onSubscribed?: (head: number, replay: { resumed: boolean; supported: boolean }) => void) => {
+  live = callback
+  queueMicrotask(() => onSubscribed?.(10000, { resumed: false, supported: false }))
+  return { unsubscribe() {}, lastSeq: 10000 }
 }) as typeof KybernClient.prototype.subscribeEvents
 const { connect, getState, resetClient, selectThread } = await import('../state.ts')
 const { loadEarlier } = await import('../transcript/store.ts')

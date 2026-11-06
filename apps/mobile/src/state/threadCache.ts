@@ -1,6 +1,8 @@
 /** Session-local snapshots: stale content stays readable until refresh succeeds. */
 export class ThreadCache<T> extends Map<string, T> {
   private stale = new Map<string, number>();
+  /** Estimated bytes per snapshot (the size of the page it was built from), for the byte bound. */
+  private sizes = new Map<string, number>();
   private epoch = 0;
   private replay: Map<string, string> | null = null;
 
@@ -60,16 +62,32 @@ export class ThreadCache<T> extends Map<string, T> {
     return true;
   }
 
-  trim(limit: number, protectedId: (id: string) => boolean) {
+  /** Record a snapshot's estimated size (bytes of the page it came from). */
+  setSize(id: string, bytes: number) {
+    if (this.has(id)) this.sizes.set(id, Math.max(0, bytes));
+  }
+
+  bytes() {
+    let total = 0;
+    for (const size of this.sizes.values()) total += size;
+    return total;
+  }
+
+  /** Drop the least recently visited snapshots past `limit` entries or `maxBytes`, never a protected one. */
+  trim(limit: number, protectedId: (id: string) => boolean, maxBytes = Infinity) {
+    let bytes = maxBytes === Infinity ? 0 : this.bytes();
     for (const id of this.keys()) {
-      if (this.size <= limit) break;
-      if (!protectedId(id)) this.delete(id);
+      if (this.size <= limit && bytes <= maxBytes) break;
+      if (protectedId(id)) continue;
+      bytes -= this.sizes.get(id) ?? 0;
+      this.delete(id);
     }
   }
 
   override delete(id: string) {
     this.replay?.delete(id);
     this.stale.delete(id);
+    this.sizes.delete(id);
     return super.delete(id);
   }
 
@@ -77,6 +95,7 @@ export class ThreadCache<T> extends Map<string, T> {
     this.replay = null;
     this.epoch++;
     this.stale.clear();
+    this.sizes?.clear();
     super.clear();
   }
 }

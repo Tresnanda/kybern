@@ -5,7 +5,7 @@
 //
 // Native virtualization bounds paint; height-correct slots also bound rich
 // React mounts while keeping logical row identities and scroll anchors.
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import type { PublicInstance } from '@gpuix/react'
 import { SidebarWindow, type SidebarWindowEntry } from './sidebar/Window.tsx'
 import { Icon } from './icons.tsx'
@@ -43,7 +43,7 @@ import {
   ThreadRow,
   useAddProject,
 } from './sidebar/rows.tsx'
-import { getState, machinesOfProject, useApp } from './state.ts'
+import { getState, loadMoreThreads, machinesOfProject, prefetchVisible, useApp, type StateThread } from './state.ts'
 import { machineHub, useMachines } from './machines/index.ts'
 import { useCurrentSpace, useCurrentSpaceId } from './spaces/current.ts'
 import { inSpace } from '../../../packages/kybern-client/src/spaces.ts'
@@ -80,6 +80,7 @@ export function Sidebar() {
   const space = useCurrentSpace()
   const spaceCount = useSpaces((s) => s.spaces.length)
   const [showAll, setShowAll] = useState<Record<string, boolean>>({})
+  const omitted = useApp((s) => s.omitted)
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
 
   const onHome = page === 'home'
@@ -92,12 +93,13 @@ export function Sidebar() {
         draft: onHome && !selectedId ? draft : null,
         collapsed,
         showAll,
+        omitted,
         expanded,
         nav: { children, activity, unread, dismissed, filter, attentionFilter, projectOrder, composerDrafts, attentionDismissals },
         now: Date.now(),
         space: { id: space?.id ?? null, name: space && spaceCount >= 2 ? space.name : null, count: spaceCount },
       }),
-    [space, spaceCount, projects, threads, selectedId, draft, onHome, collapsed, showAll, expanded, children, activity, unread, dismissed, filter, attentionFilter, projectOrder, composerDrafts, attentionDismissals],
+    [space, spaceCount, projects, threads, selectedId, draft, onHome, collapsed, showAll, omitted, expanded, children, activity, unread, dismissed, filter, attentionFilter, projectOrder, composerDrafts, attentionDismissals],
   )
   const toggleChildren = useCallback((id: string, open: boolean) => {
     markDisclosure()
@@ -105,9 +107,21 @@ export function Sidebar() {
   }, [])
   const toggleMore = useCallback((id: string) => {
     markDisclosure()
+    // Rows the bounded list left out load first; the project then stays open.
+    if ((getState().omitted[id] ?? 0) > 0) {
+      setShowAll((v) => ({ ...v, [id]: true }))
+      void loadMoreThreads(id).catch((e) => console.error('[sidebar] Unable to load more threads:', e))
+      return
+    }
     setShowAll((v) => ({ ...v, [id]: !v[id] }))
   }, [])
   const freeDraftSelected = onHome && !selectedId && !draft.projectId
+  // The thread rows on screen get their first page fetched ahead (at most 6, two at a time; `state.ts`).
+  const threadRows = useRef(new Map<string, StateThread>())
+  threadRows.current = new Map(rows.flatMap((row) => (row.kind === 'thread' || row.kind === 'child' ? [[row.key, row.thread as StateThread]] : [])))
+  const onVisibleRows = useCallback((keys: readonly string[]) => {
+    prefetchVisible(keys.flatMap((key) => { const thread = threadRows.current.get(key); return thread ? [thread] : [] }))
+  }, [])
 
   // Rows a disclosure adds or removes travel as one block for the tween; rows
   // for threads that just appeared rise in. Adjusted during render (not in an
@@ -150,7 +164,7 @@ export function Sidebar() {
         <PrimaryAction icon={N.clock} label="Resume session" onClick={() => openSessions()} testId="resume-session" />
       </div>
       <div testId="sidebar-viewport" ref={setBoxNode} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
-      <SidebarWindow list={listNode} box={boxNode} setList={setListNode} entries={[
+      <SidebarWindow list={listNode} box={boxNode} setList={setListNode} onVisible={onVisibleRows} entries={[
         ...withGroups(rows, groups).map((item): SidebarWindowEntry => item.kind === 'group' ? {
           key: `group:${item.group.id}`, height: item.group.height, pinned: true,
           render: () => <DisclosureGroup mode={item.group.mode} height={item.group.height} onDone={() => finish(item.group.id)}>

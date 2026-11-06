@@ -6,15 +6,18 @@ import { ProjectSpace } from "../src/features/ProjectSpace";
 import { useApp } from "../src/state/runtime";
 import { Empty, IconButton } from "../src/ui/primitives";
 import { CONTENT_MAX_WIDTH, gutter, space, useTheme } from "../src/ui/theme";
+import { useLists } from "../src/state/useLists";
 
 /** The Coordinator's Project sheet: brief, setup, memory, Coordinator settings and the brief switch. */
 export default function ProjectSpaceScreen() {
   const { projectId } = useLocalSearchParams<{ projectId?: string }>();
   const app = useApp();
+  // Every machine's projects: the computer the phone is at may be away (#245).
+  const lists = useLists(null);
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
-  const project = app.projects.find((item) => item.id === projectId);
+  const project = lists.projects.find((item) => item.id === projectId);
   return (
     <KeyboardAvoidingView behavior="padding" style={{ flex: 1, backgroundColor: colors.grouped }}>
       <Stack.Screen

@@ -1904,6 +1904,16 @@ export interface ThreadsListParams {
   parent_thread_id?: ThreadId;
   /** Also return the hidden threads that record tool calls other machines made here; left out by default. */
   include_inbound?: boolean;
+  /**
+   * Only threads whose row or activity changed after this cursor (`head_seq` of an earlier result), archived ones
+   * included so a client can drop them. Every returned thread's activity is replaced by its entry in `activity`, or
+   * cleared when it has none. Daemons without cursors ignore it and return the full list without `head_seq`.
+   */
+  since_seq?: EventSeq;
+  /** Every active or pinned thread plus at most this many newest settled threads per project; `omitted` counts the rest. */
+  settled_limit?: number;
+  /** With `settled_limit` and `project_id`: skip this many newest settled threads, to page older rows. */
+  settled_offset?: number;
 }
 
 export interface ThreadMessagesListParams {
@@ -1949,6 +1959,15 @@ export const DELEGATIONS_REMOTE_RESYNC_NOTIFICATION = "delegations.remote_resync
 export interface ThreadsListResult {
   threads: Thread[];
   activity?: ThreadActivitySummary[];
+  /** The event head this list reflects; the next `since_seq`. Absent from daemons without list cursors. */
+  head_seq?: EventSeq;
+  /** With `settled_limit`: settled threads per project that this result left out. */
+  omitted?: ProjectThreadCount[];
+}
+
+export interface ProjectThreadCount {
+  project_id: ProjectId;
+  count: number;
 }
 
 export interface ThreadsSearchParams {
@@ -2032,6 +2051,15 @@ export interface ThreadsGetParams {
   whole_turns?: boolean;
   /** With before_seq: only the transcript page; thread-wide state comes back empty. */
   transcript_only?: boolean;
+  /** Size the page by turns, rows and bytes instead of `transcript_limit`. Older daemons ignore it and use `transcript_limit`. */
+  page_budget?: TranscriptPageBudget;
+}
+
+/** A transcript page of about `turns` user turns, at most `max_rows` rows and `max_bytes` serialized bytes. */
+export interface TranscriptPageBudget {
+  turns: number;
+  max_rows: number;
+  max_bytes: number;
 }
 
 export interface ThreadsRecoverOmpAnswerParams { thread_id: ThreadId; turn_id: TurnId }
@@ -2067,6 +2095,11 @@ export interface ThreadsGetResult {
   next_before_seq?: EventSeq | null;
   pending_approvals: ApprovalRequest[];
   runtime_tasks?: RuntimeTask[];
+  /**
+   * The event head read before this snapshot was projected: every event at or below it is reflected. Absent from
+   * older daemons.
+   */
+  as_of_seq?: EventSeq;
 }
 
 export interface ThreadNotes {
@@ -2562,6 +2595,11 @@ export interface EventsSubscribeParams {
   after_seq?: EventSeq;
   /** Include large completed tool outputs; omitted keeps legacy full events. */
   include_tool_output?: boolean;
+  /**
+   * With `thread_id` and `after_seq`: when the thread has more than 128 events or 1 MiB of events after `after_seq`,
+   * skip the replay and return `snapshot`, this `threads.get` page as of `head_seq`. Older daemons ignore it and replay.
+   */
+  gap_snapshot?: ThreadsGetParams;
 }
 
 export interface EventsSubscribeResult {
@@ -2569,6 +2607,8 @@ export interface EventsSubscribeResult {
   head_seq: EventSeq;
   /** Available on daemons that send events.ready after replay. */
   replay_ready?: boolean;
+  /** Sent instead of a replay when `gap_snapshot` was asked for and the gap was too large. Live events follow `head_seq`. */
+  snapshot?: ThreadsGetResult;
 }
 
 export interface EventsReadyNotification {

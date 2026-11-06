@@ -10,6 +10,8 @@ const sources = {
     export async function deleteItemAsync(key) { globalThis.__secure.delete(key); }`,
   "expo-file-system": `export const Paths = { document: "/doc" };
     export class File { constructor() { this.exists = false; } create() {} write() {} textSync() { return ""; } }`,
+  // No SQLite in Node: the transcript disk cache reports the failure and the app reads the machine instead.
+  "expo-sqlite": 'export async function openDatabaseAsync() { throw new Error("No SQLite in tests"); }',
   "expo-crypto": "export function getRandomValues(bytes) { bytes.fill(7); return bytes; }",
   "expo/fetch": `export async function fetch(url, init) {
       (globalThis.__fetches ??= []).push({ url, init });

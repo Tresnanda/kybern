@@ -1156,6 +1156,19 @@ pub struct ThreadsListParams {
     /// Also return the hidden threads that record tool calls other machines made here (`Thread::inbound`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub include_inbound: bool,
+    /// Only threads whose row or activity may have changed after this cursor (the `head_seq` of an earlier
+    /// result): new events, row edits, archiving, and parents whose delegated children changed. Archived threads
+    /// are returned when they changed even without `include_archived`, so a client can drop them. A client
+    /// replaces the activity of every returned thread with its entry in `activity`, or clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since_seq: Option<crate::EventSeq>,
+    /// Per project: every active thread (pinned, running, awaiting approval, or with an activity summary) plus
+    /// at most this many of the newest settled threads by `updated_at`. `omitted` counts the rest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settled_limit: Option<u32>,
+    /// With `settled_limit` and `project_id`: skip this many of the newest settled threads, to page older ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settled_offset: Option<u32>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsListResult {
@@ -1163,6 +1176,20 @@ pub struct ThreadsListResult {
     /// Compact activity summaries for sidebar rendering.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub activity: Vec<ThreadActivitySummary>,
+    /// The event head read before the rows: the `since_seq` for the next call. Daemons without list cursors
+    /// leave it out, and a client then treats the result as the full list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_seq: Option<crate::EventSeq>,
+    /// With `settled_limit`: the settled threads per project this result left out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub omitted: Vec<ProjectThreadCount>,
+}
+
+/// How many threads of one project a `threads.list` result left out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectThreadCount {
+    pub project_id: ProjectId,
+    pub count: u32,
 }
 method!(ThreadsList, "threads.list", Some(Scope::OrchestrationRead), ThreadsListParams, ThreadsListResult);
 
@@ -1318,6 +1345,21 @@ pub struct ThreadsGetParams {
     /// usage, pending questions and approvals, notes) comes back empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_only: Option<bool>,
+    /// Size the page by turns, rows and bytes instead of `transcript_limit`, for first and `before_seq` pages.
+    /// Daemons without page budgets ignore it, so clients still send `transcript_limit` as the fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_budget: Option<TranscriptPageBudget>,
+}
+
+/// A transcript page of the newest rows that cover about `turns` turns (whole turns), at most `max_rows` rows
+/// and `max_bytes` serialized row bytes. Equal-sequence rows stay together and the newest row is always
+/// included, so a page can exceed a cap by one row group. On a first page, unfinished older rows are added as
+/// with `transcript_limit`. Bytes are counted on the projected rows, before `include_tool_output` hydration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TranscriptPageBudget {
+    pub turns: u32,
+    pub max_rows: u32,
+    pub max_bytes: u32,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsGetResult {
@@ -1338,6 +1380,11 @@ pub struct ThreadsGetResult {
     /// Durable latest-state task projection for this thread.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runtime_tasks: Vec<RuntimeTask>,
+    /// The event head read before this snapshot was projected: every event at or below it is reflected.
+    /// On one connection, a `threads.get` sent after an `events.subscribe` reads at or after that subscribe's
+    /// `head_seq`. Older daemons leave it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub as_of_seq: Option<crate::EventSeq>,
 }
 method!(ThreadsGet, "threads.get", Some(Scope::OrchestrationRead), ThreadsGetParams, ThreadsGetResult);
 
@@ -3727,6 +3774,11 @@ pub struct EventsSubscribeParams {
     /// an explicit `output_omitted` marker that can be fetched by call id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_tool_output: Option<bool>,
+    /// With `thread_id` and `after_seq`: when the thread has more than 128 events or 1 MiB of events after
+    /// `after_seq`, skip the replay and answer with `snapshot`, this `threads.get` page projected exactly
+    /// through `head_seq` (its `thread_id` and `through_seq` are replaced). Older daemons ignore it and replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap_snapshot: Option<ThreadsGetParams>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EventsSubscribeResult {
@@ -3736,6 +3788,10 @@ pub struct EventsSubscribeResult {
     /// This daemon sends `events.ready` after replay, before live delivery resumes.
     #[serde(default)]
     pub replay_ready: bool,
+    /// Sent instead of a replay when `gap_snapshot` was asked for and the gap was too large. It reflects
+    /// exactly the events through `head_seq`; live events after it follow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<Box<ThreadsGetResult>>,
 }
 method!(EventsSubscribe, "events.subscribe", Some(Scope::OrchestrationRead), EventsSubscribeParams, EventsSubscribeResult);
 

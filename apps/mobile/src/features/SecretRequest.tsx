@@ -15,7 +15,7 @@ import {
   type SecretTextPart,
 } from "../../../../packages/kybern-client/src/secretRequest";
 import type { ApprovalDecision, ApprovalRequest, SecretRequestInput } from "../state/protocol";
-import { errorText, loadThread, refresh, rpc } from "../state/runtime";
+import { errorText, respondApproval } from "../state/runtime";
 import { Button, ErrorBanner, Icon, T, Tap, styles } from "../ui/primitives";
 import { MONO, radius, space, useType, useTheme } from "../ui/theme";
 
@@ -51,9 +51,8 @@ export function SecretRequestCard({ approval, input }: { approval: ApprovalReque
     setBusy(true);
     setError("");
     try {
-      await rpc("approvals.respond", { approval_id: approval.id, ...decision });
+      await respondApproval(approval, decision);
       setValue("");
-      await Promise.all([refresh(), loadThread(approval.thread_id)]);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (e) {
       // The daemon's own words when it refused the answer; otherwise the connection failed.

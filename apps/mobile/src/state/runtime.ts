@@ -1,4 +1,11 @@
-import { EARLIER_HISTORY_ENTRIES } from "../../../../packages/kybern-client/src/historyPaging";
+import { EARLIER_HISTORY_ENTRIES, FIRST_PAGE_BUDGET } from "../../../../packages/kybern-client/src/historyPaging";
+import { applyThreadList, hasListCursor, moreParams, refreshParams, type ThreadListState } from "../../../../packages/kybern-client/src/threadListCursor";
+import { createLinger, createPrefetchQueue, PREFETCH_TOP_ROWS } from "../../../../packages/kybern-client/src/threadWarmth";
+import type { TranscriptCache, TranscriptCacheStore } from "../../../../packages/kybern-client/src/transcriptCache";
+import { createTranscriptDisk, defaultTranscriptStore, savedThread, type CachedThread } from "./transcriptDisk";
+import { listCache, setListCacheStorage } from "./listCache";
+import { setNetworkRouting } from "./federated";
+import { fileStorage } from "./listCacheFile";
 import {
   clientThreadIds,
   createdThreadId,
@@ -25,9 +32,10 @@ import {
   saveActive,
   type KeyValue,
 } from "../machines/storage";
-import { buildLists, singleMachineLists, type ListsView } from "./machineLists";
+import { buildLists, cachedSingleLists, singleMachineLists, type ListsView } from "./machineLists";
 import type { MachineId } from "./protocol";
 import { setDraft } from "./draft";
+import { markListShown } from "./devTiming";
 import { applyIndexEvent } from "./indexProjection";
 import { ThreadCache } from "./threadCache";
 import { attachNotes, loadNotes, resetNotes } from "./notes";
@@ -39,6 +47,7 @@ import {
   PROJECTS_CHANGED_NOTIFICATION,
   httpBase,
   normalizeDaemonUrl,
+  type ApprovalDecision,
   type ApprovalRequest,
   type ConnectionStatus,
   type Endpoint,
@@ -79,6 +88,8 @@ interface State {
   approvals: ApprovalRequest[];
   queue: QueuedMessage[];
   activity: ThreadActivitySummary[];
+  /** Settled threads per project the computer did not list yet ("Show more" pages them in). */
+  omitted: Record<string, number>;
 }
 /** Counts `projects.changed` notifications, so a slower `projects.list` cannot undo one. */
 let projectChanges = 0;
@@ -94,6 +105,7 @@ let state: State = {
   approvals: [],
   queue: [],
   activity: [],
+  omitted: {},
 };
 const listeners = new Set<() => void>();
 let client: KybernClient | null = null;
@@ -118,7 +130,103 @@ const historyLoads = new Map<
   { events: ThreadEvent[]; promise: Promise<void> }
 >();
 const RECENT_ENTRIES = 60;
-const CACHED_THREADS = 3;
+/** Transcripts kept in memory: the open ones plus the most recently visited, within a byte budget (#248). */
+const CACHED_THREADS = 12;
+const CACHED_BYTES = 16 * 1024 * 1024;
+
+// ---- the disk copy of opened transcripts (`transcriptDisk.ts`, #248) ----
+
+let diskStore: TranscriptCacheStore | undefined | null = null;
+let disk: TranscriptCache<CachedThread> | undefined;
+/** The disk cache, made on first use; none where the platform has no SQLite. */
+function transcriptDisk(): TranscriptCache<CachedThread> | undefined {
+  if (diskStore === null) diskStore = defaultTranscriptStore();
+  if (!disk && diskStore) disk = createTranscriptDisk(diskStore);
+  return disk;
+}
+/** Tests: use this store for the disk cache (a fresh cache over it). */
+export function setTranscriptStore(store: TranscriptCacheStore | undefined) {
+  diskStore = store;
+  disk = undefined;
+}
+/** The `lastSeq` each thread was saved or restored at in this session, so prefetch can skip it. */
+const diskSeqs = new Map<string, number>();
+/** Threads whose shown copy came from the disk and has not caught up yet. */
+const restored = new Set<string>();
+const restores = new Map<string, Promise<void>>();
+/** Machines whose daemon resumes a thread from a cursor with a gap snapshot (it answered `as_of_seq`). */
+const resumable = new Set<string>();
+/** The machine a thread's disk record is filed under: its own, else the computer the phone is at. */
+function cacheMachine(threadId: string): MachineId | undefined {
+  return remoteOwner(threadId) ?? hub?.primaryMachineId;
+}
+const cacheKey = (machineId: string, threadId: string) => `${machineId}\u0000${threadId}`;
+/** Save a thread behind, once its shown state is complete (loaded, caught up, not a new chat still being made). */
+function scheduleSave(id: string) {
+  const machineId = cacheMachine(id);
+  const cache = transcriptDisk();
+  if (!machineId || !cache) return;
+  cache.schedule(machineId, id, () => {
+    const current = snapshots.get(id);
+    if (!current?.loaded || !current.thread || snapshots.isStale(id) || hydrating.has(id) || restored.has(id) || newChats.uncreated(id)) return undefined;
+    diskSeqs.set(cacheKey(machineId, id), current.lastSeq);
+    return { lastSeq: current.lastSeq, data: savedThread(current) };
+  });
+}
+/**
+ * Show a thread's disk copy at once when memory has none: marked stale, so live events wait
+ * for the catch-up (`resumeThread`) instead of landing after a gap. Works offline too.
+ */
+function restoreThread(id: string): Promise<void> {
+  if (!id || snapshots.get(id)?.loaded || newChats.uncreated(id)) return Promise.resolve();
+  const running = restores.get(id);
+  if (running) return running;
+  const machineId = cacheMachine(id);
+  const cache = transcriptDisk();
+  if (!machineId || !cache) return Promise.resolve();
+  const epoch = generation;
+  const request = cache
+    .load(machineId, id)
+    .then((cached) => {
+      if (!cached || epoch !== generation || snapshots.get(id)?.loaded) return;
+      diskSeqs.set(cacheKey(machineId, id), cached.lastSeq);
+      restored.add(id);
+      publishThread(id, { ...emptyThreadState(), ...cached.data, lastSeq: cached.lastSeq, loaded: true, loadingEarlier: false });
+      // A rough size for the memory budget (rows of a page average about 1.5 KB); the catch-up replaces it.
+      snapshots.setSize(id, cached.data.blocks.length * 1536);
+      snapshots.invalidate(id);
+    })
+    .catch(() => {})
+    .finally(() => restores.delete(id));
+  restores.set(id, request);
+  return request;
+}
+
+// ---- keeping threads warm (`threadWarmth.ts`, #248) ----
+
+/** A closed thread stays in memory, followed by the event stream, for five minutes before it may be evicted. */
+const linger = createLinger({ expire: () => trimSnapshots() });
+/** First pages of the threads at the top of a list, fetched ahead of a tap. */
+const prefetch = createPrefetchQueue({
+  run: (id) => loadThread(id, { prefetch: true }),
+  skip: (id) => {
+    if (threadListeners.has(id) || loads.has(id) || newChats.uncreated(id)) return true;
+    if (!threadConnection(id).open) return true;
+    const listed = listedThread(id);
+    const current = snapshots.get(id);
+    if (current?.loaded && !snapshots.isStale(id) && (!listed || current.lastSeq >= listed.last_seq)) return true;
+    const machineId = cacheMachine(id);
+    const saved = machineId ? diskSeqs.get(cacheKey(machineId, id)) : undefined;
+    return saved !== undefined && !!listed && saved >= listed.last_seq;
+  },
+});
+function listedThread(id: string): Thread | undefined {
+  return state.threads.find((thread) => thread.id === id) ?? hub?.view().threads.all.find((entry) => entry.thread.id === id)?.thread;
+}
+/** The rows at the top of a thread list: their first pages load ahead of a tap (bounded, two at a time). */
+export function prefetchThreads(threads: readonly Pick<Thread, "id">[]) {
+  prefetch.want(threads.slice(0, PREFETCH_TOP_ROWS).map((thread) => thread.id));
+}
 const KEY = "kybern.ink.environments";
 
 export function getState() {
@@ -202,6 +310,7 @@ function publish(patch: Partial<State>) {
 function publishThread(id: string, value: ThreadState) {
   snapshots.set(id, value);
   trimSnapshots();
+  if (value.loaded) scheduleSave(id);
   changedThreads.add(id);
   // Fold every event, but render at most once per 32ms while an agent streams.
   notifyTimer ??= setTimeout(() => {
@@ -214,7 +323,8 @@ function publishThread(id: string, value: ThreadState) {
 function trimSnapshots() {
   snapshots.trim(
     CACHED_THREADS,
-    (id) => threadListeners.has(id) || loads.has(id) || historyLoads.has(id),
+    (id) => threadListeners.has(id) || loads.has(id) || historyLoads.has(id) || linger.has(id),
+    CACHED_BYTES,
   );
 }
 export function subscribeApp(fn: () => void) {
@@ -244,11 +354,21 @@ export function useThreadValue<T>(
       const set = threadListeners.get(id) ?? new Set();
       set.add(fn);
       threadListeners.set(id, set);
+      // A thread of another machine follows that machine's events from the moment it shows,
+      // whether or not the computer the phone is at answers (#245).
+      const owner = id ? remoteOwner(id) : undefined;
+      if (owner) ensureRemoteEvents(owner);
+      if (id) {
+        linger.hold(id);
+        // The disk copy shows at once, the machine online or not (#248).
+        void restoreThread(id);
+      }
       openHooks.forEach((open) => open(id));
       return () => {
         set.delete(fn);
         if (!set.size) {
           threadListeners.delete(id);
+          if (id) linger.release(id);
           trimSnapshots();
         }
       };
@@ -260,10 +380,12 @@ export function useThreadValue<T>(
     [id, select],
   );
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  // The thread's own machine answering is what counts, not the computer the phone is at (#245).
+  const live = useThreadLive(id);
   useEffect(() => {
-    if (id && state.status === "open")
+    if (id && live)
       void ensureThread(id).catch((e) => publish({ error: errorText(e) }));
-  }, [id, state.status]);
+  }, [id, live]);
   return snapshot;
 }
 // ---- the machine set (design §5.3): every machine the phone knows, the one it is at being the primary connection ----
@@ -329,7 +451,154 @@ export function useMachineView() {
 /** Lists across machines as the screens read them; one machine gives the computer's own lists untouched. */
 export function listsOf(view: ReturnType<MachineHub["view"]>, machine: MachineId | null): ListsView {
   const local = { projects: state.projects, threads: state.threads, activity: state.activity };
-  return view.machines.length <= 1 ? singleMachineLists(local) : buildLists(view, local, machine, (id) => hub?.set.activityOf(id));
+  if (view.machines.length > 1) return buildLists(view, local, machine, (id) => hub?.set.activityOf(id));
+  // One machine that has not answered yet in this connection: its lists from the offline cache (#248).
+  if (hub && !hub.primaryListed && !state.threads.length && !state.projects.length) {
+    const cached = cachedSingleLists(view);
+    if (cached) {
+      markListShown(cached.threads.length, "cache");
+      return cached;
+    }
+  }
+  return singleMachineLists(local);
+}
+
+// ---- the machine a thread lives on (#245): every thread uses its own machine ----
+
+const LIVE_MACHINE = new Set(["online", "relaying", "needs-update"]);
+
+/** The machine a thread lives on, or undefined for the computer the phone is at (and with one machine). */
+export function threadMachine(threadId: string | null | undefined): MachineId | undefined {
+  return threadId ? remoteOwner(threadId) : undefined;
+}
+
+/** How a machine's connection reads on a thread screen. */
+export interface MachineConnectionState {
+  /** The machine; undefined before anything is known about the computer the phone is at. */
+  machineId?: MachineId;
+  name: string;
+  status: ConnectionStatus;
+  /** Requests reach it now. */
+  open: boolean;
+  /** It is not the computer the phone is at. */
+  remote: boolean;
+}
+
+/** A machine's connection: the phone's own socket for the computer it is at, the machine set's for any other. */
+export function machineConnection(machineId?: MachineId): MachineConnectionState {
+  const primaryId = hub?.primaryMachineId;
+  if (!machineId || !hub || machineId === primaryId) {
+    const name = (primaryId && hub ? hub.set.displayName(primaryId) : undefined) || activeEnvironment()?.name || "your computer";
+    return { ...(primaryId ? { machineId: primaryId } : {}), name, status: state.status, open: state.status === "open", remote: false };
+  }
+  const connection = hub.set.connection(machineId);
+  const live = !!connection && LIVE_MACHINE.has(connection.status);
+  const status: ConnectionStatus = live
+    ? "open"
+    : connection?.status === "unpaired"
+      ? "failed"
+      : connection?.connecting
+        ? "reconnecting"
+        : "closed";
+  return { machineId, name: hub.set.displayName(machineId), status, open: live, remote: true };
+}
+
+/** The connection of the machine a thread lives on. */
+export function threadConnection(threadId: string | null | undefined): MachineConnectionState {
+  return machineConnection(threadMachine(threadId));
+}
+
+function subscribeConnections(fn: () => void) {
+  const offApp = subscribeApp(fn);
+  const offHub = machineHub().set.onChange(fn);
+  return () => {
+    offApp();
+    offHub();
+  };
+}
+const connectionMemo = new Map<string, MachineConnectionState>();
+function memoConnection(value: MachineConnectionState): MachineConnectionState {
+  const key = [value.machineId ?? "", value.name, value.status].join("\u0001");
+  const old = connectionMemo.get(key);
+  if (old) return old;
+  if (connectionMemo.size > 64) connectionMemo.clear();
+  connectionMemo.set(key, value);
+  return value;
+}
+/** The connection of the machine a thread lives on, live: its status drives the thread's banner, composer and loading. */
+export function useThreadConnection(threadId: string | null | undefined): MachineConnectionState {
+  const read = useCallback(() => memoConnection(threadConnection(threadId)), [threadId]);
+  return useSyncExternalStore(subscribeConnections, read, read);
+}
+/** True while the machine a thread lives on answers. */
+export function useThreadLive(threadId: string | null | undefined): boolean {
+  const read = useCallback(() => threadConnection(threadId).open, [threadId]);
+  return useSyncExternalStore(subscribeConnections, read, read);
+}
+/** The thread's machine can serve requests about it now (its events are followed and it answers). */
+function threadReady(threadId: string): boolean {
+  const owner = remoteOwner(threadId);
+  return owner ? machineConnection(owner).open : subscriptionReady;
+}
+
+/**
+ * Answer an approval on the machine whose thread raised it: an approval of another machine's thread
+ * never goes through the computer the phone is at (#245).
+ */
+export async function respondApproval(
+  approval: Pick<ApprovalRequest, "id" | "thread_id">,
+  decision: ApprovalDecision,
+) {
+  const owner = threadMachine(approval.thread_id);
+  await rpc("approvals.respond", { approval_id: approval.id, ...decision }, owner);
+  await Promise.all([refresh(owner), loadThread(approval.thread_id)]);
+}
+
+// ---- data every machine shares (spaces) ----
+
+/**
+ * The client for data the network shares: the computer the phone is at while it answers, else the
+ * nearest live member (`MachineHub.memberClient`). Null while nothing answers.
+ */
+export function networkClient(): KybernClient | null {
+  if (client?.status === "open") return client;
+  return hub?.memberClient(hub.primaryMachineId) ?? null;
+}
+const networkHooks = new Set<(client: KybernClient) => void>();
+/** The computer the phone is at is away and another member answers: read shared data through it here. */
+export const onNetworkClient = hook(networkHooks);
+let lastNetworkClient: KybernClient | null = null;
+/** True while something answers for the network (the computer the phone is at, or a member). */
+export function useNetworkLive(): boolean {
+  const read = useCallback(() => networkClient() !== null, []);
+  return useSyncExternalStore(subscribeConnections, read, read);
+}
+// Notes and tasks read and write through the network (`federated.ts`): the computer the phone is at
+// while it answers, else the nearest member; an item goes to the machine that holds it.
+setNetworkRouting({
+  network: () => {
+    if (client?.status === "open") return { client, ...(hub?.primaryMachineId ? { machineId: hub.primaryMachineId } : {}) };
+    const member = hub?.memberConnection(hub.primaryMachineId);
+    return member && hub ? { client: hub.set.clientFor(member.record.machineId), machineId: member.record.machineId } : null;
+  },
+  machine: (machineId) =>
+    machineId === hub?.primaryMachineId ? (client?.status === "open" ? client : null) : (hub?.liveClientFor(machineId) ?? null),
+  name: (machineId) => hub?.set.displayName(machineId) ?? machineId,
+  multiple: () => (hub?.machineCount ?? 0) > 1,
+});
+onNetworkClient(() => {
+  void loadNotes();
+  void loadTasks();
+});
+function watchNetworkClient() {
+  if (client?.status === "open") {
+    lastNetworkClient = null;
+    return;
+  }
+  const next = hub?.memberClient(hub.primaryMachineId) ?? null;
+  if (!next || next === lastNetworkClient) return;
+  lastNetworkClient = next;
+  networkHooks.forEach((fn) => fn(next));
 }
 
 /**
@@ -360,6 +629,12 @@ export function activeEnvironment() {
 export function currentClient() {
   return client;
 }
+/** A copy of the thread's transcript is on the phone (in memory or on disk): opening it shows content at once. */
+export function isThreadCached(threadId: string): boolean {
+  if (snapshots.get(threadId)?.loaded) return true;
+  const machineId = cacheMachine(threadId);
+  return !!machineId && diskSeqs.has(cacheKey(machineId, threadId));
+}
 /** True when the connected daemon makes the thread the client names (0.15.0 and later). Older
  *  daemons ignore the ids, so new chats there wait for `threads.create` and open its thread. */
 export function supportsOptimisticCreate() {
@@ -388,6 +663,7 @@ let booted = false;
 export async function boot() {
   if (booted) return;
   booted = true;
+  setListCacheStorage(fileStorage());
   try {
     phoneDeviceId = await loadDeviceId(secureKv, randomId);
     const saved = await loadMachines(secureKv);
@@ -410,7 +686,11 @@ export async function boot() {
     if (next === "active") {
       void client?.checkConnection();
       void hub?.foreground().catch(() => {});
-    } else cacheFile?.flush();
+    } else {
+      cacheFile?.flush();
+      listCache().flush();
+      void disk?.flush();
+    }
   });
 }
 async function openCandidate(endpoint: Endpoint) {
@@ -543,6 +823,15 @@ export async function removeMachine(id: string) {
   if (wasActive) connect(null);
   publish({ environments });
   await machineHub().removeMachine(id);
+  // Its transcripts and lists leave the phone with it; forgetting the last machine leaves nothing behind.
+  if (environments.length) {
+    void transcriptDisk()?.wipeMachine(id);
+    listCache().wipeMachine(id);
+  } else {
+    void transcriptDisk()?.clear();
+    listCache().clear();
+  }
+  for (const key of [...diskSeqs.keys()]) if (!environments.length || key.startsWith(`${id}\u0000`)) diskSeqs.delete(key);
   if (wasActive) {
     await saveActive(secureKv, next);
     connect(next);
@@ -564,6 +853,7 @@ export function connect(id: string | null) {
   offFailoverWatch?.();
   offFailoverWatch = undefined;
   resetRemoteEvents();
+  lastNetworkClient = null;
   client?.close();
   client = null;
   snapshots.cancelReplay();
@@ -578,6 +868,13 @@ export function connect(id: string | null) {
   loads.clear();
   historyLoads.clear();
   hydrating.clear();
+  restored.clear();
+  closeResumes();
+  listCursor = undefined;
+  if (state.activeId !== id) resumable.clear();
+  else if (hub?.primaryMachineId) resumable.delete(hub.primaryMachineId);
+  linger.expireAll();
+  prefetch.invalidate();
   threadListeners.forEach((set) => set.forEach((fn) => fn()));
   publish({
     activeId: id,
@@ -589,6 +886,7 @@ export function connect(id: string | null) {
     approvals: [],
     queue: [],
     activity: [],
+    omitted: {},
   });
   void saveActive(secureKv, id).catch((e) => publish({ error: errorText(e) }));
   const env = state.environments.find((e) => e.id === id);
@@ -601,9 +899,10 @@ export function connect(id: string | null) {
   client = next;
   const machines = machineHub();
   void machines.beginPrimary(next, { machineId: env.id, name: env.name, url: env.url }).catch(() => {});
-  machines.setPrimaryLists(next, () => ({ projects: state.projects, threads: state.threads, activity: state.activity }));
-  attachNotes(next, () => generation === thisGeneration);
-  attachTasks(next, () => generation === thisGeneration);
+  // Empty until the first refresh answers: the set keeps the machine's cached lists until then (#245).
+  machines.setPrimaryLists(next, () => ({ projects: state.projects, threads: state.threads, activity: state.activity }), { ready: false });
+  attachNotes(next, () => generation === thisGeneration, env.id);
+  attachTasks(next, () => generation === thisGeneration, env.id);
   attachRequestProgress(next, () => generation === thisGeneration);
   attachHooks.forEach((attach) => attach(next, () => generation === thisGeneration && client === next));
   attachPreviews(next, () => generation === thisGeneration);
@@ -620,6 +919,7 @@ export function connect(id: string | null) {
     publish({ status, error: status === "open" ? null : (detail ?? null) });
     if (status === "open") failover.downSince = undefined;
     else failover.downSince ??= Date.now();
+    watchNetworkClient();
     tryOtherAddresses(thisGeneration, env, next);
     // The daemon answered: the computer joins the machine set under its machine id.
     if (status === "open") void hub?.primaryOpened(next).catch(() => {});
@@ -654,6 +954,11 @@ export function connect(id: string | null) {
       ) {
         clearTimeout(activityTimer);
         activityTimer = setTimeout(() => {
+          // With a list cursor only the rows that changed come back (#248); older daemons send the whole list.
+          if (hasListCursor(listCursor)) {
+            void refreshChanged(next, thisGeneration).catch(() => {});
+            return;
+          }
           void next
             .call("threads.list", { include_archived: true })
             .then((result) => {
@@ -735,6 +1040,7 @@ export function connect(id: string | null) {
   // The network may learn where this computer is now while its saved address keeps failing: look again then.
   offFailoverWatch = machines.set.onChange((event) => {
     if (event.type === "routes" || event.type === "status") tryOtherAddresses(thisGeneration, env, next);
+    if (event.type === "status" || event.type === "records") watchNetworkClient();
   });
   next.connect();
 }
@@ -807,26 +1113,34 @@ export async function refresh(machineId?: unknown) {
   const events: ThreadEvent[] = [];
   indexEvents = events;
   const projectsSeen = projectChanges;
+  // The first read lists active and pinned threads plus the newest settled ones per project; later reads
+  // ask only for rows changed since the cursor (#248). A daemon without cursors answers with the whole list.
+  const listRequest = refreshParams(listCursor, { include_archived: true });
   refreshPromise = (async () => {
     const [projects, threads, approvals, queue] = await Promise.all([
       rpc("projects.list", {}),
-      rpc("threads.list", { include_archived: true }),
+      rpc("threads.list", listRequest),
       rpc("approvals.list", {}),
       rpc("queue.list", {}),
     ]);
     if (epoch === generation) {
+      const list = foldThreadList(listRequest, threads);
       let next: State = {
         ...state,
         // A `projects.changed` received meanwhile is newer than this list.
         projects: projectChanges === projectsSeen ? projects.projects : state.projects,
-        threads: withNewChats(threads.threads),
+        threads: withNewChats(list.threads),
         approvals: approvals.approvals,
-        queue: queue.messages,
-        activity: threads.activity ?? [],
+        // Other machines' queued prompts stay (`refreshRemoteQueue`): this computer lists only its own.
+        queue: [...queue.messages, ...state.queue.filter((item) => remoteOwner(item.thread_id))],
+        activity: list.activity,
+        omitted: list.omitted,
         error: null,
       };
       for (const event of events) next = applyIndexEvent(next, event);
       publish(next);
+      markListShown(next.threads.length, "daemon");
+      if (client) hub?.primaryListsReady(client);
     }
   })().finally(() => {
     if (epoch === generation) {
@@ -836,6 +1150,58 @@ export async function refresh(machineId?: unknown) {
   });
   return refreshPromise;
 }
+// ---- the thread list by cursor (`threadListCursor.ts`, #248) ----
+
+/** The computer's list cursor: `head_seq` of the last read and the settled threads not listed yet. */
+let listCursor: ThreadListState | undefined;
+/**
+ * Fold a `threads.list` answer into the computer's list. The previous rows are the ones on screen
+ * (live events included, optimistic new chats left out), so unchanged rows keep their objects.
+ */
+function foldThreadList(request: ParamsOf<"threads.list">, result: ResultOf<"threads.list">): ThreadListState {
+  const optimistic = new Set<Thread>(newChats.unlisted());
+  const previous: ThreadListState | undefined = listCursor && {
+    ...listCursor,
+    threads: state.threads.filter((thread) => !optimistic.has(thread)),
+    activity: state.activity,
+  };
+  listCursor = applyThreadList(previous, request, result);
+  return listCursor;
+}
+/** Activity changed somewhere: read the rows that changed since the cursor. */
+async function refreshChanged(on: KybernClient, thisGeneration: number) {
+  if (!hasListCursor(listCursor)) return;
+  const request = refreshParams(listCursor, { include_archived: true });
+  const result = await on.call("threads.list", request);
+  if (generation !== thisGeneration || client !== on) return;
+  const list = foldThreadList(request, result);
+  if (list.threads !== state.threads || list.activity !== state.activity)
+    publish({ threads: withNewChats(list.threads), activity: list.activity });
+}
+/** The settled threads of a project the computer has not listed yet. */
+export function omittedThreads(projectId: string): number {
+  return state.omitted[projectId] ?? 0;
+}
+let moreLoading: Promise<void> | null = null;
+/** "Show more" past the loaded rows: the next page of a project's older settled threads. */
+export function loadMoreThreads(projectId: string): Promise<void> {
+  if (moreLoading || !listCursor || !omittedThreads(projectId) || !client) return moreLoading ?? Promise.resolve();
+  const on = client;
+  const epoch = generation;
+  const request = moreParams(listCursor, projectId, { include_archived: true });
+  moreLoading = on
+    .call("threads.list", request)
+    .then((result) => {
+      if (epoch !== generation || client !== on) return;
+      const list = foldThreadList(request, result);
+      publish({ threads: withNewChats(list.threads), activity: list.activity, omitted: list.omitted });
+    })
+    .finally(() => {
+      moreLoading = null;
+    });
+  return moreLoading;
+}
+
 function withNewChats(listed: Thread[]): Thread[] {
   listedThreadIds = new Set(listed.map((thread) => thread.id));
   const merged = mergeOptimisticThreads(listed, newChats.unlisted());
@@ -875,7 +1241,12 @@ function ensureRemoteEvents(machineId: MachineId) {
         hydrating.get(event.thread_id)?.push(event);
         historyLoads.get(event.thread_id)?.events.push(event);
         const snapshot = snapshots.get(event.thread_id);
-        if (snapshot?.loaded) publishThread(event.thread_id, applyEvent(snapshot, event));
+        // A copy that has not caught up (restored from disk) waits for its catch-up instead of skipping a gap.
+        if (snapshot?.loaded && !snapshots.isStale(event.thread_id)) publishThread(event.thread_id, applyEvent(snapshot, event));
+        else if (snapshot && !hydrating.has(event.thread_id)) snapshots.invalidate(event.thread_id);
+        // Queued prompts of this machine's threads follow its events (the lists stay the machine set's).
+        const queue = applyIndexEvent(state, event).queue;
+        if (queue !== state.queue) publish({ queue });
         if (event.kind === "workspace_reverted") {
           snapshots.invalidate(event.thread_id);
           if (threadListeners.has(event.thread_id)) void loadThread(event.thread_id).catch(() => {});
@@ -890,11 +1261,12 @@ function ensureRemoteEvents(machineId: MachineId) {
   );
 }
 
-export async function loadThread(id: string) {
+export async function loadThread(id: string, options: { prefetch?: boolean } = {}) {
   const owner = id ? remoteOwner(id) : undefined;
   if (owner) ensureRemoteEvents(owner);
   if (!id || (!subscriptionReady && !owner)) return;
   if (loads.has(id)) return loads.get(id)!;
+  if (options.prefetch && snapshots.get(id)?.loaded && !snapshots.isStale(id)) return;
   historyLoads.delete(id);
   const epoch = generation;
   const revision = snapshots.revision(id);
@@ -905,14 +1277,19 @@ export async function loadThread(id: string) {
   // Reconnects retain already loaded history. Large, fully browsed threads use
   // the legacy full snapshot instead of dropping the user's reading position.
   const requested = Math.max(RECENT_ENTRIES, previous?.blocks.length ?? 0);
+  const machineId = cacheMachine(id);
   const request = rpc("threads.get", {
     thread_id: id,
     // Settled tool output streams load when a step is opened (`threads.tool_output`).
     defer_tool_stream: true,
-    ...(requested <= 500 ? { transcript_limit: requested } : {}),
+    // The first page by budget (whole turns, bounded rows and bytes); `transcript_limit` for older daemons.
+    // A reload that keeps more history than a first page asks for all of it, as before.
+    ...(requested === RECENT_ENTRIES ? firstPage() : requested <= 500 ? { transcript_limit: requested } : {}),
   })
     .then((result) => {
       if (epoch !== generation) return;
+      if (machineId && result.as_of_seq !== undefined && result.as_of_seq !== null) resumable.add(machineId);
+      if (owner && !options.prefetch) refreshRemoteQueue(id);
       let snapshot = seedFromGet(result);
       for (const event of buffer) snapshot = applyEvent(snapshot, event);
       if (previous)
@@ -920,8 +1297,12 @@ export async function loadThread(id: string) {
           snapshot,
           snapshots.get(id) ?? previous,
         );
+      restored.delete(id);
       publishThread(id, snapshot);
+      snapshots.setSize(id, pageBytes(result));
       superseded = !snapshots.markFresh(id, revision);
+      // A fresh copy: save it now that it is complete.
+      if (!superseded) scheduleSave(id);
     })
     .finally(() => {
       if (epoch === generation) {
@@ -941,7 +1322,122 @@ export async function ensureThread(id: string) {
   // A new chat the daemon has not made yet: its seeded record stands until the create answers.
   if (newChats.uncreated(id)) return;
   snapshots.touch(id);
+  if (snapshots.get(id)?.loaded && !snapshots.isStale(id)) return;
+  // The disk copy first (it is on screen at once), then catch it up from its cursor.
+  await restoreThread(id);
+  if (restored.has(id) && canResume(id)) {
+    try {
+      await resumeThread(id);
+      return;
+    } catch {
+      // The machine could not resume it: read the first page instead.
+    }
+  }
   if (!snapshots.get(id)?.loaded || snapshots.isStale(id)) await loadThread(id);
+}
+
+/** Another machine's thread: its queued prompts come from that machine (the computer lists only its own). */
+function refreshRemoteQueue(id: string) {
+  const epoch = generation;
+  void rpc("queue.list", { thread_id: id })
+    .then((result) => {
+      if (epoch !== generation) return;
+      publish({ queue: [...state.queue.filter((item) => item.thread_id !== id), ...result.messages.filter((item) => item.thread_id === id)] });
+    })
+    .catch(() => {});
+}
+
+/** The first page's params (`FIRST_PAGE_BUDGET`, with the old daemons' `transcript_limit`). */
+function firstPage() {
+  return { page_budget: { ...FIRST_PAGE_BUDGET }, transcript_limit: RECENT_ENTRIES };
+}
+/** The size of a page, for the memory budget: its transcript as sent. */
+function pageBytes(result: ResultOf<"threads.get">): number {
+  try {
+    return JSON.stringify(result.transcript).length;
+  } catch {
+    return 0;
+  }
+}
+/** The client a thread's machine answers on now, or null. */
+function threadClientNow(id: string): KybernClient | null {
+  const owner = remoteOwner(id);
+  if (owner) return hub?.liveClientFor(owner) ?? null;
+  return subscriptionReady && client?.status === "open" ? client : null;
+}
+function canResume(id: string) {
+  const machineId = cacheMachine(id);
+  return !!machineId && resumable.has(machineId) && !!threadClientNow(id) && !loads.has(id);
+}
+const RESUME_TIMEOUT_MS = 15_000;
+const resumes = new Map<string, { close(): void }>();
+function closeResumes() {
+  resumes.forEach((resume) => resume.close());
+  resumes.clear();
+}
+/**
+ * Catch a restored copy up from its cursor: `events.subscribe` for the thread after its `lastSeq`.
+ * A small gap replays as events; a large one comes back as a fresh first page (`gap_snapshot`) that
+ * keeps the rows already on screen. Events of the main stream received meanwhile are replayed after.
+ */
+function resumeThread(id: string): Promise<void> {
+  const on = threadClientNow(id);
+  const base = snapshots.get(id);
+  if (!on || !base?.loaded) return Promise.reject(new Error("Not connected"));
+  const epoch = generation;
+  const revision = snapshots.revision(id);
+  const buffer: ThreadEvent[] = [];
+  hydrating.set(id, buffer);
+  const request = new Promise<void>((resolve, reject) => {
+    let done = false;
+    let subscription: { unsubscribe(): void } | undefined;
+    const finish = (error?: Error) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      subscription?.unsubscribe();
+      resumes.delete(id);
+      if (error) reject(error);
+      else resolve();
+    };
+    const timer = setTimeout(() => finish(new Error("The machine did not catch the thread up in time")), RESUME_TIMEOUT_MS);
+    resumes.set(id, { close: () => finish(new Error("Closed")) });
+    subscription = on.subscribeEvents(
+      { thread_id: id, after_seq: base.lastSeq, gap_snapshot: { thread_id: id, defer_tool_stream: true, ...firstPage() } },
+      (event) => {
+        if (done || epoch !== generation || event.thread_id !== id) return;
+        const current = snapshots.get(id);
+        if (current) publishThread(id, applyEvent(current, event));
+      },
+      (_head, replay) => {
+        // Without the ready barrier there is no telling when the replay ends: read the page instead.
+        if (!replay.supported) finish(new Error("No replay barrier"));
+      },
+      () => {
+        if (done || epoch !== generation) return finish(new Error("Superseded"));
+        let current = snapshots.get(id) ?? base;
+        for (const event of [...buffer].sort((a, b) => a.seq - b.seq)) current = applyEvent(current, event);
+        restored.delete(id);
+        publishThread(id, current);
+        if (!snapshots.markFresh(id, revision)) return finish(new Error("Superseded"));
+        scheduleSave(id);
+        finish();
+      },
+      (page) => {
+        if (done || epoch !== generation) return;
+        const visible = snapshots.get(id) ?? base;
+        publishThread(id, retainHistoryIdentities(seedFromGet(page), visible));
+        snapshots.setSize(id, pageBytes(page));
+      },
+    );
+  }).finally(() => {
+    if (epoch !== generation) return;
+    loads.delete(id);
+    hydrating.delete(id);
+    trimSnapshots();
+  });
+  loads.set(id, request);
+  return request;
 }
 
 export async function loadEarlier(id: string) {
@@ -949,7 +1445,7 @@ export async function loadEarlier(id: string) {
   if (existing) return existing.promise;
   const base = snapshots.get(id);
   if (
-    !subscriptionReady ||
+    !threadReady(id) ||
     !base?.loaded ||
     base.nextBeforeSeq === null ||
     loads.has(id)

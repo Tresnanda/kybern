@@ -27,7 +27,7 @@ import {
   startsCollapsed,
 } from "../src/state/tasksModel";
 import { useProjectScope } from "../src/state/projectScope";
-import { errorText, useApp } from "../src/state/runtime";
+import { errorText, useApp, useNetworkLive } from "../src/state/runtime";
 import { useInSpace, useSpaceProjects } from "../src/state/spaces";
 import { HeaderActions, MenuButton, type MenuItem } from "../src/ui/ActionMenu";
 import { Alert } from "../src/ui/Alert";
@@ -51,6 +51,7 @@ import {
   useType,
   useTheme,
 } from "../src/ui/theme";
+import { useLists } from "../src/state/useLists";
 
 type Row =
   | { key: string; kind: "header"; status: TaskStatus; count: number; collapsible: boolean; open: boolean; first: boolean }
@@ -234,11 +235,14 @@ function Board({
 export default function Tasks() {
   const { projectId } = useLocalSearchParams<{ projectId?: string }>();
   const app = useApp();
+  // Every machine's projects: the computer the phone is at may be away (#245).
+  const lists = useLists(null);
   const { tasks: allTasks, loaded, unsupported, error, toast } = useTasks();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const now = useMinuteClock();
-  const connected = app.status === "open";
+  // Tasks read and write through the network: another member answers while this computer is away.
+  const connected = useNetworkLive();
   const [refreshing, setRefreshing] = useState(false);
   const [open, setOpen] = useState<Partial<Record<TaskStatus, boolean>>>({});
   const [view, setView] = useState<Layout>("list");
@@ -249,8 +253,8 @@ export default function Tasks() {
   // A link from a project page opens on that project; the filter can widen it.
   const [scope, setScope] = useProjectScope("tasks", projectId);
   const projectName = useCallback(
-    (id?: string | null) => (id ? app.projects.find((p) => p.id === id)?.name : undefined),
-    [app.projects],
+    (id?: string | null) => (id ? lists.projects.find((p) => p.id === id)?.name : undefined),
+    [lists.projects],
   );
   // Global tasks show in every space; project tasks in their project's space.
   const inSpace = useInSpace();

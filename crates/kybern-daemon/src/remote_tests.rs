@@ -8,17 +8,17 @@ use std::{path::PathBuf, time::Duration};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use uuid::Uuid;
 
-struct Host {
-    state: crate::state::AppState,
-    url: String,
-    root: PathBuf,
+pub(crate) struct Host {
+    pub(crate) state: crate::state::AppState,
+    pub(crate) url: String,
+    pub(crate) root: PathBuf,
     /// The server side runs on the stack the daemon's own runtime gives its threads: an
     /// unoptimized build's RPC frames do not fit the 2 MiB of a test thread, and a test must not
     /// depend on how close to the edge the dispatch happens to be.
     server: Option<tokio::runtime::Runtime>,
 }
 impl Host {
-    async fn start() -> Self {
+    pub(crate) async fn start() -> Self {
         let root = std::env::temp_dir().join(format!("kybern-remote-test-{}", Uuid::now_v7()));
         let paths = crate::config::Paths::resolve(Some(root.clone())).unwrap();
         let state = crate::state::AppState::initialize(&paths).unwrap();
@@ -38,7 +38,7 @@ impl Host {
         });
         Self { state, url, root, server: Some(server) }
     }
-    async fn client(&self) -> Client {
+    pub(crate) async fn client(&self) -> Client {
         let client = Client::connect(&Endpoint {
             url: format!("{}/ws", self.url.replace("http:", "ws:")),
             token: self.state.bootstrap_token.clone(),
@@ -50,7 +50,7 @@ impl Host {
         client.call::<DaemonInfoMethod>(Empty {}).await.unwrap();
         client
     }
-    fn thread(&self) -> Thread {
+    pub(crate) fn thread(&self) -> Thread {
         let project = self.state.orchestrator.add_project(self.root.to_string_lossy().into_owned(), Some("Fixture".into()), None).unwrap();
         let now = chrono::Utc::now();
         let thread = Thread {
@@ -500,7 +500,12 @@ async fn compact_event_subscription_defers_large_tool_output_to_exact_rpc() {
 
     let compact = host.client().await;
     compact
-        .call::<EventsSubscribe>(EventsSubscribeParams { thread_id: Some(thread.id), after_seq: Some(0), include_tool_output: Some(false) })
+        .call::<EventsSubscribe>(EventsSubscribeParams {
+            thread_id: Some(thread.id),
+            after_seq: Some(0),
+            include_tool_output: Some(false),
+            ..Default::default()
+        })
         .await
         .unwrap();
     let compact_event = {
@@ -540,7 +545,7 @@ async fn compact_event_subscription_defers_large_tool_output_to_exact_rpc() {
     assert!(exact.is_error);
 
     let full = host.client().await;
-    full.call::<EventsSubscribe>(EventsSubscribeParams { thread_id: Some(thread.id), after_seq: Some(0), include_tool_output: None })
+    full.call::<EventsSubscribe>(EventsSubscribeParams { thread_id: Some(thread.id), after_seq: Some(0), ..Default::default() })
         .await
         .unwrap();
     let full_event = {

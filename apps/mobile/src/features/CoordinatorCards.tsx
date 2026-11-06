@@ -23,7 +23,7 @@ import type { Block } from "../../../../packages/kybern-client/src/transcript";
 type RotationBlock = Extract<Block, { kind: "rotation" }>;
 import { settingValueLabel } from "../../../../packages/kybern-client/src/coordinatorSettings";
 import type { ApprovalDecision, ApprovalRequest, BriefProposalInput, LeadGitCardInput, SettingsProposalInput } from "../state/protocol";
-import { errorText, loadThread, refresh, rpc, useApp } from "../state/runtime";
+import { errorText, respondApproval, useApp } from "../state/runtime";
 import { Button, ErrorBanner, Icon, T, Tap, styles, type IconName } from "../ui/primitives";
 import { MONO, radius, space, useType, useTheme } from "../ui/theme";
 
@@ -53,8 +53,7 @@ function useRespond(approval: ApprovalRequest) {
     setBusy(true);
     setError("");
     try {
-      await rpc("approvals.respond", { approval_id: approval.id, ...decision });
-      await Promise.all([refresh(), loadThread(approval.thread_id)]);
+      await respondApproval(approval, decision);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (e) {
       setError(e instanceof Error && "code" in e ? errorText(e) : COORDINATOR_CARD_COPY.answerFailed);
