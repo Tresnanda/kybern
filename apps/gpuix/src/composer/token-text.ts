@@ -1,7 +1,12 @@
 import { textEdit } from '../notes/rich-text.ts'
-/** `icon` is the glyph the chip leads with: its room is two monospace spaces before the label (`ICON_PAD`), under the native icon. */
+import { FONTS, chipPad } from '../platform/fonts.ts'
+/** `icon` is the glyph the chip leads with: its room is the spaces before the label (`ICON_PAD`), under the native icon. */
 export interface TokenReference { token: string; label: string; icon?: string }
-export const ICON_PAD = '  '
+/** The composer's text size and the chip icon's size: the pad is sized from them. */
+export const CHIP_FONT_SIZE = 14, CHIP_ICON_SIZE = 13.3
+/** What a chip reserves for its icon (`chipPad`): `ui` says whether its first two spaces take the UI font or the code font. */
+export const CHIP_PAD = chipPad(FONTS, CHIP_FONT_SIZE, CHIP_ICON_SIZE)
+export const ICON_PAD = CHIP_PAD.text
 export interface TokenSpan { sourceStart: number; sourceEnd: number; start: number; end: number; token: string }
 export interface TokenText { source: string; text: string; spans: TokenSpan[] }
 export function tokenText(source: string, references: readonly TokenReference[]): TokenText {
