@@ -13,6 +13,9 @@ import { setPullsTab, usePullsTab, type PullsTab } from './actions/store.ts'
 export const HEADER_COMPACT_PULLS = 400
 export const HEADER_COMPACT_ISSUES = 400
 export const HEADER_COMPACT_ACTIONS = 416
+/** The list column's narrowest width: the three tabs and the most header buttons any tab shows (Actions: folder, run, refresh)
+ *  stay inside the column, so no button runs past its border. */
+export const PULLS_LIST_MIN = 368
 /** The compact picker's glyph: the kit's folder at the standard icon stroke, matching the header's other icon buttons. */
 export const FOLDER = glyph(Folder01Icon)
 

@@ -31,7 +31,7 @@ import { prCall } from '../client.ts'
 import { hasPullRequests, isGroup, listableMembers } from '../list/model.ts'
 import { load, save } from '../persist.ts'
 import { PrLoading, Problem } from '../PrStates.tsx'
-import { FOLDER, HEADER_COMPACT_ACTIONS, PullsHeader } from '../PullsTabs.tsx'
+import { FOLDER, HEADER_COMPACT_ACTIONS, PULLS_LIST_MIN, PullsHeader } from '../PullsTabs.tsx'
 import { PR_SCROLL_LAYOUT } from '../scroll-layout.ts'
 import { Dispatch } from './Dispatch.tsx'
 import { BEAD_PITCH } from './Beads.tsx'
@@ -105,7 +105,7 @@ function ActionsTab() {
   const [dispatching, setDispatching] = useState(false)
   const [selectedActive, setSelectedActive] = useState(false)
   const visible = useWindowVisible()
-  const list = useResize({ initial: 352, min: 304, max: 512, side: 'left', storageKey: 'kybern.pulls.listWidth' })
+  const list = useResize({ initial: PULLS_LIST_MIN, min: PULLS_LIST_MIN, max: 512, side: 'left', storageKey: 'kybern.pulls.listWidth' })
   const [windowWidth, setWindowWidth] = useState(() => renderer?.getWindowSize?.().width ?? 1280)
   const measure = () => { const size = renderer?.getWindowSize?.(); setWindowWidth(size?.width ?? 1280); if (size?.height) setWindowHeight(size.height) }
   const available = windowWidth - 60 - (peek ? 256 : 0)
@@ -203,7 +203,7 @@ function ActionsTab() {
         <IconButton testId="actions-dispatch-open" icon={PLAY} glyph={PLAY_SIZE} style={PLAY_NUDGE} label="Run workflow" active={dispatching} onClick={() => { setDispatching(true); setSelected(null) }} />
         <IconButton testId="actions-refresh" icon={N.refresh} label="Refresh" disabled={pending} onClick={() => refresh(n => n + 1)}><SwapOnChange kind="icon" active={pending ? 'busy' : 'idle'} style={{ width: 16, height: 16 }}>{pending ? <SpinIcon source={N.refresh} size={16} color={t.iconSecondary} /> : <Icon source={N.refresh} size={16} color={t.iconSecondary} />}</SwapOnChange></IconButton>
       </PullsHeader>
-      <div style={{ ...column, gap: 8, paddingLeft: 12, paddingRight: 12, paddingTop: 2, paddingBottom: 10 }}>
+      <div style={{ ...column, gap: 8, paddingLeft: 12, paddingRight: 12, paddingTop: 10, paddingBottom: 10 }}>
         <Segmented size="sm" fill aria-label="Status" testId="actions-status" value={status} options={STATUSES.map(([value, label]) => ({ value, label }))} onChange={v => { setStatus(v as Status); setLimit(PAGE) }} />
         <div style={{ ...row, gap: 6 }}>
           <div style={{ display: 'flex', flexShrink: 0 }}><Menu testId="actions-workflow" align="start" width={264} trigger={open => <PickerChip testId="actions-workflow-chip" size="sm" square open={open} truncate maxWidth={150} selected={!!workflow} label={`Workflow: ${workflowName}`}>{workflowName}</PickerChip>}>
