@@ -175,9 +175,13 @@ async fn dispatch_part_2(state: &AppState, ctx: &ConnectionCtx, method: &str, sl
                 .into_iter()
                 .filter_map(|kind| {
                     let provider = crate::settings::provider_settings(&settings, kind, cwd.as_deref().and_then(|p| p.to_str()));
-                    let context =
-                        kybern_drivers::ProbeContext { binary: provider.binary.map(Into::into), cwd: cwd.clone(), env: provider.env };
-                    let names: Vec<_> = kybern_drivers::coordinator_mcp::servers(kind, &context).into_keys().collect();
+                    let mut names = std::collections::BTreeSet::new();
+                    for instance in std::iter::once("default").chain(provider.accounts.keys().map(String::as_str)) {
+                        let Ok(env) = crate::provider_accounts::environment(&provider, kind, instance) else { continue };
+                        let context = kybern_drivers::ProbeContext { binary: None, cwd: cwd.clone(), env };
+                        names.extend(kybern_drivers::coordinator_mcp::servers(kind, &context).into_keys());
+                    }
+                    let names: Vec<_> = names.into_iter().collect();
                     (!names.is_empty()).then_some((kind, names))
                 })
                 .collect();
