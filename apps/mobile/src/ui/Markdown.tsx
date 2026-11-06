@@ -131,7 +131,7 @@ function Inline({ text, checklist }: { text: string; checklist?: boolean }) {
                   color: colors.accent,
                 }}
               >
-                <ReplyLinkIcon href={link[2]!} />{String.fromCharCode(0x2009)}{link[1]}
+                <ReplyLinkIcon key={link[2]} href={link[2]!} />{String.fromCharCode(0x2009)}{link[1]}
               </Text>
             );
           if (part.startsWith("*") && part.endsWith("*"))
