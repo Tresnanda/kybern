@@ -12,11 +12,12 @@ import { toast } from '../shell/toasts.tsx'
 import { toastProblem } from '../problems/toast.ts'
 import { showFileInExplorer } from '../dock/explorerSelection.ts'
 
+const referencePath = (file: string) => file.startsWith('file://') ? (imageSource(file)?.value ?? file).replace(/^\/([a-z]:[\\/])/i, '$1') : file
 const fileThread = (id: string) => getState().threads.find(th => th.id === id) ?? (getState().open.thread?.id === id ? getState().open.thread : undefined) ?? getNav().children[id]
 
 export const threadFilesAreLocal = (id: string) => activeEnvironment().local && !machineOfThreadId(id)
 export function absoluteThreadFile(id: string, file: string, root: 'thread' | 'project' = 'thread'): string | null {
-  if (file.startsWith('file://')) file = imageSource(file)?.value ?? file
+  file = referencePath(file)
   if (threadFilesAreLocal(id) && file.startsWith('~/')) file = path.join(homedir(), file.slice(2))
   const thread = fileThread(id)
   let cwd = thread?.cwd
@@ -70,6 +71,7 @@ async function downloadFile(id: string, file: string): Promise<string> {
 }
 export async function actOnThreadFile(id: string, file: string, action: 'open' | 'reveal') {
   try {
+    file = referencePath(file)
     let target = absoluteThreadFile(id, file)
     if (!threadFilesAreLocal(id)) {
       const key = `${machineOfThreadId(id)}:${id}:${file}`
@@ -78,6 +80,13 @@ export async function actOnThreadFile(id: string, file: string, action: 'open' |
       target = await request
     }
     if (!target) throw Error('Open the conversation again, then retry.')
-    if (action === 'open') await openTarget(target); else await revealPath(target)
+    if (action === 'open') await openTarget(target)
+    else {
+      try { await access(target) } catch (error) {
+        if (threadFilesAreLocal(id) && (error as NodeJS.ErrnoException).code === 'ENOENT') { await openTarget(path.dirname(target)); return }
+        throw error
+      }
+      await revealPath(target)
+    }
   } catch (error) { toastProblem(error, { action: `${action} the file` }) }
 }

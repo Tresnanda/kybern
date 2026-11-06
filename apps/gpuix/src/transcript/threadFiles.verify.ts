@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { mock } from 'bun:test'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 const root = mkdtempSync(path.join(tmpdir(), 'kybern-thread-files-'))
@@ -19,6 +19,8 @@ const { actOnThreadFile, threadFilesAreLocal } = await import('./threadFiles.ts'
 try {
   assert.equal(threadFilesAreLocal('local'), true)
   assert.equal(threadFilesAreLocal('remote'), false, 'the window being local does not make a remote thread local')
+  writeFileSync(path.join(root, 'report.pdf'), 'local')
+  mkdirSync(path.join(root, 'child')); writeFileSync(path.join(root, 'child/artifact.png'), 'image')
   await actOnThreadFile('local', 'report.pdf', 'reveal')
   assert.equal(actions[0], path.join(root, 'report.pdf')); assert.equal(requests, 0)
   await actOnThreadFile('child', 'artifact.png', 'reveal')
@@ -33,5 +35,7 @@ try {
   machineName = '../escape'
   await actOnThreadFile('remote', 'reports/safe.pdf', 'open')
   assert.ok(actions.at(-1)!.startsWith(path.join(root, 'Kybern') + path.sep), 'a machine display name cannot escape Downloads/Kybern')
+  await actOnThreadFile('local', 'missing.pdf', 'reveal')
+  assert.equal(actions.at(-1), root, 'a missing local image or deleted edited file still reveals its folder')
   assert.deepEqual(failures, [])
 } finally { rmSync(root, { recursive: true, force: true }) }
