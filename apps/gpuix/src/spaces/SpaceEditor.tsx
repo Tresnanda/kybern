@@ -1,5 +1,6 @@
 // The create/edit popover (`docs/specs/spaces.md` §7.6), anchored to the "+" tile or the space's
 // tile: a live preview with the name, an image well, eight swatches and the icon grid.
+import { problemSentence } from '../problems/sentence.ts'
 import { useGpuixRequired, type EventPayload, type PublicInstance } from '@gpuix/react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { RpcCallError } from '../../../../packages/kybern-client/src/client.ts'
@@ -47,7 +48,7 @@ const toLogo = (draft: Draft): Logo => (draft.kind === 'image' ? { kind: 'image'
 const sameLogo = (a: Draft, b: Draft) => a.kind === b.kind && (a.kind !== 'icon' || a.icon === (b as typeof a).icon) && (a.kind !== 'image' || a.assetId === (b as typeof a).assetId)
 
 function saveError(error: unknown): string {
-  return error instanceof RpcCallError ? error.message : SPACE_COPY.saveFailure
+  return problemSentence(error, { action: 'save the space' })
 }
 
 export function SpaceEditor({ mode, space, still }: { mode: 'create' | 'edit'; space?: Space; still?: boolean }) {

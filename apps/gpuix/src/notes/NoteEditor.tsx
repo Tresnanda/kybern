@@ -1,4 +1,6 @@
 import { toast } from '../shell/toasts.tsx'
+import { toastProblem } from '../problems/toast.ts'
+import { ProblemLine } from '../problems/Line.tsx'
 import { createTask, openTask } from '../tasks/store.ts'
 import { checklistLine } from '@/state/noteLines'
 import { goPage } from '../nav/history.ts'
@@ -112,13 +114,13 @@ export function NoteEditor({ id, compact = false, width, onClose }: { id: string
       const lineText = checklistLine(markdown, line.index) ?? line.title
       const task = await createTask({ scope: projectId ? 'project' : 'global', project_id: projectId, title: line.title, status: 'todo', note_ids: [id], source: { note_id: id, line_text: lineText } })
       toast(`${task.key} created`, { action: { label: 'Open', onClick: () => { openTask(task.id); goPage('tasks') } } })
-    } catch (error) { toast.error('Unable to make a task', { description: String(error) }) }
+    } catch (error) { toastProblem(error, { action: 'make a task' }) }
     finally { making.current.delete(line.title) }
   }
   const insertImage = async () => {
     const paths = await renderer?.promptForPaths?.({ files: true, multiple: true, prompt: 'Add image' })
     if (!paths?.length) return
-    try { await editor.current?.addImages(paths) } catch (error) { toast.error('Couldn’t add image', { description: String(error) }) }
+    try { await editor.current?.addImages(paths) } catch (error) { toastProblem(error, { action: 'add the image' }) }
   }
   // Words in the document, read again a moment after typing pauses (desktop `useDocumentStats`).
   const [words, setWords] = useState<number | null>(null)
@@ -211,11 +213,11 @@ export function NoteEditor({ id, compact = false, width, onClose }: { id: string
     minHeight={variant === 'page' ? 96 : 60}
   />
   if (compact) return <div testId="thread-note-editor" style={{ display: 'flex', flexDirection: 'column', minHeight: 120, maxHeight: 320, padding: 10, gap: 6, borderRadius: 8, backgroundColor: t.buttonSecondary }}>
-    {snap.phase === 'ready' ? <div testId="thread-note-scroll" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, overflow: 'scroll' }}>{body('compact')}</div> : <Label color={t.textSecondary} size={12}>{snap.phase === 'loading' ? 'Loading note…' : snap.error ?? 'This note is unavailable.'}</Label>}
+    {snap.phase === 'ready' ? <div testId="thread-note-scroll" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, overflow: 'scroll' }}>{body('compact')}</div> : snap.error ? <ProblemLine error={snap.error} action="open this note" retry={() => void session.reload()} testId="note-problem-compact" /> : <Label color={t.textSecondary} size={12}>{snap.phase === 'loading' ? 'Loading note…' : 'This note is unavailable.'}</Label>}
     {snap.conflict ? <div style={{ display: 'flex', gap: 6 }}><Button size="sm" danger onClick={() => session.useTheirs()}>Use theirs</Button><Button size="sm" variant="primary" onClick={() => session.keepMine()}>Keep mine</Button></div> : <div onClick={() => void session.flush()}><Label color={snap.status === 'error' ? t.red : t.textSecondary} size={11}>{status}</Label></div>}
   </div>
   return <div testId="note-editor" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
-    {snap.phase === 'error' && <Banner opened={openedAt} title="Couldn’t open this note" detail={snap.error ?? ''}><Button onClick={() => void session.reload()}>Try again</Button></Banner>}
+    {snap.phase === 'error' && <div style={{ padding: 8 }}><ProblemLine error={snap.error} action="open this note" retry={() => void session.reload()} testId="note-problem" /></div>}
     {snap.phase === 'missing' && (onClose
       ? <Banner opened={openedAt} title="This note no longer exists" detail="It was deleted or moved to another workspace."><Button testId="note-close-tab" onClick={onClose}>Close tab</Button></Banner>
       : <Banner opened={openedAt} title="This note no longer exists" detail="Return to Notes to open another document."><Button onClick={gallery}>Open Notes</Button></Banner>)}
@@ -228,7 +230,7 @@ export function NoteEditor({ id, compact = false, width, onClose }: { id: string
           <div paintTransform={docIn} style={{ display: 'flex', flexDirection: 'column', width: docWidth, paddingTop: 84, flexShrink: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, minHeight: 19.5, marginBottom: 20 }}>
               <ProjectDot projectId={note?.scope === 'global' ? null : note?.project_id ?? null} /><Label color={k.fg2} size={NOTES_META} lineHeight={19.5}>{note?.scope === 'global' ? 'Global' : projects.find((p) => p.id === note?.project_id)?.name ?? 'Chats'}</Label>
-              {note?.scope === 'project' && <CategoryPicker category={note.category ?? null} locked={deleted} onPick={(category) => void session.setCategory(category).catch((error) => toast.error('Unable to set the category', { description: String(error) }))} />}
+              {note?.scope === 'project' && <CategoryPicker category={note.category ?? null} locked={deleted} onPick={(category) => void session.setCategory(category).catch((error) => toastProblem(error, { action: 'set the category' }))} />}
               <Label color={k.fg4} size={NOTES_META} lineHeight={19.5}>·</Label>
               <div testId="note-save-status" onClick={() => { if (snap.status === 'error') void session.flush() }}><SwapOnChange active={`save:${saveEra}`} style={{ justifyContent: 'flex-start' }}><Label color={snap.status === 'error' ? t.red : k.fg3} size={NOTES_META} lineHeight={19.5}>{status}</Label></SwapOnChange></div>
             </div>

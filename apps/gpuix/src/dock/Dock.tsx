@@ -5,8 +5,7 @@
 // fades (250 ms in, 150 ms out; paint-only); a pane switched to by pointer enters as `t-pane` (opacity, 4 px, scale 0.995);
 // the strip is the kit `Tabs` (its own open and close motion). Shortcut toggles and keyboard tab changes are instant.
 // Since ADE-54 the dock holds navigational lists only; what they list opens as a tab beside the chat (`tabs/`).
-import { toast } from '../shell/toasts.tsx'
-import { errorText } from '../nav/actions.ts'
+import { toastProblem } from '../problems/toast.ts'
 import { popAnimation } from '../kit/Pop.tsx'
 import { motion, useGpuix, type PublicInstance } from '@gpuix/react'
 import { useSidebarWidth, useWindowWidth } from '../shell/layout.ts'
@@ -254,7 +253,7 @@ function TabStrip({ threadId, width: _width, coordinator, activeTasks, stats }: 
       {threadId && <>
         <MenuSeparator />
         <MenuLabel>Open beside the chat</MenuLabel>
-        {VIEWERS.map((viewer) => <Fragment key={viewer.id}><MenuItem id={`tab-${viewer.id}`} icon={viewer.icon} label={viewer.label} testId={`dock-open-${viewer.id}`} onSelect={() => void Promise.resolve().then(() => viewer.open(threadId)).catch((error) => toast.error(viewer.id === 'terminal' ? 'Unable to open a terminal' : `Unable to open ${viewer.label}`, { description: errorText(error) }))} />{viewer.id === 'terminal' && <TerminalOnMenu threadId={threadId} />}</Fragment>)}
+        {VIEWERS.map((viewer) => <Fragment key={viewer.id}><MenuItem id={`tab-${viewer.id}`} icon={viewer.icon} label={viewer.label} testId={`dock-open-${viewer.id}`} onSelect={() => void Promise.resolve().then(() => viewer.open(threadId)).catch((error) => toastProblem(error, { action: viewer.id === 'terminal' ? 'open a terminal' : `open ${viewer.label}` }))} />{viewer.id === 'terminal' && <TerminalOnMenu threadId={threadId} />}</Fragment>)}
       </>}
     </Menu>
     <Tip label="Collapse panel (⌘J)" side="top" size={28}><KitIconButton icon={N.panelRight} label="Collapse panel" onClick={() => setDock(threadId, { open: false, instant: false })} testId="dock-collapse" /></Tip>

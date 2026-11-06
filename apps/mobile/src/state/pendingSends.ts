@@ -9,7 +9,7 @@ import type { Block } from "./transcript";
 import type { UserMessage } from "./protocol";
 import { OfflineError } from "../../../../packages/kybern-client/src/machines";
 import { queueSend } from "./outbox";
-import { errorText, loadThread, machineHub, rpc } from "./runtime";
+import { errorText, loadThread, machineHub, machineNameFor, rpc } from "./runtime";
 
 export const pendingSends = createPendingStore();
 export { withPending, settledPending };
@@ -49,7 +49,7 @@ export async function sendWithPending(threadId: string, message: UserMessage, ex
         e = queueError;
       }
     }
-    const error = errorText(e) || "Check the connection and try again.";
+    const error = errorText(e, { action: "send your message", machine: machineNameFor({ thread_id: threadId }) });
     if (existing) pendingSends.update(threadId, id, { state: "failed", error });
     else pendingSends.add({ id, threadId, message, at: new Date().toISOString(), delivery: "send", state: "failed", error });
     return null;

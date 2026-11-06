@@ -213,7 +213,7 @@ function ThreadListRowView({
   const indent = Math.min(depth, 2) * space.lg;
   const home = ctx.machine?.(thread.id);
   const agent = PROVIDER_DISPLAY_NAME[thread.provider.kind] ?? thread.provider.kind;
-  const fail = (e: unknown) => ctx.onError?.(errorText(e));
+  const fail = (e: unknown) => ctx.onError?.(errorText(e, "change the thread"));
 
   let leading;
   // The sidebar's 12 pt mark: the same status or agent, smaller.

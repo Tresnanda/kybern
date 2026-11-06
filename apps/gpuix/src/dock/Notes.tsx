@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState } from 'react'
+import { asError } from '../../../../packages/kybern-client/src/problem.ts'
 import { isEmptyThreadNote, noteTitle } from '@/state/notesModel'
 import { relativeTime } from '@/lib/format'
 import { isFreeChatProject, type NoteSummary, type Thread } from '../../../../packages/kybern-client/src/types.ts'
@@ -60,7 +61,7 @@ export function NotesPane({ thread }: { thread: Thread }) {
     <ScopeHeader thread={thread} action={<IconButton icon={N.plus} size="sm" label="New note" testId="dock-new-note" onClick={quick} />} />
     <DockSection label="This thread">{own && !isEmptyThreadNote(own) && <Tip label="Open in Notes" side="top" size={24}><IconButton icon={ARROW_UP_RIGHT} size="sm" glyph={14} label="Open in Notes" onClick={() => openNote(own.id)} /></Tip>}</DockSection>
     <div style={{ paddingLeft: 8, paddingRight: 8, paddingBottom: 16 }}><ThreadNote key={thread.id} threadId={thread.id} noteId={own?.id} /></div>
-    <ErrorLine error={error} retry={() => void refreshNotes()} />
+    <ErrorLine error={error?.error} action={error?.action} retry={() => void refreshNotes()} />
     {!loaded ? <Section label="Loading notes…" /> : entries.length ? <TaskWindow entries={entries} testId="dock-notes-list" /> : <Section label={`Other notes for ${project ? projectName ?? 'this project' : 'Global'} appear here.`} />}
   </div>
 }
@@ -86,7 +87,7 @@ function ThreadNote({ threadId, noteId }: { threadId: string; noteId?: string })
   const [saving, setSaving] = useState(false)
   const id = useRef(noteId)
   id.current = noteId ?? id.current
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<Error | null>(null)
   const [created, setCreated] = useState<string>()
   const flush = async () => {
     if (!draft.current.trim() || busy.current || id.current) return
@@ -96,7 +97,7 @@ function ThreadNote({ threadId, noteId }: { threadId: string; noteId?: string })
       if (draft.current !== note.body) save(`kybern.notes.draft:env:note:${note.id}`, { title: note.title, body: draft.current, baseRevision: note.revision })
       id.current = note.id; save(key, undefined); setCreated(note.id); recordNote(note)
     } catch (e) {
-      setError(String(e))
+      setError(asError(e))
       if ((e as { code?: number }).code === -32004) { await refreshNotes(); const remote = getNotes().notes.find(n => n.thread_id === threadId); if (remote) save(`kybern.notes.draft:env:note:${remote.id}`, { title: remote.title, body: draft.current, baseRevision: 0 }) }
     } finally { busy.current = false; setSaving(false) }
   }
@@ -106,7 +107,7 @@ function ThreadNote({ threadId, noteId }: { threadId: string; noteId?: string })
   // The textarea's own placeholder has a fixed colour; draw the desktop's (muted 14px) over the empty field.
   return <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', height: 96, paddingLeft: 10, paddingRight: 10, paddingTop: 8, paddingBottom: 8, borderRadius: 10, backgroundColor: ink(t, 0.05) }}>
     {!body && <div style={{ position: 'absolute', left: 10, top: 8, right: 10, pointerEvents: 'none' }}><Label color={muted(t, 0.45)} size={14} lineHeight={20} truncate>Ideas, reminders, to-dos. Type / for formatting</Label></div>}
-    <DecoratedTextarea decorations={markdownInputDecorations(body, noteInputMarkColors(t))} testId="thread-note-new" aria-label="Thread note" value={body} minRows={3} maxRows={6} onChange={e => { draft.current = e.value ?? ''; setBody(draft.current); save(key, draft.current) }} onBlur={() => void flush()} theme={{ text: t.text, caret: t.text }} style={{ flexGrow: 1, width: '100%', fontSize: 14, lineHeight: 20, color: t.text, backgroundColor: 'transparent' }} /><ErrorLine error={error} retry={() => void flush()} /></div>
+    <DecoratedTextarea decorations={markdownInputDecorations(body, noteInputMarkColors(t))} testId="thread-note-new" aria-label="Thread note" value={body} minRows={3} maxRows={6} onChange={e => { draft.current = e.value ?? ''; setBody(draft.current); save(key, draft.current) }} onBlur={() => void flush()} theme={{ text: t.text, caret: t.text }} style={{ flexGrow: 1, width: '100%', fontSize: 14, lineHeight: 20, color: t.text, backgroundColor: 'transparent' }} /><ErrorLine error={error} action="save the note" retry={() => void flush()} /></div>
 }
 
 export function DockSection({ label, count, children }: { label: string; count?: number; children?: React.ReactNode }) {

@@ -7,6 +7,7 @@
 // Motion: the preview opens with the disclosure height tween (tier 2, 220 ms) and Reduce Motion makes it instant; the
 // card's content swaps to the confirmation with the kit `Swap` cross-fade; dismissing fades the card up 4 px (150 ms)
 // while its height closes, so the composer below slides up instead of jumping.
+import { problemSentence } from '../problems/sentence.ts'
 import { useEffect, useState } from 'react'
 import {
   GROUP_COPY,
@@ -24,7 +25,6 @@ import { loadMemberStatus, updateGroup, useMemberStatus } from '../groups/store.
 import { Icon } from '../icons.tsx'
 import { Collapse, Swap } from '../motion/kit.tsx'
 import { EXIT, Presence } from '../motion/Presence.tsx'
-import { errorText } from '../nav/actions.ts'
 import { N } from '../nav/glyphs.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { projectClient } from '../state.ts'
@@ -109,7 +109,7 @@ function OfferCard({ project, missing, done, onCreated, onHide }: {
       if (projectClient(project.id) !== client) return
       onCreated(result.created)
       void loadMemberStatus(project.id, true)
-    } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
+    } catch (e) { setError(problemSentence(e, { action: 'add the instructions' })) } finally { setBusy(false) }
   }
   const openAgents = () => { if (local) openQuietly(`${project.path}/AGENTS.md`) }
 

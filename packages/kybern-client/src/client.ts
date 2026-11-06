@@ -298,7 +298,7 @@ export class KybernClient {
     ) {
       return Promise.reject(
         new ConnectionClosedError(
-          "Reconnect to this environment before trying again",
+          "Reconnect to this computer before trying again",
         ),
       );
     }
@@ -308,7 +308,7 @@ export class KybernClient {
         this.pending.delete(id);
         reject(
           new ConnectionClosedError(
-            "The environment did not acknowledge this request. Reconnect and check its state before retrying",
+            "This computer did not answer this request. Reconnect and check its state before retrying",
           ),
         );
       }, timeoutMs);
@@ -387,7 +387,7 @@ export class KybernClient {
     this.opening = controller;
     this.openTimer = setTimeout(() => {
       if (this.generation === generation)
-        this.retry("Connection timed out; check the environment and network");
+        this.retry("Connection timed out; check that the computer is on and online");
     }, 15_000);
     try {
       let socket: WebSocket;
@@ -406,7 +406,7 @@ export class KybernClient {
         if (this.stopped || generation !== this.generation) return;
         if (response.status === 401 || response.status === 403) {
           this.fail(
-            "Access was revoked or the credential is invalid. Pair this environment again",
+            "Access to this computer was revoked or is no longer valid. Pair it again",
             "auth",
           );
           return;
@@ -422,7 +422,7 @@ export class KybernClient {
         const { ticket } = (await response.json()) as { ticket: string };
         if (typeof ticket !== "string" || !ticket)
           throw new Error(
-            "The environment returned an invalid connection ticket",
+            "This computer sent an unexpected reply. Update Kybern on it, then reconnect",
           );
         if (this.stopped || generation !== this.generation) return;
         const url = new URL(this.endpoint.url);
@@ -442,12 +442,12 @@ export class KybernClient {
       socket.onclose = (event) => {
         if (this.ws !== socket || this.stopped) return;
         if (event.code === 4401)
-          this.fail("Access was revoked. Pair this environment again", "auth");
+          this.fail("Access to this computer was revoked. Pair it again", "auth");
         else if (!opened && this.options.createSocket && this.options.probeAuth)
           void this.probeRefusal(socket, generation);
         else
           this.retry(
-            "Connection interrupted; reconnecting to this environment",
+            "Connection interrupted; reconnecting to this computer",
           );
       };
       socket.onopen = async () => {
@@ -461,7 +461,7 @@ export class KybernClient {
           if (this.ws !== socket) return;
           if (info.protocol_version !== PROTOCOL_VERSION) {
             this.fail(
-              "This environment uses an incompatible protocol. Update Kybern on the client and host",
+              "This computer runs a different version of Kybern. Update Kybern on both, then reconnect",
             );
             return;
           }
@@ -474,7 +474,7 @@ export class KybernClient {
             (expected && info.environment_id !== expected)
           ) {
             this.fail(
-              "This address now belongs to a different environment. Add it separately",
+              "This address now belongs to a different computer. Add it as a new computer",
             );
             return;
           }
@@ -489,7 +489,7 @@ export class KybernClient {
           }, this.options.heartbeatMs ?? 20_000);
         } catch {
           if (this.ws === socket && !this.stopped)
-            this.retry("Unable to verify the environment; reconnecting");
+            this.retry("Unable to verify this computer; reconnecting");
         }
       };
     } catch (e) {
@@ -550,10 +550,10 @@ export class KybernClient {
     if (this.stopped || this.ws !== socket || generation !== this.generation) return;
     if (verdict === "rejected")
       this.fail(
-        "Access was revoked or the credential is invalid. Pair this environment again",
+        "Access to this computer was revoked or is no longer valid. Pair it again",
         "auth",
       );
-    else this.retry("Connection interrupted; reconnecting to this environment");
+    else this.retry("Connection interrupted; reconnecting to this computer");
   }
 
   private fail(detail: string, failure?: ClientFailure) {
@@ -665,10 +665,10 @@ export class KybernClient {
           sub.lastSeq = undefined;
           void this.issueSubscribe(sub);
         } else {
-          this.fail("Unable to subscribe to this environment. Update Kybern and reconnect");
+          this.fail("Unable to stay in sync with this computer. Update Kybern and reconnect");
         }
       } else {
-        this.retry("Unable to synchronize this environment");
+        this.retry("Unable to sync with this computer; retrying");
       }
     }
   }

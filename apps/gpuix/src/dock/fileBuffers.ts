@@ -1,6 +1,7 @@
 // Unsaved file edits (ADE-61). A file tab's text lives here, not in the editor, so it survives switching tabs (only the active
 // tab of a group is mounted). One buffer per file: a project file shown in two groups, or in two threads' tabs, is one buffer.
 // Listeners hear only state changes (dirty, saving, a conflict), never keystrokes: the text itself is read on demand.
+import { asError, errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
 import { useSyncExternalStore } from 'react'
 import type { FilesReadResult } from '../../../../packages/kybern-client/src/types.ts'
 import { getState, ownProjectId, projectClient, threadClient } from '../state.ts'
@@ -26,7 +27,8 @@ export interface FileBuffer {
   saving: boolean
   /** The file changed on disk while there were unsaved edits. */
   conflict: { content: string; version: string | null } | null
-  error: string | null
+  /** The save that failed, as caught, so its words come from `describeProblem` (`ErrorLine`). */
+  error: Error | null
 }
 
 const buffers = new Map<string, FileBuffer>()
@@ -148,15 +150,15 @@ export async function saveBuffer(key: string): Promise<boolean> {
     patch(key, { saving: false, base: text, version: saved.version, dirty: !!now && now.text !== text })
     return true
   } catch (error) {
-    if ((error as { code?: number }).code === CONFLICT || /changed on disk/.test(String(error))) {
+    if ((error as { code?: number }).code === CONFLICT || /changed on disk/.test(errorMessage(error))) {
       patch(key, { saving: false })
       try {
         const file = await readFile(buffer.root, buffer.path)
         patch(key, { conflict: { content: file.content, version: file.version ?? null } })
-      } catch { patch(key, { error: 'The file changed on disk. Reload it to see the new version.' }) }
+      } catch { patch(key, { error: Object.assign(new Error('The file changed on disk. Reload it to see the new version.'), { data: { problem: { kind: 'conflict', detail: errorMessage(error), retryable: true } } }) }) }
       return false
     }
-    patch(key, { saving: false, error: `Unable to save ${buffer.path.split('/').pop()}. ${String((error as Error).message ?? error)}` })
+    patch(key, { saving: false, error: asError(error) })
     return false
   }
 }

@@ -226,7 +226,7 @@ impl AppTools {
             }
             None => None,
         };
-        ensure!(Repo::is_repo(Path::new(&thread.cwd)).await, "project is not a git repository");
+        ensure!(Repo::check(Path::new(&thread.cwd)).await?, "project is not a git repository");
         let (from, to) = match checkpoint {
             Some(checkpoint) => {
                 let to = match checkpoint.after {

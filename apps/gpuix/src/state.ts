@@ -1,5 +1,8 @@
+import { problemSentence } from './problems/sentence.ts'
 import { activeEnvironment, environmentEndpoint } from './shell/environment.ts'
 import { machineHub } from './machines/index.ts'
+import { OfflineError } from '../../../packages/kybern-client/src/machineClient.ts'
+import { machineNameOf } from './problems/describe.ts'
 import { openOwner } from './machines/openOwner.ts'
 import { ListMerger, byPinnedThenNewest, type StateThread } from './machines/merged.ts'
 import { scopedKey } from '../../../packages/kybern-client/src/machineMerge.ts'
@@ -173,6 +176,12 @@ export const getClient = () => client
  * a project (its settings, accounts, providers, usage). Thread-scoped folders may use this, never `getClient()`.
  */
 export const localClient = getClient
+/** The connection for a call that must run now; before the app has connected it throws the `OfflineError` an away machine does, naming the computer. */
+export function requireClient(): KybernClient {
+  if (client) return client
+  const env = activeEnvironment()
+  throw new OfflineError('', false, `${env.local ? 'This computer' : env.name} is offline. Try again when it reconnects.`)
+}
 export { clientFor, clientForProject, clientForThread, useMachineView, useMachines } from './machines/index.ts'
 export type { StateThread } from './machines/merged.ts'
 
@@ -208,6 +217,16 @@ export function threadClient(id: ThreadId | null | undefined, machineId?: Machin
   const machine = id ? machineOfThreadId(id, machineId) : machineId ? machineOfThreadId('', machineId) : undefined
   return machine ? machineHub().clientFor(machine) : client
 }
+/**
+ * `threadClient` for a call that must run now. Where `threadClient` hands back `null` (the app has not connected yet) this throws the same
+ * `OfflineError` an away machine does, naming the machine, so the failure reads "SatyaMas is offline" instead of "Cannot read properties of null".
+ */
+export function requireThreadClient(id: ThreadId | null | undefined, machineId?: MachineId): KybernClient {
+  const found = threadClient(id, machineId)
+  if (found) return found
+  const owner = machineId ?? (id ? machineOfThreadId(id) : undefined)
+  throw new OfflineError(owner ?? '', false, `${machineNameOf(owner) ?? 'This computer'} is offline. Try again when it reconnects.`)
+}
 /** `threadClient` for a project (`machineId` picks one of several checkouts). */
 export function projectClient(id: string | null | undefined, machineId?: MachineId): KybernClient | null {
   const machine = id ? machineOfProjectId(id, machineId) : machineId ? machineOfProjectId('', machineId) : undefined
@@ -215,9 +234,7 @@ export function projectClient(id: string | null | undefined, machineId?: Machine
 }
 /** One call on the machine that owns a thread. Rejects (never throws) when that machine is offline or the app is not connected. */
 export async function callThread<M extends MethodName>(id: ThreadId | null | undefined, method: M, params: ParamsOf<M>, machineId?: MachineId): Promise<ResultOf<M>> {
-  const owner = threadClient(id, machineId)
-  if (!owner) throw new Error('Not connected')
-  return owner.call(method, params)
+  return requireThreadClient(id, machineId).call(method, params)
 }
 /** A thread's own project id on its machine (listed threads of other machines were moved onto the merged project row). */
 export const ownProjectId = (thread: { project_id: string; ownProjectId?: string }) => thread.ownProjectId ?? thread.project_id
@@ -326,7 +343,7 @@ export async function connect() {
     startupMark('endpoint-ready')
   } catch (error) {
     if (attempt !== connectionAttempt) return
-    set({ status: 'failed', statusDetail: error instanceof Error ? error.message : 'Start kybernd, then reconnect' })
+    set({ status: 'failed', statusDetail: problemSentence(error, { action: 'connect to kybernd' }) })
     return
   }
   // Native sockets authenticate the upgrade with a header and use the trusted
@@ -537,8 +554,8 @@ function watchMachines() {
 }
 /** A machine that cannot be reached is a notice, not an error screen. */
 function notifyOffline(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error)
-  void import('./shell/toasts.tsx').then(({ toast }) => toast.info(message.includes('offline') ? message : 'That machine is offline. Its threads show from the last time it was online.')).catch(() => {})
+  console.warn('[machines] offline:', error)
+  void import('./shell/toasts.tsx').then(({ toast }) => toast.info('That machine is offline. Its threads show from the last time it was online.')).catch(() => {})
 }
 
 async function loadLists() {

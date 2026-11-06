@@ -1,8 +1,7 @@
 import { useSidebarRowLease } from './Window.tsx'
+import { toastProblem } from '../problems/toast.ts'
 import { startProjectRename, stopProjectRename, useRenamingProject } from './renameProject.ts'
 import { PROJECT_RENAME_COPY, renamedProject } from '../../../../packages/kybern-client/src/projectName.ts'
-import { RpcCallError } from '../../../../packages/kybern-client/src/client.ts'
-import { toast } from '../shell/toasts.tsx'
 import { Button } from '../kit/Button.tsx'
 import { CONTROL } from '../kit/controls.ts'
 import { IconButton, type IconButtonProps } from '../kit/IconButton.tsx'
@@ -31,7 +30,7 @@ import { SUBAGENT_SIDEBAR_HOLD_MS, subagentThreadPhase, type SubagentPhase } fro
 import { FREE_CHAT_PROJECT_ID, type Project, type Thread, type ThreadActivityState } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
 import { MatrixLoader } from '../MatrixLoader.tsx'
-import { archiveThread, errorText, removeProject, renameProject, updateThread } from '../nav/actions.ts'
+import { archiveThread, removeProject, renameProject, updateThread } from '../nav/actions.ts'
 import { N } from '../nav/glyphs.ts'
 import { newThread, openThread } from '../nav/history.ts'
 import { ContextMenu, Menu, MenuItem, MenuLabel, MenuSeparator, muted, Tip } from '../nav/overlay.tsx'
@@ -381,7 +380,7 @@ export const ProjectHeader = memo(function ProjectHeader({
     stopProjectRename(project.id)
     const next = save ? renamedProject(name, project.name) : null
     if (next) {
-      renameProject(project.id, next).catch((e) => toast.error(e instanceof RpcCallError ? e.message : PROJECT_RENAME_COPY.failure))
+      renameProject(project.id, next).catch((e) => toastProblem(e, { action: 'rename the project', projectId: project.id }))
     }
   }
   const move = (offset: -1 | 1) => {
@@ -502,7 +501,7 @@ export const ProjectHeader = memo(function ProjectHeader({
             icon={N.archive}
             label="Remove project"
             destructive
-            onSelect={() => void removeProject(project.id).catch((e) => console.error('[sidebar] Unable to remove project:', errorText(e)))}
+            onSelect={() => void removeProject(project.id).catch((e) => toastProblem(e, { action: 'remove the project', projectId: project.id }))}
           />
         </ContextMenu>
       )}
@@ -565,7 +564,7 @@ export const ThreadRow = memo(function ThreadRow({
   const commitRename = () => {
     setRenaming(false)
     const next = title.trim()
-    if (next && next !== thread.title) void updateThread(thread.id, { title: next }).catch((e) => console.error('[sidebar] Unable to rename:', errorText(e)))
+    if (next && next !== thread.title) void updateThread(thread.id, { title: next }).catch((e) => toastProblem(e, { action: 'rename the thread', projectId: thread.project_id }))
     else setTitle(thread.title)
   }
   return (
@@ -663,7 +662,7 @@ export const ThreadRow = memo(function ThreadRow({
                 label={thread.pinned ? 'Unpin' : 'Pin'}
 
                 testId={`pin-${thread.id}`}
-                onClick={() => void updateThread(thread.id, { pinned: !thread.pinned }).catch((e) => console.error('[sidebar] Unable to pin:', errorText(e)))}
+                onClick={() => void updateThread(thread.id, { pinned: !thread.pinned }).catch((e) => toastProblem(e, { action: thread.pinned ? 'unpin the thread' : 'pin the thread', projectId: thread.project_id }))}
               />
               <SidebarIconButton
                 icon={N.archive}
@@ -672,7 +671,7 @@ export const ThreadRow = memo(function ThreadRow({
                 label="Archive"
 
                 testId={`archive-${thread.id}`}
-                onClick={() => void archiveThread(thread.id).catch((e) => console.error('[sidebar] Unable to archive:', errorText(e)))}
+                onClick={() => void archiveThread(thread.id).catch((e) => toastProblem(e, { action: 'archive the thread', projectId: thread.project_id }))}
               />
             </div>
           </Reveal>
@@ -858,10 +857,10 @@ export const ChildRow = memo(function ChildRow({
           <MenuItem id="open" label="Open" onSelect={() => openThread(thread.id, machineId)} />
           <MenuItem id="parent" icon={N.backToParent} label="Open parent" onSelect={() => thread.parent_thread_id && openThread(thread.parent_thread_id, parentMachineOf(thread))} />
           {working && !delegated && thread.subagent?.capabilities?.stop !== false && (
-            <MenuItem id="stop" icon={N.stop} label="Stop" onSelect={() => void callThread(thread.id, 'tasks.stop', { thread_id: thread.id }).catch(() => {})} />
+            <MenuItem id="stop" icon={N.stop} label="Stop" onSelect={() => void callThread(thread.id, 'tasks.stop', { thread_id: thread.id }).catch((e) => toastProblem(e, { action: 'stop the agent', projectId: thread.project_id }))} />
           )}
           {canStopDelegation(thread) && (
-            <MenuItem id="stop-delegated" icon={N.stop} label="Stop" onSelect={() => void callThread(thread.id, 'threads.interrupt', { thread_id: thread.id }).catch(() => {})} />
+            <MenuItem id="stop-delegated" icon={N.stop} label="Stop" onSelect={() => void callThread(thread.id, 'threads.interrupt', { thread_id: thread.id }).catch((e) => toastProblem(e, { action: 'stop the agent', projectId: thread.project_id }))} />
           )}
           {delegated && <MenuItem id="archive" icon={N.archive} label="Archive" onSelect={() => void archiveThread(thread.id)} />}
         </ContextMenu>

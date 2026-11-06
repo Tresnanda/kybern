@@ -3,9 +3,9 @@
 // shows a readable fallback in that place and leaves the rest of the window
 // working. The fallback names the surface, shows the error and offers Reload,
 // which remounts the surface's tree from scratch.
-import { Button } from '../kit/Button.tsx'
+import { errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
+import { ProblemRow } from '../kit/Problem.tsx'
 import { Component, Fragment, type ReactNode } from 'react'
-import { Label, useTheme } from '../ui.tsx'
 
 interface State {
   error: Error | null
@@ -31,27 +31,19 @@ export class ErrorBoundary extends Component<{ children: ReactNode; label?: stri
 }
 
 function Fallback({ label, error, compact, onReload }: { label: string; error: Error; compact?: boolean; onReload: () => void }) {
-  const t = useTheme()
   const stack = error.stack?.split('\n').slice(1, 4).join('\n')
+  // The message and stack are for whoever reports the bug: behind "Show details", never the headline.
   return (
-    <div
-      testId="error-fallback"
-      style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, alignItems: 'center', justifyContent: 'center', gap: 12, padding: compact ? 12 : 32 }}
-    >
-      <Label color={t.text} size={14} weight={500}>
-        {`Something went wrong in ${label}`}
-      </Label>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxWidth: 520, paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 8, borderRadius: 10, backgroundColor: t.buttonSecondary }}>
-        <Label color={t.textSecondary} size={12} lineHeight={16}>
-          {error.message}
-        </Label>
-        {stack && !compact && (
-          <Label color={t.textTertiary} size={11} lineHeight={15}>
-            {stack}
-          </Label>
-        )}
+    <div testId="error-fallback" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, alignItems: 'center', justifyContent: 'center', padding: compact ? 12 : 32 }}>
+      <div style={{ width: '100%', maxWidth: 520 }}>
+        <ProblemRow
+          title={`Something went wrong in ${label}`}
+          body="The rest of the window keeps working. Reload to try again."
+          primary={{ label: 'Reload', onClick: onReload, testId: 'error-reload' }}
+          detail={[errorMessage(error), !compact && stack].filter(Boolean).join('\n')}
+          testId="error-problem"
+        />
       </div>
-      <Button testId="error-reload" onClick={onReload}>Reload</Button>
     </div>
   )
 }

@@ -3,6 +3,7 @@
 // (src-tauri/src/text_export.rs, lib.rs). The destination is chosen in the
 // native save panel (`promptForNewPath`, native/upstream/packages/native/src/window_platform.rs);
 // callers never pass a path. Each resolves to false when the panel is dismissed.
+import { errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
 import { writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { downloadsDir, savePanelDialog } from './os.ts'
@@ -48,7 +49,7 @@ export async function saveTextFile(host: object | null | undefined, fileName: st
   if (Buffer.byteLength(contents) > 2 * 1024 * 1024) throw Error('This note is too large to export. Copy it as Markdown instead.')
   const target = await choose(host, markdownFileName(fileName), ['md', 'markdown'])
   if (!target) return false
-  await writeFile(target, contents).catch((error) => { throw Error(`write file: ${error.message}`) })
+  await writeFile(target, contents).catch((error) => { throw Error(`write file: ${errorMessage(error)}`) })
   return true
 }
 
@@ -57,7 +58,7 @@ export async function saveHtmlFile(host: object | null | undefined, fileName: st
   if (Buffer.byteLength(contents) > 25 * 1024 * 1024 + 64 * 1024) throw Error('This visual is too large to save. Ask the agent to use smaller images.')
   const target = await choose(host, htmlFileName(fileName), ['html', 'htm'])
   if (!target) return false
-  await writeFile(target, contents).catch((error) => { throw Error(`Unable to save the visual: ${error.message}. Choose another location and retry.`) })
+  await writeFile(target, contents).catch((error) => { throw Error(`Unable to save the visual: ${errorMessage(error)}. Choose another location and retry.`) })
   return true
 }
 
@@ -67,7 +68,7 @@ export async function saveImageFile(host: object | null | undefined, data: Uint8
   const ext = path.extname(name).slice(1).toLowerCase()
   const target = await choose(host, name, [...new Set([ext || 'png', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'avif'])])
   if (!target) return false
-  await writeFile(target, data).catch((error) => { throw Error(`write image file: ${error.message}`) })
+  await writeFile(target, data).catch((error) => { throw Error(`write image file: ${errorMessage(error)}`) })
   return true
 }
 

@@ -1,4 +1,6 @@
 import { useEffect, useSyncExternalStore } from 'react'
+import { failure, type Failure } from '../problems/Line.tsx'
+import { toastProblem } from '../problems/toast.ts'
 import type {
   Federation,
   TaskItem,
@@ -22,7 +24,7 @@ interface State {
   federation: Federation | null
   tasks: Record<string, TaskItem>
   loaded: boolean
-  error: string | null
+  error: Failure | null
   prefs: TaskViewPrefs
   query: string
   openId: string | null
@@ -140,7 +142,7 @@ export async function refreshTasks() {
     if (token === generation) {
       let map = state.tasks
       for (const event of queue) map = change(map, event)
-      setTasks({ tasks: map, error: String(error) })
+      setTasks({ tasks: map, error: failure('load the tasks', error) })
     }
   } finally {
     if (pending === queue) pending = null
@@ -189,7 +191,7 @@ export async function updateTask(id: string, patch: Omit<TaskItemsUpdateParams, 
     if (owner === activeEnvironment()) upsert(task)
     return task
   } catch (error) {
-    toast.error('Unable to save task', { description: String(error) })
+    toastProblem(error, { action: 'save the task' })
     throw error
   }
 }
@@ -217,7 +219,7 @@ export async function deleteTasks(ids: string[]) {
       selected.delete(id)
       setTasks({ tasks, selected, openId: state.openId === id ? null : state.openId })
     } catch (error) {
-      toast.error('Unable to delete task', { description: String(error) })
+      toastProblem(error, { action: 'delete the task' })
     }
   }
   if (deleted.length)
@@ -234,7 +236,7 @@ export async function deleteTasks(ids: string[]) {
                 const task = await target.call('tasks.items.restore', { id })
                 if (owner === activeEnvironment()) upsert(task)
               } catch (error) {
-                toast.error('Unable to restore task', { description: String(error) })
+                toastProblem(error, { action: 'restore the task' })
               }
             }),
           )

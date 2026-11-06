@@ -7,7 +7,8 @@ import { RADIUS } from '../kit/controls.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { getClient } from '../state.ts'
 import { addProjectToCurrentSpace } from '../spaces/add.ts'
-import { errorText } from '../nav/actions.ts'
+import { asError } from '../../../../packages/kybern-client/src/problem.ts'
+import { ProblemLine } from '../problems/Line.tsx'
 import { Label, useTheme } from '../ui.tsx'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
@@ -20,26 +21,29 @@ export function ProjectPicker({ close, group = false }: { close: () => void; gro
   const [client] = useState(() => getClient()!)
   const [path, setPath] = useState('')
   const [listing, setListing] = useState<ProjectsBrowseResult | null>(null)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<Error | null>(null)
   const [busy, setBusy] = useState(true)
   const sequence = useRef(0)
+  const failed = useRef<'browse' | 'add'>('browse')
   const browse = async (path?: string) => {
     const attempt = ++sequence.current
-    setBusy(true); setError('')
+    failed.current = 'browse'
+    setBusy(true); setError(null)
     try { const next = await client.call('projects.browse', path ? { path } : {}); if (attempt === sequence.current) { setPath(next.path); setListing(next) } }
-    catch (e) { if (attempt === sequence.current) setError(errorText(e)) }
+    catch (e) { if (attempt === sequence.current) setError(asError(e)) }
     finally { if (attempt === sequence.current) setBusy(false) }
   }
   useEffect(() => { void browse(); return () => { sequence.current++ } }, [client])
   const add = async () => {
     if (group) return showDialog({ kind: 'group', path: path.trim() })
-    setBusy(true); setError('')
+    failed.current = 'add'
+    setBusy(true); setError(null)
     try {
       // Into the active space; a folder that is a project elsewhere stays there, with a toast that offers to move it.
       await addProjectToCurrentSpace(path.trim())
       if (getClient() !== client) return
       close()
-    } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
+    } catch (e) { setError(asError(e)) } finally { setBusy(false) }
   }
   return <Dialog onClose={close} width={512} testId="project-picker"><DialogHeader title={group ? GROUP_COPY.chooseGroupFolder : 'Add project'} description={group ? GROUP_COPY.addMenuGroupDetail : `Choose a folder on ${activeEnvironment().name}.`} onClose={close} />
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingLeft:16, paddingRight:16, paddingTop:0, paddingBottom:12 }}>
@@ -52,7 +56,7 @@ export function ProjectPicker({ close, group = false }: { close: () => void; gro
         {!busy && listing?.directories.length === 0 && <div key="empty" style={{ padding: 12 }}><Label color={t.textSecondary} size={12}>No subfolders. Add this folder as a project, or enter another path.</Label></div>}
         {listing?.has_more && <div key="more" style={{ padding: 12 }}><Label color={t.textSecondary} size={12}>Showing the first 1,000 folders. Enter a path to open another folder.</Label></div>}
       </virtual-list></div>
-      {error && <Label color={t.red} size={12}>{error}</Label>}
+      <ProblemLine error={error} action={error && failed.current === 'browse' ? 'open that folder' : 'add that folder'} retry={() => void (failed.current === 'browse' ? browse(path) : add())} testId="project-picker-problem" />
       <div style={{ display: 'flex', justifyContent: 'flex-end',paddingTop:12 }}><Button size="lg" variant="primary" testId="project-picker-add" disabled={busy || !path.trim()} onClick={() => void add()}>{group ? 'Choose this folder' : 'Add this folder'}</Button></div>
     </div>
   </Dialog>

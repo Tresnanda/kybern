@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { toastProblem } from '../problems/toast.ts'
 import { noteMatchesQuery, noteTitle, savedMessageMarkdown, titleFromText } from '@/state/notesModel'
 import { isFreeChatProject } from '../../../../packages/kybern-client/src/types.ts'
 import { addWindowKeyHandler } from '../nav/keys.ts'
@@ -110,7 +111,7 @@ function SaveToNote({ capture }: { capture: Capture }) {
       }
       recordNote(note); setNotes({ capture: null }); const savedId = note.id
       toast('Saved to note', { action: { label: 'Open', onClick: () => openNote(savedId) } })
-    } catch (e) { toast.error('Couldn’t save to note', { description: String(e) }) }
+    } catch (e) { toastProblem(e, { action: 'save to the note' }) }
     finally { guard.current = false; setBusy(false) }
   }
   return <Dialog testId="save-to-note" width={400} onClose={() => { if (!busy) setNotes({ capture: null }) }}>

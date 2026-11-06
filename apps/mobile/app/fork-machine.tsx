@@ -52,7 +52,7 @@ export default function ForkMachine() {
       (e) => {
         if (!live) return;
         setGenerated("");
-        setNoteError(FORK_COPY.noteError(errorText(e)));
+        setNoteError(FORK_COPY.noteError(errorText(e, "write the fork note")));
       },
     );
     return () => {
@@ -75,7 +75,7 @@ export default function ForkMachine() {
       haptics.success();
       router.back();
     } catch (e) {
-      setError(errorText(e));
+      setError(errorText(e, "fork the thread"));
       setBusy(false);
     }
   };

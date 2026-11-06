@@ -14,7 +14,8 @@ import {
 } from "../../../../packages/kybern-client/src/prReview";
 import { linkedRepairThread } from "../../../../packages/kybern-client/src/pullRequests";
 import type { PrActionKind, PrDetailResult, PrPageKind, PrPageResult, PrReviewEntry } from "./protocol";
-import { activeEnvironment, errorText, refresh, rpc, useApp } from "./runtime";
+import { activeEnvironment, problemFor, refresh, rpc, useApp } from "./runtime";
+import type { ProblemModel } from "./problems";
 
 const drafts = new Map<string, ReviewDraft>();
 const listeners = new Set<() => void>();
@@ -39,7 +40,7 @@ export function usePullRequest(projectId: string, number: number, repo?: string)
   const member = repo ? { repo } : {};
   const draft = useSyncExternalStore(subscribe, () => drafts.get(key) ?? EMPTY);
   const [detail, setDetail] = useState<PrDetailResult | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<ProblemModel | "">("");
   const [loading, setLoading] = useState(true);
   const [revision, setRevision] = useState(0);
   const [busy, setBusy] = useState<PrActionKind | "repair" | null>(null);
@@ -61,7 +62,7 @@ export function usePullRequest(projectId: string, number: number, repo?: string)
         setError("");
       })
       .catch((e) => {
-        if (!canceled) setError(errorText(e));
+        if (!canceled) setError(problemFor(e, { action: "load this pull request", goal: "load pull requests" }, { pr: true, params: { project_id: projectId } }));
       })
       .finally(() => {
         if (!canceled) setLoading(false);
@@ -177,14 +178,14 @@ export function usePullRequest(projectId: string, number: number, repo?: string)
 /** One page of comments, reviews or checks. Stale replies never replace a newer page. */
 export function usePrPage(projectId: string, number: number, kind: PrPageKind, revision: number, head?: string, repo?: string) {
   const status = useApp().status;
-  const [state, setState] = useState<{ key: string; data?: PrPageResult; error?: string } | null>(null);
+  const [state, setState] = useState<{ key: string; data?: PrPageResult; error?: ProblemModel } | null>(null);
   const key = `${projectId}${repo ? `/${repo}` : ""}:${number}:${kind}:${revision}:${head}`;
   useEffect(() => {
     if (!head || status !== "open") return;
     let canceled = false;
     void rpc("github.pr.page", { project_id: projectId, number, kind, page: 1, ...(repo ? { repo } : {}) }).then(
       (data) => !canceled && setState({ key, data }),
-      (e) => !canceled && setState({ key, error: errorText(e) }),
+      (e) => !canceled && setState({ key, error: problemFor(e, "load the conversation", { pr: true, params: { project_id: projectId } }) }),
     );
     return () => {
       canceled = true;

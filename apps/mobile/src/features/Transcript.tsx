@@ -25,7 +25,7 @@ import type { LoginRecipe } from "../../../../packages/kybern-client/src/loginRe
 import { sendFollowUp } from "../state/followUp";
 import { createNote } from "../state/notes";
 import { type ApprovalDecision, type ApprovalRequest } from "../state/protocol";
-import { errorText, getState } from "../state/runtime";
+import { getState, problemFor } from "../state/runtime";
 import { threadImageSource } from "../state/machineRequests";
 import { type Block } from "../state/transcript";
 import type { TurnRow } from "../state/turnRows";
@@ -33,7 +33,8 @@ import { turnFooterText } from "../state/format";
 import { workDuration } from "../state/turnRows";
 import { ContextMenu, type MenuItem } from "../ui/ActionMenu";
 import { Markdown } from "../ui/Markdown";
-import { Button, Icon, T, Tap, styles } from "../ui/primitives";
+import { Button, ErrorBanner, Icon, T, Tap, styles } from "../ui/primitives";
+import { failedToast } from "../ui/failedToast";
 import { showToast } from "../ui/Toast";
 import { useStreamedText } from "../ui/useStreamedText";
 import { radius, space, useTheme } from "../ui/theme";
@@ -240,7 +241,7 @@ function ReplyInChat({ approval, threadId }: { approval: ApprovalRequest; thread
             setSent(option.label);
             void sendFollowUp(threadId, replyInChatMessage(question.title, option.label)).catch((e) => {
               setSent("");
-              showToast(errorText(e));
+              failedToast(e, "send your answer", { params: { thread_id: threadId } });
             });
           }}
         >
@@ -319,7 +320,7 @@ function answerMenu(text: string, threadId: string, turnId: string | null): Menu
               onPress: () => router.push({ pathname: "/note", params: { id: note.id } }),
             }),
           )
-          .catch((e) => showToast(errorText(e) || "Unable to save the note. Try again."));
+          .catch((e) => failedToast(e, "save the note"));
       },
     },
     ...(turnId
@@ -345,6 +346,12 @@ function AgentImage({ block, threadId }: { block: Extract<Block, { kind: "image"
       {open && <Lightbox source={source} label="Image from the agent" onClose={() => setOpen(false)} />}
     </>
   );
+}
+
+/** A turn that ended in a failure: the words and fix, with the provider's own text behind Show details. */
+function TurnFailure({ error, threadId }: { error: string; threadId: string }) {
+  const problem = useMemo(() => problemFor(error, "finish this turn", { params: { thread_id: threadId } }), [error, threadId]);
+  return <ErrorBanner error={problem} />;
 }
 
 export const TranscriptBlock = memo(function TranscriptBlock({
@@ -436,7 +443,7 @@ export const TranscriptBlock = memo(function TranscriptBlock({
     case "turn_end":
       return (
         <View style={{ gap: space.xs }}>
-          {block.error && <TurnProblemLine threadId={threadId} error={block.error} problem={block.problem} />}
+          {block.error && <TurnProblemLine threadId={threadId} error={block.error} problem={block.problem} fallback={<TurnFailure error={block.error} threadId={threadId} />} />}
           <T variant="caption" tone="muted" style={{ fontVariant: ["tabular-nums"], lineHeight: 28 }}>
             {turnFooter(block)}
           </T>

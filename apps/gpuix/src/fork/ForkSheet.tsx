@@ -3,6 +3,7 @@
 // gets a notice when it arrives (`transcript/rows.tsx`). Both threads stay live. An offline machine receives the fork
 // when it is back, through the outbox. In `move` mode ("Continue on another machine…", design §7.2) the same sheet moves
 // the thread instead: the work and the conversation go there and this thread becomes read-only with a link.
+import { problemSentence } from '../problems/sentence.ts'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useGpuix, type PublicInstance } from '@gpuix/react'
 import { forkParams, forkQueuedText, forkSheetDefaults, type ForkInstance } from '../../../../packages/kybern-client/src/forkMachine.ts'
@@ -16,7 +17,6 @@ import { loadMachineLists, useComposer, type RemoteLists } from '../composer/sto
 import { formatEffort } from '@/lib/format'
 import { nativeCapabilities } from '../native/api.ts'
 import { Dialog } from '../nav/overlay.tsx'
-import { errorText } from '../nav/actions.ts'
 import { callThread, useApp } from '../state.ts'
 import { toast } from '../shell/toasts.tsx'
 import { Button } from '../kit/Button.tsx'
@@ -61,7 +61,7 @@ export function ForkSheet({ threadId, machineId, close, mode = 'fork' }: { threa
     let live = true
     callThread(threadId, 'threads.fork_note', { thread_id: threadId }, machineId).then(
       (result) => { if (live) { setGenerated(result.note); setState((current) => ({ ...current, note: result.note })) } },
-      (e) => { if (live) { setGenerated(''); setNoteError(`Unable to write the hand-off note. ${errorText(e)} Write one yourself, or fork without it.`) } },
+      (e) => { if (live) { setGenerated(''); setNoteError(`${problemSentence(e, { action: 'write the hand-off note' })} Write one yourself, or fork without it.`) } },
     )
     return () => { live = false }
   }, [threadId, machineId])
@@ -131,7 +131,7 @@ export function ForkSheet({ threadId, machineId, close, mode = 'fork' }: { threa
         toast.success(forkQueuedText(result.target_name, target.online), { description: target.online ? 'A notice in this thread links to the new one when it arrives.' : 'It waits in the outbox.' })
       }
       close()
-    } catch (e) { setError(errorText(e)); setBusy(false) }
+    } catch (e) { setError(problemSentence(e, { action: 'fork the thread' })); setBusy(false) }
   }
   const dismiss = () => { if (!busy) close() }
   const signedOut = agents?.find((item) => item.kind === agent && item.available && item.signedIn === false)

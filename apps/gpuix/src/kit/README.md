@@ -177,6 +177,18 @@ button for each action the table can run.
 toastProblem(error, { action: 'start the thread', retry, projectId })   // problems/toast.ts: the same, as a toast with Copy
 ```
 
+**Report a problem.** `problemProps` gives every Problem an `onReport`, shown as a ghost "Report a problem" inside Show details (never a
+button of its own). It builds the GitHub issue (`problems/report.ts`, redaction in `packages/kybern-client/src/report.ts`: local paths,
+the user and computer names, e-mail addresses, tokens and network addresses are replaced by `<…>` before anything is shown), opens the
+review sheet (`dialogs/ReportProblem.tsx`: the issue title and text, editable) and opens the prefilled issue only on "Open on GitHub".
+`scripts/report-problem-check.ts` drives it.
+
+**One-line and named forms (`problems/describe.ts`).** `describe(error, ctx)` is `describeProblem` that also names the machine an `OfflineError`
+came from; use it instead of calling `describeProblem` directly. Where there is no room for a card (a composer line, a form field, the
+connection banner) `problemLine(error, { action })` gives "<headline>. <what to do next>", never the raw text. A call that must run now
+uses `requireThreadClient` / `requireClient` (`state.ts`), which throw the offline error naming the computer instead of a `TypeError` on `null`.
+The gallery section `problem-families` (`scripts/problem-families-check.ts`) shows the phase 3 copy built from real failures.
+
 **Actions (`problems/actions.ts`).** `PROBLEM_ACTIONS` maps an action id to a flow GPUIX already has; `resolveAction(action, context)` gives
 the button or `null`. An id that isn't in the table, or that cannot run with the context (`retry` without a `retry` callback,
 `copy_details` without `detail`), renders no button; a "Copy details" action is also dropped when the details disclosure is there.
@@ -189,6 +201,23 @@ the button or `null`. An id that isn't in the table, or that cannot run with the
 | `retry` | the surface's own `context.retry` |
 | `copy_details`, `copy_detail` | `writeClipboardText(context.detail)` |
 | `update` | checks for an app update and opens its details (`platform/update.ts`) |
+
+**Where a caught error goes.** Keep the caught error in state (`asError(e)`, or `failure('save the brief', e)` where one place fails in several
+ways), never its text, and say it with the form that fits (`problems/`):
+
+| Where it happened | Use |
+| --- | --- |
+| a command or background job (a rename, a pin, an install) | `toastProblem(e, { action, retry?, projectId? })`; `reportError(action, e)` is the same, for code with no `retry` |
+| a section of a page or a dock panel | `<ProblemLine error action retry? />` (a `ProblemRow` that words the error itself); `<ErrorLine />` in `dock/parts.tsx` pads it for a panel |
+| a page that failed to load | `<ProblemState {...problemProps(describeProblem(e, { action }), …)} />` |
+| a status string or a request card's hint line, with no room for a button | `problemSentence(e, { action })` (`problems/sentence.ts`): the headline and the one sentence; the technical text goes to the console |
+
+`actionPhrase` (`problems/action.ts`) turns an old title ("Unable to open link") into the phrase after "Couldn't". A failure with a fix of its own
+words it before it falls back to `describeProblem`: a Windows file lock on a worktree (`dialogs/worktreeProblem.ts`: names the program, says the work
+is safe), a refused write linking the `kybern` command (`settings/cliProblem.ts`), a refused SSH key (`SshProblem`).
+
+`problems/rawErrors.test.ts` fails when `String(e)`, `errorText(` or a caught error's `.message` is shown anywhere under `src/`. Log it, match it
+with `errorMessage(e)`, or word it with the forms above; `RAW_ERROR_ALLOWLIST` in that test lists the files whose rewrite has not landed.
 
 ## Resize (`Resize.tsx`)
 

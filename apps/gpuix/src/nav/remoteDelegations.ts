@@ -11,6 +11,7 @@
 // here), and once per connection for a parent that has children at work (`active_children`, which counts remote
 // ones), has a listed remote child that still says it works, or is opened. Changes after that arrive as
 // notifications. A record whose child appeared or ended asks for a fresh read of its machine's lists.
+import { asError, errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
 import { DELEGATIONS_REMOTE_CHANGED_NOTIFICATION, DELEGATIONS_REMOTE_RESYNC_NOTIFICATION, type MachineId, type RemoteChild, type Thread, type ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 import { remoteChildStandIn, withRemoteRecord } from '../../../../packages/kybern-client/src/delegations.ts'
 
@@ -214,7 +215,7 @@ export class RemoteDelegations {
       })
       .catch((error: unknown) => {
         this.read.delete(parentId)
-        if (/-32601|unknown method|method not found/i.test(error instanceof Error ? error.message : String(error))) this.unsupported = true
+        if (/-32601|unknown method|method not found/i.test(errorMessage(error))) this.unsupported = true
       })
       .finally(() => this.loads.delete(parentId))
     this.loads.set(parentId, request)

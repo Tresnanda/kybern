@@ -46,7 +46,7 @@ export default function PullSendSheet() {
       router.back();
       router.push({ pathname: "/thread/[id]", params: { id: thread } });
     } catch (e) {
-      setError(`${errorText(e)}${repair ? " Your selection is kept." : ""}`);
+      setError(errorText(e, { action: "send to the agent", ...(repair ? { note: "Your selection is kept." } : {}) }));
     }
   }
   return (

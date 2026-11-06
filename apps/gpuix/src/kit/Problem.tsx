@@ -40,13 +40,15 @@ export interface ProblemProps {
   secondary?: ProblemButton
   /** The technical text, shown only when the person opens the details. */
   detail?: string
+  /** Opens the review step of "Report a problem". Shown quietly inside the details, never as a button of its own. */
+  onReport?: () => void
   testId?: string
 }
 
 const column = { display: 'flex', flexDirection: 'column', minWidth: 0 } as const
 
 /** The "Show details" button and, once open, the technical text with its copy button. Each part is placed by the form that uses it. */
-function useDetails(detail: string | undefined, testId: string): { toggle: ReactNode; box: ReactNode } {
+function useDetails(detail: string | undefined, testId: string, onReport?: () => void): { toggle: ReactNode; box: ReactNode } {
   const t = useTheme()
   const c = useControls()
   const [open, setOpen] = useState(false)
@@ -69,6 +71,7 @@ function useDetails(detail: string | undefined, testId: string): { toggle: React
       <div style={{ position: 'absolute', top: 4, right: 4 }}>
         <IconButton testId={`${testId}-copy`} size="sm" icon={copied ? 'check' : 'copy'} label={copied ? 'Copied' : 'Copy details'} onClick={copy} />
       </div>
+      {onReport && <div style={{ display: 'flex', marginTop: 4, marginLeft: -4 }}><Button testId={`${testId}-report`} size="sm" variant="ghost" onClick={onReport}>Report a problem</Button></div>}
     </div>
   ) : null
   return { toggle, box }
@@ -90,9 +93,9 @@ function tint(t: ReturnType<typeof useTheme>, name: ProblemTone) {
 }
 
 /** A page or pane that couldn't load or run. Fills its parent and centres: give it a parent with a size. */
-export function ProblemState({ tone: name = 'danger', icon = 'alert', title, body, primary, secondary, detail, testId = 'problem' }: ProblemProps) {
+export function ProblemState({ tone: name = 'danger', icon = 'alert', title, body, primary, secondary, detail, onReport, testId = 'problem' }: ProblemProps) {
   const t = useTheme()
-  const details = useDetails(detail, testId)
+  const details = useDetails(detail, testId, onReport)
   return (
     <div role="alert" testId={testId} style={{ ...column, flexGrow: 1, width: '100%' }}>
       <Empty style={{ gap: 16, padding: 24 }}>
@@ -119,9 +122,9 @@ export function ProblemState({ tone: name = 'danger', icon = 'alert', title, bod
 }
 
 /** A failure inside a section: the `Card` in the tone, a leading glyph, the headline and one sentence, then the fix. */
-export function ProblemRow({ tone: name = 'danger', icon = 'alert', title, body, primary, secondary, detail, testId = 'problem' }: ProblemProps) {
+export function ProblemRow({ tone: name = 'danger', icon = 'alert', title, body, primary, secondary, detail, onReport, testId = 'problem' }: ProblemProps) {
   const t = useTheme()
-  const details = useDetails(detail, testId)
+  const details = useDetails(detail, testId, onReport)
   const c = toneOf(t, name)
   return (
     <Card testId={testId} style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10, backgroundColor: c.fill(t.problem.rowFill), borderColor: c.edge(t.problem.rowEdge) }}>

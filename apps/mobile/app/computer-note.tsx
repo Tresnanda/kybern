@@ -27,7 +27,7 @@ export default function ComputerNoteScreen() {
       await saveComputerNote(note, value);
       router.back();
     } catch (e) {
-      setError(`Unable to save the note. ${errorText(e)}`);
+      setError(errorText(e, "save the note"));
     } finally {
       setBusy(false);
     }

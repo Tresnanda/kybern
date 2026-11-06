@@ -170,8 +170,8 @@ const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1
  */
 export function plainSentence(text: string): string | null {
   const t = text.trim()
-  if (!t || t.length > 240 || t.includes("\n")) return null
-  if (/RpcCallError|invalid params|^not found:|method not found|missing scope|os error \d|exit (code|status)|errno|EPERM|EACCES|ENOENT|panicked|\bat .+:\d+:\d+|^\w*Error:|^run \S+:|^\S+ \S+.*failed:|program not found|\(code -?\d+\)/i.test(t)) return null
+  if (!t || t.length > 240 || t.includes("\n") || !/\s/.test(t)) return null
+  if (/RpcCallError|invalid params|^not found:|method not found|missing scope|os error \d|exit (code|status)|errno|EPERM|EACCES|ENOENT|panicked|\bat .+:\d+:\d+|^\w*Error:|^run \S+:|^\S+ \S+.*failed:|program not found|\(code -?\d+\)|^[a-z_]+\.[a-z_.]+:/i.test(t)) return null
   if (/[A-Za-z]:\\|\\\\\?\\|(^|[\s"'(])\/(Users|home|usr|tmp|var|opt|private|etc)\//.test(t)) return null
   return /[.!?]$/.test(t) ? t : `${t}.`
 }
@@ -179,7 +179,11 @@ export function plainSentence(text: string): string | null {
 /** The problem an error from an older daemon, or from the client itself, most likely is. */
 function legacyProblem(error: unknown, message: string): Problem {
   const name = error && typeof error === "object" ? (error as { name?: unknown }).name : undefined
-  if (name === "OfflineError" || name === "ConnectionClosedError") return { kind: "offline", detail: message, retryable: true }
+  if (name === "OfflineError" || name === "ConnectionClosedError") {
+    // An `OfflineError` from the machine set says whose it is: "SatyaMas is offline. Try again when it reconnects."
+    const machine = name === "OfflineError" ? /^(.+?) is offline\b/i.exec(message)?.[1] : undefined;
+    return { kind: "offline", ...(machine && machine.length <= 64 && machine !== "This machine" ? { subject: machine } : {}), detail: message, retryable: true };
+  }
   const code = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined
   if (typeof code === "string") {
     const machine = machineProblem(code, message)

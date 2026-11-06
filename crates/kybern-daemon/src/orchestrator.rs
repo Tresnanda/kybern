@@ -3501,7 +3501,7 @@ impl Orchestrator {
                 .await;
         }
         let repo = Repo::new(&thread.cwd);
-        if !Repo::is_repo(std::path::Path::new(&thread.cwd)).await {
+        if !Repo::check(std::path::Path::new(&thread.cwd)).await? {
             return Err(anyhow!("project is not a git repository"));
         }
         let (from, to) = match turn_id {

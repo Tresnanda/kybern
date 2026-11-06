@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { RpcCallError } from '../../../../packages/kybern-client/src/client.ts'
 import { ghProblem } from '../../../../packages/kybern-client/src/prReview.ts'
 import { GH_SIGN_IN, ghInstallCommand } from './ghSetup.ts'
-import { problemCopy } from './problemCopy.ts'
+import { partialCopy, problemCopy } from './problemCopy.ts'
 
 const daemonError = (message: string, problem: object) => new RpcCallError({ code: -32003, message, data: { problem } })
 
@@ -44,5 +44,14 @@ describe('gh setup commands', () => {
     expect(ghInstallCommand('darwin', () => false)).toBeNull()
     expect(ghInstallCommand('linux', () => true)).toBeNull()
     expect(GH_SIGN_IN.startsWith('gh auth login -h github.com --web')).toBe(true)
+  })
+})
+
+describe('partial pull request lists', () => {
+  test('names the projects that did not list and says the rest are shown', () => {
+    expect(partialCopy(['kybern / app', 'docs'], true)).toEqual({ title: 'Some pull requests didn’t load', body: 'Couldn’t read kybern / app, docs. The rest are listed below.' })
+  })
+  test('nothing listed: says to try again, and caps the names', () => {
+    expect(partialCopy(['a', 'b', 'c', 'd', 'e'], false)).toEqual({ title: 'Pull requests didn’t load', body: 'Couldn’t read a, b, c and 2 more. Try again in a moment.' })
   })
 })

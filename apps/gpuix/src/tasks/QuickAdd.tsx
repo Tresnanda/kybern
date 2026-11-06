@@ -1,10 +1,10 @@
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
+import { toastProblem } from '../problems/toast.ts'
 import { useEffect, useRef, useState } from 'react'
 import { observeElementBounds } from '../native/layout.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { useApp } from '../state.ts'
 import { useSpaceProjects } from '../spaces/current.ts'
-import { toast } from '../shell/toasts.tsx'
 import { ink, Label, useTheme } from '../ui.tsx'
 import { GlassEdge } from '../kit/GlassEdge.tsx'
 import { raisedFill, useGlass } from '../platform/glass.ts'
@@ -60,7 +60,7 @@ export function QuickAdd({ request, card = false }: { request: NonNullable<Retur
     } catch (error) {
       draft.current.title = value
       setTitle(value)
-      toast.error(`Unable to add “${value}”`, { description: String(error) })
+      toastProblem(error, { action: `add “${value}”` })
     } finally {
       draft.current.busy = false
       setBusy(false)
@@ -77,7 +77,7 @@ export function QuickAdd({ request, card = false }: { request: NonNullable<Retur
           title: value,
           status: request.status,
           priority: request.priority,
-        }).catch((error) => toast.error(`Unable to add “${value}”`, { description: String(error) }))
+        }).catch((error) => toastProblem(error, { action: `add “${value}”` }))
     },
     [request],
   )

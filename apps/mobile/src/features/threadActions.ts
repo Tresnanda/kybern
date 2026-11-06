@@ -15,7 +15,7 @@ export function threadMenuItems(
   thread: Thread,
   options: { refresh: () => unknown; onError?: (message: string) => void },
 ): MenuItem[] {
-  const fail = (e: unknown) => options.onError?.(errorText(e));
+  const fail = (e: unknown) => options.onError?.(errorText(e, "change the thread"));
   return [
     {
       title: thread.pinned ? "Unpin thread" : "Pin thread",

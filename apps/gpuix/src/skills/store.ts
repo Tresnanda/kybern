@@ -1,10 +1,10 @@
 // The skills on every machine (ADE-86): `skills.network_view` read from the machine the user is at, which asks the other
 // members. Read while Settings → Skills shows it, and again when the outbox or a machine changes. Copies go to the same
 // daemon (`skills.copy`), which forwards one to the machine that sends the skill.
+import { problemSentence } from '../problems/sentence.ts'
 import { useEffect, useSyncExternalStore } from 'react'
 import type { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 import { NETWORK_MACHINE_CHANGED_NOTIFICATION, OUTBOX_CHANGED_NOTIFICATION, type SkillsCopyParams, type SkillsCopyResult, type SkillsNetworkView } from '../../../../packages/kybern-client/src/types.ts'
-import { errorText } from '../nav/actions.ts'
 import { getClient } from '../state.ts'
 
 interface SkillsState { view: SkillsNetworkView | null; error: string; loading: boolean }
@@ -33,7 +33,7 @@ export async function refreshSkills(): Promise<void> {
         if (skillsClient() !== client) return
         emit({ view, error: '', loading: false })
       } catch (e) {
-        if (skillsClient() === client) emit({ error: `Unable to read your skills. ${errorText(e)}`, loading: false })
+        if (skillsClient() === client) emit({ error: problemSentence(e, { action: 'read your skills' }), loading: false })
       }
     } while (again)
   } finally { reading = false }

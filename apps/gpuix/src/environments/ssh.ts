@@ -1,4 +1,5 @@
 // Bun counterpart of desktop/src-tauri/src/remote.rs. Never passes secrets in argv.
+import { problemSentence } from '../problems/sentence.ts'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -121,7 +122,7 @@ async function keepTunnel(tunnel: Tunnel) {
       tunnel.status = { state: 'starting' }
     } catch (error) {
       if (tunnel.stopped) return
-      tunnel.status = { state: 'failed', error: error instanceof Error ? error.message : String(error) }
+      tunnel.status = { state: 'failed', error: problemSentence(error, { action: 'keep the SSH tunnel open' }) }
     }
     await new Promise<void>(done => { tunnel.wake = done; tunnel.retry = setTimeout(done, backoff) })
     backoff = Math.min(30000, backoff * 2)
@@ -224,5 +225,5 @@ export async function bootstrapSsh(input: BootstrapInput, report: (progress: Boo
     deps.signal?.throwIfAborted()
     const profile = await deps.pair(ssh.local_port, machine.token, { ...input, id }, ssh, info.environment_id)
     progress('done'); return profile
-  } catch (error) { deps.stop(id); progress('failed', error instanceof Error ? error.message : String(error)); throw error } finally { deps.signal?.removeEventListener('abort', abort) }
+  } catch (error) { deps.stop(id); progress('failed', problemSentence(error, { action: 'set up this machine' })); throw error } finally { deps.signal?.removeEventListener('abort', abort) }
 }

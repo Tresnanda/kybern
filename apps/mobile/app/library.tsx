@@ -174,7 +174,7 @@ export default function Library() {
       await refreshAll();
       setError("");
     } catch (e) {
-      setError(errorText(e));
+      setError(errorText(e, "refresh your library"));
     } finally {
       setRefreshing(false);
       refreshingRef.current = false;

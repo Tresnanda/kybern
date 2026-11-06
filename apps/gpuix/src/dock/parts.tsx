@@ -4,8 +4,8 @@ import { Icon } from '../icons.tsx'
 import { EASE_OUT, ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { muted } from '../nav/overlay.tsx'
 import { Rise } from '../motion/kit.tsx'
-import { Button } from '../kit/Button.tsx'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
+import { ProblemLine, type ProblemLineProps } from '../problems/Line.tsx'
 
 /**
  * A dock panel's empty state. Like the kit's `Empty` it runs `.t-stagger` on mount: the icon, the title and the description rise
@@ -30,13 +30,14 @@ export function Section({ label, children }: { label: string; children?: ReactNo
   </div>
 }
 
-export function ErrorLine({ error, retry }: { error: string | null; retry?: () => void }) {
-  const t = useTheme()
-  if (!error) return null
-  return <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: 12 }}>
-    <Label color={t.red} size={12}>{error}</Label>
-    {retry && <Button size="sm" style={{ alignSelf: 'flex-start' }} onClick={retry}>Try again</Button>}
-  </div>
+/**
+ * A failure inside a dock panel, in plain words (`ProblemLine`): the headline names what couldn't be done (`action`: "load the files"),
+ * one sentence says what to do next, and the technical text sits behind "Show details". `retry` makes "Try again" the fix. Pass the
+ * caught error itself (`asError(e)`), not its text, so the daemon's own `data.problem` survives.
+ */
+export function ErrorLine({ error, action = 'finish that', retry, projectId, machine, testId = 'dock-problem' }: Partial<ProblemLineProps> & { error: unknown }) {
+  if (error == null || error === '') return null
+  return <div style={{ display: 'flex', flexDirection: 'column', padding: 8 }}><ProblemLine error={error} action={action} retry={retry} projectId={projectId} machine={machine} testId={testId} /></div>
 }
 
 /** Desktop Switch: 32 × 20 track, 16px thumb; a 28px pointer/keyboard target. */

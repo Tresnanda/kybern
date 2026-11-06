@@ -29,7 +29,7 @@ function report(kind: 'exception' | 'rejection', thrown: unknown, notify: Notify
   if (now - lastToast < TOAST_INTERVAL_MS) return
   lastToast = now
   try {
-    notify('Something went wrong', `${error.message || error.name}. Kybern kept running; if this repeats, restart the app.`)
+    notify('Something went wrong', 'Kybern kept running. If this repeats, restart the app.')
   } catch (failure) { console.error('[kybern] could not show the error toast:', failure) }
 }
 

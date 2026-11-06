@@ -1,10 +1,9 @@
 // The "Mixed" marker beside a shared setting (design §9.1). When the machines that answered disagree about a field, a
 // small chip opens a popover with each machine's value and "Use <value> on all machines". A change that still waits for
 // an offline machine reads "Waiting for satyamas". Nothing shows with one machine, or for a field the machines agree on.
+import { toastProblem } from '../problems/toast.ts'
 import { describeSharedValue, fieldOf, machineValues, pendingMachineNames, silentDetail, useOnAllLabel, useOnAllMachines, valueGroups } from '../../../../packages/kybern-client/src/sharedState.ts'
 import { Menu, MenuItem, MenuLabel, MenuSeparator } from '../nav/overlay.tsx'
-import { errorText } from '../nav/actions.ts'
-import { toast } from '../shell/toasts.tsx'
 import { PERMISSION_LABEL, PROVIDER_LABEL } from '../shared/lib/format.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { refreshSettings } from './store.ts'
@@ -26,7 +25,7 @@ export function SharedMark({ path }: { path: string }) {
       if (!result) throw new Error('Check the connection and try again.')
       await refreshSettings()
       await refreshSharedView()
-    } catch (e) { toast.error('Unable to change the other machines', { description: errorText(e) }) }
+    } catch (e) { toastProblem(e, { action: 'change the other machines' }) }
   }
   return <div testId={`shared-${path}`} style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
     {waiting.length > 0 && <Label color={t.textSecondary} size={13} lineHeight={20}>{`Waiting for ${waiting.join(', ')}`}</Label>}

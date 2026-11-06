@@ -26,14 +26,14 @@ import { MermaidBlock } from './transcript/MermaidBlock.tsx'
 import { MessageRail, type RailItem } from './transcript/rail.tsx'
 import { createTranscriptNavigation } from './shared/lib/transcriptNavigation.ts'
 import { T } from './transcript/glyphs.ts'
-import { alpha, muted, Para } from './transcript/kit.tsx'
+import { alpha, muted } from './transcript/kit.tsx'
 import { over } from './theme.ts'
 import { AnswerImages, DateSeparator, Turn, TurnFooter, turnTimestamp } from './transcript/Turn.tsx'
 import { RotationRow } from './transcript/Rotation.tsx'
 import { useComposerOverlayHeight } from './composer/height.ts'
 import { GlassEdge } from './kit/GlassEdge.tsx'
 import { frostBackdrop, frostFill, frostHoverFill, useGlass } from './platform/glass.ts'
-import { loadEarlier, useActionError, useEarlierError, usePacedBlocks } from './transcript/store.ts'
+import { loadEarlier, useEarlierError, usePacedBlocks } from './transcript/store.ts'
 
 export { markdownTheme } from './transcript/kit.tsx'
 
@@ -67,7 +67,6 @@ const scrollAnchors = new Map<string, SavedAnchor>()
 export function Transcript() {
   const pane = usePaneAccess()
   const t = useTheme()
-  const g = useGlass()
   const renderer = useGpuixRequired()
   const threadId = useApp((s) => s.selectedId)
   const thread = useApp(s => s.open.thread)
@@ -77,7 +76,6 @@ export function Transcript() {
   const loadingEarlier = useApp((s) => !!s.open.loadingEarlier)
   const threadRunning = useApp((s) => s.open.thread?.status === 'running' || s.open.thread?.status === 'awaiting-approval')
   const earlierError = useEarlierError()
-  const actionError = useActionError()
   const groupTurns = useMemo(() => createTurnGrouper(), [threadId])
   const turns = useMemo(() => groupTurns(blocks), [blocks, groupTurns])
   const rowStateScope = useMemo(() => new Map<string, unknown>(), [threadId])
@@ -435,7 +433,7 @@ export function Transcript() {
                   <div testId="earlier-status" style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 32, paddingTop: 8, paddingBottom: 8 }}>
                     {earlierError ? (
                       <>
-                        <Label color={muted(t)} truncate style={{ flexShrink: 1 }}>{`Unable to load earlier messages. ${earlierError}`}</Label>
+                        <Label color={muted(t)} truncate style={{ flexShrink: 1 }}>{earlierError}</Label>
                         <div onClick={() => void loadEarlier(pane.id)} style={{ paddingLeft: 8, paddingRight: 8, paddingTop: 6, paddingBottom: 6, borderRadius: 6, backgroundColor: t.buttonSecondary, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
                           <Label color={t.text} weight={500}>Retry</Label>
                         </div>
@@ -473,13 +471,6 @@ export function Transcript() {
         renderer.scrollToItem?.(target, index + lead, 0)
         setJump(old => ({id,index,generation:(old?.generation ?? 0)+1}))
       }} />}
-      {actionError && (
-        <div style={{ position: 'absolute', top: 12, left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
-          <div backdrop={frostBackdrop(g, 'menus', 10)} style={{ position: 'relative', paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 8, borderRadius: 10, borderWidth: 1, borderColor: g.on ? g.frostRim : t.border, backgroundColor: frostFill(g, 'menus', t.popover, 'frostMenu'), maxWidth: 480 }}>
-            <Para color={t.text} size={13} lineHeight={19.5}>{actionError}</Para>
-          </div>
-        </div>
-      )}
       <OverlayScrollButton visible={!atTail} onClick={scrollToBottom} />
     </div></SparseRetention.Provider></TranscriptRowStateScope.Provider></TranscriptFocusRestoration.Provider></TranscriptTail.Provider>
   )

@@ -27,7 +27,7 @@ import {
   startsCollapsed,
 } from "../src/state/tasksModel";
 import { useProjectScope } from "../src/state/projectScope";
-import { errorText, useApp } from "../src/state/runtime";
+import { problemFor, useApp } from "../src/state/runtime";
 import { useInSpace, useSpaceProjects } from "../src/state/spaces";
 import { HeaderActions, MenuButton, type MenuItem } from "../src/ui/ActionMenu";
 import { Alert } from "../src/ui/Alert";
@@ -37,6 +37,7 @@ import { InsetGroup, SectionHeader } from "../src/ui/List";
 import {
   Button,
   Empty,
+  ErrorBanner,
   Icon,
   IconButton,
   T,
@@ -303,7 +304,8 @@ export default function Tasks() {
   const add = useCallback(
     (title: string) =>
       createTask({ title, projectId: targetProject }).catch((e) => {
-        Alert.alert("Unable to add the task", errorText(e), [{ text: "OK" }]);
+        const problem = problemFor(e, "add the task");
+        Alert.alert(problem.title, problem.body, [{ text: "OK" }]);
         throw e;
       }),
     [targetProject],
@@ -486,11 +488,7 @@ export default function Tasks() {
             }
             ListEmptyComponent={empty}
             ListFooterComponent={
-              error ? (
-                <T variant="footnote" tone="negative" style={{ paddingVertical: space.md, paddingHorizontal: space.lg }}>
-                  {error}
-                </T>
-              ) : null
+              <ErrorBanner error={error} onRetry={() => void loadTasks()} />
             }
           />
         </PullRefresh>
