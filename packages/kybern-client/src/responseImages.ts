@@ -1,16 +1,17 @@
 export interface ResponseImage { source: string; label: string }
-const MIME = /^image\/(png|jpeg|gif|webp|avif)$/i
+const MIME = /^image\/(png|jpe?g|gif|webp|avif)$/i
+const decodePath = (path: string) => { try { return decodeURIComponent(path) } catch { return path } }
 export function imageSource(source: string): { kind: "remote" | "inline" | "local"; value: string } | null {
   if (source.length > 70_000_000) return null
-  if (/^data:image\/(png|jpeg|gif|webp|avif);base64,[a-z0-9+/=\s]+$/i.test(source)) return { kind: "inline", value: source }
+  if (/^data:image\/(png|jpe?g|gif|webp|avif)(?:;[a-z0-9!#$&^_.+-]+=[^;,]+)*;base64,[a-z0-9+/=\s]+$/i.test(source)) return { kind: "inline", value: source }
   if (/^https?:\/\//i.test(source)) return { kind: "remote", value: source }
   if (/^file:\/\//i.test(source)) {
-    try { const url = new URL(source); return !url.hostname || url.hostname === "localhost" ? { kind: "local", value: decodeURIComponent(url.pathname) } : null } catch { return null }
+    try { const url = new URL(source); return !url.hostname || url.hostname === "localhost" ? { kind: "local", value: decodePath(url.pathname) } : null } catch { return null }
   }
   // A Windows drive path (`D:\cache\a.png`) is a file, not a `d:` scheme.
   if (/^[a-z]:[\\/]/i.test(source)) return { kind: "local", value: source }
   if (/^[a-z][a-z0-9+.-]*:/i.test(source) || source.startsWith("//") || !source.trim()) return null
-  try { return { kind: "local", value: decodeURIComponent(source) } } catch { return null }
+  try { return { kind: "local", value: decodeURIComponent(source) } } catch { return { kind: "local", value: source } }
 }
 export function responseImages(value: unknown): ResponseImage[] {
   const found = new Map<string, ResponseImage>()

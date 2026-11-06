@@ -7,7 +7,7 @@ test("image URLs retain machine-local paths and reject active or unknown schemes
   assert.deepEqual(imageSource("file:///workspace/a%20b.png"), { kind: "local", value: "/workspace/a b.png" })
   assert.deepEqual(imageSource("D:\\cache\\images\\a%20b.png"), { kind: "local", value: "D:\\cache\\images\\a%20b.png" }, "a Windows drive path is a file, kept as written")
   assert.deepEqual(imageSource("C:/Users/a.png"), { kind: "local", value: "C:/Users/a.png" })
-  for (const src of ["javascript:alert(1)", "data:text/html;base64,YQ==", "data:image/svg+xml;base64,YQ==", "file://other/a.png", "//other/a.png", "%zz"]) assert.equal(imageSource(src), null)
+  for (const src of ["javascript:alert(1)", "data:text/html;base64,YQ==", "data:image/svg+xml;base64,YQ==", "file://other/a.png", "//other/a.png"]) assert.equal(imageSource(src), null)
 })
 
 test("native tool image blocks survive nested harness payloads and deduplicate", () => {
@@ -37,7 +37,7 @@ test("Claude's Read result keeps its picture out of the text view and shows it o
 
 test("only supported local image links open a thread preview", () => {
   for (const source of ["/workspace/a.png", "artifacts/first%20pass.PNG", "file:///workspace/a%20b.webp", "./result.jpeg"]) assert.equal(localImageLink(source), true, source)
-  for (const source of ["https://example.com/a.png", "javascript:alert(1).png", "data:text/html,a.png", "file://other/a.png", "//other/a.png", "page.html", "image.svg", "invalid%zz.png"]) assert.equal(localImageLink(source), false, source)
+  for (const source of ["https://example.com/a.png", "javascript:alert(1).png", "data:text/html,a.png", "file://other/a.png", "//other/a.png", "page.html", "image.svg"]) assert.equal(localImageLink(source), false, source)
 })
 
 test("only images that can never load are not offered a retry; no folder is refused (ADE-122)", () => {
@@ -54,4 +54,11 @@ test("streaming image-safe JSON matches the old sanitized tree without copying p
   assert.equal(JSON.stringify(output, imageSafeValue, 2), JSON.stringify(imageSafeOutput(output), null, 2))
   assert.equal(imageSafeValue.call(output, "nested", output.nested), output.nested)
   assert.equal(output.nested[0].data.length, 1000, "original image remains available to the gallery")
+})
+
+test('OpenCode image urls and image mime aliases', () => {
+  assert.equal(imageSource('data:image/gif;name=demo.gif;base64,R0lGODlh').kind, 'inline')
+  assert.equal(imageSource('100% complete.gif').value, '100% complete.gif')
+  assert.equal(responseImages({ type: 'file', mime: 'image/gif', url: 'artifacts/demo.gif' })[0].source, 'artifacts/demo.gif')
+  assert.equal(responseImages({ type: 'file', mime: 'image/jpg', url: 'photo.jpg' })[0].source, 'photo.jpg')
 })

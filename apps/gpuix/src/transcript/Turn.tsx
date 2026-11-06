@@ -1,3 +1,6 @@
+import { actOnThreadFile, showThreadFile } from './threadFiles.ts'
+import { Menu, MenuItem } from '../nav/overlay.tsx'
+import { osLabels } from '../platform/os.ts'
 import { useWorkspaceProgress } from '../groups/store.ts'
 import { editedFilesTitle, groupFilesByRepo, includedMembers, stripRepoPrefix, workspaceProgressLabel } from '../../../../packages/kybern-client/src/groups.ts'
 import { OutsideChange } from './OutsideChange.tsx'
@@ -45,7 +48,7 @@ import { Button } from '../kit/Button.tsx'
 import { IconButton } from '../kit/IconButton.tsx'
 import { CopyAction, messageText, SaveToNoteAction, UserBubble } from './bubble.tsx'
 import { T } from './glyphs.ts'
-import { ResponseImage } from './images.tsx'
+import { ThreadImage } from './ThreadImage.tsx'
 import { alpha, cachedMarkdownTheme, Chevron, fg, META, muted, Para, ROW_LINE, RowIcon, TEXT } from './kit.tsx'
 import { over } from '../theme.ts'
 import { Collapse, Rise } from '../motion/kit.tsx'
@@ -272,7 +275,7 @@ export const AnswerImages = memo(function AnswerImages({ group, threadId }: { gr
           {images.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               {images.map((image) => (
-                <ResponseImage key={image.source} source={image.source} label={image.label} at={image.at} />
+                <ThreadImage key={image.source} threadId={threadId} source={image.source} alt={image.label} at={image.at} />
               ))}
             </div>
           )}
@@ -447,6 +450,7 @@ function RepoCaption({ name, border }: { name: string; border?: string }) {
 function EditedFileRow({ file, threadId, turnId, first, border, repo }: { file: Diff['files'][number]; threadId: ThreadId; turnId: string; first?: boolean; border: string; /** The member it belongs to: its path prefix is drawn muted. */ repo?: string }) {
   const t = useTheme()
   const g = useGlass()
+  const [hover, setHover] = useState(false)
   const [open, setOpen] = useRowState(`file:${turnId}:${file.path}`, false)
   // The patch is cached outside the row: the virtual list and the card's
   // disclosure both remount rows, and an open row must not come back empty.
@@ -479,6 +483,7 @@ function EditedFileRow({ file, threadId, turnId, first, border, repo }: { file: 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', ...(first ? {} : { borderTopWidth: 1, borderColor: border }) }}>
       <div
+        onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
         style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 12, paddingRight: 8, paddingTop: 10, paddingBottom: 10, minWidth: 0, cursor: 'pointer', hover: { backgroundColor: t.variant === 'dark' ? 'rgba(0, 0, 0, 0)' : t.buttonSecondaryHover } }}
       >
         <div testId={`edited-file-${file.path}`} onClick={toggle} style={{ display: 'flex', alignItems: 'center', gap: 8, flexGrow: 1, minWidth: 0 }}>
@@ -497,6 +502,15 @@ function EditedFileRow({ file, threadId, turnId, first, border, repo }: { file: 
         <div style={{ flexGrow: 1 }} />
         <DiffStat additions={file.additions} deletions={file.deletions} />
         </div>
+        <div style={{ display: 'flex', opacity: hover ? 1 : 0, pointerEvents: hover ? undefined : 'none' }}>
+        <IconButton label="Open" icon={N.external} size="sm" onClick={() => void actOnThreadFile(threadId, file.path, 'open')} />
+        <IconButton label={osLabels().reveal} icon={N.folder} size="sm" onClick={() => void actOnThreadFile(threadId, file.path, 'reveal')} />
+        </div>
+        <Menu align="end" trigger={() => <IconButton icon={N.ellipsis} label="File actions" size="sm" />}>
+          <MenuItem id="reveal" label={osLabels().reveal} icon={N.folder} onSelect={() => void actOnThreadFile(threadId, file.path, 'reveal')} />
+          <MenuItem id="open" label="Open" onSelect={() => void actOnThreadFile(threadId, file.path, 'open')} />
+          <MenuItem id="explorer" label="Show in Kybern Explorer" onSelect={() => showThreadFile(threadId, file.path)} />
+        </Menu>
         <IconButton testId={`edited-review-${file.path}`} label={`Open the changes in ${file.path} in a tab`} icon={T.panelRight} size="sm" onClick={() => openTab(threadId, { kind: 'diff', path: file.path })} />
       </div>
       <Collapse open={open && ready}>

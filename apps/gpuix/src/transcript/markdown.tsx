@@ -1,3 +1,7 @@
+import { useLinkIcons } from './linkIcons.ts'
+import { actOnThreadFile, showThreadFile } from './threadFiles.ts'
+import { osLabels } from '../platform/os.ts'
+import { ContextMenu, MenuItem } from '../nav/overlay.tsx'
 import { knownPullTarget } from '../pulls/OpenPullRequest.tsx'
 import { knownRunTarget, openRunTarget } from '../pulls/openRun.ts'
 import { knownIssueTarget, openIssueTarget } from '../pulls/openIssue.ts'
@@ -271,6 +275,9 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
   }, [text, refs, notes, tasks, fileOf, refused])
   const [preview, setPreview] = useState<{ title: string; text: string; code: boolean; line?: number; whole?: boolean; markdown?: boolean; raw?: boolean } | null>(null)
   useTranscriptRowLease(preview !== null)
+  const linkIcons = useLinkIcons(source, threadId, t)
+  const theme = useMemo(() => { const base = cachedMarkdownTheme(t); return { ...base, markdown: { ...base.markdown, linkIcons: [...linkIcons, ...base.markdown.linkIcons] } } }, [t, linkIcons])
+  const [fileMenu, setFileMenu] = useState<{ path: string; at: { x: number; y: number } } | null>(null)
   const [image, setImage] = useState<string | null>(null)
   const open = async (href: string) => {
     const link = chatLink(href)
@@ -303,6 +310,9 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
           if (outside === 'cancelled') return
           path = outside ?? link.path
         }
+        if (/\.(?:pdf|mp4|mov|mkv|webm|avi|zip|docx?|xlsx?|pptx?)$/i.test(path)) { void actOnThreadFile(threadId, path, 'open'); return }
+        const header = await client.call('threads.files.read', { thread_id: threadId, path, max_bytes: 512 })
+        if (header.binary) { void actOnThreadFile(threadId, path, 'open'); return }
         if (!openTabFromPane(pane.id, { kind: 'file', path, root: 'thread', ...(link.line ? { line: link.line } : {}) })) {
           const file = await client.call('threads.files.read', { thread_id: threadId, path })
           setPreview({ title: link.line ? `${path}:${link.line}` : path, text: file.content, code: true, line: link.line, markdown: MARKDOWN_FILE.test(path) })
@@ -320,7 +330,12 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
   const rendered = !!preview?.markdown && !preview.raw
   const shown = preview && fromLine(preview.text, preview.whole || rendered ? undefined : preview.line)
   return <>
-    <markdown source={source} theme={cachedMarkdownTheme(t)} onLinkClick={e => { if (e.value) void open(e.value) }} style={{ color: t.text, userSelect: 'text' }} />
+    <markdown source={source} theme={theme} onLinkClick={e => { if (e.value) void open(e.value) }} onLinkContextMenu={e => { if (!e.value) return; const target = chatLink(e.value); if (target.kind === 'file') setFileMenu({ path: target.path, at: { x: e.x ?? 0, y: e.y ?? 0 } }) }} style={{ color: t.text, userSelect: 'text' }} />
+    {fileMenu && threadId && <ContextMenu at={fileMenu.at} onClose={() => setFileMenu(null)}>
+      <MenuItem id="reveal" label={osLabels().reveal} onSelect={() => void actOnThreadFile(threadId, fileMenu.path, 'reveal')} />
+      <MenuItem id="open" label="Open" onSelect={() => void actOnThreadFile(threadId, fileMenu.path, 'open')} />
+      <MenuItem id="explorer" label="Show in Kybern Explorer" onSelect={() => showThreadFile(threadId, fileMenu.path)} />
+    </ContextMenu>}
     {image && threadId && <ThreadImagePreview threadId={threadId} source={image} onClose={() => setImage(null)} />}
     {preview && shown && <Dialog width={720} onClose={() => setPreview(null)} testId="chat-link-preview">
       <DialogHeader title={preview.title} onClose={() => setPreview(null)} />
