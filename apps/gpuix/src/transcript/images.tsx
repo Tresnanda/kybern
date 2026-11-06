@@ -94,7 +94,8 @@ function srcFor(source: string): string | null {
  * A click morphs the image into the shared preview (`motion/ImageMorph.tsx`); Enter or Space opens it at once.
  */
 /** `tabSource`: what an image tab reloads from (a thread-relative path), when `source` is already the loaded data. */
-export function ResponseImage({ source, tabSource, label = 'Agent image', compact = false, thumbnail = false, at }: { source: string; tabSource?: string; label?: string; compact?: boolean; thumbnail?: boolean; at?: string }) {
+/** `maxWidth` / `maxHeight`: the largest box the image is drawn in (280 wide by default; an issue's images are larger). */
+export function ResponseImage({ source, tabSource, label = 'Agent image', compact = false, thumbnail = false, at, maxWidth = 280, maxHeight }: { source: string; tabSource?: string; label?: string; compact?: boolean; thumbnail?: boolean; at?: string; maxWidth?: number; maxHeight?: number }) {
   const t = useTheme()
   const fresh = useFresh(at)
   // `t-img` starts when the bitmap has decoded (`<img onLoad>`), not on mount, so the blur resolves over the picture
@@ -115,8 +116,9 @@ export function ResponseImage({ source, tabSource, label = 'Agent image', compac
         <Para color={muted(t)} size={14}>Preview unavailable</Para>
       </div>
     )
-  const width = thumbnail ? 64 : Math.min(280, size?.width ?? 280)
-  const height = thumbnail ? 64 : size ? Math.round((width * size.height) / size.width) : 210
+  const box = boxFor(size, maxWidth, maxHeight)
+  const width = thumbnail ? 64 : box.width
+  const height = thumbnail ? 64 : box.height
   // Painted from a file at most twice the slot wide; the viewer opens the original (`imageFiles.ts`).
   const files = useImageFiles(src, width * 2, size?.width ?? null)
   return (
@@ -145,6 +147,16 @@ export function ResponseImage({ source, tabSource, label = 'Agent image', compac
     }} onClose={viewer.hide} onOpenInTab={() => openTabFromPane(pane.id, { kind: 'image', source: tabSource ?? source, label })} />}
     </>
   )
+}
+
+/** The box an image of `size` is drawn in: its own size, at most `maxWidth` wide and `maxHeight` high, keeping its shape.
+ *  Unknown sizes take a 4:3 box `maxWidth` wide (at most 280). */
+export function boxFor(size: { width: number; height: number } | null, maxWidth = 280, maxHeight?: number): { width: number; height: number } {
+  if (!size) { const width = Math.min(280, maxWidth); return { width, height: Math.round(width * 0.75) } }
+  let width = Math.min(maxWidth, size.width)
+  let height = Math.round((width * size.height) / size.width)
+  if (maxHeight && height > maxHeight) { height = maxHeight; width = Math.max(1, Math.round((maxHeight * size.width) / size.height)) }
+  return { width, height }
 }
 
 /** An image that cannot be shown, in a dialog with its caption and what to do (a clicked image link that failed to load). The

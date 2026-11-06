@@ -3266,6 +3266,8 @@ export interface IssueComment {
   created_at: string
   url: string
 }
+/** `github.issue.comment`: a comment on an issue or a pull request's conversation. `repo`: the member of a group project. */
+export interface IssueCommentParams { project_id: ProjectId; number: number; body: string; repo?: string }
 export interface IssueLinkedPull {
   number: number
   title: string
@@ -4954,6 +4956,7 @@ export interface Methods {
   "github.pr.detail": [PrDetailParams, PrDetailResult];
   "github.issue.list": [IssueListParams, IssueListResult];
   "github.issue.detail": [IssueDetailParams, IssueDetailResult];
+  "github.issue.comment": [IssueCommentParams, IssueComment];
   "github.pr.page": [PrPageParams, PrPageResult];
   "github.pr.action": [PrActionParams, Empty];
   "github.actions.runs": [ActionsRunsParams, ActionsRunsResult];

@@ -33,6 +33,7 @@ pub fn routes() -> Router<AppState> {
         .route("/assets", post(upload_asset).options(asset_preflight))
         .route("/assets/{id}", get(get_asset).options(asset_preflight))
         .route("/threads/{id}/image", get(get_thread_image).options(asset_preflight))
+        .route("/github/image", get(get_github_image).options(asset_preflight))
         .route("/threads/{id}/snapshot", post(post_thread_snapshot).options(asset_preflight))
         .route("/threads/{id}/visuals/{visual}/snapshot/{file}", get(get_visual_snapshot).options(asset_preflight))
 }
@@ -416,6 +417,64 @@ async fn get_thread_image(
         ms = started.elapsed().as_millis() as u64,
         "thread image"
     );
+    with_asset_cors(response, origin)
+}
+
+#[derive(Deserialize)]
+struct GithubImageQuery {
+    project_id: Uuid,
+    url: String,
+    /// The issue or pull request the image is in: a private repository's upload is found in its HTML.
+    #[serde(default)]
+    number: Option<u64>,
+    /// Group projects: the member repository.
+    #[serde(default)]
+    repo: Option<String>,
+}
+
+/// An image in an issue's or a pull request's Markdown on one of GitHub's hosts, fetched by the machine that owns the
+/// project, with that machine's `gh` sign-in for a private repository's uploads (`github_images.rs`). The answer is the
+/// image, or a status and one sentence the client shows under the image's caption.
+async fn get_github_image(State(state): State<AppState>, headers: HeaderMap, Query(query): Query<GithubImageQuery>) -> Response {
+    use crate::github_images::ImageFailure;
+    let origin = allowed_asset_origin(&headers);
+    let started = std::time::Instant::now();
+    let response = async {
+        let Some(raw) = bearer(&headers) else { return (StatusCode::UNAUTHORIZED, "missing token").into_response() };
+        if !matches!(authenticate(&state.store, &raw), Ok(Some(p)) if p.has(kybern_protocol::Scope::OrchestrationRead)) {
+            return (StatusCode::FORBIDDEN, "token cannot read images").into_response();
+        }
+        let Ok(Some(project)) = state.store.project_get(query.project_id) else {
+            return (StatusCode::NOT_FOUND, "Project not found. Refresh and try again.").into_response();
+        };
+        let Ok(dir) = crate::rpc::pr_dir(&project, query.repo.as_deref()) else {
+            return (StatusCode::BAD_REQUEST, "That repository isn't part of this project.").into_response();
+        };
+        // Each image is up to 50 MB in memory: four at a time.
+        static FETCHES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+        let Ok(_permit) = FETCHES.acquire().await else { return (StatusCode::SERVICE_UNAVAILABLE, "Try again.").into_response() };
+        match crate::github_images::fetch("gh", &dir, query.number, &query.url).await {
+            Ok((mime, bytes)) => (
+                [(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "private, no-store"), (header::X_CONTENT_TYPE_OPTIONS, "nosniff")],
+                bytes,
+            )
+                .into_response(),
+            Err(ImageFailure::NotGithub) => (StatusCode::BAD_REQUEST, "Not an image on GitHub.").into_response(),
+            Err(ImageFailure::NotFound) => {
+                (StatusCode::NOT_FOUND, "GitHub didn't share this image. Open it on GitHub, or check that gh can see the repository.")
+                    .into_response()
+            }
+            Err(ImageFailure::TooLarge) => (StatusCode::PAYLOAD_TOO_LARGE, "images are limited to 50 MB").into_response(),
+            Err(ImageFailure::NotImage) => {
+                (StatusCode::UNSUPPORTED_MEDIA_TYPE, "use a PNG, JPEG, GIF, WebP, or AVIF image").into_response()
+            }
+            Err(ImageFailure::Unreachable) => {
+                (StatusCode::BAD_GATEWAY, "GitHub didn't answer. Check the connection, then retry.").into_response()
+            }
+        }
+    }
+    .await;
+    tracing::debug!(target: "kybern::images", status = response.status().as_u16(), ms = started.elapsed().as_millis() as u64, "github image");
     with_asset_cors(response, origin)
 }
 

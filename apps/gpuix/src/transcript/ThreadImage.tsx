@@ -113,18 +113,19 @@ function LocalThreadImage({ threadId, source, label, at }: { threadId: string | 
     onReveal={file ? () => { if (image.failure!.status === 404) openQuietly(path.dirname(file)); else revealQuietly(file) } : undefined} />
 }
 
-/** The image's slot while it loads, or why it cannot show: a quiet card with its caption (`ResponseImage`'s width). */
-function ImageCard({ label, reason, loading = false, onRetry, onReveal }: { label: string; reason?: string; loading?: boolean; onRetry?: () => void; onReveal?: () => void }) {
+/** The image's slot while it loads, or why it cannot show: a quiet card with its caption (`ResponseImage`'s width). `testId`
+ *  prefixes `-loading` / `-failed` (default `thread-image`). */
+export function ImageCard({ label, reason, loading = false, onRetry, onReveal, testId = 'thread-image' }: { label: string; reason?: string; loading?: boolean; onRetry?: () => void; onReveal?: () => void; testId?: string }) {
   const t = useTheme()
   return <Rise kind="row" play={!loading}>
-    <div testId={loading ? 'thread-image-loading' : 'thread-image-failed'} style={{ display: 'flex', flexDirection: 'column', gap: 8, width: 280, marginTop: 12, marginBottom: 12, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: t.border, backgroundColor: t.buttonSecondary }}>
+    <div testId={loading ? `${testId}-loading` : `${testId}-failed`} style={{ display: 'flex', flexDirection: 'column', gap: 8, width: 280, marginTop: 12, marginBottom: 12, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: t.border, backgroundColor: t.buttonSecondary }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
         <Icon source={T.eye} size={14} color={muted(t)} />
         <Label color={t.text} size={13} weight={500} truncate style={{ flexShrink: 1 }}>{label}</Label>
       </div>
       <Label color={muted(t)} size={12} lineHeight={16}>{loading ? 'Loading image…' : reason ?? ''}</Label>
       {(onRetry || onReveal) && <div style={{ display: 'flex', gap: 8 }}>
-        {onRetry && <Button size="sm" testId="thread-image-retry" onClick={onRetry}>Retry</Button>}
+        {onRetry && <Button size="sm" testId={`${testId}-retry`} onClick={onRetry}>Retry</Button>}
         {onReveal && <Button variant="ghost" size="sm" testId="thread-image-reveal" onClick={onReveal}>{osLabels().reveal.replace('Reveal', 'Show')}</Button>}
       </div>}
     </div>

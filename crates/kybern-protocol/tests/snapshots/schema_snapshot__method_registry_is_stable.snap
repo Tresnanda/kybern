@@ -157,6 +157,7 @@ expression: names
 - github.pr.action
 - github.issue.list
 - github.issue.detail
+- github.issue.comment
 - github.actions.runs
 - github.actions.run
 - github.actions.log

@@ -1238,6 +1238,17 @@ enum IssueCmd {
         #[arg(long)]
         repo: Option<String>,
     },
+    /// Comment on an issue or a pull request. The Markdown comes from --body, or from standard input.
+    Comment {
+        project: String,
+        number: u64,
+        /// The comment, in Markdown. Omit it to read the comment from standard input.
+        #[arg(long)]
+        body: Option<String>,
+        /// Member repository of a group project.
+        #[arg(long)]
+        repo: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2947,6 +2958,19 @@ pub async fn run() -> Result<()> {
                 let project_id = resolve_project(&client, &project, false).await?;
                 let result = client.call::<IssueDetail>(IssueDetailParams { project_id, number, repo }).await?;
                 println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            IssueCmd::Comment { project, number, body, repo } => {
+                let body = match body {
+                    Some(body) => body,
+                    None => {
+                        let mut text = String::new();
+                        std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)?;
+                        text
+                    }
+                };
+                let project_id = resolve_project(&client, &project, false).await?;
+                let comment = client.call::<IssueCommentCreate>(IssueCommentParams { project_id, number, body, repo }).await?;
+                println!("{}", comment.url);
             }
         },
         Cmd::Pr { cmd } => match cmd {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { asError } from '../../../../../packages/kybern-client/src/problem.ts'
 import type { IssueDetailResult } from '../../../../../packages/kybern-client/src/types.ts'
 import { useMachines } from '../../machines/index.ts'
@@ -7,7 +7,8 @@ import { prCall, prClient } from '../client.ts'
 
 const details = new Map<string, IssueDetailResult>()
 
-/** One issue with its comments (`github.issue.detail`), read again on `refresh()` and when its machine reconnects. `repo`: the member repository of a group project. */
+/** One issue with its comments (`github.issue.detail`), read again on `refresh()` and when its machine reconnects. `repo`: the member repository of a group project.
+ *  `update` changes the held copy (a comment posted from the page). */
 export function useIssue(projectId: string, number: number, repo?: string) {
   const connection = useApp(s => s.status)
   useMachines() // A remote project's reconnect retries its open issue.
@@ -31,5 +32,15 @@ export function useIssue(projectId: string, number: number, repo?: string) {
     }, e => { if (!canceled) { setError(asError(e)); setLoading(false) } })
     return () => { canceled = true }
   }, [projectId, number, repo, revision, connection, client, key])
-  return { detail, loading, error, refresh: () => refresh(n => n + 1) }
+  const current = useRef(key)
+  current.current = key
+  /** Change the held issue (a comment posted from here): kept for the next visit, and shown if it is still the one open. */
+  const update = useCallback((change: (detail: IssueDetailResult) => IssueDetailResult) => {
+    const known = details.get(key)
+    if (!known) return
+    const next = change(known)
+    details.set(key, next)
+    if (current.current === key) setDetail(next)
+  }, [key])
+  return { detail, loading, error, refresh: () => refresh(n => n + 1), update }
 }

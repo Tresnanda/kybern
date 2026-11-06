@@ -2,14 +2,14 @@ import { expect, test } from 'bun:test'
 import { chipPad, CHIP_ICON_GAP, fontPlan, installUiFont, INTER, INTER_FILES, MONO_WEIGHT_FILES, SEGOE_VARIABLE, uiFontFiles } from './fonts.ts'
 
 test('macOS keeps the system font and Menlo', () => {
-  expect(fontPlan('darwin', { KYBERN_UI_FONT: 'Other' })).toEqual({ systemUi: null, mono: 'Menlo', monoAdvance: 0.602, uiSpaceAdvance: null })
+  expect(fontPlan('darwin', { KYBERN_UI_FONT: 'Other' })).toEqual({ systemUi: null, mono: 'Menlo', monoAdvance: 0.602, uiSpaceAdvance: null, uiXCentre: (0.952 - 0.241 - 0.527) / 2 })
 })
 
 test('Windows 11 uses Segoe UI Variable, Windows 10 the bundled Inter', () => {
   const seen: string[] = []
   const win11 = fontPlan('win32', { WINDIR: 'D:\\Windows' }, file => (seen.push(file), true))
   expect(seen).toEqual(['D:\\Windows\\Fonts\\SegUIVar.ttf'])
-  expect(win11).toEqual({ systemUi: SEGOE_VARIABLE, mono: 'JetBrains Mono', monoAdvance: 0.6, uiSpaceAdvance: 561 / 2048 })
+  expect(win11).toEqual({ systemUi: SEGOE_VARIABLE, mono: 'JetBrains Mono', monoAdvance: 0.6, uiSpaceAdvance: 561 / 2048, uiXCentre: (2210 - 514 - 1024) / 2 / 2048 })
   expect(fontPlan('win32', {}, () => false).systemUi).toBe(INTER)
 })
 

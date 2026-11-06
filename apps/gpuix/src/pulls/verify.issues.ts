@@ -1,7 +1,9 @@
 /**
  * #217 Issues tab: the list with its Open / Closed, search, Labels and Assignee filters and "Show more", an issue with its
  * description, comments and sidebar, "Start a thread", and the filter toolbars of Pull requests, Actions and Issues sharing one
- * control height and centre line. Mock RPC only: nothing reaches GitHub. `--light` for the light theme;
+ * control height and centre line. Images in an issue (GitHub's HTML `<img>`, Markdown, one GitHub didn't share) and the
+ * comment box: ⌘↩ / Ctrl+Enter posts, the comment shows at once, the draft stays with its issue, a signed-out gh disables the
+ * box with the fix. Mock RPC only: nothing reaches GitHub. `--light` for the light theme;
  * `KYBERN_VERIFY_OUTPUT=<dir>` saves screenshots.
  */
 import assert from 'node:assert/strict'
@@ -22,6 +24,10 @@ const painted = async () => (await a.call('getPaintedText', {})).text.join('\n')
 const until = async (re: RegExp) => { const end = Date.now() + 10000; while (Date.now() < end) { if (re.test(await painted())) return; await Bun.sleep(200) } assert.fail(`never painted ${re}\n${(await painted()).slice(0, 3000)}`) }
 const waitFor = async (id: string, timeoutMs: number) => { try { await a.getByTestId(id).waitFor({ timeoutMs }) } catch (e) { throw new Error(`waitFor ${id}: ${e}`) } }
 const exists = async (id: string) => { try { await a.getByTestId(id).waitFor({ timeoutMs: 3000 }); return true } catch { return false } }
+const send = process.platform === 'darwin' ? 'cmd-enter' : 'ctrl-enter'
+const count = (id: string) => a.getByTestId(id).count()
+/** The issue's end: rows measure as they mount, so wheel again until it settles. */
+const toEnd = async () => { for (let i = 0; i < 3; i++) { await a.getByTestId('issue-scroll').wheel(0, -100000); await Bun.sleep(400) } }
 const listCalls = () => fixture.params.filter(p => p.method === 'github.issue.list').map(p => p.params)
 const lastList = () => listCalls().at(-1)!
 /** Every control of a toolbar row is 24 high and centred on the same line. */
@@ -68,6 +74,72 @@ try {
   assert.ok(fixture.params.some(p => p.method === 'github.issue.detail' && p.params.number === 217))
   await Bun.sleep(500)
   await shot('issues-detail')
+
+  // Images: GitHub's own `<img>` and a Markdown image in the description, one in a comment, all through the project's
+  // machine (`/github/image`); the one GitHub didn't share shows its caption and why, never its HTML.
+  await click('issue-row-228')
+  await until(/Pairing stops at the second step/)
+  { const end = Date.now() + 15000; while (Date.now() < end && (await count('response-image')) < 3) await Bun.sleep(250) }
+  assert.equal(await count('response-image'), 3, 'two images in the description and one in the comment')
+  await waitFor('github-image-failed', 10000)
+  const pictured = await painted()
+  assert.ok(pictured.includes("The daemon's log"), 'the text between the images shows')
+  assert.doesNotMatch(pictured, /<img|user-attachments|!\[/, 'no image is painted as HTML or Markdown')
+  const fetched = fixture.params.filter(p => p.method === 'GET /github/image').map(p => p.params as Record<string, string>)
+  assert.ok(fetched.some(p => p.number === '228' && p.project_id === 'pages-fixture' && p.url.includes('/user-attachments/assets/')), 'images load through the project\'s machine')
+  const widths = (await a.getByTestId('response-image').all()).map(node => node.bounds?.width ?? 0)
+  assert.ok(widths.some(w => w > 280) && widths.every(w => w <= 480.5), `issue images are drawn larger than a reply's, at most 480 wide (${widths})`)
+  await shot('issue-images')
+  await a.getByTestId('issue-scroll').wheel(0, -700); await Bun.sleep(500)
+  const below = await painted()
+  for (const text of ['Phone settings', "GitHub didn't share this image"]) assert.ok(below.includes(text), `the issue shows ${text}`)
+  assert.doesNotMatch(below, /<img|user-attachments|!\[/, 'no image is painted as HTML or Markdown')
+  await shot('issue-images-comments')
+  await toEnd()
+  assert.match(await painted(), /Same on Android 15/)
+
+  // The comment box: ⌘↩ / Ctrl+Enter posts, and the comment is in the timeline before GitHub answers (600 ms in the fixture).
+  await a.getByTestId('issue-comment-input').waitFor({ timeoutMs: 10000 })
+  await toEnd()
+  await a.getByTestId('issue-comment-input').click()
+  await a.getByTestId('issue-comment-input').fill('Fixed by **#250**: the pairing step now retries over Tailscale.')
+  await Bun.sleep(300)
+  await shot('issue-comment-box')
+  await a.getByTestId('issue-comment-input').press(send)
+  await Bun.sleep(250)
+  // Before GitHub answers: the comment is in the timeline as yours, rendered (no `**`), and the box is empty.
+  const pending = await painted()
+  assert.ok(fixture.params.some(p => p.method === 'github.issue.comment'), `${send} posts the comment`)
+  assert.match(pending, /You[\s\S]*Fixed by #250: the pairing step/, 'the comment shows before GitHub answers, as yours')
+  assert.equal(await count('issue-comment-input-placeholder'), 1, 'the box is empty while it posts')
+  await shot('issue-comment-pending')
+  await Bun.sleep(900)
+  const posted = fixture.params.filter(p => p.method === 'github.issue.comment').map(p => p.params as { number: number; body: string; project_id: string })
+  assert.deepEqual(posted, [{ project_id: 'pages-fixture', number: 228, body: 'Fixed by **#250**: the pairing step now retries over Tailscale.' }])
+  await until(/tresnanda[\s\S]*Fixed by/)
+  assert.equal(await a.getByTestId('pr-timeline-IC_posted_1').count(), 1, "GitHub's copy replaced the pending one")
+  assert.equal(await count('issue-comment-input-placeholder'), 1, 'the box is empty again')
+
+  // The draft stays with its issue: typed on #228, gone on #217, back on #228; the Comment button posts too.
+  await a.getByTestId('issue-comment-input').fill('Draft for 228')
+  await Bun.sleep(300)
+  await click('issue-row-217')
+  await until(/Done when/)
+  assert.doesNotMatch(await painted(), /Draft for 228/)
+  await click('issue-row-228')
+  await toEnd()
+  await until(/Draft for 228/)
+  await click('issue-comment-send')
+  await Bun.sleep(900)
+  assert.equal(fixture.params.filter(p => p.method === 'github.issue.comment').length, 2, 'the Comment button posts')
+
+  // A signed-out gh: the comment goes back in the box, which waits behind the fix.
+  await a.getByTestId('issue-comment-input').fill('Ping #signed-out')
+  await a.getByTestId('issue-comment-input').press(send)
+  await waitFor('issue-comment-problem', 10000)
+  await until(/Sign in to GitHub/)
+  assert.match(await painted(), /Ping #signed-out/, 'the words are back in the box')
+  await shot('issue-comment-signed-out')
 
   // Closed, search, labels, assignee: each asks GitHub, nothing is filtered on the client.
   await click('issues-state-closed')

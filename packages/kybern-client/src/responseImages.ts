@@ -7,6 +7,8 @@ export function imageSource(source: string): { kind: "remote" | "inline" | "loca
   if (/^file:\/\//i.test(source)) {
     try { const url = new URL(source); return !url.hostname || url.hostname === "localhost" ? { kind: "local", value: decodeURIComponent(url.pathname) } : null } catch { return null }
   }
+  // A Windows drive path (`D:\cache\a.png`) is a file, not a `d:` scheme.
+  if (/^[a-z]:[\\/]/i.test(source)) return { kind: "local", value: source }
   if (/^[a-z][a-z0-9+.-]*:/i.test(source) || source.startsWith("//") || !source.trim()) return null
   try { return { kind: "local", value: decodeURIComponent(source) } } catch { return null }
 }
