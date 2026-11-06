@@ -16,13 +16,13 @@ pub fn servers(kind: ProviderKind, context: &ProbeContext) -> BTreeMap<String, V
     let cwd = context.cwd.as_deref();
     match kind {
         ProviderKind::ClaudeCode => {
-            let dir = env("CLAUDE_CONFIG_DIR").map(PathBuf::from).unwrap_or_else(|| home.join(".claude"));
-            sources.push((dir.with_extension("json"), "mcpServers"));
-            sources.push((dir.join("mcp.json"), "mcpServers"));
+            let config =
+                env("CLAUDE_CONFIG_DIR").map(|dir| PathBuf::from(dir).join(".claude.json")).unwrap_or_else(|| home.join(".claude.json"));
+            sources.push((config.clone(), "mcpServers"));
             if let Some(cwd) = cwd {
                 sources.push((cwd.join(".mcp.json"), "mcpServers"));
                 // Claude stores local project servers under the canonical project's path.
-                if let Some(value) = read(&dir.with_extension("json")).and_then(|v| v.get("projects")?.get(cwd.to_str()?).cloned()) {
+                if let Some(value) = read(&config).and_then(|v| v.get("projects")?.get(cwd.to_str()?).cloned()) {
                     let mut result = merge_sources(&sources);
                     merge(&mut result, &value, "mcpServers");
                     return result;
@@ -213,8 +213,9 @@ mod tests {
     fn native_configs_follow_project_precedence() {
         let home = tempfile::tempdir().unwrap();
         let project = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".claude")).unwrap();
         std::fs::write(
-            home.path().join(".claude.json"),
+            home.path().join(".claude/.claude.json"),
             json!({"mcpServers":{"memory":{"command":"user"},"other":{"command":"other"}}}).to_string(),
         )
         .unwrap();
