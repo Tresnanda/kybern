@@ -447,7 +447,8 @@ expression: schema_for!(EventsSubscribeResult)
         "pi",
         "omp",
         "cursor",
-        "antigravity"
+        "antigravity",
+        "grok-build"
       ]
     },
     "PermissionMode": {
