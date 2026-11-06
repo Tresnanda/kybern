@@ -1,4 +1,4 @@
-import type { GpuixTheme } from '@gpuix/react'
+import type { GpuixTheme, EventPayload } from '@gpuix/react'
 /** Optional native Markdown controls. Pixels except ratios/weights. Defaults
  * preserve upstream styling; unknown/invalid colors retain their fallback. */
 export interface MarkdownStyle {
@@ -64,6 +64,7 @@ export interface MarkdownStream {
   fadeMs?: number
 }
 declare module '@gpuix/native/host' {
+  interface MarkdownProps { onLinkContextMenu?: (event: EventPayload) => void }
   interface GpuixTheme { markdown?: MarkdownStyle }
   /** Applied while a Finder file drag hovers the element. */
   interface StyleDesc { dragOver?: Omit<StyleDesc, 'hover' | 'active' | 'dragOver'> }

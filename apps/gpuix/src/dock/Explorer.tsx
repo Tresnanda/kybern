@@ -1,4 +1,5 @@
-import { DocumentMarkdown } from '../native/markdownDocument.tsx'
+import { actOnThreadFile, absoluteThreadFile } from '../transcript/threadFiles.ts'
+import { MarkdownPreview } from './MarkdownPreview.tsx'
 import { VirtualCode, type SyntaxDocument } from '../native/syntax.tsx'
 import { acquireSyntax, cachedRead, peekSyntax, rememberRead } from './fileCache.ts'
 import { adoptRead, bufferKey, EDITABLE_BYTES, getBuffer, keepMine, openBuffer, readFile, releaseBuffer, reloadBuffer, saveBuffer, useBufferState, type FileRoot } from './fileBuffers.ts'
@@ -23,7 +24,7 @@ import { sendPath } from '../machines/utilities.ts'
 import { IconButton } from '../kit/IconButton.tsx'
 import { SearchField } from '../kit/SearchField.tsx'
 import { Button } from '../kit/Button.tsx'
-import { ownProjectId, threadClient, useApp } from '../state.ts'
+import { machineOfThreadId, ownProjectId, threadClient, useApp } from '../state.ts'
 import { cachedMarkdownTheme } from '../transcript/kit.tsx'
 import { copyText } from '../transcript/store.ts'
 import { FONT_MONO } from '../theme.ts'
@@ -205,7 +206,7 @@ export const FileViewer = memo(function FileViewer({ projectId, threadId, path, 
   const markdownFile = /\.(md|mdx|markdown)$/i.test(path)
   const project = useApp((s) => s.projects.find((p) => p.id === projectId))
   const thread = useApp((s) => threadId ? s.threads.find((th) => th.id === threadId) : undefined)
-  const absolutePath = path.startsWith('/') ? path : project ? `${project.path}/${path}` : thread ? `${thread.cwd}/${path}` : null
+  const absolutePath = threadId ? absoluteThreadFile(threadId, path, projectId ? 'project' : 'thread') : project ? `${project.path}/${path}` : null
   // A project root is read through the machine of the thread that shows it.
   const root = useMemo<FileRoot | null>(() => projectId ? { projectId, ...(threadId ? { threadId } : {}) } : threadId ? { threadId } : null, [projectId, threadId])
   const key = root ? bufferKey(root, path) : null
@@ -213,7 +214,7 @@ export const FileViewer = memo(function FileViewer({ projectId, threadId, path, 
   // syntax document is not rebuilt.
   const [file, setFile] = useState<FilesReadResult | null>(() => cachedRead(owner, path) ?? null)
   const [error, setError] = useState<Error | null>(null)
-  const [preview, setPreview] = useState(() => markdownFile && !line)
+  const [preview, setPreview] = useState(() => markdownFile)
   const [reload, setReload] = useState(0)
   const editable = !!file && !file.binary && !file.truncated && !file.read_only && file.size <= EDITABLE_BYTES
   const buffer = useBufferState(editable ? key : null)
@@ -258,10 +259,13 @@ export const FileViewer = memo(function FileViewer({ projectId, threadId, path, 
   const editors = installedEditors()
   const preferred = defaultEditor()
   const openIn = useCallback((target: Editor | null) => {
-    if (!target || !absolutePath || !activeEnvironment().local) return
+    if (!target || !absolutePath || (!activeEnvironment().local || !!(threadId && machineOfThreadId(threadId)))) return
     openInEditor(target, absolutePath, editor.current?.caretLine() ?? line ?? 1).catch((e: unknown) => toastProblem(e, { action: `open the file in ${target.name}` }))
   }, [absolutePath, line])
-  const canPreview = markdownFile && editable
+  useEffect(() => {
+    if (file && threadId && (file.binary || /\.(?:pdf|mp4|mov|mkv|webm|avi|zip|docx?|xlsx?|pptx?)$/i.test(path))) void actOnThreadFile(threadId, absolutePath ?? path, 'open')
+  }, [file?.binary, threadId, path, absolutePath])
+  const canPreview = markdownFile && !!file && !file.binary
   const showPreview = preview && canPreview
   const showPreviewRef = useRef(showPreview)
   showPreviewRef.current = showPreview
@@ -290,12 +294,13 @@ export const FileViewer = memo(function FileViewer({ projectId, threadId, path, 
         <MenuItem id="save" label="Save" shortcut="⌘S" disabled={!buffer?.dirty || buffer.saving} onSelect={save} testId="file-action-save" />
         <MenuCheckboxItem id="wrap" label="Wrap lines" checked={wrap} onCheckedChange={setWrapLines} testId="file-action-wrap" />
         <MenuSeparator />
-        {editors.length > 0 && absolutePath && activeEnvironment().local && <>
+        {editors.length > 0 && absolutePath && activeEnvironment().local && !(threadId && machineOfThreadId(threadId)) && <>
           <MenuLabel>Open in</MenuLabel>
           {editors.map((candidate) => <MenuItem key={candidate.id} id={`open-${candidate.id}`} label={candidate.name} shortcut={candidate.id === preferred?.id ? '⌘⇧O' : undefined} testId={`file-open-${candidate.id}`} onSelect={() => openIn(candidate)} />)}
           <MenuSeparator />
         </>}
-        <MenuItem id="reveal" label={osLabels().reveal} icon={N.folder} disabled={!absolutePath || !activeEnvironment().local} onSelect={() => { if (absolutePath && activeEnvironment().local) revealQuietly(absolutePath) }} />
+        <MenuItem id="open" label="Open" disabled={!threadId} onSelect={() => { if (threadId) void actOnThreadFile(threadId, absolutePath ?? path, 'open') }} />
+        <MenuItem id="reveal" label={osLabels().reveal} icon={N.folder} disabled={!threadId} onSelect={() => { if (threadId) void actOnThreadFile(threadId, absolutePath ?? path, 'reveal') }} />
         <SendToMenu thread={projectId && !path.startsWith('/') ? thread : undefined} path={path} separated />
         <MenuItem id="relative" label="Copy relative path" onSelect={() => copyText(path)} />
         <MenuItem id="absolute" label="Copy absolute path" disabled={!absolutePath} onSelect={() => { if (absolutePath) copyText(absolutePath) }} />
@@ -310,8 +315,8 @@ export const FileViewer = memo(function FileViewer({ projectId, threadId, path, 
     <ErrorLine error={error ?? buffer?.error ?? null} action={error ? 'open the file' : `save ${path.split('/').pop()}`} retry={error ? () => setReload((n) => n + 1) : save} />
     {file ? <Rise kind="pane" play={play} style={{ flexGrow: 1, minHeight: 0, minWidth: 0 }}>{file.binary ? <DockEmpty icon={N.note} title="Binary file" body="Open this file in your editor to view it." /> : <>
       {!editable && <ReadOnlyNote size={file.size} outside={file.read_only} />}
-      {showPreview && key ? <virtual-list testId="dock-file-content" {...EXPLORER_SCROLL_LAYOUT} overdraw={0} style={{ flexGrow: 1, minHeight: 0, overflowX: 'scroll' }}>
-        <div style={{ padding: 12 }}><DocumentMarkdown source={getBuffer(key)?.text ?? file.content} theme={cachedMarkdownTheme(t)} /></div>
+      {showPreview ? <virtual-list testId="dock-file-content" {...EXPLORER_SCROLL_LAYOUT} overdraw={0} style={{ flexGrow: 1, minHeight: 0, overflowX: 'scroll' }}>
+        <div style={{ padding: 12 }}><MarkdownPreview source={(key ? getBuffer(key)?.text : undefined) ?? file.content} threadId={threadId} file={path} /></div>
       </virtual-list> : editable && key && buffer ? <FileEditor key={key} bufferKey={key} path={path} wrap={wrap} line={line} handle={editor} />
         : <FileCode content={file.content} path={path} line={line} wrap={wrap} />}
     </>}</Rise> : !error && <LoadingLines testId="dock-file-loading" />}

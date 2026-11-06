@@ -2496,3 +2496,7 @@ focus flag: a click on its box always asks for focus, which is a no-op for the f
 `kybernCapabilities().desktopMaterial` returns `{ translucent, blur }` on Linux. It probes the display without creating a window or GPU. No X11 compositing-manager owner means both false. Wayland uses the bound KWin manager or the standard background-effect Blur capability; Hyprland's compositor-managed blur is also recognized. Standard capability changes switch the native window between standard blur and KWin fallback. The app leaves blur strength to the compositor.
 
 The root native wrapper clips all Linux client-decorated content, including popovers, to the untiled 12-pixel outer shape. The X11 alpha backing is retained even when the content material is Solid. Blur regions use the corresponding integer scanline shape.
+
+### Reply link context menus
+
+`<markdown onLinkContextMenu>` emits the hit-tested link URL in `value` and its window coordinates in `x`/`y` on a right click. Ordinary link clicks keep `onLinkClick`; selecting or right-clicking prose does not navigate. The JS bridge patch registers `linkContextMenu`. Reply link icons use existing `linkIcons` entries ordered by full destination length, with one fixed-size slot per link, so cached GitHub colors and favicon updates preserve the label and geometry.

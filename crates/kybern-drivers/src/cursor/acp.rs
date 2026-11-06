@@ -455,7 +455,7 @@ async fn run_connection(
                         let _ = ev.send(DriverEvent::Notice { level: NoticeLevel::Info, text: format!("plan updated ({} entries)", p.entries.len()), data: serde_json::to_value(&p).ok() }).await;
                     }
                     SessionUpdate::AvailableCommandsUpdate(update) => {
-                        let commands = update.available_commands.into_iter().map(|c| kybern_protocol::ProviderCommand { name: c.name, description: c.description }).collect();
+                        let commands = update.available_commands.into_iter().map(|c| kybern_protocol::ProviderCommand { name: c.name, description: c.description, ..Default::default() }).collect();
                         let _ = ev.send(DriverEvent::CommandsUpdated(commands)).await;
                     }
                     SessionUpdate::UsageUpdate(u) => {

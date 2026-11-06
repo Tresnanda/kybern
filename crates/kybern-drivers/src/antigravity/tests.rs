@@ -576,7 +576,8 @@ printf '%s\n\n' '{"event":"result","result":{"conversation_id":"conv-1","status"
         let SpawnedSession { session, mut events } = driver.spawn(config).await.unwrap();
         session.send_message("m1", &UserMessage::text("first")).await.unwrap();
         let first = next_turn_end(&mut events).await;
-        assert!(matches!(&first[0], DriverEvent::SessionBound { session_id, .. } if session_id == "conv-1"));
+        assert!(matches!(&first[0], DriverEvent::CommandsUpdated(commands) if commands.iter().any(|c| c.name == "goal")));
+        assert!(matches!(&first[1], DriverEvent::SessionBound { session_id, .. } if session_id == "conv-1"));
         assert!(matches!(first.last(), Some(DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. })));
         session.send_message("m2", &UserMessage::text("second")).await.unwrap();
         next_turn_end(&mut events).await;

@@ -16,6 +16,8 @@ def edit(name, old, new):
 def run_hook(file):
     hook_check.run(file, Path(__file__).parent, globals())
 
+edit('dist/host.d.ts', 'export interface MarkdownProps extends HostProps {', 'export interface MarkdownProps extends HostProps {\n    onLinkContextMenu?: (event: EventPayload) => void;')
+edit('dist/mutations.js', '    ["onLinkClick", "linkClick"],', '    ["onLinkClick", "linkClick"],\n    ["onLinkContextMenu", "linkContextMenu"],')
 edit('dist/mutations.js', '    "motion",\n    "testId",', '    "motion",\n    // Kybern native capabilities.\n    "backdrop",\n    "paintAnimation",\n    "cache",\n    "windowDrag",\n    "interceptKeys",\n    "secure",\n    "softWrap",\n    "testId",')
 edit('dist/host.d.ts', 'export interface HostProps {', 'export interface HostProps {\n    cache?: boolean | "fill";\n    /** Empty titlebar region; do not place on interactive controls. */\n    windowDrag?: boolean;')
 edit('dist/mutations.js', '    "paintAnimation",', '    "paintAnimation",\n    "paintTranslate",')

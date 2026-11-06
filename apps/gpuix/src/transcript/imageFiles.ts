@@ -27,7 +27,7 @@ const MEMORY_ENTRIES = 512
 /** Conversion processes at a time. */
 const CONVERSIONS = 2
 const ENABLED = process.env.KYBERN_IMAGE_FILES !== '0'
-const EXTENSIONS: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif' }
+const EXTENSIONS: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif' }
 
 let folder: string | null = null
 function cacheFolder() {
@@ -181,7 +181,7 @@ async function prepare(source: string, maxPx: number, width: number | null): Pro
   let full: string, id: string, media: string
   if (target.kind === 'inline') {
     const comma = target.value.indexOf(',')
-    media = target.value.slice(5, target.value.indexOf(';'))
+    media = target.value.slice(5, target.value.indexOf(';')).toLowerCase().replace(/^image\/jpg$/, 'image/jpeg')
     full = await storeImageBytes(Buffer.from(target.value.slice(comma + 1), 'base64'), media)
     id = path.basename(full).replace(/\.\w+$/, '')
   } else {

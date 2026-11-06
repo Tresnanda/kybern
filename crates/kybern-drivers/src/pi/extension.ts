@@ -320,6 +320,7 @@ export default function kybernExtension(pi) {
   const configuredTools = configuredAppTools(appTools);
   const appToolNames = new Set(configuredTools.map((tool) => tool.name));
   const deniedTools = configuredToolSet("KYBERN_PI_DENIED_TOOLS");
+  const allowedMcpServers = configuredToolSet("KYBERN_PI_ALLOWED_MCP_SERVERS");
   const coordinatorOnly = process.env.KYBERN_PI_COORDINATOR_ONLY === "1";
   const leadReadOnlyBuiltins = process.env.KYBERN_PI_READ_ONLY_BUILTINS === "1";
   const coordinatorInstructions = process.env.KYBERN_PI_SYSTEM_PROMPT || "";
@@ -401,7 +402,10 @@ export default function kybernExtension(pi) {
       if (deniedTools.has(toolName)) {
         return { block: true, reason: `Kybern coordinator policy denied ${toolName}.` };
       }
-      if (coordinatorOnly && !appToolNames.has(toolName) && !(leadReadOnlyBuiltins && LEAD_READ_ONLY_TOOLS.has(toolName))) {
+      // Resolve provenance from the harness registry, never a model-supplied name prefix.
+      const toolInfo = coordinatorOnly && allowedMcpServers.size ? pi.getAllTools?.().find((tool) => tool.name === toolName) : undefined;
+      const allowedMcp = toolInfo?.sourceInfo?.source === "mcp" && allowedMcpServers.has(toolInfo.mcpServerName);
+      if (coordinatorOnly && !allowedMcp && !appToolNames.has(toolName) && !(leadReadOnlyBuiltins && LEAD_READ_ONLY_TOOLS.has(toolName))) {
         return { block: true, reason: "Kybern coordinator policy permits only Kybern tools and read-only file tools." };
       }
       if (isAllowedWithoutPrompt(mode, toolName, appToolNames)) return;

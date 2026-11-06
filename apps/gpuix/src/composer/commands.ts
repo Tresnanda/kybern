@@ -24,7 +24,7 @@ const EMPTY: never[] = []
 export function useThreadCommands(thread: StateThread | null, attach: () => void): SlashCommand[] {
   const nativeCommands = useApp(s => (thread && s.open.thread?.id === thread.id ? s.open.providerCommands : undefined) ?? EMPTY)
   const freeChat = !!thread && isFreeChatProject(thread.project_id)
-  const canCompact = !!thread?.provider_session_id && (['codex', 'pi', 'omp', 'opencode'].includes(thread!.provider.kind) || nativeCommands.some(command => command.name === 'compact'))
+  const canCompact = !!thread?.provider_session_id && (['codex', 'pi', 'omp', 'opencode', 'cursor', 'claude-code'].includes(thread!.provider.kind))
   return useMemo<SlashCommand[]>(() => {
     if (!thread) return []
     const panel = (tab: DockTab) => () => { setDock(thread.id, { open: true }); chooseTab(thread.id, tab) }
@@ -60,7 +60,7 @@ export function useThreadCommands(thread: StateThread | null, attach: () => void
     // The names, hints and order are the desktop's (`lib/threadCommands.ts`); only the icons and handlers are ours.
     return threadCommandSpecs({ freeChat, canCompact, providerKind: thread.provider.kind, nativeCommands }).map((spec): SlashCommand =>
       spec.kind === 'native'
-        ? { name: spec.name, invocation: spec.invocation, hint: spec.hint, icon: G.terminal, insert: true, run: () => {} }
+        ? { name: spec.name, label: spec.label, invocation: spec.invocation, hint: spec.hint, icon: G.terminal, insert: true, run: () => {} }
         : { name: spec.name, hint: spec.hint, ...handlers[spec.id] })
   }, [thread?.id, thread?.project_id, thread?.provider.kind, freeChat, canCompact, nativeCommands, attach])
 }

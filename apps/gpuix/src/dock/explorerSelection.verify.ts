@@ -2,10 +2,11 @@ import assert from 'node:assert/strict'
 import { mock } from 'bun:test'
 const environment = { id: 'test', revision: 1 }, actions: unknown[] = []
 const thread = { id: 'one', project_id: 'project', cwd: '/repo' }
-mock.module('../state.ts', () => ({ getState: () => ({ threads: [thread], projects: [{ id: 'project', path: '/repo' }] }) }))
+mock.module('../machines/index.ts', () => ({ machineHub: () => ({ localMachineId: 'local', view: () => ({ projects: [] }) }) }))
+mock.module('../state.ts', () => ({ machineOfThreadId: () => undefined, ownProjectId: (t: typeof thread) => t.project_id, getState: () => ({ threads: [thread], projects: [{ id: 'project', path: '/repo' }] }) }))
 mock.module('../shell/environment.ts', () => ({ activeEnvironment: () => environment }))
 mock.module('./store.ts', () => ({ chooseTab: (...args: unknown[]) => actions.push(args), setDock: (...args: unknown[]) => actions.push(args) }))
-const { showFileInExplorer, takeExplorerSelection, canShowFileInExplorer } = await import('./explorerSelection.ts')
+const { showFileInExplorer, takeExplorerSelection, canShowFileInExplorer, explorerSelection } = await import('./explorerSelection.ts')
 showFileInExplorer('one', 'project', '/repo/mock/deep/page.html')
 const selected = takeExplorerSelection('one', 'project')
 assert.equal(selected?.path, 'mock/deep/page.html'); assert.deepEqual(selected?.ancestors, ['mock', 'mock/deep'])
@@ -21,3 +22,5 @@ showFileInExplorer('one', 'project', '/repo/page.html'); assert.equal(takeExplor
 assert.equal(takeExplorerSelection('one', 'other'), null)
 assert.equal(takeExplorerSelection('one', 'project')?.path, 'page.html', 'unrelated Explorer must leave the intended request pending')
 console.log('PASS one-shot Explorer handoff: current environment/thread/project/workspace; ancestor expansion plan; no stale or outside paths')
+
+assert.equal(explorerSelection({ environmentId: 'test', revision: 1, threadId: 'one', projectId: 'project', cwd: 'D:\\repo', projectRoot: 'D:\\repo' }, 'D:\\repo\\screens\\demo.gif')?.path, 'screens/demo.gif')

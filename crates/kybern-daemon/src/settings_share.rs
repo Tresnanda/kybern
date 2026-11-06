@@ -81,6 +81,7 @@ classify!(SETTINGS_FIELDS, every_settings_field_is_classified, Settings, {
     access => PerMachine,
     computer_use => PerMachine,
     antigravity => PerMachine,
+    coordinator_mcp_servers => PerMachine,
     orchestration => Shared,
     tell_agents_about_kybern => Shared,
     ask_deadlines => Shared,
@@ -531,8 +532,12 @@ mod tests {
     fn every_settings_and_provider_field_has_a_classification() {
         // The build already fails when a field is missing from the tables. This also checks the tables
         // against what the types actually serialize, and that no table names a field twice.
-        let settings =
-            Settings { title_provider: Some(ProviderKind::Codex), preview_allowed_folders: vec!["/tmp".into()], ..Settings::default() };
+        let settings = Settings {
+            title_provider: Some(ProviderKind::Codex),
+            preview_allowed_folders: vec!["/tmp".into()],
+            coordinator_mcp_servers: [(ProviderKind::Omp, vec!["memory".into()])].into(),
+            ..Settings::default()
+        };
         let mut provider = ProviderSettings::default();
         provider.accounts.insert("work".into(), ProviderAccount::default());
         provider.default_account = Some("work".into());
@@ -569,7 +574,8 @@ mod tests {
         ] {
             assert_eq!(class(shared), Sharing::Shared, "{shared}");
         }
-        for own in ["background", "access", "computer_use", "antigravity", "preview_allowed_folders", "network"] {
+        for own in ["background", "access", "computer_use", "antigravity", "coordinator_mcp_servers", "preview_allowed_folders", "network"]
+        {
             assert_eq!(class(own), Sharing::PerMachine, "{own}");
         }
         assert_eq!(class("providers"), Sharing::PerProvider);

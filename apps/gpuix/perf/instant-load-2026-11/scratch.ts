@@ -31,7 +31,10 @@ export async function startDaemon(exe: string, dir: string, port: number, timeou
   if (!existsSync(exe)) throw Error(`No daemon binary at ${exe}`)
   for (const file of ['daemon.port', 'daemon.pid']) rmSync(path.join(dir, file), { force: true })
   const started = performance.now()
-  const child: ChildProcess = spawn(exe, ['--data-dir', dir, '--port', String(port)], { stdio: 'ignore', windowsHide: true, env: { ...process.env, RUST_LOG: process.env.RUST_LOG ?? 'warn' } })
+  const child: ChildProcess = spawn(exe, ['--data-dir', dir, '--port', String(port)], {
+    stdio: 'ignore', windowsHide: true,
+    env: { ...process.env, KYBERN_DATA_DIR: dir, KYBERN_CLIENT_CONFIG_DIR: path.join(dir, 'client-config'), RUST_LOG: process.env.RUST_LOG ?? 'warn' },
+  })
   const deadline = Date.now() + timeoutMs
   while (!existsSync(path.join(dir, 'daemon.port'))) {
     if (Date.now() > deadline || child.exitCode !== null) { child.kill(); throw Error(`Scratch daemon on ${dir} failed to start (exit ${child.exitCode})`) }

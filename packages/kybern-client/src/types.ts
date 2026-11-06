@@ -1640,6 +1640,7 @@ export interface DaemonActivity {
 }
 
 export interface ProvidersListResult {
+  coordinator_mcp_servers?: Partial<Record<ProviderKind, string[]>>;
   providers: ProviderStatus[];
 }
 
@@ -2669,6 +2670,8 @@ export interface AccessSettings {
 export type UpdateTrack = "stable" | "dev";
 
 export interface Settings {
+  /** Machine-local Coordinator MCP allowlist. All servers default to off. */
+  coordinator_mcp_servers?: Partial<Record<ProviderKind, string[]>>;
   default_provider: ProviderKind;
   default_permission_mode: PermissionMode;
   worktrees_default: boolean;
@@ -5227,7 +5230,7 @@ export interface HarnessUpdate {
   checked_at: DateTime | null;
 }
 
-export interface ProviderCommand { name: string; description: string }
+export interface ProviderCommand { name: string; description: string; aliases?: string[]; source?: string; input_hint?: string; subcommands?: ProviderCommand[] }
 
 export interface ProviderUsage {
   context?: { used_tokens: number; window_tokens: number };

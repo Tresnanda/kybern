@@ -28,6 +28,7 @@ mod harness_updates;
 mod http;
 mod integrations;
 mod lead_git;
+mod link_metadata;
 mod login_service;
 mod maintenance;
 mod native_tools_mcp;

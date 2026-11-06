@@ -414,6 +414,9 @@ pub struct ProvidersListParams {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProvidersListResult {
     pub providers: Vec<ProviderStatus>,
+    /// Configured server names only; credentials never leave the daemon.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub coordinator_mcp_servers: std::collections::BTreeMap<ProviderKind, Vec<String>>,
 }
 method!(ProvidersList, "providers.list", Some(Scope::OrchestrationRead), ProvidersListParams, ProvidersListResult);
 
