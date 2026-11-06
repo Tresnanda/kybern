@@ -1,7 +1,7 @@
 // The pull request's Changes tab: a file tree (or flat list) and the selected file's diff. The list fills the
 // pane; pages of files load in the background (`useFiles.ts`), and closed folders persist per pull request
 // (`model.ts`, `folders.ts`).
-import { LinkSquare02Icon, ListViewIcon } from '@hugeicons/core-free-icons'
+import { LinkSquare02Icon, ListViewIcon, TextWrapIcon } from '@hugeicons/core-free-icons'
 import { glyph, Icon } from '../../icons.tsx'
 import { N } from '../../nav/glyphs.ts'
 import { Tip } from '../../nav/overlay.tsx'
@@ -35,6 +35,7 @@ const INDENT = 14
 const LIST_WIDTH = 320
 const COMPACT_LIST_HEIGHT = 272
 const MODE_KEY = 'pulls.changes.mode'
+const WRAP_KEY = 'pulls.changes.wrap'
 
 /** Tabular numerals for counts, stats and durations (the style type does not list the property). */
 const num = (style: object = {}) => ({ ...style, fontVariantNumeric: 'tabular-nums' }) as never
@@ -96,6 +97,8 @@ export function Changes({ projectId, number, repo, review, compact = false, view
     folders.close([...next])
   }, [collapsed, folders])
   const setModeSaved = (next: 'tree' | 'list') => { setMode(next); save(MODE_KEY, next) }
+  const [wrap, setWrap] = useState(() => load<boolean>(WRAP_KEY, true) !== false)
+  const toggleWrap = () => { setWrap(!wrap); save(WRAP_KEY, !wrap) }
 
   const total = Math.max(review.detail?.changed_files ?? 0, files.length)
 
@@ -128,9 +131,10 @@ export function Changes({ projectId, number, repo, review, compact = false, view
           {!selected ? (list.done ? <Label color={t.textSecondary} size={13}>No changed files.</Label> : list.paused ? <Label color={t.textSecondary} size={13}>Load more files to find the selected file.</Label> : <div style={{ padding: 16 }}><PrLoading label="Loading selected file…" rows={7} /></div>) : <>
             <div style={{ ...row, gap: 0, height: 37, flexShrink: 0, borderBottomWidth: 1, borderColor: t.border, backgroundColor: t.v('--background') }}>
               <div style={{ flexGrow: 1, minWidth: 0 }}><NativeDiffHeader file={{ ...selected, oldPath: selected.old_path }} /></div>
+              <Tip label="Wrap lines" side="bottom" size={24}><IconButton testId="pr-diff-wrap" icon={glyph(TextWrapIcon)} size="sm" glyph={14} active={wrap} label="Wrap lines" onClick={toggleWrap} /></Tip>
               <IconButton icon={glyph(LinkSquare02Icon)} size="sm" glyph={14} label="Open file on GitHub" onClick={() => { if (review.detail) void prFileUrl(review.detail.pull_request.url, selected.path).then(openUrl) }} />
             </div>
-            {patchOf.loading ? <div style={{ padding: 16 }}><PrLoading label="Loading patch…" rows={5} /></div> : file?.patch ? <diff ref={diffScroll} key={file.path} {...PR_SCROLL_LAYOUT} testId="pr-native-diff" patch={patch} scroll theme={diffTheme} maxLines={visibleLines} onShowMore={() => setVisibleLines(n => n + 600)} onLineClick={e => {
+            {patchOf.loading ? <div style={{ padding: 16 }}><PrLoading label="Loading patch…" rows={5} /></div> : file?.patch ? <diff ref={diffScroll} key={file.path} {...PR_SCROLL_LAYOUT} testId="pr-native-diff" patch={patch} scroll softWrap={wrap} theme={diffTheme} maxLines={visibleLines} onShowMore={() => setVisibleLines(n => n + 600)} onLineClick={e => {
               if (stale) { setLineError('This draft belongs to a different commit. Resolve the previous draft before choosing a new inline anchor.'); return }
               if (pending?.body.trim()) { setLineError('Add this comment to the review or cancel it before choosing another line.'); return }
               const line = e.newLine && e.newLine > 0 ? e.newLine : e.oldLine
