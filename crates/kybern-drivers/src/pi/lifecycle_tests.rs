@@ -125,7 +125,7 @@ async fn retry_success_clears_a_transient_error_but_exhaustion_fails_the_turn() 
     let mut exhausted = Harness::new(Flavor::Pi);
     active_turn(&exhausted.session).await;
     exhausted.session.handle_frame(json!({ "type": "auto_retry_end", "success": false, "finalError": "quota remained exhausted" })).await;
-    assert!(matches!(exhausted.settle().await, DriverEvent::TurnFailed { error } if error == "quota remained exhausted"));
+    assert!(matches!(exhausted.settle().await, DriverEvent::TurnFailed { error, .. } if error == "quota remained exhausted"));
 }
 
 #[tokio::test]

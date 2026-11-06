@@ -71,10 +71,33 @@ const signIn: ProblemActionHandler = {
       // A machine that isn't paired is fixed where machines are managed, not with an account.
       if (provider === 'machine') return (await import('../settings/SettingsScreen.tsx')).openSettingsTab('machines')
       const kind = provider ? providerOf(provider) : null
-      // The same Add account sheet Settings opens: it runs `useAccountLogin` (browser, pasted code, terminal).
-      if (kind) return (await import('../dialogs/store.ts')).showDialog({ kind: 'account', provider: kind })
+      // The same sheet Settings opens: it runs `useAccountLogin` (browser, pasted code, terminal). With an `instance`
+      // it signs that account in again; without one it adds an account.
+      const instance = text(action, 'instance')
+      if (kind) return (await import('../dialogs/store.ts')).showDialog({ kind: 'account', provider: kind, ...(instance ? { instance } : {}) })
       ;(await import('../settings/SettingsScreen.tsx')).openSettingsTab('accounts')
     })().catch(() => {})
+  },
+}
+
+/** A failed turn's "Use another account": the Add account sheet for the agent, whatever account it ran with. */
+const useAnotherAccount: ProblemActionHandler = {
+  available: (action) => !!text(action, 'provider') && !!providerOf(text(action, 'provider') as string),
+  run: (action) => {
+    const kind = providerOf(text(action, 'provider') ?? '')
+    if (kind) void import('../dialogs/store.ts').then(({ showDialog }) => showDialog({ kind: 'account', provider: kind })).catch(() => {})
+  },
+}
+
+/** An agent older than Kybern needs: its update command in the same terminal sheet Settings uses (Cursor updates itself). */
+const updateAgent: ProblemActionHandler = {
+  available: (action) => !!text(action, 'provider') && !!providerOf(text(action, 'provider') as string),
+  run: (action) => {
+    const kind = providerOf(text(action, 'provider') ?? '')
+    if (!kind) return
+    void import('../onboarding/agentsStore.ts')
+      .then((store) => (kind === 'cursor' ? store.cursorSetup('install') : store.openSheet(kind, 'update')))
+      .catch(() => {})
   },
 }
 
@@ -112,6 +135,8 @@ const update: ProblemActionHandler = {
 export const PROBLEM_ACTIONS: Readonly<Record<string, ProblemActionHandler>> = {
   install_tool: installTool,
   sign_in: signIn,
+  use_another_account: useAnotherAccount,
+  update_agent: updateAgent,
   open_settings: openSettings,
   open_machines: { available: () => true, run: () => openSettings.run({ id: 'open_settings', label: '', params: { section: 'machines' } }, {}) },
   retry,

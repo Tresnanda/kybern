@@ -24,7 +24,7 @@ const ALIASES: Record<string, string> = { npm: 'node', npx: 'node' }
 
 const PROVIDERS: Record<string, ProviderKind> = {
   claude: 'claude-code', 'claude-code': 'claude-code', codex: 'codex', opencode: 'opencode', pi: 'pi', omp: 'omp',
-  cursor: 'cursor', 'cursor-agent': 'cursor', agy: 'antigravity', antigravity: 'antigravity',
+  cursor: 'cursor', 'cursor-agent': 'cursor', agy: 'antigravity', antigravity: 'antigravity', grok: 'grok-build', 'grok-build': 'grok-build',
 }
 
 /** The agent a tool name (a binary or a subject) stands for, or `null`. */

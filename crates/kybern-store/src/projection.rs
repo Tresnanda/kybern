@@ -431,7 +431,7 @@ fn apply_transcript_event(
                 out.push(TranscriptEntry::User { id: *message_id, turn_id, seq: ev.seq, message: message.clone(), at: ev.at });
             }
             EventPayload::SessionImported { .. } => {
-                out.push(TranscriptEntry::Notice { turn_id: last_turn_id_value.unwrap_or_default(), seq: ev.seq, at: ev.at, level: NoticeLevel::Info, text: "Session resumed. Earlier messages are shown above.".into(), data: None });
+                out.push(TranscriptEntry::Notice { turn_id: last_turn_id_value.unwrap_or_default(), seq: ev.seq, at: ev.at, level: NoticeLevel::Info, text: "Session resumed. Earlier messages are shown above.".into(), data: None, problem: None });
             }
             EventPayload::TurnResumed => {
                 let Some(turn_id) = turn_id else { continue };
@@ -663,9 +663,10 @@ fn apply_transcript_event(
                     terminal_message_id: *terminal_message_id,
                     at: ev.at,
                     error: None,
+                    problem: None,
                 });
             }
-            EventPayload::TurnFailed { error } => {
+            EventPayload::TurnFailed { error, problem } => {
                 let Some(turn_id) = turn_id else { continue };
                 last_turn_id_value = Some(turn_id);
                 mark_turn_complete(out, turn_id, lookup);
@@ -680,6 +681,7 @@ fn apply_transcript_event(
                     terminal_message_id: None,
                     at: ev.at,
                     error: Some(error.clone()),
+                    problem: problem.clone(),
                 });
             }
             EventPayload::ApprovalRequested { approval } | EventPayload::UserInputRequested { approval } => {
@@ -736,10 +738,10 @@ fn apply_transcript_event(
             }
             EventPayload::SessionTransitioned { text, .. } => {
                 if let Some(turn_id) = turn_id.or(last_turn_id_value) {
-                    out.push(TranscriptEntry::Notice { turn_id, seq: ev.seq, level: NoticeLevel::Info, text: text.clone(), at: ev.at, data: None });
+                    out.push(TranscriptEntry::Notice { turn_id, seq: ev.seq, level: NoticeLevel::Info, text: text.clone(), at: ev.at, data: None, problem: None });
                 }
             }
-            EventPayload::ProviderNotice { level, text, data } => {
+            EventPayload::ProviderNotice { level, text, data, problem } => {
                 // A fork or move notice is written to an idle source thread, between turns: it belongs to the last one.
                 let fork = data
                     .as_ref()
@@ -747,7 +749,7 @@ fn apply_transcript_event(
                     .and_then(|kind| kind.as_str())
                     .is_some_and(|kind| kind.starts_with("fork") || kind.starts_with("move"));
                 let Some(turn_id) = turn_id.or(if fork { last_turn_id_value } else { None }) else { continue };
-                out.push(TranscriptEntry::Notice { turn_id, seq: ev.seq, level: *level, text: text.clone(), at: ev.at, data: data.clone() });
+                out.push(TranscriptEntry::Notice { turn_id, seq: ev.seq, level: *level, text: text.clone(), at: ev.at, data: data.clone(), problem: problem.clone() });
             }
             EventPayload::WorkspaceReverted { commit, .. } => {
                 let Some(turn_id) = turn_id else { continue };
@@ -761,7 +763,7 @@ fn apply_transcript_event(
             EventPayload::ProviderSessionReleased { reason } => {
                 // Releases happen between turns; show them under the last one.
                 let (Some(turn_id), Some(text)) = (turn_id.or(last_turn_id_value), reason.notice_text()) else { continue };
-                out.push(TranscriptEntry::Notice { turn_id, seq: ev.seq, level: NoticeLevel::Info, text: text.into(), at: ev.at, data: None });
+                out.push(TranscriptEntry::Notice { turn_id, seq: ev.seq, level: NoticeLevel::Info, text: text.into(), at: ev.at, data: None, problem: None });
             }
             EventPayload::ContextRotationStarted { rotation_id, reason, used_tokens, window_tokens } => {
                 out.push(TranscriptEntry::Rotation {
@@ -1761,6 +1763,7 @@ mod reconciliation_allocation_tests {
                 text: "separator".into(),
                 at: "2026-09-17T00:00:00Z".parse().unwrap(),
                 data: None,
+                problem: None,
             });
         }
         (out, indices)
@@ -1951,6 +1954,7 @@ mod rotation_tests {
                     level: NoticeLevel::Info,
                     text: "Continued on satyamas · open".into(),
                     data: Some(data.clone()),
+                    problem: None,
                 },
             ),
         ];
@@ -1970,6 +1974,64 @@ mod rotation_tests {
     }
 
     #[test]
+    fn a_failed_turn_and_an_error_notice_carry_their_problem_for_every_kind() {
+        use kybern_protocol::rpc::{Problem, ProblemKind};
+        let kinds = [
+            ProblemKind::ToolMissing,
+            ProblemKind::SignedOut,
+            ProblemKind::Permission,
+            ProblemKind::Offline,
+            ProblemKind::Conflict,
+            ProblemKind::InvalidInput,
+            ProblemKind::NotFound,
+            ProblemKind::UpdateNeeded,
+            ProblemKind::Internal,
+        ];
+        for kind in kinds {
+            let turn = TurnId::from_u128(9);
+            let problem = Problem::new(kind, format!("{kind:?} detail")).with_subject("claude");
+            let events = vec![
+                event(1, Some(turn), EventPayload::TurnStarted { message_id: MessageId::from_u128(1), message: UserMessage::text("hi") }),
+                event(
+                    2,
+                    Some(turn),
+                    EventPayload::ProviderNotice {
+                        level: NoticeLevel::Error,
+                        text: "notice".into(),
+                        data: None,
+                        problem: Some(problem.clone()),
+                    },
+                ),
+                event(3, Some(turn), EventPayload::TurnFailed { error: format!("{kind:?} detail"), problem: Some(problem.clone()) }),
+            ];
+            let rows = project_transcript(&events);
+            let failed = rows.iter().find_map(|row| match row {
+                TranscriptEntry::TurnSummary { error, problem, .. } => Some((error.clone(), problem.clone())),
+                _ => None,
+            });
+            assert_eq!(failed, Some((Some(format!("{kind:?} detail")), Some(problem.clone()))), "{kind:?}");
+            assert!(
+                rows.iter().any(|row| matches!(row, TranscriptEntry::Notice { problem: Some(found), .. } if *found == problem)),
+                "{kind:?}: {rows:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_failure_stored_before_problems_existed_still_projects_without_one() {
+        let old: EventPayload = serde_json::from_str(r#"{"kind":"turn_failed","error":"weekly quota"}"#).unwrap();
+        assert!(matches!(&old, EventPayload::TurnFailed { problem: None, .. }));
+        let notice: EventPayload = serde_json::from_str(r#"{"kind":"provider_notice","level":"error","text":"x","data":null}"#).unwrap();
+        assert!(matches!(&notice, EventPayload::ProviderNotice { problem: None, .. }));
+        let turn = TurnId::from_u128(3);
+        let rows = project_transcript(&[event(1, Some(turn), old)]);
+        assert!(matches!(&rows[..], [TranscriptEntry::TurnSummary { error: Some(error), problem: None, .. }] if error == "weekly quota"));
+        // Absent on the wire when there is none, so old clients see the same JSON as before.
+        let json = serde_json::to_string(&EventPayload::TurnFailed { error: "x".into(), problem: None }).unwrap();
+        assert!(!json.contains("problem"), "{json}");
+    }
+
+    #[test]
     fn a_fork_notice_between_turns_keeps_its_data_and_lands_under_the_last_turn() {
         let turn = TurnId::from_u128(7);
         let completed = |seq| {
@@ -1985,8 +2047,9 @@ mod rotation_tests {
                 },
             )
         };
-        let notice =
-            |seq, text: &str, data| event(seq, None, EventPayload::ProviderNotice { level: NoticeLevel::Info, text: text.into(), data });
+        let notice = |seq, text: &str, data| {
+            event(seq, None, EventPayload::ProviderNotice { level: NoticeLevel::Info, text: text.into(), data, problem: None })
+        };
         let data = serde_json::json!({ "kind": "fork", "machine_id": "m-2", "machine_name": "satyamas", "thread_id": "t-9" });
         let events = vec![
             event(1, Some(turn), EventPayload::TurnStarted { message_id: MessageId::from_u128(1), message: UserMessage::text("hi") }),

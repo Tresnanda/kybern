@@ -240,7 +240,7 @@ mod tests {
             thread_id: ThreadId::nil(),
             turn_id: Some(TurnId::nil()),
             at: chrono::Utc::now(),
-            payload: EventPayload::ProviderNotice { level: NoticeLevel::Info, text, data: None },
+            payload: EventPayload::ProviderNotice { level: NoticeLevel::Info, text, data: None, problem: None },
         }
     }
 

@@ -2533,6 +2533,9 @@ pub enum TranscriptEntry {
         at: DateTime<Utc>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+        /// The classified cause of `error`, when Kybern could tell (from `TurnFailed::problem`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        problem: Option<crate::rpc::Problem>,
     },
     /// Stable launch row for a provider-owned task. Later snapshots update the
     /// task in place; `seq` remains the first event that made it visible.
@@ -2553,6 +2556,9 @@ pub enum TranscriptEntry {
         /// What the provider notice carried (a fork notice names its machine and thread). Absent for plain notices.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         data: Option<Value>,
+        /// The classified cause of an error notice (from `ProviderNotice::problem`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        problem: Option<crate::rpc::Problem>,
     },
     Reverted {
         turn_id: TurnId,

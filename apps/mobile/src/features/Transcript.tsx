@@ -43,6 +43,7 @@ import { EditedFilesCard, confirmRewind } from "./EditedFiles";
 import { Lightbox } from "./Lightbox";
 import { HistoryRow } from "./HistoryRow";
 import { LongPressArea } from "./LongPressArea";
+import { TurnProblemLine } from "./TurnProblem";
 import { MessagePart } from "./MessagePart";
 import { RequestRecordLine, SettledLine } from "./RequestCards";
 import { SecretRequestLine } from "./SecretRequest";
@@ -435,11 +436,7 @@ export const TranscriptBlock = memo(function TranscriptBlock({
     case "turn_end":
       return (
         <View style={{ gap: space.xs }}>
-          {block.error && (
-            <T variant="footnote" tone="negative">
-              {block.error}
-            </T>
-          )}
+          {block.error && <TurnProblemLine threadId={threadId} error={block.error} problem={block.problem} />}
           <T variant="caption" tone="muted" style={{ fontVariant: ["tabular-nums"], lineHeight: 28 }}>
             {turnFooter(block)}
           </T>

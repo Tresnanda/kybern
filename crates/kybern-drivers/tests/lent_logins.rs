@@ -158,7 +158,7 @@ async fn claude_runs_on_the_lent_token_and_a_rejected_one_fails_the_turn() {
     std::fs::write(out.join("valid"), "tok-B").unwrap();
     session.send_message("m2", &UserMessage::text("again")).await.unwrap();
     match next_turn_end(&mut events).await {
-        DriverEvent::TurnFailed { error } => {
+        DriverEvent::TurnFailed { error, .. } => {
             assert!(error.contains("OAuth token revoked"), "{error}");
             assert!(login_lend::is_login_failure(kybern_protocol::ProviderKind::ClaudeCode, &error));
         }

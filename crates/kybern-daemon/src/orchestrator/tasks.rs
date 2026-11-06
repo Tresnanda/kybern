@@ -1639,7 +1639,7 @@ mod tests {
         assert_eq!((interrupted.status, interrupted.runs[0].state), (TaskStatus::NeedsReview, TaskRunState::Interrupted));
 
         fixture.emit(&thread, turn_started());
-        fixture.emit(&thread, EventPayload::TurnFailed { error: "boom".into() });
+        fixture.emit(&thread, EventPayload::TurnFailed { error: "boom".into(), problem: None });
         let failed = fixture.current(&task);
         assert_eq!((failed.status, failed.runs[0].state), (TaskStatus::NeedsReview, TaskRunState::Failed));
 
@@ -2632,7 +2632,7 @@ mod tests {
         let settings = SettingsStore::load(&paths.settings).unwrap();
         let (events_tx, _) = crate::bounded_broadcast::channel(8, 1024 * 1024);
         let restarted = Orchestrator::new(fixture.store.clone(), DriverRegistry::default(), events_tx, paths, settings);
-        restarted.emit(thread.id, Some(Uuid::nil()), EventPayload::TurnFailed { error: "daemon restarted".into() }).unwrap();
+        restarted.emit(thread.id, Some(Uuid::nil()), EventPayload::TurnFailed { error: "daemon restarted".into(), problem: None }).unwrap();
         let settled = fixture.current(&task);
         assert_eq!((settled.status, settled.runs[0].state), (TaskStatus::NeedsReview, TaskRunState::Failed));
     }

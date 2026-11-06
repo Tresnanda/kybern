@@ -6,7 +6,8 @@
 //! `internal` with the whole error chain as the detail. Clients write the words from `kind` and
 //! `subject`; the daemon's `title`/`hint` are only their fallback.
 
-use kybern_drivers::DriverError;
+use kybern_drivers::{DriverError, failure};
+use kybern_protocol::ProviderKind;
 use kybern_protocol::process::SpawnError;
 use kybern_protocol::rpc::{Problem, ProblemAction, ProblemKind, RpcError, codes};
 use std::io::ErrorKind;
@@ -32,6 +33,27 @@ pub(crate) fn rpc_error(code: i32, error: &anyhow::Error) -> RpcError {
         _ => detail(error),
     };
     RpcError::new(code, message).with_problem(&problem)
+}
+
+/// What a failure that stopped a turn of a `kind` thread means: a harness error that says so, else the
+/// typed cause `typed` knows, else the harness's own words classified. `None` when Kybern can't tell, and
+/// the turn then shows the text alone.
+pub(crate) fn turn_problem(kind: ProviderKind, error: &anyhow::Error) -> Option<Problem> {
+    let driver =
+        error.chain().find_map(|cause| cause.downcast_ref::<DriverError>().and_then(|driver| failure::classify_error(kind, driver)));
+    driver
+        .or_else(|| typed(error).filter(|problem| problem.kind != ProblemKind::Internal))
+        .or_else(|| failure::classify(kind, &detail(error)))
+}
+
+/// The same for a `DriverError` that rejected a message: its text (with the whole cause chain) and meaning.
+pub(crate) fn driver_failure(kind: ProviderKind, error: &DriverError) -> (String, Option<Problem>) {
+    let text = match error {
+        DriverError::Other(inner) => detail(inner),
+        other => other.to_string(),
+    };
+    let problem = failure::classify_error(kind, error).or_else(|| failure::classify(kind, &text));
+    (text, problem)
 }
 
 /// The meaning of `error` when one of its causes says it, or `None`.

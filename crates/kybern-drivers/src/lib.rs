@@ -50,6 +50,7 @@ pub mod codex;
 pub mod codex_integrations;
 pub mod cursor;
 pub mod edit_paths;
+pub mod failure;
 pub mod grok;
 pub mod login_lend;
 pub mod login_recipes;
@@ -91,6 +92,15 @@ pub enum DriverError {
 }
 
 pub type Result<T> = std::result::Result<T, DriverError>;
+
+impl DriverEvent {
+    /// A failed turn of `kind` with the harness's own `error` text, classified when Kybern can name the cause.
+    pub fn turn_failed(kind: ProviderKind, error: impl Into<String>) -> Self {
+        let error = error.into();
+        let problem = failure::classify(kind, &error);
+        Self::TurnFailed { error, problem }
+    }
+}
 
 /// Read-only context used while discovering a provider's installed
 /// capabilities and effective defaults.
@@ -450,6 +460,8 @@ pub enum DriverEvent {
     },
     TurnFailed {
         error: String,
+        /// What the failure means (signed out, rate limited, offline, ...), when the driver could tell.
+        problem: Option<kybern_protocol::rpc::Problem>,
     },
     CommandsUpdated(Vec<kybern_protocol::ProviderCommand>),
     UsageUpdated(kybern_protocol::ProviderUsage),

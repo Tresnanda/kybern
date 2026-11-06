@@ -608,7 +608,7 @@ async fn a_seed_whose_turn_failed_is_sent_again_with_the_next_message() {
 
     lead.fixture.orchestrator.send(lead.thread.id, UserMessage::text("first try")).await.unwrap();
     let fresh = lead.session_with("first try").await;
-    fresh.tx.send(DriverEvent::TurnFailed { error: "provider crashed".into() }).await.unwrap();
+    fresh.tx.send(DriverEvent::TurnFailed { error: "provider crashed".into(), problem: None }).await.unwrap();
     eventually(|| async { (lead.current().status == ThreadStatus::Failed).then_some(()) }).await;
     assert!(lead.seed().is_some(), "the provider never finished reading it");
 

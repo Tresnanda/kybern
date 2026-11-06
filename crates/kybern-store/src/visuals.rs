@@ -122,7 +122,12 @@ mod tests {
             .event_append(
                 thread,
                 Some(older),
-                EventPayload::ProviderNotice { level: NoticeLevel::Info, text: "Old background task finished".into(), data: None },
+                EventPayload::ProviderNotice {
+                    level: NoticeLevel::Info,
+                    text: "Old background task finished".into(),
+                    data: None,
+                    problem: None,
+                },
             )
             .unwrap();
         assert_eq!(store.visual_latest_turn(thread).unwrap(), Some(newer));

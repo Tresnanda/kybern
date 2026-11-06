@@ -4,7 +4,7 @@
 // contain "RpcCallError", "invalid params", "not found:", exit codes or paths; the technical text is only `detail`.
 import { classifyPrError } from "./prReview.ts"
 import { errorMessage, problemOf } from "./problem.ts"
-import type { JsonValue, Problem, ProblemKind } from "./types.ts"
+import type { JsonValue, Problem, ProblemKind, ProviderKind } from "./types.ts"
 
 /** What the person was doing when it failed. */
 export interface ProblemContext {
@@ -265,4 +265,101 @@ function kindForCode(code: number): ProblemKind {
     default:
       return "internal"
   }
+}
+
+/** What a failed turn knows about itself: the harness's own text and, when the daemon could tell, what it means. */
+export interface TurnFailure {
+  error: string
+  problem?: Problem | null
+}
+
+export interface TurnFailureContext {
+  /** The agent that ran the turn, named in the headline. */
+  provider: ProviderKind
+  /** Which of its accounts ran it, so Sign in signs that account in again. */
+  instance?: string
+  /** The machine the agent ran on, when it isn't this one: "SatyaMas". */
+  machine?: string
+  /** A phone: it can't run a fix, so the words say what to do on `machine` and no buttons are offered. */
+  phone?: boolean
+}
+
+const PROVIDER_TOOLS: Record<ProviderKind, string> = {
+  "claude-code": "claude",
+  codex: "codex",
+  opencode: "opencode",
+  pi: "pi",
+  omp: "omp",
+  cursor: "cursor",
+  antigravity: "antigravity",
+  "grok-build": "grok",
+}
+
+/** The short tool name the daemon uses as a problem's `subject` for this agent (`claude`, `codex`, ...). */
+export const providerTool = (provider: ProviderKind): string => PROVIDER_TOOLS[provider]
+
+/**
+ * The words and buttons for a failed turn, or `null` when Kybern could not tell what failed (the harness's own text is then
+ * all there is). A signed-out agent says so and offers Sign in; a usage limit and a lost connection name the agent. Everything
+ * else is `describeProblem`'s copy for "send your message". The body only tells the person what to do next: Kybern does not
+ * send the message again by itself.
+ */
+export function describeTurnFailure(failure: TurnFailure, context: TurnFailureContext): ProblemView | null {
+  const view = turnFailureView(failure, context)
+  if (!view || !context.phone) return view
+  // A phone runs no fix: the words name the computer and there are no buttons.
+  const { action: _action, secondary: _secondary, ...words } = view
+  return words
+}
+
+function turnFailureView(failure: TurnFailure, context: TurnFailureContext): ProblemView | null {
+  const problem = failure.problem
+  if (!problem) return null
+  const tool = providerTool(context.provider)
+  const label = toolLabel(tool)
+  const detail = problem.detail ?? failure.error
+  const view = (copy: Omit<ProblemView, "kind" | "subject" | "detail" | "retryable"> & { retryable?: boolean }): ProblemView => ({
+    kind: problem.kind,
+    ...(problem.subject ? { subject: problem.subject } : {}),
+    detail,
+    retryable: problem.retryable ?? true,
+    ...copy,
+  })
+  const where = context.machine ? ` on ${context.machine}` : ""
+  const there = context.machine ?? "your computer"
+  const phone = context.phone === true
+  const account = { provider: tool, ...(context.instance ? { instance: context.instance } : {}) }
+  if (problem.kind === "signed_out" && problem.subject === tool) {
+    return view({
+      title: `${label} is signed out${where}`,
+      body: phone ? `Sign in on ${there}, then send your message again.` : "Sign in, then send your message again.",
+      action: { id: "sign_in", label: "Sign in", params: account },
+      secondary: { id: "use_another_account", label: "Use another account", params: { provider: tool } },
+    })
+  }
+  if (problem.kind === "permission" && problem.subject === "rate_limit") {
+    return view({
+      title: `${label} reached its usage limit`,
+      body: phone ? `Wait for the limit to reset, or switch accounts on ${there}, then send your message again.` : "Wait for the limit to reset, or use another account or model, then send your message again.",
+      action: { id: "use_another_account", label: "Use another account", params: { provider: tool } },
+    })
+  }
+  if (problem.kind === "offline" && problem.subject === "network") {
+    return view({
+      title: `Couldn't reach ${label}${where}`,
+      body: phone ? `Check the connection on ${there}, then send your message again.` : "Check the connection, then send your message again.",
+      action: retry(),
+    })
+  }
+  if (problem.kind === "update_needed" && problem.subject === tool) {
+    return view({
+      title: `Update ${label}`,
+      body: `The installed ${label} is older than Kybern needs. Update it${phone ? ` on ${there}` : ""}, then send your message again.`,
+      action: { id: "update_agent", label: `Update ${label}`, params: { provider: tool } },
+      secondary: retry("Check again"),
+    })
+  }
+  const generic = describeProblem({ message: failure.error, data: { problem } }, { action: "send your message", ...(context.machine ? { machine: context.machine } : {}) })
+  // A harness's own failure text is technical: the headline says what happened, the text stays in Details.
+  return generic.kind === "internal" ? { ...generic, title: `${label} stopped before it could answer`, body: "Send your message again. If it keeps happening, copy the details and report them." } : generic
 }

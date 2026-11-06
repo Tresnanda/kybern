@@ -1160,6 +1160,8 @@ export type TranscriptEntry =
       terminal_message_id?: MessageId | null;
       at: DateTime;
       error?: string | null;
+      /** What `error` means, when Kybern could tell. */
+      problem?: Problem | null;
     }
   | {
       role: "runtime_task";
@@ -1177,6 +1179,8 @@ export type TranscriptEntry =
       at: DateTime;
       /** What the provider notice carried (a fork notice names its machine and thread). */
       data?: JsonValue | null;
+      /** What an error notice means, when Kybern could tell. */
+      problem?: Problem | null;
     }
   | {
       role: "reverted";
@@ -1409,12 +1413,14 @@ export type EventPayload =
   | { kind: "session_imported"; provider: ProviderKind; session_id: string }
   | { kind: "provider_commands_updated"; commands: ProviderCommand[] }
   | { kind: "provider_usage_updated"; usage: ProviderUsage }
-  | { kind: "turn_failed"; error: string }
+  /** `problem` says what the failure means (signed out, rate limited, offline, ...) when Kybern could tell; events from before it existed have none. */
+  | { kind: "turn_failed"; error: string; problem?: Problem | null }
   | {
       kind: "provider_notice";
       level: NoticeLevel;
       text: string;
       data: JsonValue | null;
+      problem?: Problem | null;
     }
   | { kind: "checkpoint_updated"; checkpoint: Checkpoint }
   | { kind: "workspace_reverted"; to_turn_id: TurnId; commit: string }

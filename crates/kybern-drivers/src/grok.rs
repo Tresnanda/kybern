@@ -576,7 +576,7 @@ async fn run_connection(
                                 let (usage, cost_usd) = turn_usage(r.meta.as_ref());
                                 DriverEvent::TurnCompleted { stop_reason: stop, usage, cost_usd, duration_ms, anchors: Default::default() }
                             }
-                            Err(e) => DriverEvent::TurnFailed { error: e.to_string() },
+                            Err(e) => DriverEvent::turn_failed(ProviderKind::GrokBuild, e.to_string()),
                         };
                         let _ = shared.events.send(ev).await;
                     }

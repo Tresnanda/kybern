@@ -26,7 +26,7 @@ fn quota_recovery_requires_the_latest_interrupted_turn_and_its_own_report() {
             }]),
         },
     };
-    let failed = EventPayload::TurnFailed { error: "Request could not complete".into() };
+    let failed = EventPayload::TurnFailed { error: "Request could not complete".into(), problem: None };
     let completed = |stop_reason| EventPayload::TurnCompleted {
         stop_reason,
         usage: Usage::default(),
@@ -65,12 +65,12 @@ fn quota_recovery_requires_the_latest_interrupted_turn_and_its_own_report() {
     assert!(!accounts::quota_limited_turn(ThreadStatus::Failed, &events(vec![start.clone(), failed.clone()]), now));
     assert!(accounts::quota_limited_turn(
         ThreadStatus::Failed,
-        &events(vec![start.clone(), EventPayload::TurnFailed { error: "5-hour usage limit reached".into() }]),
+        &events(vec![start.clone(), EventPayload::TurnFailed { error: "5-hour usage limit reached".into(), problem: None }]),
         now
     ));
     assert!(!accounts::quota_limited_turn(
         ThreadStatus::Failed,
-        &events(vec![start.clone(), EventPayload::TurnFailed { error: "Connection rate limit exceeded".into() }]),
+        &events(vec![start.clone(), EventPayload::TurnFailed { error: "Connection rate limit exceeded".into(), problem: None }]),
         now
     ));
 
@@ -102,13 +102,13 @@ fn target_quota_evidence_matches_full_history_after_each_transition() {
     let start = || EventPayload::TurnStarted { message_id: Uuid::now_v7(), message: UserMessage::text("task") };
     for (owner, payload) in [
         (turn, start()),
-        (turn, EventPayload::TurnFailed { error: "5-hour usage limit reached".into() }),
-        (other_turn, EventPayload::ProviderNotice { level: NoticeLevel::Info, text: "unrelated".repeat(10_000), data: None }),
+        (turn, EventPayload::TurnFailed { error: "5-hour usage limit reached".into(), problem: None }),
+        (other_turn, EventPayload::ProviderNotice { level: NoticeLevel::Info, text: "unrelated".repeat(10_000), data: None, problem: None }),
         (turn, EventPayload::TurnResumed),
-        (turn, EventPayload::TurnFailed { error: "weekly quota".into() }),
+        (turn, EventPayload::TurnFailed { error: "weekly quota".into(), problem: None }),
         (other_turn, start()),
-        (turn, EventPayload::TurnFailed { error: "weekly quota".into() }),
-        (other_turn, EventPayload::TurnFailed { error: "weekly quota".into() }),
+        (turn, EventPayload::TurnFailed { error: "weekly quota".into(), problem: None }),
+        (other_turn, EventPayload::TurnFailed { error: "weekly quota".into(), problem: None }),
         (turn, EventPayload::SessionTransitioned {
             from: thread.provider.clone(), to: thread.provider.clone(), native_resume: false, text: "transition".into(),
         }),
@@ -519,7 +519,7 @@ async fn stale_quota_failure_cannot_switch_a_newer_turn() {
         .unwrap();
     fixture
         .orchestrator
-        .emit(thread.id, Some(failed_turn), EventPayload::TurnFailed { error: "weekly usage limit exceeded".into() })
+        .emit(thread.id, Some(failed_turn), EventPayload::TurnFailed { error: "weekly usage limit exceeded".into(), problem: None })
         .unwrap();
     fixture
         .orchestrator

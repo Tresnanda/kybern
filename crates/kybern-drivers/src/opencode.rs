@@ -1180,7 +1180,7 @@ impl OpencodeSession {
                         .await;
                     }
                 } else if active {
-                    self.emit(DriverEvent::TurnFailed { error: format!("{name}: {msg}") }).await;
+                    self.emit(DriverEvent::turn_failed(ProviderKind::Opencode, format!("{name}: {msg}"))).await;
                 } else {
                     self.emit(DriverEvent::Notice { level: NoticeLevel::Error, text: format!("{name}: {msg}"), data: Some(err.clone()) })
                         .await;
@@ -1693,7 +1693,7 @@ impl AgentSession for Handle {
             tokio::spawn(async move {
                 if let Err(error) = session.post(&format!("/session/{session_id}/command"), body).await {
                     session.state.lock().await.active = false;
-                    session.emit(DriverEvent::TurnFailed { error: error.to_string() }).await;
+                    session.emit(DriverEvent::turn_failed(ProviderKind::Opencode, error.to_string())).await;
                 }
             });
             Ok(())

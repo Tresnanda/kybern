@@ -39,4 +39,12 @@ describe('problem actions', () => {
   test('sign_in, open_settings and update are always offered', () => {
     for (const id of ['sign_in', 'open_settings', 'update', 'open_machines']) expect(resolveAction(action(id), {})).not.toBeNull()
   })
+
+  test('a failed turn offers another account and an agent update only for an agent Kybern knows', () => {
+    for (const id of ['use_another_account', 'update_agent']) {
+      for (const provider of ['claude', 'codex', 'cursor', 'antigravity', 'grok']) expect(resolveAction(action(id, { provider }), {}), `${id} ${provider}`).not.toBeNull()
+      expect(resolveAction(action(id, { provider: 'unknown' }), {})).toBeNull()
+      expect(resolveAction(action(id), {})).toBeNull()
+    }
+  })
 })

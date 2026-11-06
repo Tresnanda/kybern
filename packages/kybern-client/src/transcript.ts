@@ -3,6 +3,7 @@ import type { ProviderUsage } from "./types.ts"
 // `ThreadEvent`s into blocks the views render directly.
 
 import type {
+  Problem,
   ApprovalDecision,
   ApprovalRequest,
   Checkpoint,
@@ -68,7 +69,7 @@ export type Block =
     }
   | { kind: "runtime_task"; id: string; turnId: TurnId; at: string; seq: number; task: RuntimeTask }
   | { kind: "approval"; id: string; turnId: TurnId; at: string; seq: number; approval: ApprovalRequest; decision: ApprovalDecision | null; auto?: boolean; /** The delegating agent that answered for the user. */ answeredBy?: RequestAnswerer }
-  | { kind: "notice"; id: string; turnId: TurnId; at: string; seq: number; level: NoticeLevel; text: string; /** What the daemon attached (a fork notice carries its machine and thread). */ data?: JsonValue | null }
+  | { kind: "notice"; id: string; turnId: TurnId; at: string; seq: number; level: NoticeLevel; text: string; /** What the daemon attached (a fork notice carries its machine and thread). */ data?: JsonValue | null; /** What an error notice means, when the daemon could tell. */ problem?: Problem }
   | {
       kind: "turn_end"
       id: string
@@ -81,6 +82,8 @@ export type Block =
       durationMs: number
       terminalMessageId: string | null
       error: string | null
+      /** What `error` means (signed out, rate limited, ...), when the daemon could tell. */
+      problem?: Problem
     }
   | { kind: "reverted"; id: string; turnId: TurnId; at: string; seq: number; commit: string }
   | {
@@ -243,7 +246,7 @@ function entryToBlock(e: TranscriptEntry): Block | null {
     case "runtime_task":
       return { kind: "runtime_task", id: `task:${e.task.id}`, turnId: e.turn_id, at: e.at, seq: e.seq ?? e.task.started_seq ?? 0, task: e.task }
     case "notice":
-      return { kind: "notice", id: `notice:${e.seq}`, turnId: e.turn_id, at: e.at, seq: e.seq ?? 0, level: e.level, text: e.text, ...(e.data ? { data: e.data } : {}) }
+      return { kind: "notice", id: `notice:${e.seq}`, turnId: e.turn_id, at: e.at, seq: e.seq ?? 0, level: e.level, text: e.text, ...(e.data ? { data: e.data } : {}), ...(e.problem ? { problem: e.problem } : {}) }
     case "reverted":
       return { kind: "reverted", id: `revert:${e.seq}`, turnId: e.turn_id, at: e.at, seq: e.seq ?? 0, commit: e.commit }
     case "rotation":
@@ -294,6 +297,7 @@ function entryToBlock(e: TranscriptEntry): Block | null {
         durationMs: e.duration_ms,
         terminalMessageId: e.terminal_message_id ?? null,
         error: e.error ?? null,
+        ...(e.problem ? { problem: e.problem } : {}),
       }
     default:
       return null
@@ -557,6 +561,7 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
           durationMs: 0,
           terminalMessageId: null,
           error: ev.error,
+          ...(ev.problem ? { problem: ev.problem } : {}),
         },
       ]
       break
@@ -576,7 +581,7 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       blocks = [...blocks, { kind: "notice", id: `notice:${ev.seq}`, turnId, at, seq: ev.seq, level: "info", text: "Session resumed. Earlier messages are shown above." }]
       break
     case "provider_notice":
-      blocks = [...blocks, { kind: "notice", id: `notice:${ev.seq}`, turnId, at, seq: ev.seq, level: ev.level, text: ev.text, ...(ev.data ? { data: ev.data } : {}) }]
+      blocks = [...blocks, { kind: "notice", id: `notice:${ev.seq}`, turnId, at, seq: ev.seq, level: ev.level, text: ev.text, ...(ev.data ? { data: ev.data } : {}), ...(ev.problem ? { problem: ev.problem } : {}) }]
       break
     case "checkpoint_updated": {
       const i = checkpoints.findIndex((c) => c.turn_id === ev.checkpoint.turn_id)

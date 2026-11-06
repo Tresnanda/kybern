@@ -1708,6 +1708,7 @@ async fn cached_history_pages_match_full_history_and_keep_their_sequence_barrier
                     data: None,
                     level: NoticeLevel::Info,
                     text: format!("Entry {index}: {}", "readable tool output ".repeat(100)),
+                    problem: None,
                 },
             )
             .unwrap();
@@ -1724,7 +1725,7 @@ async fn cached_history_pages_match_full_history_and_keep_their_sequence_barrier
         .event_append(
             thread.id,
             Some(thread.id),
-            EventPayload::ProviderNotice { data: None, level: NoticeLevel::Info, text: "New live entry".into() },
+            EventPayload::ProviderNotice { data: None, level: NoticeLevel::Info, text: "New live entry".into(), problem: None },
         )
         .unwrap();
     let mut collected = recent.transcript;
@@ -1756,7 +1757,7 @@ async fn whole_turn_history_pages_add_whole_turns_and_leave_thread_state_out() {
     let notice = |turn: Uuid, text: String| {
         host.state
             .store
-            .event_append(thread.id, Some(turn), EventPayload::ProviderNotice { data: None, level: NoticeLevel::Info, text })
+            .event_append(thread.id, Some(turn), EventPayload::ProviderNotice { data: None, level: NoticeLevel::Info, text, problem: None })
             .unwrap();
     };
     let turns: Vec<Uuid> = (0..3).map(|_| Uuid::now_v7()).collect();
@@ -1849,6 +1850,7 @@ async fn measure_remote_history_pages() {
                     data: None,
                     level: NoticeLevel::Info,
                     text: format!("Entry {index}: {}", "readable output ".repeat(400)),
+                    problem: None,
                 },
             )
             .unwrap();

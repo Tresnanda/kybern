@@ -157,6 +157,7 @@ fn checkout_transition_is_bounded_provider_only_context_and_retries_until_delive
                 level: NoticeLevel::Info,
                 text: "Changed checkout".into(),
                 data: Some(serde_json::json!({"workspace_transition":{"number":7,"branch":"review-branch","head":"review-head"}})),
+                problem: None,
             },
         )
         .unwrap();
@@ -224,6 +225,7 @@ fn record_pr_receipt(fixture: &Fixture, thread: &Thread, number: u64, head: &str
                 data: Some(serde_json::json!({"workspace_transition":{
                     "number":number,"branch":thread.worktree.as_ref().unwrap().branch,"head":head,"verified":verified,
                 }})),
+                problem: None,
             },
         )
         .unwrap();

@@ -1375,9 +1375,10 @@ impl CodexSession {
                     "interrupted" => {
                         DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, usage, cost_usd: None, duration_ms, anchors }
                     }
-                    _ => DriverEvent::TurnFailed {
-                        error: turn.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("turn failed").to_string(),
-                    },
+                    _ => DriverEvent::turn_failed(
+                        ProviderKind::Codex,
+                        turn.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("turn failed"),
+                    ),
                 };
                 self.emit(ev).await;
             }

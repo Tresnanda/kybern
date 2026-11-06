@@ -26,7 +26,7 @@ import { isImageGenerationTool } from '../../../../packages/kybern-client/src/to
 import { responseImages } from '../../../../packages/kybern-client/src/responseImages.ts'
 import { chunkRuns, isAgentLaunchBlock, isDelegationLaunchBlock, isOrchestrationBlock } from '../shared/lib/workChunks.ts'
 import { buildWorkHierarchy, shouldRevealLiveText, type Block, type TurnGroup } from '../../../../packages/kybern-client/src/transcript.ts'
-import type { ContentPart, Diff, RuntimeTask, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
+import type { ContentPart, Diff, Problem, RuntimeTask, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 import { removePending, usePendingSend } from '../composer/pending.ts'
 import { machineName } from '../composer/outbox.ts'
 import { waitingLabel } from '../../../../packages/kybern-client/src/pendingSends.ts'
@@ -35,6 +35,7 @@ import { PREPARING_WORKTREE } from '../../../../packages/kybern-client/src/newCh
 import { restoreToComposer, retryPending } from '../composer/store.ts'
 import { useApp } from '../state.ts'
 import { TranscriptTail } from './Window.tsx'
+import { TurnProblem } from './TurnProblem.tsx'
 import { isWindowVisible } from '../native/visibility.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { Icon } from '../icons.tsx'
@@ -291,12 +292,7 @@ export const TurnFooter = memo(function TurnFooter({ group, threadId, isLast }: 
   return <div style={{ display: 'flex', flexDirection: 'column', paddingBottom: 10 }}>
           {group.end && cards.below.map(card => <AgentItemCard key={card.id} result={card.result} inset={false} />)}
           {group.end?.error && (
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 8 }}>
-              <Icon source={T.alert} size={14} color={t.red} style={{ marginTop: 4 }} />
-              <Para color={t.red} selectable style={{ flexGrow: 1 }}>
-                {group.end.error}
-              </Para>
-            </div>
+            <FailedTurn threadId={threadId} error={group.end.error} problem={group.end.problem} parts={group.user?.message.parts} />
           )}
           {group.end?.stopReason === 'interrupted' && <Para color={muted(t)}>Stopped.</Para>}
           {diff && diff.files.length > 0 && <EditedFilesCard diff={diff} threadId={threadId} turnId={group.turnId} canUndo={isLast} />}
@@ -529,6 +525,21 @@ function EditedFileRow({ file, threadId, turnId, first, border, repo }: { file: 
 
 
 /** A known file-header height for the native diff, so it can be clipped exactly. */
+
+/** A failed turn: the named cause as a Problem row (signed out, usage limit, offline, ...), else the agent's own words in red. */
+function FailedTurn({ threadId, error, problem, parts }: { threadId: ThreadId; error: string; problem?: Problem; parts?: ContentPart[] }) {
+  const t = useTheme()
+  const provider = useApp((s) => (s.open.thread?.id === threadId ? s.open.thread.provider : undefined))
+  if (problem && provider) return <TurnProblem threadId={threadId} error={error} problem={problem} parts={parts} />
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 8 }}>
+      <Icon source={T.alert} size={14} color={t.red} style={{ marginTop: 4 }} />
+      <Para color={t.red} selectable style={{ flexGrow: 1 }}>
+        {error}
+      </Para>
+    </div>
+  )
+}
 
 /** Under a rejected send: what went wrong, Retry (same message id, so a send the daemon did take is not doubled) and Edit
  * (back into the composer). */

@@ -11,7 +11,8 @@ import { environmentKey } from './environment.ts'
 // A delegated agent's question or approval is announced on its top-level thread
 // ("Fix login · Parser audit needs your input"), since nobody watches the agent's own thread.
 // Questions say "Needs your input", approvals "Needs approval: …".
-import type { ApprovalRequest, Settings, Thread, ThreadEvent, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
+import type { ApprovalRequest, Problem, ProviderKind, Settings, Thread, ThreadEvent, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
+import { describeTurnFailure } from '../../../../packages/kybern-client/src/problems.ts'
 import { openThread } from '../nav/history.ts'
 import { onLiveEvent } from '../nav/live.ts'
 import { getNav, subscribeNav } from '../nav/store.ts'
@@ -50,6 +51,12 @@ let started = false
 let owner: ReturnType<typeof getClient> = null
 let stops: (() => void)[] = []
 /** Follow the daemon's events. Called once by the app shell, after `startLive()`. */
+
+/** What a notification says about a failed turn: its plain headline when the daemon named the cause ("Claude Code is signed out"), else the agent's own text. */
+function failureLine(event: { error: string; problem?: Problem | null }, provider: ProviderKind): string {
+  return describeTurnFailure(event, { provider })?.title ?? `Failed: ${event.error}`
+}
+
 export function startAgentToasts() {
   const client = getClient()
   if (!client) return
@@ -154,7 +161,7 @@ export function startAgentToasts() {
       const id = `agent:${event.thread_id}:${event.seq}`
       targets.set(id, { environment: environmentKey(), thread: event.thread_id })
       if (targets.size > 256) targets.delete(targets.keys().next().value!)
-      const body = event.kind === 'turn_failed' ? `Failed: ${event.error}`
+      const body = event.kind === 'turn_failed' ? failureLine(event, thread.provider.kind)
         : event.kind === 'approval_requested' ? waitingLine(event.approval, agent)
         : event.kind === 'user_input_requested' ? questionLine(event.approval, agent) : 'Finished working'
       void notifications.requestPermission().then(status => {
@@ -184,7 +191,7 @@ export function startAgentToasts() {
     } else {
       toast(title, {
         id: `agent:${event.thread_id}:${event.seq}`,
-        description: event.kind === 'turn_failed' ? `Failed: ${event.error}` : 'Finished working',
+        description: event.kind === 'turn_failed' ? failureLine(event, thread.provider.kind) : 'Finished working',
         duration: DONE_MS,
         action: open,
       })

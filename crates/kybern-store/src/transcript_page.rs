@@ -169,6 +169,7 @@ mod tests {
                 text: format!("entry {seq}"),
                 at: Utc::now(),
                 data: None,
+                problem: None,
             })
             .collect()
     }
@@ -287,6 +288,7 @@ mod tests {
                 text: format!("turn {turn} row {seq}"),
                 at: Utc::now(),
                 data: None,
+                problem: None,
             })
             .collect()
     }
