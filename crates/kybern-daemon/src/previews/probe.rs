@@ -455,6 +455,40 @@ pub async fn favicon_data_url(page_url: &str, href: Option<&str>, addr: SocketAd
     tokio::time::timeout(timeout, fetch).await.ok().flatten()
 }
 
+/// A public site's own icon. DNS is pinned for both requests and redirects stay closed.
+pub async fn public_favicon(raw: &str) -> Option<String> {
+    let mut url = reqwest::Url::parse(raw).ok()?;
+    if !matches!(url.scheme(), "http" | "https") || !url.username().is_empty() || url.password().is_some() {
+        return None;
+    }
+    url.set_path("/");
+    url.set_query(None);
+    url.set_fragment(None);
+    let host = url.host_str()?.to_string();
+    let port = url.port_or_known_default()?;
+    let timeout = Duration::from_secs(3);
+    let work = async {
+        let addrs: Vec<_> = tokio::net::lookup_host((host.as_str(), port)).await.ok()?.collect();
+        if addrs.is_empty()
+            || addrs.iter().any(|addr| is_local_or_private_ip(addr.ip()) || addr.ip().is_unspecified() || addr.ip().is_multicast())
+        {
+            return None;
+        }
+        let page = fetch(url.clone(), &host, &addrs, true, timeout).await;
+        let raw = favicon_data_url(url.as_str(), page.favicon_href.as_deref(), addrs[0], timeout).await?;
+        normalize_icon(&raw).await
+    };
+    tokio::time::timeout(timeout, work).await.ok().flatten()
+}
+
+async fn normalize_icon(raw: &str) -> Option<String> {
+    use base64::Engine as _;
+    let (_, data) = raw.split_once(',')?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data).ok()?;
+    let png = tokio::task::spawn_blocking(move || crate::thumbnail::make(&bytes)).await.ok()?.ok()?;
+    (png.len() <= MAX_FAVICON).then(|| format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png)))
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -635,38 +669,4 @@ pub(crate) mod tests {
         assert_eq!(html_icon_href("<link rel=stylesheet href=a.css><link href='/i.svg' rel='icon'>").as_deref(), Some("/i.svg"));
         assert_eq!(html_icon_href("<link rel=\"apple-touch-icon\" href=a>"), None);
     }
-}
-
-/// A public site's own icon. DNS is pinned for both requests and redirects stay closed.
-pub async fn public_favicon(raw: &str) -> Option<String> {
-    let mut url = reqwest::Url::parse(raw).ok()?;
-    if !matches!(url.scheme(), "http" | "https") || !url.username().is_empty() || url.password().is_some() {
-        return None;
-    }
-    url.set_path("/");
-    url.set_query(None);
-    url.set_fragment(None);
-    let host = url.host_str()?.to_string();
-    let port = url.port_or_known_default()?;
-    let timeout = Duration::from_secs(3);
-    let work = async {
-        let addrs: Vec<_> = tokio::net::lookup_host((host.as_str(), port)).await.ok()?.collect();
-        if addrs.is_empty()
-            || addrs.iter().any(|addr| is_local_or_private_ip(addr.ip()) || addr.ip().is_unspecified() || addr.ip().is_multicast())
-        {
-            return None;
-        }
-        let page = fetch(url.clone(), &host, &addrs, true, timeout).await;
-        let raw = favicon_data_url(url.as_str(), page.favicon_href.as_deref(), addrs[0], timeout).await?;
-        normalize_icon(&raw).await
-    };
-    tokio::time::timeout(timeout, work).await.ok().flatten()
-}
-
-async fn normalize_icon(raw: &str) -> Option<String> {
-    use base64::Engine as _;
-    let (_, data) = raw.split_once(',')?;
-    let bytes = base64::engine::general_purpose::STANDARD.decode(data).ok()?;
-    let png = tokio::task::spawn_blocking(move || crate::thumbnail::make(&bytes)).await.ok()?.ok()?;
-    (png.len() <= MAX_FAVICON).then(|| format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png)))
 }
