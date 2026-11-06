@@ -1,0 +1,2080 @@
+{
+  "label": "part-2-current",
+  "flow": "instant",
+  "daemon": "kybernd.exe",
+  "rttMs": 0,
+  "mbps": 0,
+  "runs": 8,
+  "warm": 3,
+  "at": "2026-11-06T18:33:14.329Z",
+  "host": {
+    "platform": "win32",
+    "bun": "1.4.3"
+  },
+  "fixture": {
+    "short": "347e68eb-6100-4f83-8d27-1b1fde2d3d6d",
+    "medium": "1082d6f9-b3c6-4358-bb91-cc2eef407c78",
+    "long": "e2a67efb-6951-412f-a640-547e0da4274e",
+    "others": 40,
+    "projects": 20,
+    "threads": 1000,
+    "events": 32101,
+    "longTurns": 3000,
+    "mediumTurns": 200
+  },
+  "summary": {
+    "daemon-spawn": {
+      "n": 8,
+      "medianMs": 102.2,
+      "p95Ms": 147.2
+    },
+    "connect": {
+      "n": 8,
+      "medianMs": 91.4,
+      "p95Ms": 105.4
+    },
+    "cold-lists": {
+      "n": 8,
+      "medianMs": 44.1,
+      "p95Ms": 53.2,
+      "roundTrips": 1,
+      "bytes": 217928,
+      "rows": 500
+    },
+    "cold-restore-long": {
+      "n": 8,
+      "medianMs": 0.3,
+      "p95Ms": 164.2,
+      "liveMedianMs": 159.7,
+      "roundTrips": 0,
+      "bytes": 0,
+      "from": "daemon/cache",
+      "blocks": 40
+    },
+    "first-open-short": {
+      "n": 8,
+      "medianMs": 0.2,
+      "p95Ms": 1.6,
+      "liveMedianMs": 0.9,
+      "roundTrips": 0,
+      "bytes": 0,
+      "from": "daemon/cache",
+      "blocks": 17
+    },
+    "first-open-medium": {
+      "n": 8,
+      "medianMs": 0.2,
+      "p95Ms": 7,
+      "liveMedianMs": 0.6,
+      "roundTrips": 0,
+      "bytes": 0,
+      "from": "daemon/cache",
+      "blocks": 40
+    },
+    "unseen-open-small": {
+      "n": 8,
+      "medianMs": 1.2,
+      "p95Ms": 1.6,
+      "liveMedianMs": 1.3,
+      "roundTrips": 1,
+      "bytes": 8559,
+      "from": "daemon",
+      "blocks": 13
+    },
+    "warm-list-refresh": {
+      "n": 24,
+      "medianMs": 0.7,
+      "p95Ms": 1,
+      "roundTrips": 1,
+      "bytes": 6925,
+      "rows": 500
+    },
+    "reopen-short": {
+      "n": 24,
+      "medianMs": 0,
+      "p95Ms": 0,
+      "liveMedianMs": 0,
+      "roundTrips": 0,
+      "bytes": 0,
+      "from": "session",
+      "blocks": 17
+    },
+    "reopen-medium": {
+      "n": 24,
+      "medianMs": 0,
+      "p95Ms": 0,
+      "liveMedianMs": 0,
+      "roundTrips": 0,
+      "bytes": 0,
+      "from": "session",
+      "blocks": 40
+    },
+    "reopen-long": {
+      "n": 24,
+      "medianMs": 0,
+      "p95Ms": 0,
+      "liveMedianMs": 0,
+      "roundTrips": 0,
+      "bytes": 0,
+      "from": "session",
+      "blocks": 40
+    }
+  },
+  "samples": [
+    {
+      "case": "daemon-spawn",
+      "ms": 96.6313,
+      "run": 0
+    },
+    {
+      "case": "connect",
+      "ms": 105.37590000000003,
+      "run": 0
+    },
+    {
+      "case": "cold-lists",
+      "ms": 44.11559999999997,
+      "rows": 500,
+      "projects": 20,
+      "bytes": 217928,
+      "calls": [
+        "projects.list",
+        "threads.list",
+        "events.subscribe",
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "run": 0
+    },
+    {
+      "case": "cold-restore-long",
+      "ms": 164.1721,
+      "liveMs": 164.26160000000004,
+      "from": "daemon",
+      "blocks": 40,
+      "roundTrips": 1,
+      "bytes": 285197,
+      "calls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "liveBytes": 285197,
+      "liveCalls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "run": 0
+    },
+    {
+      "case": "first-open-short",
+      "ms": 1.6485999999999876,
+      "liveMs": 1.6607999999999947,
+      "from": "daemon",
+      "blocks": 17,
+      "roundTrips": 1,
+      "bytes": 10866,
+      "calls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "liveBytes": 10866,
+      "liveCalls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "run": 0
+    },
+    {
+      "case": "first-open-medium",
+      "ms": 7.039699999999982,
+      "liveMs": 7.054399999999987,
+      "from": "daemon",
+      "blocks": 40,
+      "roundTrips": 1,
+      "bytes": 20600,
+      "calls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "liveBytes": 20600,
+      "liveCalls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "run": 0
+    },
+    {
+      "case": "unseen-open-small",
+      "ms": 1.3312999999999988,
+      "liveMs": 1.3431999999999675,
+      "from": "daemon",
+      "blocks": 13,
+      "roundTrips": 1,
+      "bytes": 8550,
+      "calls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "liveBytes": 8550,
+      "liveCalls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "run": 0
+    },
+    {
+      "case": "warm-list-refresh",
+      "ms": 1.0822000000000003,
+      "rows": 500,
+      "bytes": 6925,
+      "calls": [
+        "projects.list",
+        "threads.list"
+      ],
+      "roundTrips": 1,
+      "run": 0
+    },
+    {
+      "case": "reopen-short",
+      "ms": 0.0024000000000228283,
+      "liveMs": 0.0024000000000228283,
+      "from": "session",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 0
+    },
+    {
+      "case": "reopen-medium",
+      "ms": 0.0019999999999527063,
+      "liveMs": 0.0019999999999527063,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 0
+    },
+    {
+      "case": "reopen-long",
+      "ms": 0.0003999999999564352,
+      "liveMs": 0.0003999999999564352,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 0
+    },
+    {
+      "case": "warm-list-refresh",
+      "ms": 0.8822000000000116,
+      "rows": 500,
+      "bytes": 6925,
+      "calls": [
+        "projects.list",
+        "threads.list"
+      ],
+      "roundTrips": 1,
+      "run": 0
+    },
+    {
+      "case": "reopen-short",
+      "ms": 0.0006000000000199179,
+      "liveMs": 0.0006000000000199179,
+      "from": "session",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 0
+    },
+    {
+      "case": "reopen-medium",
+      "ms": 0.0003999999999564352,
+      "liveMs": 0.0003999999999564352,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 0
+    },
+    {
+      "case": "reopen-long",
+      "ms": 0.00029999999998153726,
+      "liveMs": 0.00029999999998153726,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 0
+    },
+    {
+      "case": "warm-list-refresh",
+      "ms": 0.7650000000000432,
+      "rows": 500,
+      "bytes": 6925,
+      "calls": [
+        "projects.list",
+        "threads.list"
+      ],
+      "roundTrips": 1,
+      "run": 0
+    },
+    {
+      "case": "reopen-short",
+      "ms": 0.0006000000000199179,
+      "liveMs": 0.0006000000000199179,
+      "from": "session",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 0
+    },
+    {
+      "case": "reopen-medium",
+      "ms": 0.00029999999998153726,
+      "liveMs": 0.00029999999998153726,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 0
+    },
+    {
+      "case": "reopen-long",
+      "ms": 0.00029999999998153726,
+      "liveMs": 0.00029999999998153726,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 0
+    },
+    {
+      "case": "daemon-spawn",
+      "ms": 91.6825,
+      "run": 1
+    },
+    {
+      "case": "connect",
+      "ms": 97.20709999999997,
+      "run": 1
+    },
+    {
+      "case": "cold-lists",
+      "ms": 43.556100000000015,
+      "rows": 500,
+      "projects": 20,
+      "bytes": 217928,
+      "calls": [
+        "projects.list",
+        "threads.list",
+        "events.subscribe",
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "run": 1
+    },
+    {
+      "case": "cold-restore-long",
+      "ms": 0.622199999999907,
+      "liveMs": 156.8372999999999,
+      "from": "cache",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 285197,
+      "liveCalls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "run": 1
+    },
+    {
+      "case": "first-open-short",
+      "ms": 0.20669999999995525,
+      "liveMs": 0.8404999999999063,
+      "from": "cache",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 255,
+      "liveCalls": [
+        "events.subscribe"
+      ],
+      "run": 1
+    },
+    {
+      "case": "first-open-medium",
+      "ms": 0.18989999999996598,
+      "liveMs": 0.6280000000000427,
+      "from": "cache",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 255,
+      "liveCalls": [
+        "events.subscribe"
+      ],
+      "run": 1
+    },
+    {
+      "case": "unseen-open-small",
+      "ms": 1.390700000000038,
+      "liveMs": 1.4016000000000304,
+      "from": "daemon",
+      "blocks": 13,
+      "roundTrips": 1,
+      "bytes": 8559,
+      "calls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "liveBytes": 8559,
+      "liveCalls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "run": 1
+    },
+    {
+      "case": "warm-list-refresh",
+      "ms": 0.7934999999999945,
+      "rows": 500,
+      "bytes": 6925,
+      "calls": [
+        "projects.list",
+        "threads.list"
+      ],
+      "roundTrips": 1,
+      "run": 1
+    },
+    {
+      "case": "reopen-short",
+      "ms": 0.004599999999982174,
+      "liveMs": 0.004599999999982174,
+      "from": "session",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 1
+    },
+    {
+      "case": "reopen-medium",
+      "ms": 0.0018000000000029104,
+      "liveMs": 0.0018000000000029104,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 1
+    },
+    {
+      "case": "reopen-long",
+      "ms": 0.0004000000000132786,
+      "liveMs": 0.0004000000000132786,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 1
+    },
+    {
+      "case": "warm-list-refresh",
+      "ms": 0.7282000000000153,
+      "rows": 500,
+      "bytes": 6925,
+      "calls": [
+        "projects.list",
+        "threads.list"
+      ],
+      "roundTrips": 1,
+      "run": 1
+    },
+    {
+      "case": "reopen-short",
+      "ms": 0.0008000000000265572,
+      "liveMs": 0.0008000000000265572,
+      "from": "session",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 1
+    },
+    {
+      "case": "reopen-medium",
+      "ms": 0.0003000000000383807,
+      "liveMs": 0.0003000000000383807,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 1
+    },
+    {
+      "case": "reopen-long",
+      "ms": 0.0003000000000383807,
+      "liveMs": 0.0003000000000383807,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 1
+    },
+    {
+      "case": "warm-list-refresh",
+      "ms": 0.5508000000000948,
+      "rows": 500,
+      "bytes": 6925,
+      "calls": [
+        "projects.list",
+        "threads.list"
+      ],
+      "roundTrips": 1,
+      "run": 1
+    },
+    {
+      "case": "reopen-short",
+      "ms": 0.0005999999999630745,
+      "liveMs": 0.0005999999999630745,
+      "from": "session",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 1
+    },
+    {
+      "case": "reopen-medium",
+      "ms": 0.00020000000006348273,
+      "liveMs": 0.00020000000006348273,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 1
+    },
+    {
+      "case": "reopen-long",
+      "ms": 0.0003000000000383807,
+      "liveMs": 0.0003000000000383807,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 1
+    },
+    {
+      "case": "daemon-spawn",
+      "ms": 91.41970000000015,
+      "run": 2
+    },
+    {
+      "case": "connect",
+      "ms": 99.61930000000007,
+      "run": 2
+    },
+    {
+      "case": "cold-lists",
+      "ms": 47.914999999999964,
+      "rows": 500,
+      "projects": 20,
+      "bytes": 217928,
+      "calls": [
+        "projects.list",
+        "threads.list",
+        "events.subscribe",
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "run": 2
+    },
+    {
+      "case": "cold-restore-long",
+      "ms": 0.43709999999987303,
+      "liveMs": 166.59719999999993,
+      "from": "cache",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 285197,
+      "liveCalls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "run": 2
+    },
+    {
+      "case": "first-open-short",
+      "ms": 0.19209999999998217,
+      "liveMs": 1.3981000000001131,
+      "from": "cache",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 255,
+      "liveCalls": [
+        "events.subscribe"
+      ],
+      "run": 2
+    },
+    {
+      "case": "first-open-medium",
+      "ms": 0.16270000000008622,
+      "liveMs": 0.5542000000000371,
+      "from": "cache",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 255,
+      "liveCalls": [
+        "events.subscribe"
+      ],
+      "run": 2
+    },
+    {
+      "case": "unseen-open-small",
+      "ms": 1.2128999999999905,
+      "liveMs": 1.2508000000000266,
+      "from": "daemon",
+      "blocks": 13,
+      "roundTrips": 1,
+      "bytes": 8559,
+      "calls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "liveBytes": 8559,
+      "liveCalls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "run": 2
+    },
+    {
+      "case": "warm-list-refresh",
+      "ms": 1.0317999999999756,
+      "rows": 500,
+      "bytes": 6925,
+      "calls": [
+        "projects.list",
+        "threads.list"
+      ],
+      "roundTrips": 1,
+      "run": 2
+    },
+    {
+      "case": "reopen-short",
+      "ms": 0.0013000000001284207,
+      "liveMs": 0.0013000000001284207,
+      "from": "session",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 2
+    },
+    {
+      "case": "reopen-medium",
+      "ms": 0.00029999999992469384,
+      "liveMs": 0.00029999999992469384,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 2
+    },
+    {
+      "case": "reopen-long",
+      "ms": 0.0001999999999497959,
+      "liveMs": 0.0001999999999497959,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 2
+    },
+    {
+      "case": "warm-list-refresh",
+      "ms": 0.6246000000001004,
+      "rows": 500,
+      "bytes": 6925,
+      "calls": [
+        "projects.list",
+        "threads.list"
+      ],
+      "roundTrips": 1,
+      "run": 2
+    },
+    {
+      "case": "reopen-short",
+      "ms": 0.001099999999951251,
+      "liveMs": 0.001099999999951251,
+      "from": "session",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 2
+    },
+    {
+      "case": "reopen-medium",
+      "ms": 0.0001999999999497959,
+      "liveMs": 0.0001999999999497959,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 2
+    },
+    {
+      "case": "reopen-long",
+      "ms": 0.00020000000017716957,
+      "liveMs": 0.00020000000017716957,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 2
+    },
+    {
+      "case": "warm-list-refresh",
+      "ms": 0.5961999999999534,
+      "rows": 500,
+      "bytes": 6925,
+      "calls": [
+        "projects.list",
+        "threads.list"
+      ],
+      "roundTrips": 1,
+      "run": 2
+    },
+    {
+      "case": "reopen-short",
+      "ms": 0.0006000000000767614,
+      "liveMs": 0.0006000000000767614,
+      "from": "session",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 2
+    },
+    {
+      "case": "reopen-medium",
+      "ms": 0.0003999999998995918,
+      "liveMs": 0.0003999999998995918,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 2
+    },
+    {
+      "case": "reopen-long",
+      "ms": 0.00029999999992469384,
+      "liveMs": 0.00029999999992469384,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 2
+    },
+    {
+      "case": "daemon-spawn",
+      "ms": 102.15129999999999,
+      "run": 3
+    },
+    {
+      "case": "connect",
+      "ms": 100.98760000000016,
+      "run": 3
+    },
+    {
+      "case": "cold-lists",
+      "ms": 53.16319999999996,
+      "rows": 500,
+      "projects": 20,
+      "bytes": 217928,
+      "calls": [
+        "projects.list",
+        "threads.list",
+        "events.subscribe",
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "run": 3
+    },
+    {
+      "case": "cold-restore-long",
+      "ms": 0.36189999999987776,
+      "liveMs": 186.84410000000003,
+      "from": "cache",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 285197,
+      "liveCalls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "run": 3
+    },
+    {
+      "case": "first-open-short",
+      "ms": 0.25510000000008404,
+      "liveMs": 0.9996000000001004,
+      "from": "cache",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 255,
+      "liveCalls": [
+        "events.subscribe"
+      ],
+      "run": 3
+    },
+    {
+      "case": "first-open-medium",
+      "ms": 0.25900000000001455,
+      "liveMs": 0.9666999999999462,
+      "from": "cache",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 255,
+      "liveCalls": [
+        "events.subscribe"
+      ],
+      "run": 3
+    },
+    {
+      "case": "unseen-open-small",
+      "ms": 1.4699000000000524,
+      "liveMs": 1.4830999999999221,
+      "from": "daemon",
+      "blocks": 13,
+      "roundTrips": 1,
+      "bytes": 8559,
+      "calls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "liveBytes": 8559,
+      "liveCalls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "run": 3
+    },
+    {
+      "case": "warm-list-refresh",
+      "ms": 0.8166000000001077,
+      "rows": 500,
+      "bytes": 6925,
+      "calls": [
+        "projects.list",
+        "threads.list"
+      ],
+      "roundTrips": 1,
+      "run": 3
+    },
+    {
+      "case": "reopen-short",
+      "ms": 0.0013000000001284207,
+      "liveMs": 0.0013000000001284207,
+      "from": "session",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 3
+    },
+    {
+      "case": "reopen-medium",
+      "ms": 0.0003999999998995918,
+      "liveMs": 0.0003999999998995918,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 3
+    },
+    {
+      "case": "reopen-long",
+      "ms": 0.00029999999992469384,
+      "liveMs": 0.00029999999992469384,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 3
+    },
+    {
+      "case": "warm-list-refresh",
+      "ms": 0.8333999999999833,
+      "rows": 500,
+      "bytes": 6925,
+      "calls": [
+        "projects.list",
+        "threads.list"
+      ],
+      "roundTrips": 1,
+      "run": 3
+    },
+    {
+      "case": "reopen-short",
+      "ms": 0.0012000000001535227,
+      "liveMs": 0.0012000000001535227,
+      "from": "session",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 3
+    },
+    {
+      "case": "reopen-medium",
+      "ms": 0.0003999999998995918,
+      "liveMs": 0.0003999999998995918,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 3
+    },
+    {
+      "case": "reopen-long",
+      "ms": 0.00020000000017716957,
+      "liveMs": 0.00020000000017716957,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 3
+    },
+    {
+      "case": "warm-list-refresh",
+      "ms": 0.8425999999999476,
+      "rows": 500,
+      "bytes": 6925,
+      "calls": [
+        "projects.list",
+        "threads.list"
+      ],
+      "roundTrips": 1,
+      "run": 3
+    },
+    {
+      "case": "reopen-short",
+      "ms": 0.0008000000000265572,
+      "liveMs": 0.0008000000000265572,
+      "from": "session",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 3
+    },
+    {
+      "case": "reopen-medium",
+      "ms": 0.00029999999992469384,
+      "liveMs": 0.00029999999992469384,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 3
+    },
+    {
+      "case": "reopen-long",
+      "ms": 0.00029999999992469384,
+      "liveMs": 0.00029999999992469384,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 3
+    },
+    {
+      "case": "daemon-spawn",
+      "ms": 144.7065,
+      "run": 4
+    },
+    {
+      "case": "connect",
+      "ms": 45.413099999999986,
+      "run": 4
+    },
+    {
+      "case": "cold-lists",
+      "ms": 42.86259999999993,
+      "rows": 500,
+      "projects": 20,
+      "bytes": 217928,
+      "calls": [
+        "projects.list",
+        "threads.list",
+        "events.subscribe",
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "run": 4
+    },
+    {
+      "case": "cold-restore-long",
+      "ms": 0.2966000000001259,
+      "liveMs": 159.6516999999999,
+      "from": "cache",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 285197,
+      "liveCalls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "run": 4
+    },
+    {
+      "case": "first-open-short",
+      "ms": 0.18689999999969586,
+      "liveMs": 0.6875,
+      "from": "cache",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 255,
+      "liveCalls": [
+        "events.subscribe"
+      ],
+      "run": 4
+    },
+    {
+      "case": "first-open-medium",
+      "ms": 0.14179999999987558,
+      "liveMs": 0.4776999999999134,
+      "from": "cache",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 255,
+      "liveCalls": [
+        "events.subscribe"
+      ],
+      "run": 4
+    },
+    {
+      "case": "unseen-open-small",
+      "ms": 1.1732999999999265,
+      "liveMs": 1.1790999999998348,
+      "from": "daemon",
+      "blocks": 13,
+      "roundTrips": 1,
+      "bytes": 8559,
+      "calls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "liveBytes": 8559,
+      "liveCalls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "run": 4
+    },
+    {
+      "case": "warm-list-refresh",
+      "ms": 0.9304999999999382,
+      "rows": 500,
+      "bytes": 6925,
+      "calls": [
+        "projects.list",
+        "threads.list"
+      ],
+      "roundTrips": 1,
+      "run": 4
+    },
+    {
+      "case": "reopen-short",
+      "ms": 0.001099999999951251,
+      "liveMs": 0.001099999999951251,
+      "from": "session",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 4
+    },
+    {
+      "case": "reopen-medium",
+      "ms": 0.00029999999969732016,
+      "liveMs": 0.00029999999969732016,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 4
+    },
+    {
+      "case": "reopen-long",
+      "ms": 0.0003000000001520675,
+      "liveMs": 0.0003000000001520675,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 4
+    },
+    {
+      "case": "warm-list-refresh",
+      "ms": 0.6372000000001208,
+      "rows": 500,
+      "bytes": 6925,
+      "calls": [
+        "projects.list",
+        "threads.list"
+      ],
+      "roundTrips": 1,
+      "run": 4
+    },
+    {
+      "case": "reopen-short",
+      "ms": 0.0005000000001018634,
+      "liveMs": 0.0005000000001018634,
+      "from": "session",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 4
+    },
+    {
+      "case": "reopen-medium",
+      "ms": 0.0001999999999497959,
+      "liveMs": 0.0001999999999497959,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 4
+    },
+    {
+      "case": "reopen-long",
+      "ms": 0.00029999999969732016,
+      "liveMs": 0.00029999999969732016,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 4
+    },
+    {
+      "case": "warm-list-refresh",
+      "ms": 0.5781999999999243,
+      "rows": 500,
+      "bytes": 6925,
+      "calls": [
+        "projects.list",
+        "threads.list"
+      ],
+      "roundTrips": 1,
+      "run": 4
+    },
+    {
+      "case": "reopen-short",
+      "ms": 0.0005999999998493877,
+      "liveMs": 0.0005999999998493877,
+      "from": "session",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 4
+    },
+    {
+      "case": "reopen-medium",
+      "ms": 0.0001999999999497959,
+      "liveMs": 0.0001999999999497959,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 4
+    },
+    {
+      "case": "reopen-long",
+      "ms": 0.0003000000001520675,
+      "liveMs": 0.0003000000001520675,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 4
+    },
+    {
+      "case": "daemon-spawn",
+      "ms": 146.3364999999999,
+      "run": 5
+    },
+    {
+      "case": "connect",
+      "ms": 42.13499999999976,
+      "run": 5
+    },
+    {
+      "case": "cold-lists",
+      "ms": 47.67540000000008,
+      "rows": 500,
+      "projects": 20,
+      "bytes": 217928,
+      "calls": [
+        "projects.list",
+        "threads.list",
+        "events.subscribe",
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "run": 5
+    },
+    {
+      "case": "cold-restore-long",
+      "ms": 0.3056000000001404,
+      "liveMs": 174.64080000000013,
+      "from": "cache",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 285197,
+      "liveCalls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "run": 5
+    },
+    {
+      "case": "first-open-short",
+      "ms": 0.26199999999971624,
+      "liveMs": 0.9983999999999469,
+      "from": "cache",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 255,
+      "liveCalls": [
+        "events.subscribe"
+      ],
+      "run": 5
+    },
+    {
+      "case": "first-open-medium",
+      "ms": 0.19709999999986394,
+      "liveMs": 0.8283999999998741,
+      "from": "cache",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 255,
+      "liveCalls": [
+        "events.subscribe"
+      ],
+      "run": 5
+    },
+    {
+      "case": "unseen-open-small",
+      "ms": 1.6427999999996246,
+      "liveMs": 1.6487999999999374,
+      "from": "daemon",
+      "blocks": 13,
+      "roundTrips": 1,
+      "bytes": 8559,
+      "calls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "liveBytes": 8559,
+      "liveCalls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "run": 5
+    },
+    {
+      "case": "warm-list-refresh",
+      "ms": 0.6759999999999309,
+      "rows": 500,
+      "bytes": 6925,
+      "calls": [
+        "projects.list",
+        "threads.list"
+      ],
+      "roundTrips": 1,
+      "run": 5
+    },
+    {
+      "case": "reopen-short",
+      "ms": 0.0012000000001535227,
+      "liveMs": 0.0012000000001535227,
+      "from": "session",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 5
+    },
+    {
+      "case": "reopen-medium",
+      "ms": 0.0003000000001520675,
+      "liveMs": 0.0003000000001520675,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 5
+    },
+    {
+      "case": "reopen-long",
+      "ms": 0.00020000000040454324,
+      "liveMs": 0.00020000000040454324,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 5
+    },
+    {
+      "case": "warm-list-refresh",
+      "ms": 0.5965000000001055,
+      "rows": 500,
+      "bytes": 6925,
+      "calls": [
+        "projects.list",
+        "threads.list"
+      ],
+      "roundTrips": 1,
+      "run": 5
+    },
+    {
+      "case": "reopen-short",
+      "ms": 0.0005000000001018634,
+      "liveMs": 0.0005000000001018634,
+      "from": "session",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 5
+    },
+    {
+      "case": "reopen-medium",
+      "ms": 0.0001999999999497959,
+      "liveMs": 0.0001999999999497959,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 5
+    },
+    {
+      "case": "reopen-long",
+      "ms": 0.00020000000040454324,
+      "liveMs": 0.00020000000040454324,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 5
+    },
+    {
+      "case": "warm-list-refresh",
+      "ms": 0.7076999999999316,
+      "rows": 500,
+      "bytes": 6925,
+      "calls": [
+        "projects.list",
+        "threads.list"
+      ],
+      "roundTrips": 1,
+      "run": 5
+    },
+    {
+      "case": "reopen-short",
+      "ms": 0.000600000000304135,
+      "liveMs": 0.000600000000304135,
+      "from": "session",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 5
+    },
+    {
+      "case": "reopen-medium",
+      "ms": 0.0003000000001520675,
+      "liveMs": 0.0003000000001520675,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 5
+    },
+    {
+      "case": "reopen-long",
+      "ms": 0.0001999999999497959,
+      "liveMs": 0.0001999999999497959,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 5
+    },
+    {
+      "case": "daemon-spawn",
+      "ms": 147.17779999999993,
+      "run": 6
+    },
+    {
+      "case": "connect",
+      "ms": 40.6880000000001,
+      "run": 6
+    },
+    {
+      "case": "cold-lists",
+      "ms": 41.60269999999991,
+      "rows": 500,
+      "projects": 20,
+      "bytes": 217928,
+      "calls": [
+        "projects.list",
+        "threads.list",
+        "events.subscribe",
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "run": 6
+    },
+    {
+      "case": "cold-restore-long",
+      "ms": 0.3287999999997737,
+      "liveMs": 157.79469999999992,
+      "from": "cache",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 285197,
+      "liveCalls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "run": 6
+    },
+    {
+      "case": "first-open-short",
+      "ms": 0.1997999999998683,
+      "liveMs": 0.9239999999999782,
+      "from": "cache",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 255,
+      "liveCalls": [
+        "events.subscribe"
+      ],
+      "run": 6
+    },
+    {
+      "case": "first-open-medium",
+      "ms": 0.15810000000010405,
+      "liveMs": 0.48909999999978027,
+      "from": "cache",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 255,
+      "liveCalls": [
+        "events.subscribe"
+      ],
+      "run": 6
+    },
+    {
+      "case": "unseen-open-small",
+      "ms": 1.1375000000002728,
+      "liveMs": 1.1434000000003834,
+      "from": "daemon",
+      "blocks": 13,
+      "roundTrips": 1,
+      "bytes": 8576,
+      "calls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "liveBytes": 8576,
+      "liveCalls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "run": 6
+    },
+    {
+      "case": "warm-list-refresh",
+      "ms": 0.8142000000002554,
+      "rows": 500,
+      "bytes": 6925,
+      "calls": [
+        "projects.list",
+        "threads.list"
+      ],
+      "roundTrips": 1,
+      "run": 6
+    },
+    {
+      "case": "reopen-short",
+      "ms": 0.001299999999901047,
+      "liveMs": 0.001299999999901047,
+      "from": "session",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 6
+    },
+    {
+      "case": "reopen-medium",
+      "ms": 0.0001999999999497959,
+      "liveMs": 0.0001999999999497959,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 6
+    },
+    {
+      "case": "reopen-long",
+      "ms": 0.0003000000001520675,
+      "liveMs": 0.0003000000001520675,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 6
+    },
+    {
+      "case": "warm-list-refresh",
+      "ms": 0.5650000000000546,
+      "rows": 500,
+      "bytes": 6925,
+      "calls": [
+        "projects.list",
+        "threads.list"
+      ],
+      "roundTrips": 1,
+      "run": 6
+    },
+    {
+      "case": "reopen-short",
+      "ms": 0.0008000000002539309,
+      "liveMs": 0.0008000000002539309,
+      "from": "session",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 6
+    },
+    {
+      "case": "reopen-medium",
+      "ms": 0.0001999999999497959,
+      "liveMs": 0.0001999999999497959,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 6
+    },
+    {
+      "case": "reopen-long",
+      "ms": 0.00020000000040454324,
+      "liveMs": 0.00020000000040454324,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 6
+    },
+    {
+      "case": "warm-list-refresh",
+      "ms": 0.5256000000003951,
+      "rows": 500,
+      "bytes": 6925,
+      "calls": [
+        "projects.list",
+        "threads.list"
+      ],
+      "roundTrips": 1,
+      "run": 6
+    },
+    {
+      "case": "reopen-short",
+      "ms": 0.0005000000001018634,
+      "liveMs": 0.0005000000001018634,
+      "from": "session",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 6
+    },
+    {
+      "case": "reopen-medium",
+      "ms": 0.00020000000040454324,
+      "liveMs": 0.00020000000040454324,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 6
+    },
+    {
+      "case": "reopen-long",
+      "ms": 0.0001999999999497959,
+      "liveMs": 0.0001999999999497959,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 6
+    },
+    {
+      "case": "daemon-spawn",
+      "ms": 146.51240000000007,
+      "run": 7
+    },
+    {
+      "case": "connect",
+      "ms": 91.35950000000003,
+      "run": 7
+    },
+    {
+      "case": "cold-lists",
+      "ms": 46.38310000000001,
+      "rows": 500,
+      "projects": 20,
+      "bytes": 217928,
+      "calls": [
+        "projects.list",
+        "threads.list",
+        "events.subscribe",
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "run": 7
+    },
+    {
+      "case": "cold-restore-long",
+      "ms": 0.3373999999998887,
+      "liveMs": 156.8746000000001,
+      "from": "cache",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 285197,
+      "liveCalls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "run": 7
+    },
+    {
+      "case": "first-open-short",
+      "ms": 0.12829999999985375,
+      "liveMs": 0.6129000000000815,
+      "from": "cache",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 255,
+      "liveCalls": [
+        "events.subscribe"
+      ],
+      "run": 7
+    },
+    {
+      "case": "first-open-medium",
+      "ms": 0.12710000000015498,
+      "liveMs": 0.41210000000000946,
+      "from": "cache",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 255,
+      "liveCalls": [
+        "events.subscribe"
+      ],
+      "run": 7
+    },
+    {
+      "case": "unseen-open-small",
+      "ms": 1.1498999999998887,
+      "liveMs": 1.1541999999999462,
+      "from": "daemon",
+      "blocks": 13,
+      "roundTrips": 1,
+      "bytes": 8578,
+      "calls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "liveBytes": 8578,
+      "liveCalls": [
+        "events.subscribe",
+        "threads.get"
+      ],
+      "run": 7
+    },
+    {
+      "case": "warm-list-refresh",
+      "ms": 0.6122000000000298,
+      "rows": 500,
+      "bytes": 6925,
+      "calls": [
+        "projects.list",
+        "threads.list"
+      ],
+      "roundTrips": 1,
+      "run": 7
+    },
+    {
+      "case": "reopen-short",
+      "ms": 0.0010000000002037268,
+      "liveMs": 0.0010000000002037268,
+      "from": "session",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 7
+    },
+    {
+      "case": "reopen-medium",
+      "ms": 0.0003000000001520675,
+      "liveMs": 0.0003000000001520675,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 7
+    },
+    {
+      "case": "reopen-long",
+      "ms": 0.0001999999999497959,
+      "liveMs": 0.0001999999999497959,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 7
+    },
+    {
+      "case": "warm-list-refresh",
+      "ms": 0.4659999999998945,
+      "rows": 500,
+      "bytes": 6925,
+      "calls": [
+        "projects.list",
+        "threads.list"
+      ],
+      "roundTrips": 1,
+      "run": 7
+    },
+    {
+      "case": "reopen-short",
+      "ms": 0.0007000000000516593,
+      "liveMs": 0.0007000000000516593,
+      "from": "session",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 7
+    },
+    {
+      "case": "reopen-medium",
+      "ms": 0.00029999999969732016,
+      "liveMs": 0.00029999999969732016,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 7
+    },
+    {
+      "case": "reopen-long",
+      "ms": 0.00020000000040454324,
+      "liveMs": 0.00020000000040454324,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 7
+    },
+    {
+      "case": "warm-list-refresh",
+      "ms": 0.631800000000112,
+      "rows": 500,
+      "bytes": 6925,
+      "calls": [
+        "projects.list",
+        "threads.list"
+      ],
+      "roundTrips": 1,
+      "run": 7
+    },
+    {
+      "case": "reopen-short",
+      "ms": 0.0005000000001018634,
+      "liveMs": 0.0005000000001018634,
+      "from": "session",
+      "blocks": 17,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 7
+    },
+    {
+      "case": "reopen-medium",
+      "ms": 0.0003000000001520675,
+      "liveMs": 0.0003000000001520675,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 7
+    },
+    {
+      "case": "reopen-long",
+      "ms": 0.00010000000020227162,
+      "liveMs": 0.00010000000020227162,
+      "from": "session",
+      "blocks": 40,
+      "roundTrips": 0,
+      "bytes": 0,
+      "calls": [],
+      "liveBytes": 0,
+      "liveCalls": [],
+      "run": 7
+    }
+  ]
+}
