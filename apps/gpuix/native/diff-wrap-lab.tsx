@@ -43,6 +43,7 @@ function Lab() {
   }
   const inspect = () => ({
     wrap, narrow, maxLines,
+    tints: { add: theme.diff?.addBackground, bg: theme.bg },
     top: shown ? renderer.getListScrollTop?.(id('diff')) : null,
     saved: saved.current,
     clicks: clicks.current.slice(-8), more: more.current.slice(-4),

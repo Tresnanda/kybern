@@ -4,7 +4,7 @@
 import '../src/native/local-build.ts'
 import assert from 'node:assert/strict'
 import path from 'node:path'
-import { launch, capture, outputDir, pngPixels, sample, settled, type Png } from './check-harness.ts'
+import { launch, capture, outputDir, pngPixels, sample, settled, tolerance, type Png } from './check-harness.ts'
 
 const out = outputDir('diff-wrap')
 const LH = 13 * 1.65
@@ -52,8 +52,11 @@ for (const appearance of ['dark', 'light'] as const) {
     assert.equal(ink(png, gutter(second), gutterBg), 0, 'no number on the continuation line')
     const mid = (y: number) => y + LH / 2, gap = add.lead.x - 1.5 // the marker cell's empty right edge
     assert.deepEqual(at(png, bounds.x + 4, mid(second)), at(png, bounds.x + 4, mid(add.lead.y)), 'the gutter colour fills the continuation line')
-    assert.deepEqual(at(png, gap, mid(second)), at(png, gap, mid(add.lead.y)), 'the row tint fills the continuation line')
-    assert.notDeepEqual(at(png, gap, mid(add.next.y)), at(png, gap, mid(second)), 'the next (context) row is untinted')
+    // The marker cell is empty on a continuation line, so it shows the row's own tint.
+    const rgb = (c: string): number[] => c.startsWith('#') ? [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16)) : c.match(/[\d.]+/g)!.slice(0, 3).map(n => Math.round(+n))
+    const near = (p: number[], c: string, label: string) => assert.ok(rgb(c).every((v, i) => Math.abs(v - p[i]!) <= tolerance), `${label}: ${p.slice(0, 3)} vs ${c}`)
+    near(at(png, gap, mid(second)), s.tints.add, 'the row tint fills the continuation line')
+    near(at(png, gap, mid(add.next.y)), s.tints.bg, 'the next (context) row is untinted')
 
     // Line clicks: the continuation line and a stretched gutter target their own row.
     const clicks = async (x: number, y: number) => { await a.mouse.click({ x, y }); await a.clock.fastForward(32); return (await inspect()).clicks.at(-1) }
