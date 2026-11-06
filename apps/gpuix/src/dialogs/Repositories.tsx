@@ -28,7 +28,7 @@ import { copyChoices, folderName, isSelectable, mergeCandidates, nonMembers, ord
 import { loadMemberStatus, updateGroup, useMemberStatus } from '../groups/store.ts'
 import { Icon } from '../icons.tsx'
 import { Rise } from '../motion/kit.tsx'
-import { errorText } from '../nav/actions.ts'
+import { problemLine } from '../problems/describe.ts'
 import { N } from '../nav/glyphs.ts'
 import { Dialog, DialogHeader, Menu, MenuItem, MenuSeparator, useDialogClose } from '../nav/overlay.tsx'
 import { activeEnvironment } from '../shell/environment.ts'
@@ -87,7 +87,7 @@ function MemberList({ project, close, onAdd }: { project: Project; close: () => 
 
   const save = async (next: string[]) => {
     setError('')
-    try { await updateGroup(project.id, { members: orderMemberPaths(next) }) } catch (e) { setError(errorText(e)); throw e }
+    try { await updateGroup(project.id, { members: orderMemberPaths(next) }) } catch (e) { setError(problemLine(e, { action: 'update the repositories' })); throw e }
   }
   const remove = async (member: ProjectMember) => {
     const before = paths
@@ -117,7 +117,7 @@ function MemberList({ project, close, onAdd }: { project: Project; close: () => 
       const result = await client.call('projects.instructions.create', { project_id: project.id })
       toast(instructionsCreatedText(result.created, group))
       void loadMemberStatus(project.id, true)
-    } catch (e) { setError(errorText(e)) } finally { setCreating(false) }
+    } catch (e) { setError(problemLine(e, { action: 'create the instruction files' })) } finally { setCreating(false) }
   }
   const reveal = (path: string) => { if (local) revealQuietly(path) }
   const openFile = (path: string) => { if (local) openQuietly(path) }
@@ -126,7 +126,7 @@ function MemberList({ project, close, onAdd }: { project: Project; close: () => 
   const shared = status ? [status.agents_md && 'AGENTS.md', status.claude_md && 'CLAUDE.md'].filter((f): f is string => !!f) : []
   const copy = project.worktree_copy ?? []
   const choices = copyChoices(status?.copy_candidates ?? [], copy, paths)
-  const saveCopy = (next: string[]) => updateGroup(project.id, { worktree_copy: next }).catch((e) => setError(errorText(e)))
+  const saveCopy = (next: string[]) => updateGroup(project.id, { worktree_copy: next }).catch((e) => setError(problemLine(e, { action: 'save the copied files' })))
 
   return (
     <>
@@ -146,7 +146,7 @@ function MemberList({ project, close, onAdd }: { project: Project; close: () => 
               onRemove={() => void remove(member)}
               onLocate={() => void locate(member)}
               onReveal={() => reveal(absolute(member.path))}
-              onOwnProject={() => void addProjectToCurrentSpace(absolute(member.path)).catch((e) => setError(errorText(e)))}
+              onOwnProject={() => void addProjectToCurrentSpace(absolute(member.path)).catch((e) => setError(problemLine(e, { action: 'add this project' })))}
             />
           ))}
         </div>
@@ -293,7 +293,7 @@ function AddRepositories({ project, onDone }: { project: Project; onDone: () => 
     let live = true
     client.call('projects.scan_repos', { path: project.path }).then(
       (result) => { if (live) setCandidates(orderCandidates(nonMembers(result.candidates, members))) },
-      (e) => { if (live) setError(errorText(e)) },
+      (e) => { if (live) setError(problemLine(e, { action: 'look for repositories' })) },
     ).finally(() => { if (live) setLoading(false) })
     return () => { live = false }
   }, [client, project.path])
@@ -315,7 +315,7 @@ function AddRepositories({ project, onDone }: { project: Project; onDone: () => 
       const merged = mergeCandidates(candidates, nonMembers(result.candidates, members), [relative])
       setCandidates(merged)
       if (merged.find((c) => c.path === relative && isSelectable(c))) setSelected((prev) => (prev.includes(relative) ? prev : toggled(prev, relative)))
-    } catch (e) { setError(errorText(e)) }
+    } catch (e) { setError(problemLine(e, { action: 'add that folder' })) }
   }
 
   const submit = async () => {
@@ -324,7 +324,7 @@ function AddRepositories({ project, onDone }: { project: Project; onDone: () => 
     const invalid = memberSelectionError(next)
     if (invalid) return setError(invalid)
     setBusy(true); setError('')
-    try { await updateGroup(project.id, { members: next }); onDone() } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
+    try { await updateGroup(project.id, { members: next }); onDone() } catch (e) { setError(problemLine(e, { action: 'save the repositories' })) } finally { setBusy(false) }
   }
 
   return (

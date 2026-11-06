@@ -48,7 +48,7 @@ export default function ScanPairing() {
       if (match) accept(match.data);
       else setError("No Kybern invitation found. Choose an image that shows the whole pairing QR code.");
     } catch (e) {
-      setError(errorText(e));
+      setError(errorText(e, "read that image"));
     } finally {
       setBusy(false);
     }

@@ -146,7 +146,10 @@ async fn interrupted_and_failed_executions_end_the_turn() {
             json!({"sessionID":"ses_root","error":{"type":"provider.auth","message":"denied"}}),
         ))
         .await;
-    assert!(matches!(rx.recv().await, Some(DriverEvent::TurnFailed { error }) if error == "provider.auth: denied"));
+    let Some(DriverEvent::TurnFailed { error, problem }) = rx.recv().await else { panic!("the turn must fail") };
+    assert_eq!(error, "provider.auth: denied");
+    let problem = problem.expect("a signed-out problem");
+    assert_eq!((problem.kind, problem.subject.as_deref()), (kybern_protocol::rpc::ProblemKind::SignedOut, Some("opencode")));
 }
 
 #[tokio::test]

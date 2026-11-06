@@ -1,6 +1,7 @@
 // Where the composer's next new chat runs (design §6.1, Q35). With one machine none of this costs anything: `useMachineTarget`
 // answers a shared, frozen "this machine" and the composer looks as it always did. With several, it works out the picker's rows,
 // the default (the last machine used for the project, else the machine you are at) and the machine's own agent lists.
+import { problemLine } from '../problems/describe.ts'
 import { useEffect, useMemo, useState } from 'react'
 import {
   machineChoices, machineMemoryKey, machineReachable, resolveMachine, showMachinePicker, type MachineChoice,
@@ -72,7 +73,7 @@ export function useMachineTarget(projectId: ProjectId | null | undefined, enable
     if (ready || !projectId || !target.chosen) return
     let live = true
     void loadGroupPaths(projectId, target.chosen.machineId, paneId).catch((error) => {
-      if (live) setMappingError({ key: mapKey, error: error instanceof Error ? error.message : String(error) })
+      if (live) setMappingError({ key: mapKey, error: problemLine(error, { action: 'reach the project on that machine' }) })
     })
     return () => { live = false }
   }, [ready, projectId, target.chosen?.machineId, mapKey, paneId, rows])

@@ -7,6 +7,7 @@ import { queuedCreate } from "../../../../packages/kybern-client/src/machineTarg
 import type { KybernClient } from "../../../../packages/kybern-client/src/client";
 import type { MachineId, OutboxItem, ThreadId, ThreadsCreateParams, ThreadsSendParams } from "../../../../packages/kybern-client/src/types";
 import { pendingSends } from "./pendingSends";
+import { plainReason } from "./problems";
 import { currentClient, loadThread, machineHub, newChats, onClientAttach, refresh } from "./runtime";
 
 /** A machine's name as the screens say it ("Waiting for satyamas"). */
@@ -42,6 +43,8 @@ export function watchOutbox(client: KybernClient) {
 
 function apply(item: OutboxItem) {
   if (!isComposerOutbox(item)) return;
+  // The outbox keeps the machine's own words for a failure; only a plain sentence reaches the screen.
+  item = { ...item, last_error: plainReason(item.last_error) ?? null };
   const chat = newChats.outbox(item);
   if (chat?.state === "created") {
     // The machine has the thread now: read its list, then the thread, which opens as the real one.

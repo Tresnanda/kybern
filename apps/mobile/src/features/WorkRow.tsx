@@ -189,7 +189,7 @@ export const ToolWorkRow = memo(function ToolWorkRow({
         if (alive) setFetched({ output: result.output, stream: result.stream ?? "" });
       })
       .catch((e) => {
-        if (alive) setLoadError(errorText(e));
+        if (alive) setLoadError(errorText(e, "load the output"));
       });
     return () => {
       alive = false;
@@ -234,7 +234,7 @@ export const ToolWorkRow = memo(function ToolWorkRow({
                 .then(() => showToast(`Asked to sign in to ${signIn.service}`))
                 .catch((e) => {
                   setAsked(false);
-                  showToast(errorText(e));
+                  showToast(errorText(e, "ask for sign-in"));
                 });
             }}
           >

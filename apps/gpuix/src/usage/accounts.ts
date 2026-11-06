@@ -7,11 +7,12 @@ import {readAccounts} from '../requests/accounts.ts'
 // Reads happen when a surface that shows accounts opens (Settings › Accounts, the
 // rail usage card, the Add account sheet) and after every change; an idle window never
 // polls, because a list asks the daemon to probe each account's identity.
+import { errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
+import { toastProblem } from '../problems/toast.ts'
 import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import { accountFor, defaultAccountFor, isCliInstance, legacyAccounts } from '../shared/lib/accounts.ts'
 import { PROVIDER_NAMES } from '../shared/lib/providerUsage.ts'
 import { USAGE_LIMITS_CHANGED_NOTIFICATION, type AccountSummary, type ProviderInstance, type ProviderKind, type ProviderLimits, type ProviderSettings, type UsageLimitsParams, type UsageLimitsResult } from '../../../../packages/kybern-client/src/types.ts'
-import { errorText } from '../nav/actions.ts'
 import { useNav } from '../nav/store.ts'
 import { toast } from '../shell/toasts.tsx'
 import { getClient, useApp } from '../state.ts'
@@ -38,7 +39,7 @@ const subscribe = (listener: () => void) => { listeners.add(listener); return ()
 const select = <T,>(pick: (s: State) => T) => useSyncExternalStore(subscribe, () => pick(state))
 let generation = 0
 
-const isMethodNotFound = (error: unknown) => /method not found|-32601/i.test(errorText(error))
+const isMethodNotFound = (error: unknown) => /method not found|-32601/i.test(errorMessage(error))
 const inflight = new Map<string, Promise<boolean>>()
 
 /**
@@ -149,7 +150,7 @@ export async function makeDefaultAccount(account: AccountSummary): Promise<boole
     toast.success(`${account.name} is now the default for ${PROVIDER_NAMES[kind] ?? kind}. Running turns keep their account.`)
     return true
   } catch (error) {
-    toast.error('Unable to change the default account', { description: `${errorText(error)} Check your connection, then try again.` })
+    toastProblem(error, { action: 'change the default account' })
     return false
   }
 }

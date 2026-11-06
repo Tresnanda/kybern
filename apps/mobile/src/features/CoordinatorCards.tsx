@@ -56,7 +56,7 @@ function useRespond(approval: ApprovalRequest) {
       await respondApproval(approval, decision);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (e) {
-      setError(e instanceof Error && "code" in e ? errorText(e) : COORDINATOR_CARD_COPY.answerFailed);
+      setError(e instanceof Error && "code" in e ? errorText(e, "answer the coordinator") : COORDINATOR_CARD_COPY.answerFailed);
     } finally {
       setBusy(false);
     }

@@ -17,6 +17,7 @@
 //
 // Every input is injectable (`CliEnvironment`) so checks run against a scratch
 // home and PATH; the app uses the real ones.
+import { errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
 import { execFile } from 'node:child_process'
 import { existsSync, lstatSync, readlinkSync, realpathSync, statSync } from 'node:fs'
 import { mkdir, open, rename, rm, symlink, unlink } from 'node:fs/promises'
@@ -191,11 +192,11 @@ async function checkReplaceable(target: string, bundled: string) {
 /** Link beside the target, then rename over it, so `kybern` is never missing or half-written. */
 async function link(bundled: string, target: string) {
   const dir = path.dirname(target)
-  await mkdir(dir, { recursive: true }).catch((error) => { throw Error(`Unable to create ${dir}: ${error.message}`) })
+  await mkdir(dir, { recursive: true }).catch((error) => { throw Error(`Unable to create ${dir}: ${errorMessage(error)}`) })
   const staging = path.join(dir, `.kybern-${process.pid}`)
   await rm(staging, { force: true })
-  await symlink(bundled, staging).catch((error) => { throw Error(`Unable to link ${target}: ${error.message}`) })
-  await rename(staging, target).catch(async (error) => { await rm(staging, { force: true }); throw Error(`Unable to install ${target}: ${error.message}`) })
+  await symlink(bundled, staging).catch((error) => { throw Error(`Unable to link ${target}: ${errorMessage(error)}`) })
+  await rename(staging, target).catch(async (error) => { await rm(staging, { force: true }); throw Error(`Unable to install ${target}: ${errorMessage(error)}`) })
 }
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
@@ -240,7 +241,7 @@ export async function uninstallCli(env = defaultCliEnvironment()): Promise<CliSt
   if (!target) throw Error('Kybern couldn’t find your home folder.')
   if (sameFile(target, bundled)) {
     if (!(await writable(path.dirname(target)))) await env.adminRun(`/bin/rm -f ${shellQuote(target)}`, `Kybern wants to remove the kybern command from ${path.dirname(target)}.`)
-    else await unlink(target).catch((error) => { throw Error(`Unable to remove ${target}: ${error.message}`) })
+    else await unlink(target).catch((error) => { throw Error(`Unable to remove ${target}: ${errorMessage(error)}`) })
   }
   return cliStatus(env)
 }
@@ -250,6 +251,6 @@ export async function removeOtherCli(file: string, env = defaultCliEnvironment()
   const current = await cliStatus(env)
   if (!current.shadowed || current.resolved !== file) throw Error('That command is no longer first on your PATH. Reopen Settings to check again.')
   if (!(await cliVersion(file))) throw Error(`${file} isn’t a Kybern command, so Kybern left it in place.`)
-  await unlink(file).catch((error) => { throw Error(`Unable to remove ${file}: ${error.message}. Remove it from a terminal instead.`) })
+  await unlink(file).catch((error) => { throw Error(`Unable to remove ${file}: ${errorMessage(error)}. Remove it from a terminal instead.`) })
   return cliStatus(env)
 }

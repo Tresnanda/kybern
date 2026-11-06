@@ -309,6 +309,7 @@ impl Orchestrator {
                     level: NoticeLevel::Info,
                     text,
                     data: Some(json!({ "kind": "move_queued", "machine_id": target.id, "machine_name": target.name, "operation_id": operation_id })),
+                    problem: None,
                 },
             );
         }
@@ -746,6 +747,7 @@ impl Orchestrator {
                     "kind": "move", "machine_id": done.peer, "machine_name": name, "thread_id": peer_thread,
                     "branch": done.branch, "operation_id": done.operation_id,
                 })),
+                problem: None,
             },
         );
         Ok(())
@@ -797,7 +799,7 @@ impl Orchestrator {
         if self.inner.store.thread_get(thread_id).ok().flatten().is_none() {
             return;
         }
-        match self.emit(thread_id, None, EventPayload::ProviderNotice { level, text, data: Some(data) }) {
+        match self.emit(thread_id, None, EventPayload::ProviderNotice { level, text, data: Some(data), problem: None }) {
             Ok(_) => {
                 let _ = self.inner.store.meta_set(&key, "1");
             }
@@ -833,6 +835,7 @@ impl Orchestrator {
                     level: NoticeLevel::Warning,
                     text: format!("The move to {name} didn't finish, so this thread is yours again. It will try again when {name} is reachable."),
                     data: Some(json!({ "kind": "move_released", "machine_id": info.peer, "machine_name": name, "operation_id": info.operation_id })),
+                    problem: None,
                 },
             );
         }

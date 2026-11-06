@@ -1,4 +1,5 @@
 import { useGpuixRequired, type MarkdownProps } from '@gpuix/react'
+import { asError } from '../../../../packages/kybern-client/src/problem.ts'
 import { createElement, memo, useEffect, useRef, useState } from 'react'
 export interface MarkdownBlock {
   id: string; index: number; kind: string; startByte: number; endByte: number
@@ -55,7 +56,7 @@ export const DocumentMarkdown = memo(function DocumentMarkdown(props: MarkdownPr
           if (actor.latest == null) setReady(next)
         }
       } catch (error) {
-        if (!actor.disposed) setError(error instanceof Error ? error : Error(String(error)))
+        if (!actor.disposed) setError(asError(error))
       } finally { actor.running = false }
     }
     actor.enqueue = text => { actor.latest = text; setError(null); void drain() }

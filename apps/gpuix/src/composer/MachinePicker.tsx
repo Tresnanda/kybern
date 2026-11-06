@@ -1,6 +1,7 @@
 // The machine chip of a new chat's composer (design §6.1): where the chat runs. Rows in machine order: machines with a checkout
 // of the project (an away one says "Offline · sends when it returns"), then the ones without, which offer project setup. It only
 // exists while there is a choice (`useMachineTarget().show`), so one machine looks as the composer always did.
+import { problemLine } from '../problems/describe.ts'
 import { glyphOfMachine } from '../machines/index.ts'
 import { MachineBadge } from '../sidebar/MachineBadge.tsx'
 import { useEffect, useRef, useState } from 'react'
@@ -59,7 +60,7 @@ export function MachinePicker({ target, locked }: { target: MachineTarget; locke
                 void (async () => {
                   try {
                     await loadGroupPaths(target.projectId!, choice.machineId, paneId)
-                  } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+                  } catch (e) { setError(problemLine(e, { action: 'reach the project on that machine' })) }
                   finally { picking.current = false }
                 })()
               }

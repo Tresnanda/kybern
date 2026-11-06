@@ -24,7 +24,7 @@ export function MoveBanner({ thread }: { thread?: Thread | null }) {
       const result = await rpc("threads.move_abandon", { thread_id: thread!.id, force });
       if (result.outcome === "completed") showToast(`${banner!.machineName} already had the thread. The move is done.`);
     } catch (e) {
-      showToast(`Couldn't give the thread back. ${errorText(e)}`);
+      showToast(errorText(e, "give the thread back"));
     } finally {
       setBusy(false);
     }

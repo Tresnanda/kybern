@@ -4,7 +4,9 @@ import { Platform, ScrollView, useWindowDimensions, View } from "react-native";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { parsePairingInvitation } from "../src/state/protocol";
-import { addEnvironment, errorText, pairEnvironment } from "../src/state/runtime";
+import { addEnvironment, pairEnvironment, problemFor } from "../src/state/runtime";
+import type { ProblemModel } from "../src/state/problems";
+import type { ErrorValue } from "../src/ui/Problem";
 import { HeaderActions } from "../src/ui/ActionMenu";
 import { Brand } from "../src/ui/Brand";
 import { SectionFooter, SectionHeader } from "../src/ui/List";
@@ -13,6 +15,14 @@ import { CONTENT_MAX_WIDTH, gutter, space, useTheme } from "../src/ui/theme";
 
 // Pair this phone with Kybern on a computer: scan the invitation's QR code, or
 // type its address and six-digit code. An access token is the fallback.
+/** Pairing has no machine yet and no retry loop: an unreachable address is the address, not a computer that is away. */
+function pairingProblem(e: unknown): ProblemModel {
+  const problem = problemFor(e, "connect to your computer");
+  return problem.kind === "offline"
+    ? { ...problem, title: "Can't reach that address", body: "Check the address and that Kybern is running on your computer, then try again.", actions: [] }
+    : problem;
+}
+
 export default function Connect() {
   const { invitation, autoconnect } = useLocalSearchParams<{ invitation?: string; autoconnect?: string }>();
   const { colors } = useTheme();
@@ -24,7 +34,7 @@ export default function Connect() {
   const [token, setToken] = useState("");
   const [advanced, setAdvanced] = useState(false);
   const [expected, setExpected] = useState<string>();
-  const [error, setError] = useState("");
+  const [error, setError] = useState<ErrorValue>("");
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     if (!invitation) return;
@@ -38,7 +48,7 @@ export default function Connect() {
         setBusy(true);
         pairEnvironment(parsed.url, parsed.code, "", parsed.environmentId)
           .then(() => router.dismissTo("/"))
-          .catch((e) => setError(errorText(e)))
+          .catch((e) => setError(pairingProblem(e)))
           .finally(() => setBusy(false));
       }
     } else setError("This invitation is incomplete. Create a new one in Kybern on your computer.");
@@ -61,7 +71,7 @@ export default function Connect() {
       else await pairEnvironment(address, code, name, expected);
       router.dismissTo("/");
     } catch (e) {
-      setError(errorText(e));
+      setError(pairingProblem(e));
     } finally {
       setBusy(false);
     }

@@ -1,10 +1,21 @@
 import { DEFAULT_PORT } from "./types.ts";
 
+/** What a person types for a computer: its name or IP address, with a port only when it is not the usual one. */
+const ADDRESS_EXAMPLE_PROMPT = "Enter the computer's address, like 192.168.1.20 or my-pc.tailnet.ts.net";
+export const INVALID_ADDRESS = "That isn't a valid address. Enter the computer's name or IP address, like 192.168.1.20";
+const UNSUPPORTED_ADDRESS = "Use just the computer's address, without a user name, password or query, like 192.168.1.20";
+
 export function normalizeDaemonUrl(input: string): string {
   const value = input.trim();
-  if (!value) throw new Error("Enter the environment address");
+  if (!value) throw new Error(ADDRESS_EXAMPLE_PROMPT);
   const explicit = value.includes("://");
-  const url = new URL(explicit ? value : `ws://${value}`);
+  let url: URL;
+  try {
+    url = new URL(explicit ? value : `ws://${value}`);
+  } catch {
+    // The platform says "Invalid URL"; say what to fix instead.
+    throw new Error(INVALID_ADDRESS);
+  }
   if (
     !["ws:", "wss:", "http:", "https:"].includes(url.protocol) ||
     !url.hostname ||
@@ -13,9 +24,7 @@ export function normalizeDaemonUrl(input: string): string {
     url.search ||
     url.hash
   ) {
-    throw new Error(
-      "Use a server address without credentials or query parameters",
-    );
+    throw new Error(UNSUPPORTED_ADDRESS);
   }
   url.protocol =
     url.protocol === "https:" || url.protocol === "wss:" ? "wss:" : "ws:";

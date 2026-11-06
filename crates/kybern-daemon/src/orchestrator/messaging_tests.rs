@@ -907,7 +907,7 @@ async fn a_failed_child_is_started_directly_when_its_parent_messages_it() {
     let t = Delegating::new().await;
     let started = t.delegate(json!({"task": "Fail first"})).await;
     let child = t.delegation(&started["task_id"]);
-    t.agent("Fail first").await.tx.send(DriverEvent::TurnFailed { error: "rate limited".into() }).await.unwrap();
+    t.agent("Fail first").await.tx.send(DriverEvent::TurnFailed { error: "rate limited".into(), problem: None }).await.unwrap();
     eventually(|| async {
         let thread = t.fixture.store.thread_get(child.id).unwrap().unwrap();
         (thread.status == ThreadStatus::Failed && thread.delegation.as_ref().unwrap().status == DelegationStatus::Failed).then_some(())

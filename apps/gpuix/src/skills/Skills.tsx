@@ -1,6 +1,7 @@
 // Settings › Skills (ADE-86): your user skills on every machine. Each skill once, with the machines that have it and whether
 // their copies match ("Different on os-kdi"); Copy… opens the sheet that sends it. "Copy N missing" per machine copies every
 // skill it lacks. Nothing copies by itself. Words come from `packages/kybern-client/src/skillSync.ts`.
+import { toastProblem } from '../problems/toast.ts'
 import { useMemo, useState } from 'react'
 import { SKILL_HOMES, type SkillsNetworkView } from '../../../../packages/kybern-client/src/types.ts'
 import { filterCounts, machineSummaries, missingRequests, readersText, SKILL_HOME_DETAILS, skillRows, type SkillFilter, type SkillMachineCell, type SkillMachineSummary, type SkillRowModel } from '../../../../packages/kybern-client/src/skillSync.ts'
@@ -10,7 +11,6 @@ import { Segmented } from '../kit/Segmented.tsx'
 import { toneColor } from '../kit/tone.ts'
 import { useControls } from '../kit/controls.ts'
 import { Tip } from '../nav/overlay.tsx'
-import { errorText } from '../nav/actions.ts'
 import { toast } from '../shell/toasts.tsx'
 import { MachineBadge } from '../sidebar/MachineBadge.tsx'
 import { glyphOfMachine } from '../machines/index.ts'
@@ -85,7 +85,7 @@ function MachineRow({ view, summary }: { view: SkillsNetworkView; summary: Skill
       <Label color={t.text} size={14} lineHeight={20} weight={500} truncate>{machine.is_self ? `${machine.name} (this computer)` : machine.name}</Label>
       <Label color={t.textSecondary} size={13} lineHeight={18} truncate>{summary.detail}</Label>
     </div>
-    {live && missing.length > 0 && <Button testId={`skills-copy-missing-${machine.id}`} size="sm" variant="secondary" busy={busy} onClick={() => void copyMissing().catch((e) => toast.error('Unable to copy the skills', { description: errorText(e) }))}>{`Copy ${missing.length} missing`}</Button>}
+    {live && missing.length > 0 && <Button testId={`skills-copy-missing-${machine.id}`} size="sm" variant="secondary" busy={busy} onClick={() => void copyMissing().catch((e) => toastProblem(e, { action: 'copy the skills' }))}>{`Copy ${missing.length} missing`}</Button>}
   </div>
 }
 

@@ -77,7 +77,10 @@ fn delegation(parent: ThreadId, status: DelegationStatus) -> DelegationInfo {
 }
 
 fn notice(host: &Host, thread: ThreadId, turn: Option<Uuid>, text: String) -> ThreadEvent {
-    host.state.orchestrator.emit(thread, turn, EventPayload::ProviderNotice { data: None, level: NoticeLevel::Info, text }).unwrap()
+    host.state
+        .orchestrator
+        .emit(thread, turn, EventPayload::ProviderNotice { data: None, level: NoticeLevel::Info, text, problem: None })
+        .unwrap()
 }
 
 fn row_seq(entry: &TranscriptEntry) -> EventSeq {
@@ -138,6 +141,7 @@ fn turns_fixture(host: &Host, thread: &Thread, turns: usize, rows: usize, text_b
                             data: None,
                             level: NoticeLevel::Info,
                             text: format!("{turn}.{row} {}", "x".repeat(text_bytes)),
+                            problem: None,
                         },
                     )
                     .unwrap();
@@ -255,7 +259,12 @@ async fn a_large_gap_answers_with_a_snapshot_through_head_and_live_events_contin
                     .emit(
                         thread_id,
                         Some(thread_id),
-                        EventPayload::ProviderNotice { data: None, level: NoticeLevel::Info, text: format!("Entry {index}") },
+                        EventPayload::ProviderNotice {
+                            data: None,
+                            level: NoticeLevel::Info,
+                            text: format!("Entry {index}"),
+                            problem: None,
+                        },
                     )
                     .unwrap()
                     .seq;
@@ -357,7 +366,7 @@ async fn threads_get_sent_after_events_subscribe_reads_at_or_after_its_head() {
                     .emit(
                         thread_id,
                         Some(thread_id),
-                        EventPayload::ProviderNotice { data: None, level: NoticeLevel::Info, text: "tick".into() },
+                        EventPayload::ProviderNotice { data: None, level: NoticeLevel::Info, text: "tick".into(), problem: None },
                     )
                     .unwrap();
             }

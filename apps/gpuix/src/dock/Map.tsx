@@ -1,11 +1,11 @@
 // The Coordinator's project map, read-only: the daemon-built description of the repositories (`projects.map`), stamped with the
 // commit it describes. Layout, Commands, Busy areas and Removed and renamed, one virtual list; a path row shows that path in
 // Explorer. The header's rebuild button asks for the map again (the daemon rebuilds when a repository's HEAD moved).
+import { asError, errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
 import path from 'node:path'
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import type { ProjectMap, ProjectMapRepo, Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { builtAgo, changeRow, mapHead, NOTES_HISTORY_COPY as COPY } from '../../../../packages/kybern-client/src/notesHistory.ts'
-import { errorText } from '../nav/actions.ts'
 import { IconButton } from '../kit/IconButton.tsx'
 import { Tip } from '../nav/overlay.tsx'
 import { SwapOnChange } from '../motion/kit.tsx'
@@ -27,7 +27,7 @@ export function MapPane({ thread }: { thread: Thread }) {
   const projectId = thread.coordinator_project_id!
   const project = useApp((s) => s.projects.find((p) => p.id === projectId))
   const [map, setMap] = useState<ProjectMap | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<Error | null>(null)
   const [loading, setLoading] = useState(true)
   const request = useRef(0)
   const load = useCallback(async () => {
@@ -36,7 +36,7 @@ export function MapPane({ thread }: { thread: Thread }) {
     try {
       const result = await threadClient(thread.id)!.call('projects.map', { project_id: projectId })
       if (mine === request.current) setMap(result.map)
-    } catch (e) { if (mine === request.current) setError(errorText(e)) } finally { if (mine === request.current) setLoading(false) }
+    } catch (e) { if (mine === request.current) setError(asError(e)) } finally { if (mine === request.current) setLoading(false) }
   }, [projectId, thread.id])
   useEffect(() => { void load(); return () => { request.current++ } }, [load])
   const reveal = (repo: ProjectMapRepo | undefined, rel: string) => {
@@ -48,7 +48,7 @@ export function MapPane({ thread }: { thread: Thread }) {
   return <div testId="dock-map" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
     <ScopeHeader thread={thread} action={<Tip label={COPY.mapRebuild} side="top" size={24}><IconButton icon={DOCK_ICONS.refresh} size="sm" glyph={14} label={COPY.mapRebuild} testId="dock-map-rebuild" disabled={loading} onClick={() => void load()}>{loading && !map ? <Spinner size={12} /> : undefined}</IconButton></Tip>} />
     {map && <AsOf map={map} />}
-    <ErrorLine error={error} retry={() => void load()} />
+    <ErrorLine error={error} action="load the map" retry={() => void load()} />
     {!map && !error ? (loading ? <Section label="Loading map…" /> : null)
       : map && !entries.length ? <DockEmpty icon={DOCK_ICONS.map} title={COPY.mapEmptyTitle} body={COPY.mapEmptyBody} />
       : map ? <TaskWindow entries={entries} testId="dock-map-list" /> : null}

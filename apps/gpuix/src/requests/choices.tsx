@@ -1,10 +1,11 @@
 // The numbered rows of a summoned card (sign-in, permission, SSH host key): the same `OptionRow`s, keys and decline note as an
 // approval's, but each row runs its own action (`requests.act`, an answer, opening System Settings) instead of an `approvalCard`
 // decision. The highlight lives in `ui.ts`, so ↑ ↓ from the empty composer move it too (`registerCardKeys`).
+import { problemSentence } from '../problems/sentence.ts'
 import { useEffect, useRef, useState } from 'react'
 import type { ApprovalRequest, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 import { sendToThread } from '../composer/store.ts'
-import { errorText, reportError, respondApproval } from '../transcript/store.ts'
+import { reportError, respondApproval } from '../transcript/store.ts'
 import { NoteField, OptionList, OptionRow } from './Card.tsx'
 import { threadProvider } from './actions.ts'
 import { agentName, forwardsDeclineReason, stepHighlight, type Part } from './model.ts'
@@ -29,7 +30,7 @@ export const agentFor = (approval: ApprovalRequest) => {
 export const declineLabel = (approval: ApprovalRequest) => `Decline and tell ${agentFor(approval)} what to do instead`
 
 /** A sentence for an action that failed: the daemon's own message when it gave one. */
-export const actionFailed = (e: unknown) => errorText(e) || 'Unable to reach Kybern. Check the connection and try again.'
+export const actionFailed = (e: unknown) => problemSentence(e, { action: 'send your answer' })
 
 /** Deny the card, with the note as its reason; a harness that drops the reason gets the note as the next message. */
 export async function declineWithNote(approval: ApprovalRequest, note: string) {

@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
+use kybern_protocol::process::SpawnError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -212,7 +213,28 @@ pub struct Cli {
 }
 
 /// A `whois` call in flight: its answer, or the error's text, once it is known.
-type Running = Arc<tokio::sync::OnceCell<std::result::Result<Whois, String>>>;
+type Running = Arc<tokio::sync::OnceCell<std::result::Result<Whois, WhoisFailure>>>;
+
+/// Why a `whois` call failed, in a form every waiter of one call can share: the CLI is not there (a typed missing tool, so a
+/// client offers Install), or the error's text.
+#[derive(Debug, Clone)]
+enum WhoisFailure {
+    Missing,
+    Other(String),
+}
+
+impl WhoisFailure {
+    fn into_error(self) -> anyhow::Error {
+        match self {
+            // The chain keeps the typed `SpawnError`; the top line stays the sentence people read in other messages.
+            Self::Missing => {
+                anyhow::Error::new(SpawnError::new("tailscale", std::io::Error::new(std::io::ErrorKind::NotFound, "program not found")))
+                    .context("Tailscale is not installed on this machine")
+            }
+            Self::Other(message) => anyhow!(message),
+        }
+    }
+}
 
 impl Cli {
     async fn run(&self, args: &[&str]) -> Option<(bool, String)> {
@@ -321,14 +343,14 @@ impl Tailscale for Cli {
             return Ok(whois.clone());
         }
         let running = self.whois_running.lock().unwrap_or_else(|p| p.into_inner()).entry(addr).or_default().clone();
-        let answer = running.get_or_init(|| async { self.whois_now(addr).await.map_err(|error| format!("{error:#}")) }).await.clone();
+        let answer = running.get_or_init(|| self.whois_now(addr)).await.clone();
         {
             let mut table = self.whois_running.lock().unwrap_or_else(|p| p.into_inner());
             if table.get(&addr).is_some_and(|current| Arc::ptr_eq(current, &running)) {
                 table.remove(&addr);
             }
         }
-        answer.map_err(|message| anyhow!(message))
+        answer.map_err(WhoisFailure::into_error)
     }
 
     async fn listen_ip(&self) -> Option<IpAddr> {
@@ -350,14 +372,16 @@ impl Cli {
         status
     }
 
-    async fn whois_now(&self, addr: IpAddr) -> Result<Whois> {
+    async fn whois_now(&self, addr: IpAddr) -> std::result::Result<Whois, WhoisFailure> {
         let address = addr.to_string();
-        let (ok, text) = self.run(&["whois", "--json", &address]).await.context("Tailscale is not installed on this machine")?;
+        let Some((ok, text)) = self.run(&["whois", "--json", &address]).await else { return Err(WhoisFailure::Missing) };
+        let not_a_node = || WhoisFailure::Other(format!("{addr} is not a node on this tailnet"));
         if !ok {
-            return Err(anyhow!("{addr} is not a node on this tailnet"));
+            return Err(not_a_node());
         }
-        let value: Value = serde_json::from_str(&text).context("Tailscale returned unreadable whois output")?;
-        let whois = parse_whois(&value).ok_or_else(|| anyhow!("{addr} is not a node on this tailnet"))?;
+        let value: Value =
+            serde_json::from_str(&text).map_err(|_| WhoisFailure::Other("Tailscale returned unreadable whois output".into()))?;
+        let whois = parse_whois(&value).ok_or_else(not_a_node)?;
         let mut cache = self.whois.lock().unwrap_or_else(|p| p.into_inner());
         cache.retain(|_, (at, _)| at.elapsed() < WHOIS_TTL);
         cache.insert(addr, (Instant::now(), whois.clone()));
@@ -521,6 +545,18 @@ pub fn from_env() -> std::sync::Arc<dyn Tailscale> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_missing_tailscale_is_a_typed_tool_missing_with_the_readable_sentence() {
+        let error = WhoisFailure::Missing.into_error();
+        assert_eq!(error.to_string(), "Tailscale is not installed on this machine");
+        let problem = crate::problem::problem_from(&error);
+        assert_eq!((problem.kind, problem.subject.as_deref()), (kybern_protocol::rpc::ProblemKind::ToolMissing, Some("tailscale")));
+        assert_eq!(
+            WhoisFailure::Other("100.64.0.9 is not a node on this tailnet".into()).into_error().to_string(),
+            "100.64.0.9 is not a node on this tailnet"
+        );
+    }
     use serde_json::json;
 
     use super::*;

@@ -1,12 +1,13 @@
 // "Hand off to another agent" (`views/Handoff.tsx`): pick an installed agent and
 // start a new thread in the same project, seeded with the conversation so far.
+import { problemSentence } from '../problems/sentence.ts'
 import { useState } from 'react'
 import { Icon } from '../icons.tsx'
 import { MatrixLoader } from '../MatrixLoader.tsx'
 import { useApp } from '../state.ts'
 import { Label, ProviderMark, useTheme } from '../ui.tsx'
 import { revealTransform, SwapOnChange } from '../motion/kit.tsx'
-import { errorText, handOff } from './actions.ts'
+import { handOff } from './actions.ts'
 import { N } from './glyphs.ts'
 import { Dialog, DialogHeader, muted } from './overlay.tsx'
 import { setNav, useNav } from './store.ts'
@@ -68,7 +69,7 @@ function HandoffBody({ threadId, target }: { threadId: string; target: string | 
                   await handOff(threadId, { kind: p.kind, instance: 'default' }, model?.id)
                   close()
                 } catch (e) {
-                  setError(`Unable to hand off. ${errorText(e)}`)
+                  setError(problemSentence(e, { action: 'hand off' }))
                 } finally {
                   setBusy(null)
                 }

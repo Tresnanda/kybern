@@ -146,7 +146,7 @@ pub(super) fn internal_turn_event(turn: &mut Option<ActiveTurn>, ev: DriverEvent
             settled = true;
             None
         }
-        DriverEvent::TurnFailed { error } => {
+        DriverEvent::TurnFailed { error, .. } => {
             internal.finish(Err(format!("The handoff turn failed: {error}")));
             settled = true;
             None

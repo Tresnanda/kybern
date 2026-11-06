@@ -47,7 +47,7 @@ export default function MachineDetail() {
         lastInfo.set(id, next);
         if (current) setInfo(next);
       },
-      (e) => current && setError(errorText(e)),
+      (e) => current && setError(errorText(e, "read this machine")),
     );
     return () => {
       current = false;

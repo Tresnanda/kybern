@@ -225,7 +225,7 @@ export function createLocalDaemonResolver(options: LocalDaemonOptions, dependenc
     const existing = endpoint && (await info(endpoint) ?? (configured ? null : await info(endpoint, 5000)))
     if (configured) {
       if (!existing) throw Error('The daemon configured by KYBERN_URL is not reachable or rejected the configured token')
-      if (existing.protocol_version !== PROTOCOL_VERSION) throw Error('This environment uses an incompatible protocol. Update Kybern on the client and host')
+      if (existing.protocol_version !== PROTOCOL_VERSION) throw Error('This computer runs a different version of Kybern. Update Kybern on both, then reconnect')
       return endpoint!
     }
     const binary = options.binary ?? bundledCommand('kybernd')

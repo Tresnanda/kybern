@@ -53,7 +53,7 @@ export function ProjectCoordinatorSection({ projectId }: { projectId: string }) 
     setPending({ value: next });
     setError("");
     saveProjectCoordinator(projectId, next)
-      .catch((e) => setError(`${COORDINATOR_SETTINGS_COPY.saveFailed} ${errorText(e)}`))
+      .catch((e) => setError(errorText(e, "save the coordinator settings")))
       .finally(() => setPending(null));
   };
   const setField = <K extends CoordinatorField>(field: K, value: CoordinatorOverrides[K]) => write(withOverrideField(overrides, field, value));
@@ -66,7 +66,7 @@ export function ProjectCoordinatorSection({ projectId }: { projectId: string }) 
       destructive: false,
       onConfirm: () => {
         setError("");
-        rpc("coordinator.setup", { project_id: projectId }).catch((e) => setError(`${COORDINATOR_SETTINGS_COPY.redoFailed}. ${errorText(e)}`));
+        rpc("coordinator.setup", { project_id: projectId }).catch((e) => setError(errorText(e, "set up the coordinator again")));
       },
     });
   const reset = () =>

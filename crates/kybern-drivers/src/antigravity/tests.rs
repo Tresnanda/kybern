@@ -181,23 +181,27 @@ fn failures_say_what_to_do_next() {
     let mut mapper = TurnMapper::new(None);
     feed(&mut mapper, r#"{"event":"result","result":{"conversation_id":"c","status":"ERROR","error":"authentication required"}}"#);
     let events = mapper.finish(Some(1), None, false);
-    let [DriverEvent::TurnFailed { error }] = &events[..] else { panic!("{events:?}") };
+    let [DriverEvent::TurnFailed { error, problem }] = &events[..] else { panic!("{events:?}") };
     assert!(error.contains("Settings → Agents → Antigravity"), "{error}");
+    // The friendly sentence is the headline text; the problem is what the buttons are keyed by.
+    let problem = problem.as_ref().expect("a signed-out problem");
+    assert_eq!((problem.kind, problem.subject.as_deref()), (kybern_protocol::rpc::ProblemKind::SignedOut, Some("antigravity")));
+    assert_eq!(problem.detail.as_deref(), Some("authentication required"));
 
     // A crash with no result says what the process printed.
     let mut crashed = TurnMapper::new(None);
     let events = crashed.finish(Some(2), Some("authentication required"), false);
-    assert!(matches!(&events[..], [DriverEvent::TurnFailed { error }] if error.contains("Settings → Agents → Antigravity")));
+    assert!(matches!(&events[..], [DriverEvent::TurnFailed { error, .. }] if error.contains("Settings → Agents → Antigravity")));
     let mut other = TurnMapper::new(None);
     let events = other.finish(Some(3), Some("quota exhausted for today"), false);
-    let [DriverEvent::TurnFailed { error }] = &events[..] else { panic!() };
+    let [DriverEvent::TurnFailed { error, .. }] = &events[..] else { panic!() };
     assert!(error.starts_with("Antigravity stopped: quota exhausted for today."));
     assert!(error.ends_with("pick another agent."));
     // The structured `error` event is used when nothing was printed on stderr.
     let mut evented = TurnMapper::new(None);
     feed(&mut evented, r#"{"event":"error","error":"model not found"}"#);
     let events = evented.finish(Some(1), None, false);
-    assert!(matches!(&events[..], [DriverEvent::TurnFailed { error }] if error.contains("model not found")));
+    assert!(matches!(&events[..], [DriverEvent::TurnFailed { error, .. }] if error.contains("model not found")));
     assert!(friendly_error("").contains("Send your message again"));
 }
 
@@ -672,7 +676,7 @@ printf '%s\n\n' '{"event":"result","result":{"conversation_id":"conv-1","status"
         session.send_message("m", &UserMessage::text("go")).await.unwrap();
         let ended = next_turn_end(&mut events).await;
         assert!(
-            matches!(ended.last(), Some(DriverEvent::TurnFailed { error }) if error.contains("Settings → Agents → Antigravity")),
+            matches!(ended.last(), Some(DriverEvent::TurnFailed { error, .. }) if error.contains("Settings → Agents → Antigravity")),
             "{ended:?}"
         );
         // Wait until the session frees itself, then send again.

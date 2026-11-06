@@ -2,13 +2,13 @@
 // under it, and repositories without changes still listed ("No changes") so the user sees what the chat spans. A second
 // repository's edits are never hidden: headers start open, and only the user collapses one (the chevron turns, 250 ms).
 // Repositories keep a fixed order (primary first, then by path), so nothing jumps while the agent edits.
+import { toastProblem } from '../problems/toast.ts'
 import { memo, useState, type ReactNode } from 'react'
 import { GROUP_COPY, groupFilesByRepo, includedMembers, prResultToast, stripRepoPrefix, type MemberLike, type RepoFileGroup } from '../../../../packages/kybern-client/src/groups.ts'
 import type { Diff, FileChange, GitStatus, Thread, ThreadMember } from '../../../../packages/kybern-client/src/types.ts'
 import { Chevron } from '../motion/Chevron.tsx'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
-import { errorText } from '../nav/actions.ts'
 import { toast } from '../shell/toasts.tsx'
 import { threadClient } from '../state.ts'
 import { Label, useTheme } from '../ui.tsx'
@@ -118,7 +118,7 @@ export function GroupEnvironmentRows({ thread, diff, git, row, divider, title, o
       toast(prResultToast(result.pull_requests.length, result.skipped ?? []), first ? { action: { label: GROUP_COPY.outsideChangeOpen, onClick: () => openWeb(first.url) } } : undefined)
       onChanged()
     } catch (e) {
-      if (threadClient(thread.id) === client) toast.error('Unable to create pull requests', { description: errorText(e) })
+      if (threadClient(thread.id) === client) toastProblem(e, { action: 'create the pull requests' })
     } finally { setBusy(false) }
   }
   const prs = rows.filter((r) => r.git?.pull_request)

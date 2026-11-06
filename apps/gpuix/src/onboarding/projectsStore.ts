@@ -11,6 +11,7 @@ import { activeEnvironment } from '../shell/environment.ts'
 import { REDUCED_MOTION } from '../platform/reducedMotion.ts'
 import { getClient, getState, subscribe as subscribeApp } from '../state.ts'
 import { createStore } from './store.ts'
+import { describe, problemLine } from '../problems/describe.ts'
 import { type ImportMode } from './model.ts'
 import {
   EMPTY_SUMMARY, MAX_IMPORT_ROOTS, addedRow, appendSkips, applyJob, applyProgress, entriesFor, flipDeltas, importRoots, newSuggested, overallProgress, reconcileRows,
@@ -75,7 +76,8 @@ export const useProjects = projectsStore.use
 const get = projectsStore.get
 const set = projectsStore.set
 
-const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
+/** Why a scan failed, as one sentence under the scene's own headline. */
+const scanFailure = (error: unknown) => describe(error, { action: 'scan your chat history' }).body
 
 // ─── Derived ──────────────────────────────────────────────────────────────
 
@@ -177,7 +179,7 @@ function begin(force: boolean) {
   set({ started: true, status: 'scanning', scanError: null, scanId: null })
   client.call('sessions.scan_projects', {}).then(
     (scan) => { if (token === scanToken) applyScan(scan) },
-    (error) => { if (token === scanToken) set({ status: 'failed', scanError: errorText(error) }) },
+    (error) => { if (token === scanToken) set({ status: 'failed', scanError: scanFailure(error) }) },
   )
 }
 
@@ -362,7 +364,7 @@ export function startImport(): void {
     (job) => onJobReply(job),
     (error) => {
       // Nothing started: unlock and say so next to the button.
-      set({ job: null, plan: [], imports: {}, skips: [], progress: 0, importMode: null, importError: `Couldn’t start the import (${errorText(error).replace(/[.\s]+$/, '')}). Try again.` })
+      set({ job: null, plan: [], imports: {}, skips: [], progress: 0, importMode: null, importError: problemLine(error, { action: 'start the import' }) })
       recompute()
     },
   )

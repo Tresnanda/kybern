@@ -55,7 +55,7 @@ export async function loadSettings() {
       publish({ settings, error: "" });
   } catch (e) {
     if (client === active && isCurrent())
-      publish({ error: `Unable to read settings. ${errorText(e)}` });
+      publish({ error: errorText(e, "load your settings") });
   }
 }
 
@@ -78,7 +78,7 @@ export async function saveSettings(next: Settings): Promise<boolean> {
     if (client === active && revision === at)
       publish({
         settings: previous,
-        error: `Unable to save the setting. Check the connection and try again. ${errorText(e)}`,
+        error: errorText(e, "save that setting"),
       });
     return false;
   } finally {

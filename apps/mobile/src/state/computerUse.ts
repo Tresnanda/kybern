@@ -37,7 +37,7 @@ export async function loadComputerUse() {
     ]);
     if (client === active) publish({ status, notes: notes.notes, error: "" });
   } catch (e) {
-    if (client === active) publish({ error: `Unable to read computer use. ${errorText(e)}` });
+    if (client === active) publish({ error: errorText(e, "load computer use") });
   }
 }
 

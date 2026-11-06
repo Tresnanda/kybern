@@ -1,4 +1,6 @@
 import { useSyncExternalStore } from 'react'
+import { errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
+import { problemSentence } from '../problems/sentence.ts'
 import { classifyPreviewInput, PREVIEW_REJECTED_MESSAGE } from '../../../../packages/kybern-client/src/previewTarget.ts'
 import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import type { PortForwardOrigin, PreviewOpenResult, PreviewTargetInfo, PreviewProbeResult } from '../../../../packages/kybern-client/src/types.ts'
@@ -154,11 +156,11 @@ export async function openPreview(id: string, raw: string, allowFolder = false, 
     const unsupportedProxy = !!e && typeof e === 'object' && 'data' in e && !!e.data && typeof e.data === 'object' && 'code' in e.data && e.data.code === 'unsupported_proxy'
     const message = unsupported
       ? `Update Kybern on ${activeEnvironment().name} to open servers from your machines.`
-      : e instanceof Error ? e.message : String(e)
+      : problemSentence(e, { action: 'open that page' })
     if (target.kind === 'server') {
       const entry: Entry = { address, url: address, kind: 'server', proxy: !!proxy, title: new URL(address).host, released: true, ...(via ? { machine: via } : {}) }
       commitEntry(id, entry, replace, proxy && !unsupported && !unsupportedProxy ? { phase: 'relay-failed' } : { phase: 'error', message })
-    } else if (replace && old?.kind === 'file' && /doesn't exist|does not exist|not.found|isn't there/i.test(message)) {
+    } else if (replace && old?.kind === 'file' && /doesn't exist|does not exist|not.found|isn't there/i.test(errorMessage(e))) {
       commitEntry(id, { ...old, released: true }, true, { phase: 'not-found', name: address.split('/').pop() ?? address })
     } else setPreview(id, { busy: false, loading: false, error: message, load: { phase: 'error', message } })
     return false
@@ -196,7 +198,7 @@ async function openForwarded(id: string, machine: RemoteServer, launch: boolean,
     if (generations.get(id) !== generation) return false
     // A thread's own server whose machine could not forward it (not in this machine's network): its preview ticket instead.
     if (options.fallback) return openPreview(id, options.fallback, false, launch, replace, { ...options, machine: undefined, ticketRoute: true })
-    const message = e instanceof Error ? e.message : String(e)
+    const message = problemSentence(e, { action: 'open that server', machine: machine.name })
     const address = sourceAddress(machine)
     commitEntry(id, { address, url: address, title: machine.name, kind: 'server', machine, released: true }, replace, { phase: 'error', message })
     setPreview(id, { error: message, loading: false })
@@ -214,7 +216,7 @@ export async function launchPreview(id: string) {
     const local = activeEnvironment().local && (!!entry.machine || !machineOfThreadId(id))
     if (entry.kind === 'file' && !local) return
     await launchBrowser(browserAddress(entry, previewState(id).pagePath, local, webHost.available)); if (current()) setPreview(id, { opened: true, error: null }) }
-  catch (error) { if (current()) setPreview(id, { error: String(error) }) }
+  catch (error) { if (current()) setPreview(id, { error: problemSentence(error, { action: 'open the page in your browser' }) }) }
 }
 /** What the browser-only state copies: the page's address (never a ticket URL, which works once). */
 export function previewLink(id: string): string | null {

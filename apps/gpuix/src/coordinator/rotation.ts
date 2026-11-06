@@ -1,6 +1,7 @@
 // Coordinator context refresh in the GPUIX client: the calls (`coordinator.refresh_context`, `coordinator.edit_handoff`),
 // what the open thread says about its latest rotation, and the budget in force. The words and arithmetic are shared
 // (`packages/kybern-client/src/rotation.ts`); the transcript row is `transcript/Rotation.tsx`.
+import { problemSentence } from '../problems/sentence.ts'
 import type { Block } from '../../../../packages/kybern-client/src/transcript.ts'
 import { effectiveCoordinatorSettings } from '../../../../packages/kybern-client/src/coordinatorSettings.ts'
 import { effectiveRotationBudget, ROTATION_COPY } from '../../../../packages/kybern-client/src/rotation.ts'
@@ -46,7 +47,7 @@ export async function editHandoff(threadId: string, rotationId: string, text: st
     await getClient()!.call('coordinator.edit_handoff', { thread_id: threadId, rotation_id: rotationId, text })
     return null
   } catch (error) {
-    return `${ROTATION_COPY.editFailed}. ${error instanceof Error ? error.message : String(error)}`
+    return problemSentence(error, { action: 'save the hand-off' })
   }
 }
 

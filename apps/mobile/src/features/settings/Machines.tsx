@@ -25,7 +25,7 @@ import {
   updateAllMachines,
 } from "../../state/machineActions";
 import { cancelOutboxItem, listOutboxes, onOutboxesChanged, retryOutboxItem } from "../../state/outbox";
-import { errorText, machineHub, useApp, useMachineView } from "../../state/runtime";
+import { errorText, machineHub, problemFor, useApp, useMachineView } from "../../state/runtime";
 import { Alert, confirm } from "../../ui/Alert";
 import { MenuButton } from "../../ui/ActionMenu";
 import { ListRow } from "../../ui/List";
@@ -100,7 +100,7 @@ export function MachinesSettings() {
 
   const run = (work: () => Promise<unknown>) => {
     setError("");
-    work().catch((e) => setError(errorText(e)));
+    work().catch((e) => setError(errorText(e, "change that machine")));
   };
 
   const networkPaused = (id: MachineId) => network?.members.find((card) => card.machine_id === id)?.status === "paused";
@@ -109,7 +109,7 @@ export function MachinesSettings() {
     setUpdateLine("");
     updateAllMachines()
       .then((result) => setUpdateLine(updateSummary(result)))
-      .catch((e) => setError(errorText(e)))
+      .catch((e) => setError(errorText(e, "update your machines")))
       .finally(() => setUpdating(false));
   };
   const turnOff = () =>
@@ -136,7 +136,7 @@ export function MachinesSettings() {
 
   return (
     <>
-      <ErrorBanner error={error || (app.error && !connections.length ? app.error : "")} />
+      <ErrorBanner error={error || (app.error && !connections.length ? problemFor(Object.assign(new Error(app.error), { name: "ConnectionClosedError" }), "reach your computer") : "")} />
       <Section
         title="Your machines"
         first
@@ -339,7 +339,7 @@ function AddByCode({ onDone, onError }: { onDone: () => void; onError: (message:
           onError("");
           joinWithCode(code, address)
             .then(onDone)
-            .catch((e) => onError(errorText(e)))
+            .catch((e) => onError(errorText(e, "join your network")))
             .finally(() => setBusy(false));
         }}
       >

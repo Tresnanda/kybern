@@ -3,14 +3,17 @@ import { memo, useCallback, useEffect, useState, type ReactNode } from 'react'
 import type { Diff as ThreadDiff, FileChange, GitStatus, Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
 import { ISLAND } from '../MatrixLoader.tsx'
-import { errorText } from '../nav/actions.ts'
+import { errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
+import { ProblemRow } from '../kit/Problem.tsx'
+import { describe } from '../problems/describe.ts'
+import { problemProps } from '../problems/props.ts'
+import { toastProblem } from '../problems/toast.ts'
 import { N } from '../nav/glyphs.ts'
-import { onOpenEvent, threadClient, useApp } from '../state.ts'
+import { callThread, onOpenEvent, threadClient, useApp } from '../state.ts'
 import { desktopDiffTheme } from '../native/diff.ts'
 import { NativeDiffHeader } from '../native/DiffView.tsx'
 import { Label, useTheme } from '../ui.tsx'
 import { Button } from '../kit/Button.tsx'
-import { ErrorLine } from './parts.tsx'
 import { openTab } from '../tabs/open.ts'
 import { diffFileIcons } from '../native/diff-file-icons.ts'
 import { getFileIconName } from '../shared/lib/kit/fileIcons.ts'
@@ -35,7 +38,7 @@ export function DiffPane({ thread, onStats, mode = 'list', path }: { thread: Thr
   const project = useApp(s => s.projects.find(p => p.id === thread.project_id))
   const [diff, setDiff] = useState<ThreadDiff | null>(null)
   const [git, setGit] = useState<GitStatus | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<unknown>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [generation, setGeneration] = useState(0)
@@ -46,7 +49,7 @@ export function DiffPane({ thread, onStats, mode = 'list', path }: { thread: Thr
     if (!client) return
     let current = true
     setError(null)
-    void client.call('git.status', { thread_id: thread.id }).then(status => { if (current) setGit(status) }, e => { if (current) setError(errorText(e)) })
+    void client.call('git.status', { thread_id: thread.id }).then(status => { if (current) setGit(status) }, e => { if (current) setError(e ?? new Error('Unknown failure')) })
     void client.call('threads.diff', { thread_id: thread.id, include_patch: false }).then(changes => {
       if (!current) return
       setDiff(changes); setLoaded(true)
@@ -54,7 +57,7 @@ export function DiffPane({ thread, onStats, mode = 'list', path }: { thread: Thr
     }, e => {
       if (!current) return
       // A new thread has no checkpoint yet; its project still has git status.
-      if (!/no checkpoints yet/i.test(errorText(e))) setError(errorText(e))
+      if (!/no checkpoints yet/i.test(errorMessage(e))) setError(e ?? new Error('Unknown failure'))
       setLoaded(true)
     })
     return () => { current = false }
@@ -64,17 +67,17 @@ export function DiffPane({ thread, onStats, mode = 'list', path }: { thread: Thr
   }), [thread.id, refresh])
   const run = async (kind: 'commit' | 'pr') => {
     if (busy) return
-    setBusy(kind); setError(null); setNotice(null)
+    setBusy(kind); setNotice(null)
     try {
       if (kind === 'commit') {
-        const result = await threadClient(thread.id)!.call('git.commit', { thread_id: thread.id })
+        const result = await callThread(thread.id, 'git.commit', { thread_id: thread.id })
         setNotice(`Committed · ${result.message}`)
       } else {
-        const result = await threadClient(thread.id)!.call('github.pr.create', { thread_id: thread.id })
+        const result = await callThread(thread.id, 'github.pr.create', { thread_id: thread.id })
         setNotice(`Pull request opened · #${result.number} ${result.title}`)
       }
       refresh()
-    } catch (e) { setError(errorText(e)) } finally { setBusy(null) }
+    } catch (e) { toastProblem(e, kind === 'commit' ? { action: 'commit', projectId: thread.project_id } : { action: 'create the pull request', goal: 'create pull requests', projectId: thread.project_id }) } finally { setBusy(null) }
   }
   const files = (diff?.files ?? []).filter((file) => !path || file.path === path)
   // A group thread groups its files under one header per repository (`GroupDiff.tsx`).
@@ -117,9 +120,9 @@ export function DiffPane({ thread, onStats, mode = 'list', path }: { thread: Thr
     </div>
     <div style={{ height: 1, marginLeft: 6, marginRight: 6, marginTop: 4, marginBottom: 4, backgroundColor: t.borderLight }} />
     </>}
-    <ErrorLine error={error} retry={refresh} />
+    {error != null && <div style={{ padding: 8 }}><ProblemRow {...problemProps(describe(error, { action: 'load the changes', goal: 'see the changes' }), { retry: refresh, projectId: thread.project_id }, 'dock-diff-problem')} /></div>}
     {notice && <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>{notice}</Label>}
-    {!files.length ? loaded && !error ? <div style={{ display: 'flex', flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingLeft: 20, paddingRight: 20 }}><Label color={t.textSecondary} size={12} style={{ textAlign: 'center', opacity: 0.7 }}>No changes yet. Files the agent edits in this thread show up here with their diff.</Label></div> : null : <>
+    {!files.length ? loaded && error == null ? <div style={{ display: 'flex', flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingLeft: 20, paddingRight: 20 }}><Label color={t.textSecondary} size={12} style={{ textAlign: 'center', opacity: 0.7 }}>No changes yet. Files the agent edits in this thread show up here with their diff.</Label></div> : null : <>
       <div style={{ display: 'flex', height: 38, flexShrink: 0, alignItems: 'center', gap: 6, paddingLeft: 14, paddingRight: 6 }}>
         <Icon source={N.pencil} size={14} color={t.text} />
         <Label color={t.text} size={14} lineHeight={21} style={{ flexGrow: group ? 0 : 1 }}>{`${files.length} ${files.length === 1 ? 'file' : 'files'} changed`}</Label>
@@ -148,23 +151,23 @@ export const FileDiff = memo(function FileDiff({ file, threadId, defaultOpen = f
   const [open, setOpen] = useState(defaultOpen)
   const [patch, setPatch] = useState<string | null>(null)
   const [truncated, setTruncated] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<unknown>(null)
   const [reload, setReload] = useState(0)
   useEffect(() => {
     if (!open || patch !== null || file.binary) return
     let current = true
     setError(null)
-    void threadClient(threadId)!.call('threads.diff', { thread_id: threadId, path: file.path, include_patch: true }).then((result) => {
+    void callThread(threadId, 'threads.diff', { thread_id: threadId, path: file.path, include_patch: true }).then((result) => {
       if (current) { setPatch(result.patch); setTruncated(!!result.patch_truncated) }
-    }, (e) => { if (current) setError(errorText(e)) })
+    }, (e) => { if (current) setError(e ?? new Error('Unknown failure')) })
     return () => { current = false }
   }, [open, patch, file.path, file.binary, threadId, reload])
   return <div style={{ paddingLeft: 8, paddingRight: 8, paddingBottom: 6 }}>
     <div style={{ display: 'flex', flexDirection: 'column', borderWidth: 1, borderColor: t.border, borderRadius: 6, overflow: 'hidden' }}>
       <NativeDiffHeader file={file} open={open} onToggle={() => setOpen(!open)} testId={`dock-file-diff-${file.path}`} />
       {open && <>
-        <ErrorLine error={error} retry={() => setReload((n) => n + 1)} />
-        {file.binary ? <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>Binary file changed</Label> : patch === null ? !error && <LoadingLines lines={4} testId={`dock-diff-loading-${file.path}`} /> : patch ? <diff testId={`dock-native-diff-${file.path}`} patch={patch} scroll={file.additions + file.deletions > 200} style={{ userSelect: 'text', ...(file.additions + file.deletions > 200 ? { height: 360 } : {}) }} theme={desktopDiffTheme(t, false)} /> : <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>No text changes</Label>}
+        {error != null && <div style={{ padding: 8 }}><ProblemRow {...problemProps(describe(error, { action: 'load this diff' }), { retry: () => setReload((n) => n + 1) }, `dock-diff-problem-${file.path}`)} /></div>}
+        {file.binary ? <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>Binary file changed</Label> : patch === null ? error == null && <LoadingLines lines={4} testId={`dock-diff-loading-${file.path}`} /> : patch ? <diff testId={`dock-native-diff-${file.path}`} patch={patch} scroll={file.additions + file.deletions > 200} style={{ userSelect: 'text', ...(file.additions + file.deletions > 200 ? { height: 360 } : {}) }} theme={desktopDiffTheme(t, false)} /> : <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>No text changes</Label>}
         {truncated && <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>This diff is too large to show in full. Open the file in your editor to see the remaining changes.</Label>}
       </>}
     </div>

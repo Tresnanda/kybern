@@ -40,7 +40,7 @@ export default function SettingsAgentScreen() {
         setUpdates((list) => [...list.filter((u) => u.kind !== value.kind), value]);
         showToast(value.message || `Updating ${name}`);
       })
-      .catch((e) => setError(`Unable to start the update. ${errorText(e)}`))
+      .catch((e) => setError(errorText(e, "start the update")))
       .finally(() => setBusy(false));
   };
   return (

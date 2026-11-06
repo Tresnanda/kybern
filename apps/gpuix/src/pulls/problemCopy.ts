@@ -24,3 +24,5 @@ export function problemCopy(problem: Problem, noun: string): ProblemCopy {
   const retry = [view.action, view.secondary].find(a => a?.id === 'retry')
   return { title: view.title, body: view.body, action, ...(action ? { primaryLabel: view.action!.label } : {}), retryLabel: retry?.label ?? 'Try again' }
 }
+
+export { partialCopy } from './partialCopy.ts'

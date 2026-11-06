@@ -38,12 +38,15 @@ function backCard(side: -1 | 1, paint: 'fill' | 'stroke', pad: number) {
 const PAD = 10
 const BACK = { left: { fill: backCard(-1, 'fill', PAD), stroke: backCard(-1, 'stroke', PAD) }, right: { fill: backCard(1, 'fill', PAD), stroke: backCard(1, 'stroke', PAD) } }
 
-export function EmptyMedia({ variant = 'default', icon, children }: { variant?: 'default' | 'icon'; /** Glyph source for the icon card (18 px). */ icon?: string; children?: ReactNode }) {
+/** A tone for the icon card (`ProblemState`): opaque fills and edges for the card and the two behind it, and the glyph colour. */
+export interface EmptyMediaTint { fill: string; edge: string; backFill: string; backEdge: string; icon: string }
+
+export function EmptyMedia({ variant = 'default', icon, tint, children }: { variant?: 'default' | 'icon'; /** Glyph source for the icon card (18 px). */ icon?: string; /** Colours for the icon card instead of the neutral card. */ tint?: EmptyMediaTint; children?: ReactNode }) {
   const t = useTheme()
   if (variant === 'default') return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginBottom: 24 }}>{children}</div>
   const dark = t.variant === 'dark'
-  const card = t.v('--card')
-  const border = t.v('--border')
+  const card = tint?.backFill ?? t.v('--card')
+  const border = tint?.backEdge ?? t.v('--border')
   const layer: StyleDesc = { position: 'absolute', left: -PAD, top: -PAD, width: CARD + PAD * 2, height: CARD + PAD * 2, pointerEvents: 'none' }
   return (
     <div style={{ position: 'relative', width: CARD, height: CARD, flexShrink: 0, marginBottom: 24 }}>
@@ -53,10 +56,10 @@ export function EmptyMedia({ variant = 'default', icon, children }: { variant?: 
           <svg source={BACK[side].stroke} style={{ ...layer, left: 0, top: 0, color: border }} />
         </div>
       ))}
-      <div style={{ position: 'absolute', left: 0, top: 0, width: CARD, height: CARD, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, borderWidth: 1, borderColor: border, backgroundColor: card, boxShadow: { offsetX: 0, offsetY: 1, blurRadius: 3 / 2, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.05)' } }}>
+      <div style={{ position: 'absolute', left: 0, top: 0, width: CARD, height: CARD, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, borderWidth: 1, borderColor: tint?.edge ?? border, backgroundColor: tint?.fill ?? card, boxShadow: { offsetX: 0, offsetY: 1, blurRadius: 3 / 2, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.05)' } }}>
         {/* `before:shadow-[0_-1px_white/6%]` (dark) / `[0_1px_black/4%]` (light): a 1px edge line just outside the padding box. */}
         <div style={{ position: 'absolute', left: 0, right: 0, height: 8, borderRadius: 7, pointerEvents: 'none', ...(dark ? { top: -1, borderTopWidth: 1, borderColor: 'rgba(255, 255, 255, 0.06)' } : { bottom: -1, borderBottomWidth: 1, borderColor: 'rgba(0, 0, 0, 0.04)' }) }} />
-        {icon ? <svg source={icon} style={{ width: 18, height: 18, color: t.text, pointerEvents: 'none' }} /> : children}
+        {icon ? <svg source={icon} style={{ width: 18, height: 18, color: tint?.icon ?? t.text, pointerEvents: 'none' }} /> : children}
       </div>
     </div>
   )

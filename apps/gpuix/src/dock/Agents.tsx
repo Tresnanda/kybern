@@ -11,7 +11,8 @@ import {
 import type { Thread, ThreadEvent } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
 import { FILL_ISLAND, MatrixLoader } from '../MatrixLoader.tsx'
-import { errorText } from '../nav/actions.ts'
+import { failure, type Failure } from '../problems/Line.tsx'
+import { WorktreeProblem } from '../dialogs/WorktreeCleanup.tsx'
 import { N } from '../nav/glyphs.ts'
 import { openThread } from '../nav/history.ts'
 import { Dialog, DialogHeader, muted } from '../nav/overlay.tsx'
@@ -41,7 +42,7 @@ function initialChoices(id: string) {
 export function Agents({ thread }: { thread: Thread }) {
   const [threads, setThreads] = useState<Thread[]>([])
   const [loaded, setLoaded] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<Failure | null>(null)
   const [reload, setReload] = useState(0)
   const [tree, setTree] = useState(() => initialChoices(thread.id).tree)
   const [detail, setDetail] = useState(() => initialChoices(thread.id).detail)
@@ -86,7 +87,7 @@ export function Agents({ thread }: { thread: Thread }) {
       setNav({ children })
       seeded = true
       setLoaded(true)
-    }, (e) => { if (current) { setError(errorText(e)); setLoaded(true) } })
+    }, (e) => { if (current) { setError(failure('load the agents', e)); setLoaded(true) } })
     return () => { current = false; subscription.unsubscribe() }
   }, [thread.id, ownProjectId(thread), reload])
 
@@ -111,16 +112,16 @@ export function Agents({ thread }: { thread: Thread }) {
   const toggleDetail = useCallback((id: string) => setDetail((previous) => {
     const next = { ...previous, [id]: !previous[id] }; initialChoices(thread.id).detail = next; return next
   }), [thread.id])
-  const run = async (work: () => Promise<unknown>) => {
+  const run = async (action: string, work: () => Promise<unknown>) => {
     setBusy(true); setError(null)
-    try { await work() } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
+    try { await work() } catch (e) { setError(failure(action, e)) } finally { setBusy(false) }
   }
 
   return <>
-    <ErrorLine error={error} retry={() => setReload((n) => n + 1)} />
+    {error?.action === 'remove the worktree' ? <div style={{ padding: 8 }}><WorktreeProblem error={error.error} action={error.action} /></div> : <ErrorLine error={error?.error} action={error?.action} retry={() => setReload((n) => n + 1)} projectId={ownProjectId(thread)} />}
     {!rows.length ? loaded && !error ? <DockEmpty lineage instant={dockInstant} icon={N.users} title="No agents yet" body="Ask the agent to delegate work to another agent; children appear here." /> : null : <>
       <Section label={lineageSummary(counts) || `${counts.total} ${counts.total === 1 ? 'agent' : 'agents'}`}>
-        {stoppable.length >= 2 && <Button variant="ghost" size="sm" danger disabled={busy} onClick={() => void run(() => Promise.all(stoppable.map((th) => threadClient(thread.id)!.call('threads.interrupt', { thread_id: th.id }))))}>Stop all</Button>}
+        {stoppable.length >= 2 && <Button variant="ghost" size="sm" danger disabled={busy} onClick={() => void run('stop the agents', () => Promise.all(stoppable.map((th) => threadClient(thread.id)!.call('threads.interrupt', { thread_id: th.id }))))}>Stop all</Button>}
       </Section>
       <div {...FILL_ISLAND} style={{ display: 'flex', flexGrow: 1, minHeight: 0 }}>
         <virtual-list testId="dock-agents-list" style={{ width: '100%', height: '100%' }}>
@@ -132,7 +133,7 @@ export function Agents({ thread }: { thread: Thread }) {
       <DialogHeader title="Remove this worktree?" description={`${removing?.title || 'This agent'} left its worktree on disk because it has unmerged changes. Removing it deletes those files from ${osLabels().thisComputerInline}. The branch is deleted only if already merged.`} onClose={() => { if (!busy) setRemoving(null) }} />
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: 12 }}>
         <Button size="lg" disabled={busy} onClick={() => setRemoving(null)}>Cancel</Button>
-        <Button size="lg" variant="destructive" busy={busy} onClick={() => void run(async () => { if (removing) await threadClient(thread.id)!.call('delegations.worktree_remove', { thread_id: removing.id, force: true }); setRemoving(null) })}>{busy ? 'Removing…' : 'Remove worktree'}</Button>
+        <Button size="lg" variant="destructive" busy={busy} onClick={() => void run('remove the worktree', async () => { if (removing) await threadClient(thread.id)!.call('delegations.worktree_remove', { thread_id: removing.id, force: true }); setRemoving(null) })}>{busy ? 'Removing…' : 'Remove worktree'}</Button>
       </div>
     </Dialog>}
   </>
@@ -161,7 +162,7 @@ const AgentRow = memo(function AgentRow({ row, fresh, last, rails, detailOpen, o
   const { thread, childCount, depth, open } = row
   const state = childState(thread, useNav((s) => s.pending[thread.id]?.own))
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<Failure | null>(null)
   const [expanded, setExpanded] = useState(false)
   const [allFiles, setAllFiles] = useState(false)
   const info = thread.delegation
@@ -179,7 +180,7 @@ const AgentRow = memo(function AgentRow({ row, fresh, last, rails, detailOpen, o
       // Children live on their parent's machine.
       if (thread.subagent) await threadClient(owner)!.call('tasks.stop', { thread_id: thread.id })
       else await threadClient(owner)!.call('threads.interrupt', { thread_id: thread.id })
-    } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
+    } catch (e) { setError(failure('stop the agent', e)) } finally { setBusy(false) }
   }
   return <Rise kind="row" play={fresh}><div style={{ position: 'relative', paddingLeft: 6, paddingRight: 6, paddingBottom: 1 }}>
     <div style={{ display: 'flex', minHeight: 62, alignItems: 'flex-start', paddingTop: 6, paddingBottom: 6, paddingLeft: 3 + level * 24, paddingRight: 6, borderRadius: 10, hover: { backgroundColor: t.buttonSecondaryHover } }}>
@@ -221,7 +222,7 @@ const AgentRow = memo(function AgentRow({ row, fresh, last, rails, detailOpen, o
         {info.files_touched.length > 6 && <Button variant="ghost" size="sm" style={{ alignSelf: 'flex-start' }} onClick={() => setAllFiles(!allFiles)}>{allFiles ? 'Show fewer' : `Show all ${info.files_touched.length} files`}</Button>}
       </>}
       {!!info?.conflicts?.length && <Label color={t.warning} size={11}>{`${info.conflicts.length} ownership conflicts · open the thread for details`}</Label>}
-      <ErrorLine error={error} />
+      <ErrorLine error={error?.error} action={error?.action} retry={() => void stop()} />
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
         <Button size="sm" onClick={() => openThread(thread.id, machineOfThreadId(owner))}>Open</Button>
         <Button size="sm" testId={`dock-agent-pin-${thread.id}`} onClick={() => { const host = getState().selectedId ?? thread.parent_thread_id; if (host) pinChildThread(host, thread) }}>Pin as tab</Button>

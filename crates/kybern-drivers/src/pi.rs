@@ -1130,7 +1130,7 @@ impl PiSession {
         let ev = if aborted {
             DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, usage, cost_usd: Some(cost), duration_ms, anchors }
         } else if let Some(error) = error {
-            DriverEvent::TurnFailed { error }
+            DriverEvent::turn_failed(PiDriver::kind_of(self.flavor), error)
         } else {
             DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, usage, cost_usd: Some(cost), duration_ms, anchors }
         };

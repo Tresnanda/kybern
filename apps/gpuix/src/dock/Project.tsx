@@ -10,7 +10,7 @@ import {
 import { BRIEF_NOTE_TITLE, PROJECT_SPACE_COPY, projectSpaceNotes } from '../../../../packages/kybern-client/src/projectSpace.ts'
 import type { CoordinatorOverrides, Note, NoteSummary, OrchestrationSettings, RoleDefault, Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { ModelPicker } from '../composer/ModelPicker.tsx'
-import { errorText } from '../nav/actions.ts'
+import { failure, type Failure } from '../problems/Line.tsx'
 import { N } from '../nav/glyphs.ts'
 import { loadProviders } from '../nav/live.ts'
 import { Dialog, DialogHeader } from '../nav/overlay.tsx'
@@ -33,7 +33,7 @@ export function ProjectPane({ thread }: { thread: Thread }) {
   const providers = useNav((s) => s.providers)
   const [notes, setNotes] = useState<NoteSummary[]>([])
   const [global, setGlobal] = useState<OrchestrationSettings | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<Failure | null>(null)
   const [busy, setBusy] = useState(false)
   const [loaded, setLoaded] = useState(false)
   const [reload, setReload] = useState(0)
@@ -45,7 +45,7 @@ export function ProjectPane({ thread }: { thread: Thread }) {
     setError(null)
     void Promise.all([client.call('notes.list', {}), client.call('settings.get', {})]).then(([result, settings]) => {
       if (current) { setNotes(result.notes); setGlobal(settings.orchestration); setLoaded(true) }
-    }, (e) => { if (current) setError(errorText(e)) })
+    }, (e) => { if (current) setError(failure('load the project notes', e)) })
     const off = client.onNotification('notes.changed', () => setReload((n) => n + 1))
     return () => { current = false; off() }
   }, [projectId, thread.id, reload])
@@ -58,7 +58,7 @@ export function ProjectPane({ thread }: { thread: Thread }) {
     try {
       const result = await threadClient(thread.id)!.call('projects.update', { project_id: projectId, coordinator })
       set({ projects: getState().projects.map((p) => p.id === result.id ? result : p) }); return true
-    } catch (e) { setError(errorText(e)); return false } finally { setBusy(false) }
+    } catch (e) { setError(failure('save the project settings', e)); return false } finally { setBusy(false) }
   }
   const switchBrief = async () => {
     if (busy) return
@@ -66,11 +66,11 @@ export function ProjectPane({ thread }: { thread: Thread }) {
     try {
       const result = await threadClient(thread.id)!.call('projects.update', { project_id: projectId, brief_in_all_threads: !project?.brief_in_all_threads })
       set({ projects: getState().projects.map((p) => p.id === result.id ? result : p) })
-    } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
+    } catch (e) { setError(failure('save the project settings', e)) } finally { setBusy(false) }
   }
   return <>
     <ScopeHeader thread={thread} action={null} />
-    <ErrorLine error={error} retry={() => setReload((n) => n + 1)} />
+    <ErrorLine error={error?.error} action={error?.action} retry={() => setReload((n) => n + 1)} projectId={projectId} />
     <virtual-list testId="dock-project-list" style={{ flexGrow: 1, minHeight: 0, width: '100%' }}>
       <div key="brief">{loaded && <Brief threadId={thread.id} projectId={projectId} summary={space.brief} onSave={() => setReload((n) => n + 1)} />}</div>
       <div key="setup-heading" style={{ paddingTop: 8 }}><Section label="Setup" /></div>
@@ -117,7 +117,7 @@ export function ProjectPane({ thread }: { thread: Thread }) {
         <Button size="lg" disabled={busy} onClick={() => setConfirm(null)}>Cancel</Button>
         <Button size="lg" variant="primary" busy={busy} onClick={() => { void (async () => {
           if (confirm === 'reset') { if (await write(null)) setConfirm(null) }
-          else { setBusy(true); try { await threadClient(thread.id)!.call('coordinator.setup', { project_id: projectId }); setConfirm(null) } catch (e) { setError(errorText(e)) } finally { setBusy(false) } }
+          else { setBusy(true); try { await threadClient(thread.id)!.call('coordinator.setup', { project_id: projectId }); setConfirm(null) } catch (e) { setError(failure('set up the coordinator', e)) } finally { setBusy(false) } }
         })() }}>{confirm === 'redo' ? COPY.redo : COPY.reset}</Button>
       </div>
     </Dialog>}
@@ -167,11 +167,11 @@ function Brief({ threadId, projectId, summary, onSave }: { threadId: string; pro
   const [base, setBase] = useState<Note | null>(() => briefDrafts.get(projectId)?.base ?? null)
   const [editing, setEditing] = useState(() => briefDrafts.has(projectId))
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<Failure | null>(null)
   useEffect(() => {
     if (!summary) return
     let current = true
-    void threadClient(threadId)!.call('notes.get', { id: summary.id }).then((result) => { if (current) setNote(result.note ?? null) }, (e) => { if (current) setError(errorText(e)) })
+    void threadClient(threadId)!.call('notes.get', { id: summary.id }).then((result) => { if (current) setNote(result.note ?? null) }, (e) => { if (current) setError(failure('open the brief', e)) })
     return () => { current = false }
   }, [threadId, summary?.id, summary?.revision])
   const save = async () => {
@@ -180,7 +180,7 @@ function Brief({ threadId, projectId, summary, onSave }: { threadId: string; pro
     try {
       const result = base ? await threadClient(threadId)!.call('notes.update', { id: base.id, expected_revision: base.revision, body }) : await threadClient(threadId)!.call('notes.create', { scope: 'project', project_id: projectId, project_role: 'brief', title: BRIEF_NOTE_TITLE, body })
       briefDrafts.delete(projectId); setNote(result); setEditing(false); onSave()
-    } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
+    } catch (e) { setError(failure('save the brief', e)) } finally { setBusy(false) }
   }
   return <>
     <Section label="Brief"><Button variant="ghost" size="sm" testId={busy || (!editing && !!summary && !note) ? 'dock-brief-loading' : 'dock-brief-edit'} disabled={busy || (!editing && !!summary && !note)} onClick={() => {
@@ -191,7 +191,7 @@ function Brief({ threadId, projectId, summary, onSave }: { threadId: string; pro
         setBase(note); setBody(note?.body ?? ''); setEditing(true)
       }
     }}>{editing ? 'Cancel' : summary ? 'Edit' : 'Write'}</Button></Section>
-    <ErrorLine error={error} />
+    <ErrorLine error={error?.error} action={error?.action} projectId={projectId} />
     <div style={{ marginLeft: 6, marginRight: 6, paddingTop: editing ? 0 : 8, borderRadius: 8, backgroundColor: editing ? 'transparent' : t.buttonSecondary }}>
     {editing ? <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 8, paddingRight: 8 }}>
       <TextArea label="Brief" testId="dock-brief-editor" value={body} onChange={(text) => { setBody(text); briefDrafts.set(projectId, { body: text, base }) }} placeholder={PROJECT_SPACE_COPY.briefPlaceholder} minRows={8} maxRows={12} />
@@ -206,15 +206,15 @@ function Brief({ threadId, projectId, summary, onSave }: { threadId: string; pro
 function NoteDialog({ threadId, summary, onClose }: { threadId: string; summary: NoteSummary; onClose: () => void }) {
   const t = useTheme()
   const [body, setBody] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<Failure | null>(null)
   useEffect(() => {
     let current = true
-    void threadClient(threadId)!.call('notes.get', { id: summary.id }).then((result) => { if (current) setBody(result.note?.body ?? '') }, (e) => { if (current) setError(errorText(e)) })
+    void threadClient(threadId)!.call('notes.get', { id: summary.id }).then((result) => { if (current) setBody(result.note?.body ?? '') }, (e) => { if (current) setError(failure('open the note', e)) })
     return () => { current = false }
   }, [threadId, summary.id])
   return <Dialog onClose={onClose} width={600} testId="dock-project-note">
     <DialogHeader title={summary.title} onClose={onClose} />
-    <ErrorLine error={error} />
+    <ErrorLine error={error?.error} action={error?.action} />
     <div style={{ height: 420, overflow: 'scroll', padding: 16 }}>
       {body !== null ? <markdown style={{ userSelect: 'text' }} source={body} theme={cachedMarkdownTheme(t)} /> : !error && <Label color={t.textSecondary} size={12}>Loading note…</Label>}
     </div>

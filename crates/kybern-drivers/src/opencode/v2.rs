@@ -900,7 +900,7 @@ impl OpencodeSession {
                 };
                 let text = format!("{kind}: {message}");
                 if active {
-                    self.emit(DriverEvent::TurnFailed { error: text }).await;
+                    self.emit(DriverEvent::turn_failed(ProviderKind::Opencode, text)).await;
                 } else {
                     self.emit(DriverEvent::Notice { level: NoticeLevel::Error, text, data: Some(error.clone()) }).await;
                 }

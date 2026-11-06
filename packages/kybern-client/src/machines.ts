@@ -473,6 +473,15 @@ function mintLaterError(machine: string): MachineError {
   return { code: "unreachable", message: `${machine} did not accept this device's sign-in. Kybern will try again in a minute` };
 }
 
+/** A transport failure that only means the machine could not be reached (a dropped network, a dead address, a timeout). */
+const NETWORK_FAILURE = /network request failed|failed to fetch|fetch failed|network error|networkerror|load failed|timed? ?out|econn\w*|enotfound|ehostunreach|enetunreach|socket hang up/i;
+
+/** What a machine row says when an attempt to connect threw: plain words for an unreachable machine, the reason otherwise. */
+export function connectFailureMessage(machine: string, detail: string): string {
+  if (NETWORK_FAILURE.test(detail)) return `${machine} is offline. Make sure it is awake and online; Kybern keeps trying`;
+  return `Unable to connect to ${machine}: ${detail}`;
+}
+
 function errorMessage(code: MachineErrorCode, machine: string): string {
   switch (code) {
     case "identity_mismatch":
@@ -1282,7 +1291,7 @@ export class MachineSet {
         // Never offline without a reason: the row shows what went wrong, so a broken attempt is not a silent "Offline".
         if (gen === slot.gen) {
           const detail = error instanceof Error && error.message ? error.message : String(error);
-          this.goOffline(slot, "offline", { code: "unreachable", message: `Unable to connect to ${slot.record.name}: ${detail}` });
+          this.goOffline(slot, "offline", { code: "unreachable", message: connectFailureMessage(slot.record.name, detail) });
         }
       }
     })().finally(() => {

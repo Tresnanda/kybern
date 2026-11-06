@@ -3,7 +3,7 @@
 // account, so nothing polls. Sign-in and removal stay on the computer.
 import { useSyncExternalStore } from "react";
 import type { AccountSummary, KybernClient, ProviderKind, Settings } from "./protocol";
-import { errorText, onClientAttach, onEnvironmentReset } from "./runtime";
+import { errorText, rawErrorMessage, onClientAttach, onEnvironmentReset } from "./runtime";
 import { attachLate } from "./lateAttach";
 import { saveSettings } from "./settings";
 
@@ -44,9 +44,8 @@ export function loadAccounts(): Promise<void> {
     })
     .catch((e) => {
       if (client !== active) return;
-      const text = errorText(e);
-      if (/method not found|-32601/i.test(text)) publish({ loaded: true, unsupported: true, error: "" });
-      else publish({ error: `Unable to read accounts. ${text}` });
+      if (/method not found|-32601/i.test(rawErrorMessage(e))) publish({ loaded: true, unsupported: true, error: "" });
+      else publish({ error: errorText(e, "load your accounts") });
     })
     .finally(() => {
       if (client === active) inflight = null;

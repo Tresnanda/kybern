@@ -43,7 +43,7 @@ export default function Sessions() {
           setCursor(r.next_cursor);
           setError("");
         })
-        .catch((e) => alive && setError(errorText(e)))
+        .catch((e) => alive && setError(errorText(e, "load your sessions")))
         .finally(() => alive && setBusy(false));
     }, 200);
     return () => {
@@ -58,7 +58,7 @@ export default function Sessions() {
       await refresh();
       router.replace({ pathname: "/thread/[id]", params: { id: t.id } });
     } catch (e) {
-      setError(errorText(e));
+      setError(errorText(e, "resume that session"));
     } finally {
       setBusy(false);
     }
@@ -71,7 +71,7 @@ export default function Sessions() {
         setSessions((s) => [...s, ...r.sessions]);
         setCursor(r.next_cursor);
       })
-      .catch((e) => setError(errorText(e)))
+      .catch((e) => setError(errorText(e, "load more sessions")))
       .finally(() => setBusy(false));
   };
   return (
