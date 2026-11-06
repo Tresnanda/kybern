@@ -3163,6 +3163,80 @@ export interface PrListRepo {
   problem?: Problem;
 }
 
+/** One issue (`github.issue.list`, `github.issue.detail`). */
+export interface Issue {
+  number: number
+  title: string
+  url: string
+  /** OPEN | CLOSED */
+  state: string
+  /** COMPLETED | NOT_PLANNED | REOPENED, when GitHub says why the issue was closed. */
+  state_reason?: string
+  author: string
+  author_avatar_url?: string
+  author_is_bot?: boolean
+  created_at: string
+  updated_at: string
+  labels?: PrLabel[]
+  assignees?: PrPerson[]
+  milestone?: string
+  /** Numbers of the pull requests that will close this issue when they merge. */
+  linked_pull_requests?: number[]
+  /** Group projects: the member repository the issue is in. */
+  repo?: string
+}
+export interface IssueListParams {
+  project_id: ProjectId
+  /** open (default) | closed | all */
+  state?: string
+  search?: string
+  /** Only issues with every one of these labels. */
+  labels?: string[]
+  /** A login, or `@me`. */
+  assignee?: string
+  /** 1-100, default 30. */
+  limit?: number
+  /** Issues to skip, newest first. */
+  offset?: number
+  /** Group projects: only this member repository (omit to merge every member). */
+  repo?: string
+}
+export interface IssueListResult {
+  /** Group projects: every member's issues, each tagged with `repo`. */
+  issues: Issue[]
+  has_more?: boolean
+  /** The repository's labels for the Labels filter (first page only). */
+  labels?: PrLabel[]
+  /** Group projects only: one row per member, with why its list is missing. */
+  repos?: PrListRepo[]
+}
+export interface IssueDetailParams { project_id: ProjectId; number: number; repo?: string }
+export interface IssueComment {
+  id: string
+  author: string
+  author_avatar_url?: string
+  author_is_bot?: boolean
+  body: string
+  created_at: string
+  url: string
+}
+export interface IssueLinkedPull {
+  number: number
+  title: string
+  url: string
+  /** OPEN | MERGED | CLOSED */
+  state: string
+}
+export interface IssueDetailResult {
+  issue: Issue
+  body: string
+  /** The first comments, oldest first (at most 100). */
+  comments: IssueComment[]
+  /** All comments; more than `comments` holds when the thread is long. */
+  comment_count: number
+  pull_requests?: IssueLinkedPull[]
+}
+
 /** `repo`: the member of a group project (a `PullRequest.repo`); a group project requires it. */
 export interface PrDetailParams { project_id: ProjectId; number: number; repo?: string }
 export interface PrCheck {
@@ -4828,6 +4902,8 @@ export interface Methods {
   "github.pr.create_group": [PrCreateGroupParams, PrCreateGroupResult];
   "github.pr.list": [PrListParams, PrListResult];
   "github.pr.detail": [PrDetailParams, PrDetailResult];
+  "github.issue.list": [IssueListParams, IssueListResult];
+  "github.issue.detail": [IssueDetailParams, IssueDetailResult];
   "github.pr.page": [PrPageParams, PrPageResult];
   "github.pr.action": [PrActionParams, Empty];
   "github.actions.runs": [ActionsRunsParams, ActionsRunsResult];

@@ -2967,6 +2967,124 @@ pub struct PrActionParams {
 }
 method!(PrAction, "github.pr.action", Some(Scope::OrchestrationOperate), PrActionParams, Empty);
 
+// Repository issues through `gh` (#217): a filtered, paged list and one issue with its comments.
+// Group projects list every member (each row tagged with `repo`) and name the member to open one.
+
+/// One issue as `gh issue list` and `gh issue view` report it.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Issue {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    /// OPEN | CLOSED
+    pub state: String,
+    /// COMPLETED | NOT_PLANNED | REOPENED, when GitHub says why the issue was closed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_reason: Option<String>,
+    pub author: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_avatar_url: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub author_is_bot: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<PrLabel>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assignees: Vec<PrPerson>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub milestone: Option<String>,
+    /// Numbers of the pull requests that will close this issue when they merge.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub linked_pull_requests: Vec<u64>,
+    /// Group projects: the member repository (a `PrListRepo.repo`) the issue is in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IssueListParams {
+    pub project_id: ProjectId,
+    /// open (default) | closed | all
+    #[serde(default = "default_pr_state")]
+    pub state: String,
+    /// GitHub issue search text (title, body and comments).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<String>,
+    /// Only issues with every one of these labels.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
+    /// Only issues assigned to this login (`@me` for the signed-in account).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<String>,
+    /// Issues per page, 1-100.
+    #[serde(default = "default_pr_limit")]
+    pub limit: u32,
+    /// Issues to skip, newest first.
+    #[serde(default)]
+    pub offset: u32,
+    /// Group projects: list just this member repository. Omit to merge every member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IssueListResult {
+    /// Group projects: the issues of every member that answered, tagged with `repo`.
+    pub issues: Vec<Issue>,
+    /// More issues follow the last one returned.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_more: bool,
+    /// The repository's labels (names and colors), for the Labels filter. Group projects: the union.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<PrLabel>,
+    /// Group projects only: one row per member repository, with why it could not be listed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repos: Vec<PrListRepo>,
+}
+method!(IssueList, "github.issue.list", Some(Scope::OrchestrationRead), IssueListParams, IssueListResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IssueDetailParams {
+    pub project_id: ProjectId,
+    pub number: u64,
+    /// Group projects: the member repository (an `Issue.repo`) the issue belongs to. Required for
+    /// a group project; rejected for a single project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IssueComment {
+    pub id: String,
+    pub author: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_avatar_url: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub author_is_bot: bool,
+    pub body: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub url: String,
+}
+/// A pull request that will close an issue.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IssueLinkedPull {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    /// OPEN | MERGED | CLOSED
+    pub state: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IssueDetailResult {
+    pub issue: Issue,
+    pub body: String,
+    /// The first comments, oldest first (at most 100).
+    pub comments: Vec<IssueComment>,
+    /// All comments on the issue; more than `comments` holds when the thread is long.
+    pub comment_count: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pull_requests: Vec<IssueLinkedPull>,
+}
+method!(IssueDetail, "github.issue.detail", Some(Scope::OrchestrationRead), IssueDetailParams, IssueDetailResult);
+
 // GitHub Actions through `gh` (ADE-97): workflow runs on every branch, their jobs and steps, bounded
 // job logs, reruns, cancel and `workflow_dispatch`. Group projects name the member in `repo`.
 
@@ -5026,6 +5144,8 @@ registry!(
     PrDetail,
     PrPage,
     PrAction,
+    IssueList,
+    IssueDetail,
     ActionsRuns,
     ActionsRun,
     ActionsLog,

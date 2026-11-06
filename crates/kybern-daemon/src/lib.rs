@@ -21,6 +21,7 @@ mod files_outside;
 mod gh_locate;
 mod github;
 mod github_actions;
+mod github_issues;
 mod github_review;
 mod harness_updates;
 mod http;

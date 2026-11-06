@@ -1391,6 +1391,7 @@ async fn dispatch_part_15(state: &AppState, ctx: &ConnectionCtx, method: &str, s
             }
             ok(Empty {})
         }
+        IssueList::NAME | IssueDetail::NAME => issues_call(state, "gh", method, params).await,
         ActionsRuns::NAME
         | ActionsRun::NAME
         | ActionsLog::NAME
@@ -1627,6 +1628,35 @@ async fn dispatch_part_17(state: &AppState, _ctx: &ConnectionCtx, method: &str, 
         | PeerLoginReleaseAll::NAME
         | PeerLoginUsage::NAME
         | PeerSecretsPut::NAME => Err(RpcError::new(codes::NOT_AVAILABLE, format!("{method} is only available between machines."))),
+        _ => Err(RpcError::method_not_found(method)),
+    }
+}
+
+/// The `github.issue.*` methods (#217), run with the `gh` program named here so tests can fake it.
+pub(crate) async fn issues_call(state: &AppState, gh: &str, method: &str, params: Value) -> Result<Value, RpcError> {
+    match method {
+        IssueList::NAME => {
+            let p: IssueListParams = parse(params)?;
+            let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
+            if project.kind == ProjectKind::Group && p.repo.is_none() {
+                return ok(state.orchestrator.group_issue_list(&project, &p, gh).await.map_err(gh_bad)?);
+            }
+            let mut listed = crate::github_issues::list(gh, &pr_dir(&project, p.repo.as_deref())?, &p).await.map_err(gh_bad)?;
+            // Group calls always name their member (`pr_dir`); single projects stay untagged.
+            for issue in &mut listed.issues {
+                issue.repo.clone_from(&p.repo);
+            }
+            ok(listed)
+        }
+        IssueDetail::NAME => {
+            let p: IssueDetailParams = parse(params)?;
+            let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
+            let dir = pr_dir(&project, p.repo.as_deref())?;
+            let mut detail = crate::github_issues::detail(gh, &dir, p.number).await.map_err(gh_bad)?;
+            // Group calls always name their member (`pr_dir`); single projects stay untagged.
+            detail.issue.repo = p.repo;
+            ok(detail)
+        }
         _ => Err(RpcError::method_not_found(method)),
     }
 }
