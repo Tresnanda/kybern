@@ -412,14 +412,7 @@ impl AgentDriver for AntigravityDriver {
         }
         let scratch = Arc::new(Scratch::new()?);
         let (tx, events) = mpsc::channel(1024);
-        let _ = tx
-            .send(DriverEvent::CommandsUpdated(crate::provider_commands(&json!([
-                {"name":"goal", "description":"Set a goal"},
-                {"name":"plan", "description":"Plan the work"},
-                {"name":"grill-me", "description":"Explore requirements through questions"},
-                {"name":"learn", "description":"Learn from this conversation"}
-            ]))))
-            .await;
+        let _ = tx.send(DriverEvent::CommandsUpdated(native_commands())).await;
         let model = config.model.filter(|model| valid_model(model));
         let effort = config.effort.filter(|effort| EFFORTS.contains(&effort.as_str()));
         let state = State { conversation: config.resume_session_id, model, effort, guide, turn: None, closed: false, next_turn: 0 };
@@ -776,3 +769,20 @@ fn prompt_text(message: &UserMessage, scratch: &Scratch) -> String {
 
 #[cfg(test)]
 mod tests;
+
+fn native_commands() -> Vec<kybern_protocol::ProviderCommand> {
+    crate::provider_commands(&json!([
+        {"name":"goal", "description":"Set a goal"},
+        {"name":"plan", "description":"Plan the work"},
+        {"name":"grill-me", "description":"Explore requirements through questions"},
+        {"name":"learn", "description":"Learn from this conversation"}
+    ]))
+}
+
+#[cfg(test)]
+mod command_tests {
+    #[test]
+    fn print_mode_advertises_only_supported_commands() {
+        assert_eq!(super::native_commands().iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["goal", "plan", "grill-me", "learn"]);
+    }
+}

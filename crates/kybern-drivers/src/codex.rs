@@ -2958,6 +2958,8 @@ wait
             result.unwrap();
             if method == "review/start" {
                 assert!(rx.try_recv().is_err());
+                session.handle_item(&json!({"type":"exitedReviewMode","id":"review-output","review":"**No issues found**"}), true).await;
+                assert!(matches!(rx.recv().await, Some(DriverEvent::MessageCompleted { text, .. }) if text == "**No issues found**"));
             } else {
                 let mut completed = false;
                 while let Ok(event) = rx.try_recv() {
