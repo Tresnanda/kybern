@@ -6,6 +6,7 @@ import path from 'node:path'
 import { PROTOCOL_VERSION } from '../../../../packages/kybern-client/src/types.ts'
 import { stateDetail, type PrState } from './verify.states.ts'
 import { ACTION_PULLS, actionRun, actionRuns } from './verify.actions-fixture.ts'
+import { issueDetail, issueList } from './verify.issues-fixture.ts'
 import type { PrDetailResult, PrFile, PrReviewEntry, PrTimelineEvent, PullRequest, UsageRow } from '../../../../packages/kybern-client/src/types.ts'
 
 export function actionFixture(options: { long?: boolean; horizontal?: boolean; picker?: boolean; paged?: boolean; slowFiles?: boolean; /** Extra running checks beyond the one in the base fixture. */ running?: number; /** A group project of three repositories (ADE-79): api and docs both have #108, web fails, infra is skipped. */ group?: boolean; /** ADE-85 list and Timeline: a group project of three repositories with pull requests in every readiness group, and a timeline history. */ readiness?: boolean; /** 65 distinct files in folders, with short patches (30 a page), for the Changes tab. */ changes?: boolean; /** A verdict state of the detail page (`verify.states.ts`). */ state?: PrState; /** ADE-97: 100 runs over 24 branches and a 40-job run, for the Actions performance check. */ actionsBig?: boolean; /** ADE-112: the linked thread is the project's Coordinator, so the dock has its Project panel. */ coordinator?: boolean; /** #247: the pull request is on github.com/acme/api and its checks link to Actions jobs and to another app's page. */ checkLinks?: boolean; /** `github.pr.list` fails this way until `problem(null)`. */ problem?: 'missing' | 'auth' | 'auth-text' | 'other' } = {}) {
@@ -123,6 +124,11 @@ export function actionFixture(options: { long?: boolean; horizontal?: boolean; p
           case 'github.actions.workflow': result = message.params.workflow === '2' ? { dispatchable: true, inputs: [{ name: 'checks', description: 'All, or a comma-separated list of checks', required: true, default: 'all', kind: 'string' }, { name: 'platform', kind: 'choice', options: ['all', 'windows', 'linux'], default: 'all' }, { name: 'verbose', kind: 'boolean', default: 'false' }] } : { dispatchable: false, inputs: [] }; break
           case 'github.actions.action': case 'github.actions.dispatch': actions.push({ method: message.method, ...message.params }); result = {}; break
           case 'git.branches': result = { current: 'fix/reading-position', branches: [] }; break
+          // #217: fake issues. A thread started from one is only recorded in `params`.
+          case 'github.issue.list': result = issueList(now, message.params); break
+          case 'github.issue.detail': result = issueDetail(now, Number(message.params.number)); break
+          case 'threads.create': result = { ...thread, id: 'issue-thread', title: String(message.params.title ?? 'New thread') }; break
+          case 'threads.send': result = {}; break
           default: if (!['events.unsubscribe', 'ping'].includes(message.method)) error = `Fixture rejects ${message.method}`
         }
         const response=JSON.stringify(error ? { jsonrpc: '2.0', id: message.id, error: { code: -32000, message: error, ...(errorData ? { data: errorData } : {}) } } : { jsonrpc: '2.0', id: message.id, result })

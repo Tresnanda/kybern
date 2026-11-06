@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test'
-import {githubRepo,githubPull,githubActions,resolveActions,resolvePull,matchingPulls} from './tabTargets.ts'
+import {githubRepo,githubPull,githubIssue,githubActions,resolveActions,resolveIssue,resolvePull,matchingPulls} from './tabTargets.ts'
 import type {Project,PullRequest} from '../../../../packages/kybern-client/src/types.ts'
 test('GitHub URLs resolve only registered repository targets, including grouped and remote-only projects',()=>{
  const known=[{projectId:'group',repo:'api',remote:'acme/api'},{projectId:'group',repo:'docs',remote:'acme/docs'},{projectId:'remote-only',remote:'acme/other'}]
@@ -45,4 +45,25 @@ test('Actions links open only for registered repositories, in their group member
  expect(resolveActions('https://github.com/acme/solo/runs/4',known)).toEqual({projectId:'solo',jobId:4})
  expect(resolveActions('https://github.com/stranger/repo/actions/runs/3',known)).toBeNull()
  expect(resolveActions('https://github.com/acme/solo/pull/3',known)).toBeNull()
+})
+test('issue links name the repository and the issue, ignoring a comment fragment, a query or a trailing slash',()=>{
+ expect(githubIssue('https://github.com/Acme/API/issues/217')).toEqual({remote:'acme/api',number:217})
+ expect(githubIssue('  https://github.com/acme/api/issues/217/  ')).toEqual({remote:'acme/api',number:217})
+ expect(githubIssue('https://github.com/acme/api/issues/217#issuecomment-99')).toEqual({remote:'acme/api',number:217})
+ expect(githubIssue('https://github.com/acme/api/issues/217?notification_referrer_id=x')).toEqual({remote:'acme/api',number:217})
+})
+test('only an issue link parses as one: not a pull, a list, a zero or a lookalike host',()=>{
+ for(const url of [
+  'https://github.com/acme/api/pull/217','https://github.com/acme/api/issues','https://github.com/acme/api/issues/','https://github.com/acme/api/issues/new',
+  'https://github.com/acme/api/issues/0','https://github.com/acme/api/issues/12x','https://github.com/acme/api/issues/217/edit','https://github.com/acme/api/issues/99999999999999999999',
+  'http://github.com/acme/api/issues/1','https://github.com.evil/acme/api/issues/1','https://gitlab.com/acme/api/issues/1','https://github.com/acme/api/actions/runs/1'])expect(githubIssue(url)).toBeNull()
+ expect(githubPull('https://github.com/acme/api/issues/1')).toBeNull()
+ expect(githubActions('https://github.com/acme/api/issues/1')).toBeNull()
+})
+test('issue links open only for registered repositories, in their group member',()=>{
+ const known=[{projectId:'group',repo:'api',remote:'acme/api'},{projectId:'solo',remote:'acme/solo'}]
+ expect(resolveIssue('https://github.com/acme/api/issues/5#issuecomment-1',known)).toEqual({projectId:'group',repo:'api',number:5})
+ expect(resolveIssue('https://github.com/acme/SOLO/issues/6',known)).toEqual({projectId:'solo',number:6})
+ expect(resolveIssue('https://github.com/stranger/repo/issues/6',known)).toBeNull()
+ expect(resolveIssue('https://github.com/acme/solo/pull/6',known)).toBeNull()
 })

@@ -5,7 +5,7 @@ import { mapWithConcurrency } from '@/lib/workload'
 import type { Project } from '../../../../packages/kybern-client/src/types.ts'
 import type { prCall } from './client.ts'
 import { hasPullRequests, type Row } from './list/model.ts'
-import { githubActions, githubPull, githubRepo, resolveActions, type ActionsTarget, type KnownRepo, type PrTarget } from './tabTargets.ts'
+import { githubActions, githubIssue, githubPull, githubRepo, resolveActions, type ActionsTarget, type IssueTarget, type KnownRepo, type PrTarget } from './tabTargets.ts'
 
 /** All known network projects, independently of the active Space. Partial failures keep usable results. */
 export async function loadKnownPulls(projects: readonly Project[], call: typeof prCall) {
@@ -84,4 +84,11 @@ export async function resolveKnownRun(url: string, projects: readonly Project[],
   const known = link && await resolveKnownRepo(link.remote, projects, call)
   const target = known && resolveActions(url, [known])
   return target ? completeRun(target, call) : null
+}
+
+/** An issue link of a known repository, ready for the Issues tab; unknown repositories stay with the browser. */
+export async function resolveKnownIssue(url: string, projects: readonly Project[], call: typeof prCall): Promise<IssueTarget | null> {
+  const issue = githubIssue(url)
+  const known = issue && await resolveKnownRepo(issue.remote, projects, call)
+  return known && issue ? { projectId: known.projectId, number: issue.number, ...(known.repo ? { repo: known.repo } : {}) } : null
 }

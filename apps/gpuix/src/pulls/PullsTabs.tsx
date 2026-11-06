@@ -1,4 +1,4 @@
-// The Pull requests page's two tabs, "Pull requests" and "Actions" (ADE-97), drawn in the list column's 46 px header where
+// The Pull requests page's three tabs, "Pull requests", "Actions" (ADE-97) and "Issues" (#217), drawn in the list column's 46 px header where
 // the page title was. Each tab's own header controls follow them.
 import { Folder01Icon } from '@hugeicons/core-free-icons'
 import type { ReactNode } from 'react'
@@ -8,14 +8,15 @@ import { useTheme } from '../ui.tsx'
 import { row } from '../usage/controls.tsx'
 import { setPullsTab, usePullsTab, type PullsTab } from './actions/store.ts'
 
-/** List-column widths below which a header picker shows a folder glyph instead of its name: the tabs, the picker at a
- *  readable width and the header's icon buttons don't fit together (one button on Pull requests, two on Actions). */
-export const HEADER_COMPACT_PULLS = 336
-export const HEADER_COMPACT_ACTIONS = 352
+/** List-column widths below which a header picker shows a folder glyph instead of its name: the three tabs, the picker at a
+ *  readable width and the header's icon buttons don't fit together (one button on Pull requests and Issues, two on Actions). */
+export const HEADER_COMPACT_PULLS = 400
+export const HEADER_COMPACT_ISSUES = 400
+export const HEADER_COMPACT_ACTIONS = 416
 /** The compact picker's glyph: the kit's folder at the standard icon stroke, matching the header's other icon buttons. */
 export const FOLDER = glyph(Folder01Icon)
 
-const ITEMS = [{ key: 'pulls', label: 'Pull requests', testId: 'pulls-tab-pulls' }, { key: 'actions', label: 'Actions', testId: 'pulls-tab-actions' }]
+const ITEMS = [{ key: 'pulls', label: 'Pull requests', testId: 'pulls-tab-pulls' }, { key: 'actions', label: 'Actions', testId: 'pulls-tab-actions' }, { key: 'issues', label: 'Issues', testId: 'pulls-tab-issues' }]
 
 export function PullsHeader({ children }: { children?: ReactNode }) {
   const t = useTheme()
