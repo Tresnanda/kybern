@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.22.0
+
+<!-- kybern-release-title: Instant threads, Grok Build, issues, and errors that say how to fix them -->
+<!-- kybern-release-summary: Threads open instantly from a local cache, the phone keeps working when one of your computers is offline, Grok Build joins the agents, GitHub issues open inside Kybern, and every error says what to do next. -->
+
+- Threads open instantly. Kybern keeps the last 64 conversations you opened on disk, draws them right away and fetches only what changed. Reopening a long thread after a restart went from about 2 seconds to under a millisecond, and keeping the thread list current costs a few kilobytes instead of the whole list.
+- The mobile app keeps working when the computer you paired with is offline. Each conversation talks to the computer it runs on, so sending, stopping, approvals, Changes, Files and Terminal work as long as that computer is online. Notes, tasks and spaces come from any of your computers that is online, and an offline computer's conversations stay readable, marked offline.
+- Grok Build is a new agent, driven through its own protocol, with Kybern's tools and instructions. Thanks to @Naandalist.
+- GitHub issues have their own tab next to Pull requests and Actions: filter by state, label and assignee, read an issue with its comments and linked pull requests, and start a thread from it. Issue links in chat open there too.
+- Checks on a pull request and GitHub Actions links in chat open the run, and the job's log, inside Kybern instead of the browser.
+- A link to a file outside the conversation's folder (an agent's scratchpad, another repository) asks once and opens it read-only. **Always allow this folder** remembers the choice. Phones and other computers can open it only after you allowed it on the computer it's on.
+- Errors are in plain words everywhere, with a button that fixes the problem where one exists (install, sign in, try again, open settings) and the technical text under **Show details**. A failed reply says why: signed out, rate limited, offline or out of date. **Report a problem** opens a prefilled GitHub issue after you review it, with paths, names and keys removed.
+- The model picker lists agents in a column with their names, so every installed agent fits without scrolling sideways.
+- Attached files and pasted images show as one group with thumbnails; pasted images are numbered, and the × to remove one appears on the row you point at.
+- Skills installed for one agent can be used from any other: they appear under **Other agents** in the `$` list.
+- On Windows and Linux, the `/` and `@` list no longer spills over the side panel, and chip icons no longer cover the first letters of their names.
+- The filter bars on Pull requests, Actions and Issues have controls of one height that line up.
+- A pull request's changes show syntax colours and wrap long lines, so nothing scrolls sideways. **Wrap lines** in the file header turns wrapping off, and Kybern remembers the choice.
+
 ## 0.21.8
 
 <!-- kybern-release-title: npm-installed agents on Windows, OpenCode effort -->

@@ -368,6 +368,34 @@ replay events received during hydration; preserve row identity and reading posit
   Keyboard actions and anything opened many times a day open instantly; skip
   entrance animation on frequent menus and hover transitions on dense lists.
 
+## Errors people can act on (desktop, mobile and daemon)
+
+Every error a person sees says, in plain words, what happened and what to do
+next. This applies to every new feature, not only the screens that have been
+converted.
+
+- A headline that states the outcome or the fix ("Install GitHub CLI to see
+  pull requests", "SatyaMas is offline"), sentence case, no period. Never
+  "Error", "RPC", "invalid params", "not found:", class names, stack traces
+  or file paths in a headline.
+- One sentence of help, then a button that fixes it where one exists
+  (install, sign in, try again, open settings, update). Name the machine when
+  it isn't this one, and say when the person's work is safe.
+- The technical text goes behind **Show details**, with copy and
+  **Report a problem**, never in the headline or a toast's title.
+- Daemon RPC errors carry `data.problem` (kind, subject, action), and a failed
+  turn carries `problem` on `TurnFailed`/`ProviderNotice`. Clients word the
+  copy with `describeProblem` / `describeTurnFailure` from
+  `packages/kybern-client/src/problems.ts`, keyed by kind and subject.
+- Show it with the shared components: GPUIX `kit/Problem.tsx`
+  (`ProblemState`, `ProblemRow`, `ProblemLine`), `toastProblem` and
+  `problemSentence`; mobile `src/ui/Problem.tsx`. Fix buttons map through
+  `apps/gpuix/src/problems/actions.ts`; mobile never installs or signs in on a
+  computer remotely and says which computer to do it on.
+- `apps/gpuix/src/problems/rawErrors.test.ts` fails when `String(e)`,
+  `errorText(`, a caught error's `.message` or `${e}` reaches the UI. Keep its
+  allowlist empty.
+
 ## Desktop UI rules
 
 GPUIX (`apps/gpuix`):
