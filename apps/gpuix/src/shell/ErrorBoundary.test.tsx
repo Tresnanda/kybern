@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test'
+import { expect, spyOn, test } from 'bun:test'
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import path from 'node:path'
@@ -50,6 +50,11 @@ test('a persistent effect failure retries twice and then stops rendering', async
   await new Promise(resolve => setImmediate(resolve))
   expect(mounts).toBe(3)
   expect([...h.custom.values()].some(p => p.testId === 'error-fallback')).toBe(true)
+  const clock = spyOn(Date, 'now').mockReturnValue(Date.now() + 11_000)
+  try {
+    flushSync(() => h.root.render(<ThemeProvider><ErrorBoundary><Broken /></ErrorBoundary></ThemeProvider>))
+    expect([...h.custom.values()].some(p => p.testId === 'error-fallback')).toBe(true)
+  } finally { clock.mockRestore() }
   h.root.unmount()
 })
 

@@ -10,12 +10,13 @@ import { logBoundaryError } from '../platform/boundaryLog.ts'
 
 interface State {
   error: Error | null
+  retrying: boolean
   /** Bumped by Reload: the children remount instead of re-rendering into the same bug. */
   attempt: number
 }
 
 export class ErrorBoundary extends Component<{ children: ReactNode; label?: string; compact?: boolean }, State> {
-  state: State = { error: null, attempt: 0 }
+  state: State = { error: null, retrying: false, attempt: 0 }
 
   private failures: number[] = []
   private retry: ReturnType<typeof setTimeout> | undefined
@@ -23,7 +24,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode; label?: stri
   componentWillUnmount() { clearTimeout(this.retry) }
 
   static getDerivedStateFromError(error: Error): Partial<State> {
-    return { error }
+    return { error, retrying: true }
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
@@ -35,12 +36,13 @@ export class ErrorBoundary extends Component<{ children: ReactNode; label?: stri
     logBoundaryError(this.props.label ?? 'view', error, info.componentStack ?? '', retried)
     // Defer the remount beyond this commit. A permanently broken child gets two retries,
     // then the ordinary reload card; no synchronous render loop or idle retry timer.
-    if (retried) this.retry = setTimeout(() => this.setState(s => ({ error: null, attempt: s.attempt + 1 })), 0)
+    if (retried) this.retry = setTimeout(() => this.setState(s => ({ error: null, retrying: false, attempt: s.attempt + 1 })), 0)
+    else this.setState({ retrying: false })
   }
 
   render() {
     if (!this.state.error) return <Fragment key={this.state.attempt}>{this.props.children}</Fragment>
-    if (this.failures.filter(at => Date.now() - at < 10_000).length < 2) return null
+    if (this.state.retrying) return null
     return <Fallback label={this.props.label ?? 'this view'} error={this.state.error} compact={this.props.compact} onReload={() => this.setState((s) => ({ error: null, attempt: s.attempt + 1 }))} />
   }
 }
