@@ -161,6 +161,3 @@ energy were not measured for the application. No energy or visual performance
 claim follows from the RPC results. No native addon build was needed.
 
 D: free space was 275.58 GiB before work and 274.35 GiB after validation. No task-owned binary or build remained running at the cleanup check. The execution policy rejected recursive removal of the verified task-owned target directory (blocked by policy), including an explicit absolute-path removal. Consequently target/ (2.14 GiB), apps/gpuix/node_modules/ (0.34 GiB), and .scratch/ (0.11 GiB) remain in this worktree. These generated files are excluded from the commit; cleanup remains outstanding. Other tasks changed free space concurrently, so the free-space delta is not attributed solely to this task.
-
-
-

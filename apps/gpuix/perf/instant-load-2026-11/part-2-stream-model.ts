@@ -22,5 +22,3 @@ for(const key of [...new Set(samples.map(s=>`${s.hz}/${s.batch}`))]) {
  summary.push({hz:s.hz,batch:s.batch,n:xs.length,messagesPerSecond:s.messagesPerSecond,bytesPerSecond:s.bytesPerSecond,medianApplyMsPerTenSeconds:median(xs.map(s=>s.ms)),p95ApplyMsPerTenSeconds:p95(xs.map(s=>s.ms)),medianCpuMsPerTenSeconds:median(xs.map(s=>s.cpuMs))})
 }
 writeFileSync('apps/gpuix/perf/instant-load-2026-11/results/part-2-stream-model.json',JSON.stringify({boundary:'synthetic sensitivity model, 10 seconds of input applied in a synchronous burst; no socket, relay, real Tailscale, UI, timers or paced streaming',summary,samples},null,2));console.table(summary)
-
-

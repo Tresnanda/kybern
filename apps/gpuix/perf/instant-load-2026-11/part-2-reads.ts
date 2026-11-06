@@ -29,5 +29,3 @@ for(const rtt of [0,40]) for(const name of [...new Set(samples.map(x=>x.case))])
 }
 writeFileSync('apps/gpuix/perf/instant-load-2026-11/results/part-2-reads.json',JSON.stringify({boundary:'RPC send to parsed response; no rendering; fresh daemon per run; cold OS file cache not controlled',summary,samples},null,2))
 console.table(summary)
-
-
