@@ -8216,6 +8216,8 @@ mod tests {
         let mut thread = fixture.thread(ThreadStatus::Running);
         assert!(fixture.orchestrator.send(thread.id, UserMessage::text("/compact")).await.unwrap_err().to_string().contains("busy"));
         thread.status = ThreadStatus::Idle;
+        thread.provider = ProviderInstance::default_for(ProviderKind::GrokBuild);
+        thread.permission_mode = PermissionMode::FullAccess;
         fixture.store.thread_upsert(&thread).unwrap();
         assert!(
             fixture.orchestrator.send(thread.id, UserMessage::text("/compact")).await.unwrap_err().to_string().contains("does not expose")
