@@ -22,6 +22,7 @@ import { AgentItemCard } from '../coordinator/AgentItem.tsx'
 // the "Edited N files" card and the footer.
 import { SubagentDivider } from '../subagents/Page.tsx'
 import { Fragment, memo, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { DOCK_ICONS } from '../dock/icons.ts'
 import { N } from '../nav/glyphs.ts'
 import { calendarDateKey, calendarDateLabel, elapsedSince, plural } from '../shared/lib/format.ts'
 import { clockTime } from './clock.ts'
@@ -509,8 +510,8 @@ function EditedFileRow({ file, threadId, turnId, first, border, repo }: { file: 
         </div>
         <Menu testId={`edited-actions-${file.path}`} align="end" trigger={() => <IconButton icon={N.ellipsis} label="File actions" size="sm" />}>
           <MenuItem id="reveal" label={osLabels().reveal} icon={N.folder} onSelect={() => void actOnThreadFile(threadId, file.path, 'reveal')} />
-          <MenuItem id="open" label="Open" onSelect={() => void actOnThreadFile(threadId, file.path, 'open')} />
-          <MenuItem id="explorer" label="Show in Kybern Explorer" onSelect={() => showThreadFile(threadId, file.path)} />
+          <MenuItem id="open" label="Open" icon={N.external} onSelect={() => void actOnThreadFile(threadId, file.path, 'open')} />
+          <MenuItem id="explorer" label="Show in Kybern Explorer" icon={DOCK_ICONS.explorer} onSelect={() => showThreadFile(threadId, file.path)} />
         </Menu>
         <IconButton testId={`edited-review-${file.path}`} label={`Open the changes in ${file.path} in a tab`} icon={T.panelRight} size="sm" onClick={() => openTab(threadId, { kind: 'diff', path: file.path })} />
       </div>

@@ -1,3 +1,5 @@
+import { N } from '../nav/glyphs.ts'
+import { DOCK_ICONS } from '../dock/icons.ts'
 import { useLinkIcons } from './linkIcons.ts'
 import { actOnThreadFile, showThreadFile } from './threadFiles.ts'
 import { osLabels } from '../platform/os.ts'
@@ -332,9 +334,9 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
   return <>
     <markdown testId="reply-prose" source={source} theme={theme} onLinkClick={e => { if (e.value) void open(e.value) }} onLinkContextMenu={e => { if (!e.value) return; const target = chatLink(e.value); if (target.kind === 'file') setFileMenu({ path: target.path, at: { x: e.x ?? 0, y: e.y ?? 0 } }) }} style={{ color: t.text, userSelect: 'text' }} />
     {fileMenu && threadId && <ContextMenu testId="reply-file-menu" at={fileMenu.at} onClose={() => setFileMenu(null)}>
-      <MenuItem id="reveal" label={osLabels().reveal} onSelect={() => void actOnThreadFile(threadId, fileMenu.path, 'reveal')} />
-      <MenuItem id="open" label="Open" onSelect={() => void actOnThreadFile(threadId, fileMenu.path, 'open')} />
-      <MenuItem id="explorer" label="Show in Kybern Explorer" onSelect={() => showThreadFile(threadId, fileMenu.path)} />
+      <MenuItem id="reveal" label={osLabels().reveal} icon={N.folder} onSelect={() => void actOnThreadFile(threadId, fileMenu.path, 'reveal')} />
+      <MenuItem id="open" label="Open" icon={N.external} onSelect={() => void actOnThreadFile(threadId, fileMenu.path, 'open')} />
+      <MenuItem id="explorer" label="Show in Kybern Explorer" icon={DOCK_ICONS.explorer} onSelect={() => showThreadFile(threadId, fileMenu.path)} />
     </ContextMenu>}
     {image && threadId && <ThreadImagePreview threadId={threadId} source={image} onClose={() => setImage(null)} />}
     {preview && shown && <Dialog width={720} onClose={() => setPreview(null)} testId="chat-link-preview">
