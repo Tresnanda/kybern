@@ -31,7 +31,7 @@ import { prCall } from '../client.ts'
 import { labelColor } from '../detail/model.ts'
 import { load, save } from '../persist.ts'
 import { PrLoading, Problem } from '../PrStates.tsx'
-import { HEADER_COMPACT_ISSUES, PullsHeader } from '../PullsTabs.tsx'
+import { HEADER_COMPACT_ISSUES, PULLS_LIST_MIN, PullsHeader } from '../PullsTabs.tsx'
 import { PR_SCROLL_LAYOUT } from '../scroll-layout.ts'
 import { IssueDetail } from './IssueDetail.tsx'
 import { IssueRow } from './IssueRow.tsx'
@@ -83,7 +83,7 @@ export function IssuesPage() {
   const [selected, setSelected] = useState<number | null>(() => lastSelected && lastSelected.key === key ? lastSelected.number : null)
   const [focused, setFocused] = useState<number | null>(null)
   const searchField = useRef<PublicInstance | null>(null)
-  const list = useResize({ initial: 352, min: 304, max: 512, side: 'left', storageKey: 'kybern.pulls.listWidth' })
+  const list = useResize({ initial: PULLS_LIST_MIN, min: PULLS_LIST_MIN, max: 512, side: 'left', storageKey: 'kybern.pulls.listWidth' })
   const [windowWidth, setWindowWidth] = useState(() => renderer?.getWindowSize?.().width ?? 1280)
   const measure = () => setWindowWidth(renderer?.getWindowSize?.().width ?? 1280)
   const available = windowWidth - 60 - (peek ? 256 : 0)
@@ -163,7 +163,7 @@ export function IssuesPage() {
         <RepoPicker testId="issues-repo" choices={choices} current={choice} onPick={pick} compact={listWidth < HEADER_COMPACT_ISSUES} />
         <IconButton testId="issues-refresh" icon={N.refresh} label="Refresh" disabled={pending} onClick={() => refresh(n => n + 1)}><SwapOnChange kind="icon" active={pending ? 'busy' : 'idle'} style={{ width: 16, height: 16 }}>{pending ? <SpinIcon testId="issues-refresh-spinner" source={N.refresh} size={16} color={t.iconSecondary} /> : <Icon source={N.refresh} size={16} color={t.iconSecondary} />}</SwapOnChange></IconButton>
       </PullsHeader>
-      <div style={{ ...column, gap: 8, paddingLeft: 12, paddingRight: 12, paddingTop: 2, paddingBottom: 10 }}>
+      <div style={{ ...column, gap: 8, paddingLeft: 12, paddingRight: 12, paddingTop: 10, paddingBottom: 10 }}>
         <div testId="issues-toolbar" style={{ ...row, gap: 6 }}>
           <Segmented size="sm" aria-label="State" testId="issues-state" value={state} options={STATES.map(([value, label]) => ({ value, label }))} onChange={v => { setState(v as IssueFilterState); setFocused(null) }} />
           <div style={{ flexGrow: 1, minWidth: 0 }}><SearchField ref={searchField} size="sm" label="Search issues" testId="issues-search" value={query} placeholder="Search" onChange={setQuery} width="100%" onKeyDown={e => { if (e.key === 'down' && issues[0]) setFocused(issues[0].number) }} /></div>
