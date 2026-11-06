@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import {mkdirSync} from 'node:fs'
 import path from 'node:path'
 import {pixels} from './png.ts'
-const out='/Users/mymac/projects/ade/previews/gpuix/round8/scroll/cache'
+const out=process.env.KYBERN_VERIFY_OUTPUT??import.meta.dir+'/build/scroll8-check'
 mkdirSync(out,{recursive:true})
 const release=await pacingLock()
 try{

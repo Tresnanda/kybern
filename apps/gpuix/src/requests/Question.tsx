@@ -399,8 +399,8 @@ function QuestionCard({ specs, count, busy, error, onSend, onDecline, deadline }
   const fit = (need: { full: number; short: number }) => room >= need.full ? 'full' : room >= need.short ? 'short' : 'none'
   const enterHint = direct || reviewing ? 'to send' : last ? 'to review' : 'for the next question'
   let hint: ReactNode
-  if (reviewing) hint = <HintText>Check your answers before sending.</HintText>
-  else if (deadline) hint = <><DeadlineHint approvalId={deadline.approvalId} deadline={deadline.deadline} chosen={specs.length === 1 && defaults(specs[0]!) >= 0 ? specs[0]!.options[defaults(specs[0]!)]!.label : null} /><WaitForMe approvalId={deadline.approvalId} disabled={busy} /></>
+  if (deadline) hint = <><DeadlineHint approvalId={deadline.approvalId} deadline={deadline.deadline} chosen={specs.length === 1 && defaults(specs[0]!) >= 0 ? specs[0]!.options[defaults(specs[0]!)]!.label : null} /><WaitForMe approvalId={deadline.approvalId} disabled={busy} /></>
+  else if (reviewing) hint = <HintText>Check your answers before sending.</HintText>
   else if (editing) {
     const shown = fit(fieldHint)
     hint = shown === 'none' ? null : <>

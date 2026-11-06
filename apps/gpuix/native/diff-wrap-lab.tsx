@@ -49,7 +49,7 @@ function Lab() {
     clicks: clicks.current.slice(-8), more: more.current.slice(-4),
     numbers: { 3: numbers[3], 6: numbers[6], 4: numbers[4] },
     highlights: (renderer.getPaintedHighlights?.() ?? []).map(h => ({ sub: h.sub, text: h.text.slice(h.start, h.end), rects: h.rects.map(r => ({ x: Math.round(r.x * 100) / 100, y: Math.round(r.y * 100) / 100, width: Math.round(r.width * 100) / 100, height: r.height })) })),
-    painted: (renderer.getPaintedText?.() ?? []).filter(text => text.startsWith('Show ')),
+    painted: ((renderer as unknown as { getPaintedText?: () => string[] }).getPaintedText?.() ?? []).filter(text => text.startsWith('Show ')),
   })
   const action = (key: string) => {
     try {

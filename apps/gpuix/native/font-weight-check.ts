@@ -12,7 +12,7 @@ const WEIGHTS = [400, 500, 510, 590, 600, 650, 700]
 // Widths of the same strings in the desktop frontend in WebKit (system-ui), measured by font-weight-webkit.mjs.
 const webkit: Record<string, number> = JSON.parse(execFileSync('node', [path.join(import.meta.dir, 'font-weight-webkit.mjs')], { encoding: 'utf8', env: { ...process.env, PLAYWRIGHT_CORE: process.env.PLAYWRIGHT_CORE ?? '/Users/mymac/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright-core/index.mjs' } }))
 for (const theme of ['dark', 'light']) {
-  const f = await launchFixture(path.join(import.meta.dir, 'font-weight-lab.tsx'), { GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: theme, KYBERN_DATA_DIR: '/Users/mymac/projects/ade-gpuix-scratch/phase2-render9', KYBERN_CLIENT_CONFIG_DIR: '/Users/mymac/projects/ade-gpuix-scratch/phase2-render9-client', KYBERN_URL: '', KYBERN_TOKEN: '' })
+  const f = await launchFixture(path.join(import.meta.dir, 'font-weight-lab.tsx'), { GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: theme, KYBERN_DATA_DIR: process.env.KYBERN_DATA_DIR ?? path.join(out, 'data'), KYBERN_CLIENT_CONFIG_DIR: process.env.KYBERN_CLIENT_CONFIG_DIR ?? path.join(out, 'client'), KYBERN_URL: '', KYBERN_TOKEN: '' })
   try {
     const a = f.app; await a.getByTestId('app-ready').waitFor(); await a.getByTestId('w-700').waitFor()
     const rows: string[] = []

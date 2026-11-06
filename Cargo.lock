@@ -2076,6 +2076,7 @@ dependencies = [
  "dbus-secret-service",
  "directories",
  "futures",
+ "image",
  "keyring",
  "kybern-client",
  "kybern-drivers",

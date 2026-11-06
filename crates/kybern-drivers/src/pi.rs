@@ -1310,15 +1310,8 @@ impl PiSession {
                         drop(pending);
                         self.emit(DriverEvent::AppToolRequest { request_id: id.clone(), name: request.name, arguments: request.arguments })
                             .await;
-                        let weak = Arc::downgrade(self);
-                        tokio::spawn(async move {
-                            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-                            if let Some(session) = weak.upgrade()
-                                && session.pending_app_tools.lock().await.remove(&id).is_some()
-                            {
-                                let _ = session.child.write(&json!({"type":"extension_ui_response","id":id,"cancelled":true})).await;
-                            }
-                        });
+                        // The daemon owns app-tool deadlines, including time spent on a person's
+                        // card. A second timer here cancelled long waits after only 30 seconds.
                         return;
                     }
                 }

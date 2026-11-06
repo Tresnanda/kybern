@@ -19,7 +19,7 @@ type Box={x:number;y:number;width:number;height:number}
 const changed=(a:ReturnType<typeof pixels>,b:ReturnType<typeof pixels>,box:Box)=>{let n=0;for(let y=Math.floor(box.y*2);y<(box.y+box.height)*2;y++)for(let x=Math.floor(box.x*2);x<(box.x+box.width)*2;x++){const c=a.at(x,y),d=b.at(x,y);if(c.some((v,i)=>Math.abs(v-d[i]!)>24))n++}return n}
 for(const mode of ['dark','light']){
  requireScreen()
- const f=await launchFixture(path.join(import.meta.dir,'link-hover-lab.tsx'),{KYBERN_APPEARANCE:mode,GPUIX_BACKGROUND:'1',KYBERN_DATA_DIR:'/Users/mymac/projects/ade-gpuix-scratch/chatfix/lab-data',KYBERN_CLIENT_CONFIG_DIR:'/Users/mymac/projects/ade-gpuix-scratch/chatfix/lab-client'}),a=f.app
+ const f=await launchFixture(path.join(import.meta.dir,'link-hover-lab.tsx'),{KYBERN_APPEARANCE:mode,GPUIX_BACKGROUND:'1',KYBERN_DATA_DIR: process.env.KYBERN_DATA_DIR ?? path.join(out, 'data'),KYBERN_CLIENT_CONFIG_DIR: process.env.KYBERN_CLIENT_CONFIG_DIR ?? path.join(out, 'client')}),a=f.app
  const checks:Record<string,boolean|number>={}
  try{
   await a.getByTestId('ready').waitFor();await waitForWindowOnscreen(f.pid);await Bun.sleep(400)
