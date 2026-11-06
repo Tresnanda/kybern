@@ -47,7 +47,7 @@ import { SuccessCheck } from '../motion/SuccessCheck.tsx'
 import { FONT_UI } from '../theme.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { T } from './glyphs.ts'
-import { ResponseImage } from './images.tsx'
+import { ThreadImage } from './ThreadImage.tsx'
 import { MidTurnMessage } from './bubble.tsx'
 import { cachedMarkdownTheme, Chevron, CODE, destructive, fg, muted, Para, ROW_LINE, RowIcon, TEXT } from './kit.tsx'
 import { Collapse, Rise } from '../motion/kit.tsx'
@@ -376,7 +376,7 @@ export const WorkRow = memo(function WorkRow({
     case 'tool':
       return <ToolRow block={block} ctx={ctx} />
     case 'image':
-      return <TreeBox><ResponseImage source={block.source} at={block.at} /></TreeBox>
+      return <TreeBox><ThreadImage threadId={ctx.threadId} source={block.source} alt="Agent image" at={block.at} /></TreeBox>
     case 'assistant':
       return <AssistantWorkRow block={block} tone={tone} live={live} thinkingLive={thinking} textOnly={textOnly} />
     case 'runtime_task':
@@ -579,7 +579,7 @@ function ToolResult({ block, threadId, surface, item, screenshots }: { block: To
       {screenshots.length > 0 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {screenshots.map((source, i) => (
-            <ResponseImage key={source} source={source} label={surface?.app ? `Screenshot of ${surface.app}` : `Screenshot ${i + 1}`} compact />
+            <ThreadImage key={source} threadId={threadId} source={source} alt={surface?.app ? `Screenshot of ${surface.app}` : `Screenshot ${i + 1}`} />
           ))}
         </div>
       )}

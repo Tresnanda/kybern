@@ -2490,3 +2490,7 @@ is only the lookups. Typing after a reopen: 1 of 4 opens before, 8 of 8 after; c
 Separately, GPUI activates an `on_focus` listener on a deferred effect, so an element autoFocused in the frame its
 subscription is created gets no `focus` event (every platform). `TextField` therefore no longer trusts a remembered
 focus flag: a click on its box always asks for focus, which is a no-op for the focused input.
+
+### Reply link context menus
+
+`<markdown onLinkContextMenu>` emits the hit-tested link URL in `value` and its window coordinates in `x`/`y` on a right click. Ordinary link clicks keep `onLinkClick`; selecting or right-clicking prose does not navigate. The JS bridge patch registers `linkContextMenu`. Reply link icons use existing `linkIcons` entries ordered by full destination length, with one fixed-size slot per link, so cached GitHub colors and favicon updates preserve the label and geometry.
