@@ -1299,6 +1299,31 @@ patch rebuild/shrink and lifecycle cleanup. Run it from `apps/gpuix` with the
 current local addon: `bun native/diff-scroll-check.ts` (the harness uses scratch
 client data and closes its window).
 
+## Soft-wrapped diffs (`<diff softWrap>`)
+
+`softWrap` wraps a `<diff>`'s line text at the available width with the
+`<code softWrap>` machinery (`code_wrap.rs`), so Syntect runs, word washes,
+`highlight` matches and selection keep working. A line row then grows from one
+line height (min-height): the accent bar, both gutters and the add/delete tints
+stretch with it, and the line numbers and marker sit on its first visual line
+(top-aligned at one line height). A wrapped diff has no horizontal scroller or
+scrollbar, even with `theme.diff.horizontalScroll`.
+
+Rows are measured, not uniform. Toggling `softWrap` is part of the list's layout
+hash, so the list resets its measurements and restores its logical anchor
+(index and offset, clamped). A wrapped list is seeded with per-row hints from
+each line's length at the last measured width (`diff::wrapped_row_heights`,
+re-seeded once the first width is known) instead of
+`reset_with_uniform_height`; GPUI's list re-measures its rows itself when the
+width changes. Exact anchors from the section above work inside a wrapped row,
+and line clicks, gutter clicks and Show more target the row they paint.
+`native/diff-wrap-check.ts` (lab `diff-wrap-lab.tsx`, also the `diff-wrap`
+platform check) covers first-line numbers and full tints by pixels, line clicks
+on continuation lines, no sideways scroll, width re-measure, unwrapped parity,
+anchors across toggles/remount/restore and Show more, in dark and light. The
+Pull requests Changes view turns it on by default ("Wrap lines", persisted as
+`pulls.changes.wrap`).
+
 ## Cached scroll requests and decorated inputs (package 3)
 
 `renderer.scrollToItem(elementId, index, offsetInItem?)` now wakes every cached
