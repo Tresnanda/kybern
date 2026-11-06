@@ -81,6 +81,7 @@ classify!(SETTINGS_FIELDS, every_settings_field_is_classified, Settings, {
     access => PerMachine,
     computer_use => PerMachine,
     antigravity => PerMachine,
+    coordinator_mcp_servers => PerMachine,
     orchestration => Shared,
     tell_agents_about_kybern => Shared,
     ask_deadlines => Shared,

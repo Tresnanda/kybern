@@ -146,6 +146,7 @@ impl StagedExtension {
         command.env_remove("KYBERN_PI_SYSTEM_PROMPT");
         command.env_remove("KYBERN_PI_NO_BOOTSTRAP");
         command.env_remove("KYBERN_PI_COORDINATOR_ONLY");
+        command.env_remove("KYBERN_PI_ALLOWED_MCP_SERVERS");
         command.env_remove("KYBERN_PI_READ_ONLY_BUILTINS");
         command.env_remove("KYBERN_PI_DENIED_TOOLS");
         if let Some(bridge) = bridge {
@@ -169,6 +170,11 @@ impl StagedExtension {
             command.env("KYBERN_PI_APP_TOOLS", serde_json::to_string(&tools).unwrap_or_else(|_| "[]".into()));
             if bridge.restrictions.require_enforcement {
                 command.env("KYBERN_PI_COORDINATOR_ONLY", "1");
+                command.env(
+                    "KYBERN_PI_ALLOWED_MCP_SERVERS",
+                    serde_json::to_string(&bridge.restrictions.allowed_mcp_servers.keys().collect::<Vec<_>>())
+                        .unwrap_or_else(|_| "[]".into()),
+                );
                 if bridge.restrictions.allow_read_only_builtins {
                     command.env("KYBERN_PI_READ_ONLY_BUILTINS", "1");
                 }
@@ -459,10 +465,14 @@ mod tests {
                 denied_tools: vec!["bash".into()],
                 require_enforcement: true,
                 allow_read_only_builtins: false,
+                allowed_mcp_servers: Default::default(),
             },
         };
+        let mut bridge = bridge;
+        bridge.restrictions.allowed_mcp_servers.insert("memory".into(), json!({}));
         let mut command = Command::new("pi");
         staged.configure(&mut command, Some(&bridge));
+        assert_eq!(command_env(&command, "KYBERN_PI_ALLOWED_MCP_SERVERS").unwrap().unwrap(), r#"["memory"]"#);
 
         let encoded = command_env(&command, "KYBERN_PI_APP_TOOLS").unwrap().unwrap().to_str().unwrap();
         let tools: Value = serde_json::from_str(encoded).unwrap();
@@ -495,6 +505,7 @@ mod tests {
                     denied_tools: vec![],
                     require_enforcement: enforced,
                     allow_read_only_builtins: read_only,
+                    allowed_mcp_servers: Default::default(),
                 },
             };
             let mut command = Command::new("pi");

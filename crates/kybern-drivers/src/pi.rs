@@ -2014,6 +2014,7 @@ mod tests {
                 denied_tools: vec!["kybern_thread_send".into()],
                 require_enforcement: false,
                 allow_read_only_builtins: false,
+                allowed_mcp_servers: Default::default(),
             },
         };
         assert_eq!(configured_app_tool_names(Some(&bridge)), HashSet::from(["kybern_thread_read".into()]));

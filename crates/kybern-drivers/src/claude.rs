@@ -208,6 +208,9 @@ impl AgentDriver for ClaudeDriver {
                 // project/user servers from widening it.
                 let builtins = if bridge.restrictions.allow_read_only_builtins { CLAUDE_READ_ONLY_TOOLS } else { "" };
                 cmd.args(["--tools", builtins, "--strict-mcp-config"]);
+                for server in bridge.restrictions.allowed_mcp_servers.keys() {
+                    cmd.args(["--allowedTools", &format!("mcp__{server}__*")]);
+                }
             }
         }
         if config.permission_mode == PermissionMode::FullAccess {
@@ -534,7 +537,7 @@ fn write_claude_mcp_config(bridge: &NativeToolBridge) -> Result<NativeMcpConfig>
         .authorization
         .as_deref()
         .ok_or_else(|| DriverError::Unsupported("Claude Code Kybern tools require a scoped MCP authorization capability".into()))?;
-    let config = json!({
+    let mut config = json!({
         "mcpServers": {
             bridge.server_name.clone(): {
                 "type": "http",
@@ -546,6 +549,13 @@ fn write_claude_mcp_config(bridge: &NativeToolBridge) -> Result<NativeMcpConfig>
             }
         }
     });
+    if bridge.restrictions.require_enforcement {
+        for (name, server) in &bridge.restrictions.allowed_mcp_servers {
+            if name != &bridge.server_name {
+                config["mcpServers"][name] = server.clone();
+            }
+        }
+    }
     let path = std::env::temp_dir().join(format!("kybern-claude-mcp-{}.json", Uuid::new_v4().simple()));
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -2931,5 +2941,27 @@ mod orchestration_part_tests {
         let text = blocks.last().unwrap()["text"].as_str().unwrap();
         assert!(text.starts_with("/review"));
         assert_flattened(text);
+    }
+
+    #[test]
+    fn coordinator_mcp_config_contains_only_explicit_servers() {
+        let mut bridge = NativeToolBridge {
+            server_name: "kybern".into(),
+            endpoint: Some("http://localhost/mcp".into()),
+            authorization: Some("secret".into()),
+            guide: None,
+            coordinator_instructions: None,
+            tools: vec![],
+            restrictions: Default::default(),
+        };
+        bridge.restrictions.allowed_mcp_servers.insert("memory".into(), json!({"command":"memory"}));
+        for enforced in [false, true] {
+            bridge.restrictions.require_enforcement = enforced;
+            let config = write_claude_mcp_config(&bridge).unwrap();
+            let value: Value = serde_json::from_slice(&std::fs::read(&config.path).unwrap()).unwrap();
+            assert_eq!(value["mcpServers"].as_object().unwrap().len(), if enforced { 2 } else { 1 });
+            assert_eq!(value["mcpServers"].get("memory").is_some(), enforced);
+            assert!(value["mcpServers"].get("other").is_none());
+        }
     }
 }

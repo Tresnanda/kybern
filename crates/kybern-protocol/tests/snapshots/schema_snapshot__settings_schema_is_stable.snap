@@ -140,6 +140,61 @@ expression: schema_for!(Settings)
         "rotation_budget_tokens": 200000
       }
     },
+    "coordinator_mcp_servers": {
+      "description": "MCP servers the Coordinator may use, by harness. Local to this machine; off by default.",
+      "type": "object",
+      "properties": {
+        "antigravity": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "claude-code": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "codex": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cursor": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "grok-build": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "omp": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "opencode": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pi": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "tell_agents_about_kybern": {
       "description": "Give new agent sessions a short guide to Kybern: images, notes and\ntasks, other threads, helpers. Applies to sessions started after the change.",
       "type": "boolean",

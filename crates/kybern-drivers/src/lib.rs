@@ -8,6 +8,7 @@
 pub mod account_auth;
 pub mod antigravity;
 pub mod binary;
+pub mod coordinator_mcp;
 #[cfg(test)]
 mod test_process;
 #[cfg(test)]
@@ -193,6 +194,8 @@ pub struct NativeToolDefinition {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NativeToolRestrictions {
+    /// Explicitly allowed third-party MCP server configurations. Never applied to regular threads.
+    pub allowed_mcp_servers: BTreeMap<String, Value>,
     /// If non-empty, only these bridge tool names may be exposed.
     pub allowed_tools: Vec<String>,
     /// Bridge tool names to omit even when present in `allowed_tools` or in
@@ -243,6 +246,9 @@ impl NativeToolBridge {
     }
 
     pub fn validate(&self) -> Result<()> {
+        if self.restrictions.allowed_mcp_servers.keys().any(|name| !coordinator_mcp::valid_server_name(name) || name == &self.server_name) {
+            return Err(DriverError::Unsupported("Choose MCP server names without wildcards or the reserved Kybern server name.".into()));
+        }
         if self.server_name.is_empty() || self.server_name.len() > 64 {
             return Err(DriverError::Unsupported("native tool bridge has an invalid server name".into()));
         }

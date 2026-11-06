@@ -2688,6 +2688,9 @@ pub struct Settings {
     pub antigravity: AntigravitySettings,
     /// Limits on agents delegating work to other agents.
     pub orchestration: OrchestrationSettings,
+    /// MCP servers the Coordinator may use, by harness. Local to this machine; off by default.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub coordinator_mcp_servers: BTreeMap<ProviderKind, Vec<String>>,
     /// Give new agent sessions a short guide to Kybern: images, notes and
     /// tasks, other threads, helpers. Applies to sessions started after the change.
     pub tell_agents_about_kybern: bool,
@@ -3018,6 +3021,7 @@ impl Default for Settings {
             computer_use: ComputerUseSettings::default(),
             antigravity: AntigravitySettings::default(),
             orchestration: OrchestrationSettings::default(),
+            coordinator_mcp_servers: BTreeMap::new(),
             tell_agents_about_kybern: true,
             ask_deadlines: AskDeadlineSettings::default(),
             preview_allowed_folders: Vec::new(),
