@@ -200,6 +200,9 @@ expression: names
 - events.subscribe
 - events.unsubscribe
 - events.range
+- network.cached_lists
+- peer.lists.snapshot
+- peer.preferences.sync
 - network.status
 - network.set_enabled
 - network.add
@@ -263,6 +266,7 @@ expression: names
 - settings.share
 - peer.settings.get
 - peer.settings.patch
+- peer.items.edit
 - peer.federated.read
 - peer.login.borrow
 - peer.login.push

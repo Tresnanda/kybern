@@ -1396,6 +1396,7 @@ async fn dispatch_part_16(state: &AppState, ctx: &ConnectionCtx, method: &str, s
         ThreadsMoveToMachine::NAME => ok(crate::orchestrator::move_thread::serve_move_to_machine(state, params).await?),
         ThreadsMoveAbandon::NAME => ok(state.orchestrator.move_abandon(parse(params)?).await?),
         // The machine network (N4). The logic is in `network/`; these arms parse and answer.
+        NetworkCachedLists::NAME => ok(crate::network::list_cache::read(state, parse(params)?)?),
         NetworkStatusMethod::NAME => ok(network_status(state).await?),
         NetworkSetEnabled::NAME => {
             let p: NetworkSetEnabledParams = parse(params)?;
@@ -1709,7 +1710,7 @@ fn bad(e: anyhow::Error) -> RpcError {
 
 /// Notes failures: a stale revision is a CONFLICT the client can resolve, the rest
 /// say what to do next. Anything unexpected is an internal error.
-fn note_err(e: anyhow::Error) -> RpcError {
+pub(crate) fn note_err(e: anyhow::Error) -> RpcError {
     use kybern_store::NoteError;
     match e.downcast_ref::<NoteError>() {
         Some(NoteError::Conflict) => crate::problem::rpc_error(codes::CONFLICT, &e),
@@ -1722,7 +1723,7 @@ fn note_err(e: anyhow::Error) -> RpcError {
 /// Task failures: a stale revision is a CONFLICT the client can resolve, the rest
 /// say what to do next. Notes and threads reached through a task keep their own
 /// codes. Anything unexpected is an internal error.
-fn task_err(e: anyhow::Error) -> RpcError {
+pub(crate) fn task_err(e: anyhow::Error) -> RpcError {
     use kybern_store::TaskError;
     match e.downcast_ref::<TaskError>() {
         Some(TaskError::Conflict) => crate::problem::rpc_error(codes::CONFLICT, &e),

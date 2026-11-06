@@ -6,6 +6,7 @@
 // and Ed25519 are all injected, so GPUIX, React Native and the tests share it.
 import { httpBase, normalizeDaemonUrl } from "./address.ts";
 import { KybernClient, type ClientOptions } from "./client.ts";
+import { ItemCache, isItemRead, isItemEdit, mergeOfflineItems } from "./itemCache.ts";
 import { MachineCache } from "./machineCache.ts";
 import { MachineClientProxy, OfflineError, type MachineClient } from "./machineClient.ts";
 import {
@@ -335,6 +336,9 @@ export interface MachineSetOptions {
   /** The machine the user is at: the desktop's own daemon, or the member a phone paired with. */
   localMachineId?: MachineId;
   cache?: MachineCache;
+  itemCache?: ItemCache;
+  /** Native clients supply their secure UUID source. */
+  operationId?: () => string;
   /** Used by the default `createClient`. Native platforms authenticate the upgrade with a header here. */
   socket?: SocketFactory;
   transport?: Partial<MachineTransport>;
@@ -803,6 +807,7 @@ export class MachineSet {
     this.dropSlot(slot);
     this.slots.delete(machineId);
     this.cache.delete(machineId);
+    await this.options.itemCache?.removeMachine(machineId);
     try {
       await this.options.credentials.delete(machineId);
     } catch {
@@ -984,6 +989,67 @@ export class MachineSet {
     );
     if (machineId) await Promise.all(targets.map((slot) => this.refreshSlot(slot)));
     else await mapLimit(targets, 4, (slot) => this.refreshSlot(slot).catch(() => {}));
+    await mapLimit([...this.slots.values()].filter((s) => !machineId || s.record.machineId === machineId), 4, (s) => this.readOfflineLists(s));
+  }
+
+  private async readOfflineLists(slot: Slot): Promise<void> {
+    if (slot.lists || LIVE.has(slot.status) || this.disposed) return;
+    for (const source of this.slots.values()) {
+      const inner = source.inner;
+      if (!inner || !LIVE.has(source.status)) continue;
+      try {
+        const { snapshot } = await inner.call("network.cached_lists", { machine_id: slot.record.machineId });
+        if (!snapshot || snapshot.machine_id !== slot.record.machineId) continue;
+        if (this.disposed || this.slots.get(slot.record.machineId) !== slot || slot.lists || LIVE.has(slot.status)) return;
+        const savedAt = Date.parse(snapshot.fetched_at);
+        if (!Number.isFinite(savedAt)) continue;
+        const cached = this.cache.put(slot.record.machineId, snapshot, savedAt);
+        slot.lists = { projects: cached.projects, threads: cached.threads };
+        slot.lastSeenAt = savedAt;
+        this.touch(slot, "lists");
+        return;
+      } catch { /* Older members do not offer this additive fallback. */ }
+    }
+  }
+
+  private async itemCall(machineId: string, method: string, params: unknown, live?: () => Promise<unknown>): Promise<unknown> {
+    const cache = this.options.itemCache!;
+    if (live) {
+      let value = await live();
+      if (method === 'notes.list' || method === 'tasks.items.list') {
+        value = mergeOfflineItems(value, await cache.read(machineId, method, params), method);
+        const result = value as { federation?: { skipped?: { machine_id: string; machine_name: string }[] } };
+        for (const skipped of result.federation?.skipped ?? []) {
+          const old = await cache.read(skipped.machine_id, method, {}) as Record<string, { id: string }[]> | undefined;
+          const key = method === 'notes.list' ? 'notes' : 'tasks';
+          if (old?.[key]) value = mergeOfflineItems(value, { ...old, federation: { sections: [{ machine_id: skipped.machine_id,
+            machine_name: skipped.machine_name, is_self: false, ids: old[key].map(row => row.id) }] } }, method);
+        }
+      }
+      if (isItemRead(method)) await cache.put(machineId, method, params, value);
+      return value;
+    }
+    if (isItemRead(method)) {
+      const value = await cache.read(machineId, method, params);
+      if (value !== undefined) return value;
+    }
+    if (isItemEdit(method)) {
+      const patch = params as Record<string, unknown>;
+      const note = method === 'notes.update';
+      const readMethod = note ? 'notes.get' : 'tasks.items.get';
+      const readParams = patch.id ? { id: patch.id } : patch.key ? { key: patch.key } : { thread_id: patch.thread_id };
+      const saved = await cache.read(machineId, readMethod, readParams) as Record<string, Record<string, unknown>> | undefined;
+      const previous = saved?.[note ? 'note' : 'task'];
+      if (!previous?.updated_at) throw new Error('Open the note or task while its machine is online before editing it offline.');
+      const source = [...this.slots.values()].find(s => s.inner && LIVE.has(s.status));
+      if (!source?.inner) throw new OfflineError(machineId, true, 'Connect to a network member to queue this edit.');
+      const operationId = this.options.operationId?.() ?? crypto.randomUUID();
+      const item = await source.inner.call('outbox.enqueue', { target: machineId, operation: { kind: 'item_edit', operation_id: operationId,
+        payload: { operation_id: operationId, method, params, expected_updated_at: previous.updated_at } } });
+      // Pending edits are visible in the daemon outbox. Keep the owner's cache unchanged for conflict comparison.
+      return { ...previous, ...patch, pending_operation_id: item.operation_id };
+    }
+    throw new OfflineError(machineId, true);
   }
 
   private refreshQuietly(machineId: MachineId): void {
@@ -1172,6 +1238,7 @@ export class MachineSet {
     slot.proxy.onNotification("network.changed", (params) => this.scheduleSync(slot, params));
     slot.proxy.onNotification("network.machine.changed", () => this.scheduleSync());
     this.slots.set(record.machineId, slot);
+    if (this.options.itemCache) slot.proxy.itemCall = (method, params, live) => this.itemCall(slot.record.machineId, method, params, live);
     return slot;
   }
 
@@ -1575,6 +1642,7 @@ export class MachineSet {
     if (slot.owned) inner?.close("Machine unreachable");
     slot.status = slot.record.paused ? "paused" : status;
     slot.error = slot.record.paused ? undefined : error;
+    if (status === "offline") void this.readOfflineLists(slot);
     this.touch(slot, "status");
     if (slot.record.paused || slot.external || this.disposed) return;
     let delay = FAILURE_DELAYS_MS[Math.min(slot.failures++, FAILURE_DELAYS_MS.length - 1)]!;

@@ -341,3 +341,109 @@ async fn a_member_that_turned_sharing_off_is_left_out_of_a_merged_read() {
     assert_eq!(left_out.reason, SkipReason::Refused);
     assert!(federation.footer.unwrap().contains("satyamas has sharing turned off; its notes are not included"));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn offline_lists_are_stale_and_removed_or_disabled_copies_are_deleted() {
+    let Some(t) = trio().await else { return };
+    let folder = t.b.root.join("offline-project");
+    std::fs::create_dir_all(&folder).unwrap();
+    let project = t.b.state.orchestrator.add_project(folder.to_string_lossy().into_owned(), Some("Offline project".into()), None).unwrap();
+    let created = client(&t.b)
+        .await
+        .call::<ThreadsCreate>(
+            serde_json::from_value(json!({
+                "project_id": project.id, "provider": {"kind": "codex", "instance": "default"},
+                "title": "Offline thread", "use_worktree": false
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let params = NetworkCachedListsParams { machine_id: t.b.id() };
+    eventually("peer rows cached", WAIT, || {
+        super::list_cache::read(&t.a.state, params.clone())
+            .unwrap()
+            .snapshot
+            .is_some_and(|s| s.threads.iter().any(|thread| thread.id == created.id) && s.projects.iter().any(|p| p.id == project.id))
+    })
+    .await;
+    let before = super::list_cache::read(&t.a.state, params.clone()).unwrap().snapshot.unwrap();
+    t.go_offline(&t.b).await;
+    let at_a = client(&t.a).await;
+    let after = at_a.call::<NetworkCachedLists>(params.clone()).await.unwrap().snapshot.unwrap();
+    assert!(after.stale);
+    assert_eq!(after.machine_id, t.b.id());
+    assert!(after.threads.iter().any(|thread| thread.id == created.id));
+    assert!(after.projects.iter().any(|p| p.id == project.id));
+    assert!(after.fetched_at >= before.fetched_at);
+    let mut settings = t.a.state.settings.get();
+    settings.network.keep_network_data = false;
+    t.a.state.settings.set(settings).unwrap();
+    assert!(super::list_cache::read(&t.a.state, params.clone()).unwrap().snapshot.is_none());
+    assert!(t.a.state.store.meta_get(&format!("network.list_cache.{}", t.b.id())).unwrap().is_none());
+    super::list_cache::refresh(&t.a.state).await;
+    assert!(super::list_cache::read(&t.a.state, params.clone()).unwrap().snapshot.is_none());
+    super::removal::remove(&t.c.state, &t.b.id(), false, &[]).await.unwrap();
+    assert!(t.c.state.store.meta_get(&format!("network.list_cache.{}", t.b.id())).unwrap().is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn queued_task_edit_delivers_once_and_owner_changes_win() {
+    let Some(t) = trio().await else { return };
+    let original = task(&t.b, "Original");
+    t.go_offline(&t.b).await;
+    let op = uuid::Uuid::now_v7();
+    let edit = PeerItemEditParams {
+        operation_id: op,
+        method: "tasks.items.update".into(),
+        params: json!({"id":original.id,"body":"Queued text","expected_revision":original.revision}),
+        expected_updated_at: original.updated_at,
+    };
+    let item = super::outbox::enqueue(
+        &t.a.state,
+        OutboxEnqueueParams {
+            target: t.b.id(),
+            operation: OutboxOp { kind: OutboxKind::ItemEdit, payload: serde_json::to_value(&edit).unwrap(), operation_id: Some(op) },
+        },
+    )
+    .unwrap();
+    assert_eq!(item.state, OutboxState::Queued);
+    t.come_back(&t.b).await;
+    eventually("queued task delivered", WAIT, || {
+        t.a.state.store.outbox_get(item.id).unwrap().is_some_and(|i| i.state == OutboxState::Delivered)
+    })
+    .await;
+    let saved = t.b.state.store.task_item_get(original.id).unwrap().unwrap();
+    assert_eq!(saved.body, "Queued text");
+    let replay = super::item_edits::serve(&t.b.state, &t.a.id(), edit.clone()).unwrap();
+    assert!(replay["error"].is_null());
+    assert_eq!(t.b.state.store.task_item_get(original.id).unwrap().unwrap().revision, saved.revision);
+    let conflict =
+        super::item_edits::serve(&t.b.state, &t.a.id(), PeerItemEditParams { operation_id: uuid::Uuid::now_v7(), ..edit }).unwrap();
+    assert_eq!(conflict["error"]["code"], codes::CONFLICT);
+    assert_eq!(t.b.state.store.task_item_get(original.id).unwrap().unwrap().body, "Queued text");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn preference_files_sync_without_appearance_or_secrets() {
+    let Some(t) = trio().await else { return };
+    std::fs::write(t.a.state.settings.dir().join("keybindings.json"), r#"{"send":"ctrl+enter"}"#).unwrap();
+    let link = t.a.state.network.peers.link(&t.b.id()).unwrap();
+    super::preferences::sync(&t.a.state, &link).await;
+    let value: Value = serde_json::from_slice(&std::fs::read(t.b.state.settings.dir().join("keybindings.json")).unwrap()).unwrap();
+    assert_eq!(value, json!({"send":"ctrl+enter"}));
+    // Replacing an existing file and deleting a custom theme must also converge on Windows.
+    std::fs::write(t.a.state.settings.dir().join("keybindings.json"), r#"{"send":"enter"}"#).unwrap();
+    std::fs::create_dir_all(t.a.state.settings.dir().join("themes")).unwrap();
+    std::fs::write(t.a.state.settings.dir().join("themes/custom.json"), r#"{"name":"Custom"}"#).unwrap();
+    super::preferences::sync(&t.a.state, &link).await;
+    let value: Value = serde_json::from_slice(&std::fs::read(t.b.state.settings.dir().join("keybindings.json")).unwrap()).unwrap();
+    assert_eq!(value, json!({"send":"enter"}));
+    assert!(t.b.state.settings.dir().join("themes/custom.json").exists());
+    std::fs::remove_file(t.a.state.settings.dir().join("themes/custom.json")).unwrap();
+    super::preferences::sync(&t.a.state, &link).await;
+    assert!(!t.b.state.settings.dir().join("themes/custom.json").exists());
+    let fields = t.a.state.store.meta_get("network.preferences.v1").unwrap().unwrap();
+    assert!(!fields.contains("settings.json"));
+    assert!(!fields.contains("daemon.token"));
+}

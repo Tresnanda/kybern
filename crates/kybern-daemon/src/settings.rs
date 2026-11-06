@@ -69,6 +69,9 @@ impl SettingsStore {
         *self.current.write().unwrap() = settings.clone();
         if let Some(store) = self.stamps.get() {
             crate::settings_share::note_local_change(store, &before, &settings);
+            if !settings.network.keep_network_data {
+                store.meta_delete_prefix("network.list_cache.")?;
+            }
         }
         crate::secret_store::collect_garbage(&settings);
         let _ = self.changed.send(settings.clone());

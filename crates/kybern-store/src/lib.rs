@@ -291,6 +291,14 @@ impl Store {
 
     // ---- meta ----
 
+    /// Delete cached metadata under a literal prefix.
+    pub fn meta_delete_prefix(&self, prefix: &str) -> Result<()> {
+        self.with(|c| {
+            c.execute("DELETE FROM meta WHERE substr(key, 1, length(?1)) = ?1", [prefix])?;
+            Ok(())
+        })
+    }
+
     pub fn meta_get(&self, key: &str) -> Result<Option<String>> {
         self.with(|c| Ok(c.query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0)).optional()?))
     }

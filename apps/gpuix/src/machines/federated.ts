@@ -19,7 +19,14 @@ export function foreignOwner(kind: Kind, id: string | undefined): { id: MachineI
 /** The client to write an item with: its owner's, else `fallback`. Throws `OfflineError` while the owner is away. */
 export function ownerClient(kind: Kind, id: string | undefined, fallback: () => KybernClient | null): KybernClient | null {
   const owner = foreignOwner(kind, id)
-  return owner ? machineHub().clientFor(owner.id) : fallback()
+  return owner ? machineHub().set.handleFor(owner.id) : fallback()
 }
 /** Tests: forget every owner. */
 export function resetFederated() { owners.notes.clear(); owners.tasks.clear() }
+
+/** Item reads can use the owner's disk cache while its transport is offline. */
+export function itemClient(fallback: () => KybernClient | null): KybernClient | null {
+  const hub = machineHub();
+  const id = hub.localMachineId;
+  return id ? hub.set.handleFor(id) : fallback();
+}

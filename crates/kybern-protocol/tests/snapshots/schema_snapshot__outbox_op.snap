@@ -35,6 +35,7 @@ expression: schema_for!(OutboxOp)
         "delegate",
         "files_push",
         "settings_patch",
+        "item_edit",
         "secrets_put",
         "fork",
         "move",

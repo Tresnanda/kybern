@@ -23,8 +23,10 @@ pub mod federated;
 pub mod files_push;
 pub mod forward;
 pub mod git_transfer;
+pub mod item_edits;
 pub mod join;
 pub mod keys;
+pub mod list_cache;
 pub mod machine_info;
 pub mod manage;
 pub mod membership;
@@ -33,6 +35,7 @@ pub mod outbox;
 pub mod peers;
 pub mod plugin_sync;
 pub mod ports;
+pub mod preferences;
 pub mod provision;
 pub mod relay;
 pub mod relay_pages;
@@ -375,6 +378,8 @@ impl Network {
             features::MOVE_V1.to_string(),
             features::SETTINGS_FANOUT_V1.to_string(),
             features::NOTES_FEDERATED_V1.to_string(),
+            features::OFFLINE_LISTS_V1.to_string(),
+            features::PREFERENCES_SYNC_V1.to_string(),
             features::SECRETS_STORE_V1.to_string(),
             features::LOGIN_BROKER_V1.to_string(),
             features::UPDATE_V1.to_string(),
