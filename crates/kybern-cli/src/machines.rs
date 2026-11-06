@@ -92,6 +92,8 @@ pub enum MachinesCmd {
     },
     /// This machine's CPU, memory, graphics, harnesses and repositories.
     Info,
+    /// Read a peer list snapshot, with its original fetch time.
+    CachedLists { machine_id: String },
     /// The login broker: the machine that holds the real sign-ins the others use.
     Broker {
         #[command(subcommand)]
@@ -607,6 +609,10 @@ pub async fn run(client: &Client, cmd: MachinesCmd, json: bool) -> Result<()> {
                     println!("{:<20} {state}{}", machine.name, machine.detail.as_deref().map(|d| format!(": {d}")).unwrap_or_default());
                 }
             }
+        }
+        MachinesCmd::CachedLists { machine_id } => {
+            let result = client.call::<NetworkCachedLists>(NetworkCachedListsParams { machine_id }).await?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
         }
         MachinesCmd::Info => {
             let info = client.call::<MachinesInfo>(Empty {}).await?;

@@ -78,6 +78,7 @@ export interface MachineHubOptions {
   /** The set's credential store (default: reads `readCredential` by the record's profile id, writes nothing). */
   credentials?: CredentialStore
   /** The offline cache (default: in memory). */
+  itemCache?: import("../../../../packages/kybern-client/src/itemCache").ItemCache
   cache?: MachineCache
   /** Before any machine is dialed: a tunnel for a saved SSH machine, say. Failures never stop the others. */
   prepare?: (record: MachineRecord) => void | Promise<void>
@@ -145,6 +146,7 @@ export class MachineHub {
       deviceId: options.deviceId ?? 'gpuix-desktop',
       verifyProof: verifyMachineProof,
       cache: options.cache ?? new MachineCache(),
+      itemCache: options.itemCache,
       socket: createGpuixSocket,
       transport: { ...options.transport, createClient: (args) => this.createClient(args) },
       ...(options.clock ? { clock: options.clock } : {}),

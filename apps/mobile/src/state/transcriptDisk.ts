@@ -90,10 +90,10 @@ function ensured(store: TranscriptCacheStore & { ensure(): unknown }): Transcrip
 }
 
 /** The app's store: expo-sqlite on a phone, none on web. Tests pass their own to `createTranscriptDisk`. */
-export function defaultTranscriptStore(): TranscriptCacheStore | undefined {
+export function defaultTranscriptStore(name?: string): TranscriptCacheStore | undefined {
   if (Platform.OS === "web") return undefined;
   try {
-    return ensured(sqliteTranscriptCacheStore(expoSqlDatabase()));
+    return ensured(sqliteTranscriptCacheStore(expoSqlDatabase(name)));
   } catch {
     return undefined;
   }

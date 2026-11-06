@@ -181,13 +181,13 @@ export type NoteSaveStatus =
   | "error"
   | "conflict";
 
-export function saveStatusText(status: NoteSaveStatus) {
+export function saveStatusText(status: NoteSaveStatus, pending = false) {
   switch (status) {
     case "dirty":
     case "saving":
       return "Saving…";
     case "saved":
-      return "Saved";
+      return pending ? "Waiting for machine" : "Saved";
     case "error":
       return "Not saved";
     case "conflict":

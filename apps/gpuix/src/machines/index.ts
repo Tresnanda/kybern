@@ -3,6 +3,9 @@
 // `environments.json`); state.ts feeds it the primary connection (see hub.ts).
 import { useMemo, useSyncExternalStore } from 'react'
 import type { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
+import path from 'node:path'
+import { ItemCache } from '../../../../packages/kybern-client/src/itemCache.ts'
+import { openSqliteStore } from '../transcript/diskCache.ts'
 import { MachineCache } from '../../../../packages/kybern-client/src/machineCache.ts'
 import { machineGlyph, showMachineGlyph, type MachineGlyph } from '../../../../packages/kybern-client/src/machineMerge.ts'
 import type { MachineConnectionStatus, MergedView } from '../../../../packages/kybern-client/src/machines.ts'
@@ -32,6 +35,7 @@ export function machineHub(): MachineHub {
       legacyProfileOf: (machineId) => current.set.connection(machineId)?.record.legacyProfileId,
     }),
     cache: new MachineCache(fileCacheStorage(dir)),
+    itemCache: new ItemCache(openSqliteStore(path.join(dir, 'items.sqlite'))),
     // A saved SSH machine is reached through a tunnel the app keeps open.
     prepare: async (record) => {
       const ssh = (record as GpuixMachineRecord).ssh

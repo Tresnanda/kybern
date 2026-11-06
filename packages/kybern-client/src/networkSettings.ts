@@ -35,6 +35,7 @@ const OUTBOX_KIND: Record<OutboxKind, string> = {
   thread_send: "Message",
   delegate: "Delegated task",
   files_push: "Files",
+  item_edit: "Note or task edit",
   settings_patch: "Settings change",
   secrets_put: "Provider keys",
   fork: "Fork of a thread",
@@ -45,6 +46,7 @@ const OUTBOX_KIND: Record<OutboxKind, string> = {
 }
 
 export interface OutboxRowModel {
+  editText?: string;
   id: string
   title: string
   detail: string
@@ -53,6 +55,18 @@ export interface OutboxRowModel {
 }
 
 /** Work still on its way to a machine: waiting, being sent, or stuck. Delivered and cancelled items are history. */
+/** Recover the saved edit even after its editor closed or the owner rejected it. */
+function pendingEditText(item: OutboxItem): string | undefined {
+  if (item.kind !== 'item_edit') return undefined;
+  const params = (item.payload as { params?: Record<string, unknown> } | null)?.params;
+  if (!params) return undefined;
+  const labels: Record<string, string> = { title: 'Title', status: 'Status', priority: 'Priority', category: 'Category' };
+  const fields = Object.entries(labels).flatMap(([key, label]) => params[key] !== undefined ? [`${label}: ${params[key]}`] : []);
+  if (params.clear_category) fields.push('Remove category');
+  if (typeof params.body === 'string') fields.push(params.body);
+  return fields.join('\n\n');
+}
+
 export function outboxRows(items: readonly OutboxItem[], names: ReadonlyMap<MachineId, string>): OutboxRowModel[] {
   return items
     .filter((item) => item.state === "queued" || item.state === "sending" || item.state === "failed" || item.state === "expired")
@@ -63,7 +77,7 @@ export function outboxRows(items: readonly OutboxItem[], names: ReadonlyMap<Mach
         : item.state === "sending" ? `Sending to ${target}`
         : item.state === "expired" ? `Not delivered to ${target} in time`
         : `Did not reach ${target}${item.last_error ? `: ${item.last_error}` : ""}`
-      return { id: item.id, title: OUTBOX_KIND[item.kind] ?? item.kind, detail, canRetry: item.state === "failed" || item.state === "expired", canCancel: item.state !== "sending" }
+      return { id: item.id, ...(pendingEditText(item) !== undefined ? { editText: pendingEditText(item) } : {}), title: OUTBOX_KIND[item.kind] ?? item.kind, detail, canRetry: item.state === "failed" || item.state === "expired", canCancel: item.state !== "sending" }
     })
 }
 

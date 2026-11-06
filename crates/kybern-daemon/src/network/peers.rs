@@ -773,6 +773,10 @@ impl Network {
 
     /// Close every session with a machine and revoke every grant it holds (§2.5).
     pub fn drop_machine(&self, machine_id: &str) {
+        {
+            let _guard = super::list_cache::CACHE_LOCK.lock().unwrap();
+            let _ = self.store.meta_delete_prefix(&format!("network.list_cache.{machine_id}"));
+        }
         if let Some(link) = self.peers.take(machine_id) {
             self.say_farewell(link);
         }
@@ -846,6 +850,9 @@ fn ok<T: serde::Serialize>(value: T) -> Result<Value, RpcError> {
 pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, params: Value) -> Result<Value, RpcError> {
     let network = &state.network;
     match method {
+        PeerPreferencesSync::NAME => ok(super::preferences::serve(state, parse(params)?).await?),
+        PeerItemEdit::NAME => super::item_edits::serve(state, &link.machine_id, parse(params)?),
+        PeerListSnapshot::NAME => ok(super::list_cache::local(state)?),
         PeerSpacesSync::NAME => ok(super::spaces::serve(state, link, parse(params)?).await?),
         PeerSpaceLogo::NAME => ok(super::spaces::serve_logo(state, parse(params)?)?),
         PeerOpsSync::NAME => {
@@ -1447,9 +1454,11 @@ pub async fn run(state: AppState) {
         };
         network.peers.set_pass_started(None);
         let spaces = async {
+            super::list_cache::refresh(&state).await;
             super::spaces::reconcile(&state).await;
             for link in network.peers.links() {
                 super::spaces::sync(&state, &link, false).await;
+                super::preferences::sync(&state, &link).await;
             }
         };
         if tokio::time::timeout(SPACES_LIMIT, spaces).await.is_err() {

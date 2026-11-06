@@ -398,6 +398,12 @@ expression: scopes
   - "orchestration:read"
 - - events.range
   - "orchestration:read"
+- - network.cached_lists
+  - "network:read"
+- - peer.lists.snapshot
+  - "machine:tools"
+- - peer.preferences.sync
+  - "machine:settings"
 - - network.status
   - "network:read"
 - - network.set_enabled
@@ -524,6 +530,8 @@ expression: scopes
   - "machine:settings"
 - - peer.settings.patch
   - "machine:settings"
+- - peer.items.edit
+  - "machine:tools"
 - - peer.federated.read
   - "machine:tools"
 - - peer.login.borrow

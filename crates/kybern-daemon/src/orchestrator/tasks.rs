@@ -118,9 +118,17 @@ impl Orchestrator {
     }
 
     pub fn task_item_update(&self, params: TaskItemsUpdateParams) -> Result<TaskItem> {
+        self.task_item_update_if(params, None)
+    }
+
+    pub fn task_item_update_if(
+        &self,
+        params: TaskItemsUpdateParams,
+        expected_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<TaskItem> {
         let _locks = self.task_locks()?;
         let before = self.inner.store.task_item_get(params.id)?;
-        let task = self.inner.store.task_item_update(
+        let task = self.inner.store.task_item_update_if(
             params.id,
             TaskPatch {
                 title: params.title,
@@ -134,6 +142,7 @@ impl Orchestrator {
                 pending_followup: params.pending_followup,
                 before_id: params.before_id,
             },
+            expected_at,
         )?;
         if before.as_ref() != Some(&task) {
             if before.as_ref().is_some_and(|before| before.status != task.status) {

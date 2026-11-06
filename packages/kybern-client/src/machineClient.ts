@@ -55,6 +55,8 @@ type StatusHandler = (status: ConnectionStatus, detail?: string) => void;
  * nothing: the machine set owns the lifecycle.
  */
 export class MachineClientProxy extends KybernClient {
+  itemCall?: (method: string, params: unknown, live: (() => Promise<unknown>) | undefined) => Promise<unknown>;
+
   private inner: MachineClient | undefined;
   private readonly routedSubs = new Set<RoutedSubscription>();
   private readonly routedHandlers = new Map<string, Set<(params: unknown) => void>>();
@@ -116,6 +118,10 @@ export class MachineClientProxy extends KybernClient {
   }
 
   override call<M extends MethodName>(method: M, params: ParamsOf<M>): Promise<ResultOf<M>> {
+    if (this.itemCall && ['notes.list', 'notes.get', 'tasks.items.list', 'tasks.items.get', 'notes.update', 'tasks.items.update'].includes(method)) {
+      const inner = this.inner?.status === "open" ? this.inner : undefined;
+      return this.itemCall(method, params, inner ? () => inner.call(method, params) : undefined) as Promise<ResultOf<M>>;
+    }
     if (!this.inner) return Promise.reject(new OfflineError(this.machineId, this.routedIsCached()));
     return this.inner.call(method, params);
   }

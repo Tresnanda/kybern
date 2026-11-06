@@ -238,3 +238,12 @@ pub struct PeerFederatedReadResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_items: Option<TaskItemsListResult>,
 }
+
+/// An offline edit carries the owner's version that the user actually read.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerItemEditParams {
+    pub operation_id: uuid::Uuid,
+    pub method: String,
+    pub params: serde_json::Value,
+    pub expected_updated_at: chrono::DateTime<chrono::Utc>,
+}

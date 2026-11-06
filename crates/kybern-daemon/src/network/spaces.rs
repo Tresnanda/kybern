@@ -24,7 +24,7 @@ const LOGO_MAX: usize = 2 * 1024 * 1024;
 type FieldEntry = (OpEnvelope, SpaceField);
 type Fields = Vec<FieldEntry>;
 type Placement = (SpaceProject, SpaceId, (u64, String, String));
-fn input(body: &str) -> Vec<u8> {
+pub(super) fn input(body: &str) -> Vec<u8> {
     [DOMAIN.as_bytes(), body.as_bytes()].concat()
 }
 fn stamp<'a>(e: &'a OpEnvelope, f: &SpaceField) -> (u64, &'a str, &'a str) {
@@ -47,7 +47,7 @@ fn parsed(state: &AppState) -> Result<Fields> {
 fn active(state: &AppState) -> Option<&Membership> {
     state.network.membership().map(Arc::as_ref).filter(|m| m.self_is_member() && !m.key_mismatch())
 }
-fn seal(m: &Membership, lamport: u64, entity: String, field: &str, value: Value) -> Result<OpEnvelope> {
+pub(super) fn seal(m: &Membership, lamport: u64, entity: String, field: &str, value: Value) -> Result<OpEnvelope> {
     let f = SpaceField {
         network_id: m.network_id().ok_or_else(|| anyhow::anyhow!("no network"))?,
         lamport,

@@ -12,7 +12,7 @@ const sources = {
     export class File { constructor() { this.exists = false; } create() {} write() {} textSync() { return ""; } }`,
   // No SQLite in Node: the transcript disk cache reports the failure and the app reads the machine instead.
   "expo-sqlite": 'export async function openDatabaseAsync() { throw new Error("No SQLite in tests"); }',
-  "expo-crypto": "export function getRandomValues(bytes) { bytes.fill(7); return bytes; }",
+  "expo-crypto": "export { randomUUID } from 'node:crypto'; export function getRandomValues(bytes) { bytes.fill(7); return bytes; }",
   "expo/fetch": `export async function fetch(url, init) {
       (globalThis.__fetches ??= []).push({ url, init });
       return { ok: globalThis.__fetchOk !== false, json: async () => ({ id: "a1", name: "pic.png", media_type: "image/png", size: 3 }) };

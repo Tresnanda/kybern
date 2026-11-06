@@ -190,6 +190,11 @@ impl Store {
     /// Apply a patch. Unchanged content returns the current task without a
     /// revision bump, so a retry after a lost reply is harmless.
     pub fn task_item_update(&self, id: TaskItemId, patch: TaskPatch) -> Result<TaskItem> {
+        self.task_item_update_if(id, patch, None)
+    }
+
+    /// Offline edits compare the complete owner timestamp inside the write transaction.
+    pub fn task_item_update_if(&self, id: TaskItemId, patch: TaskPatch, expected_at: Option<DateTime<Utc>>) -> Result<TaskItem> {
         check_content(patch.title.as_deref().map(str::trim), patch.body.as_deref())?;
         if patch.title.as_deref().is_some_and(|title| title.trim().is_empty()) {
             return invalid("A task needs a title. Type one and try again.");
@@ -209,6 +214,9 @@ impl Store {
                 fetch_item(&tx, id)?.ok_or(TaskError::NotFound("Task not found. It may have been deleted permanently."))?;
             if deleted.is_some() {
                 return invalid("Restore this task before editing it.");
+            }
+            if expected_at.is_some_and(|at| at != current.updated_at) {
+                return Err(TaskError::Conflict.into());
             }
             let mut touched = false;
 

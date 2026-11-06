@@ -1197,3 +1197,51 @@ test("reach resolves false while the machine stays unreachable, and a paused one
   assert.equal(world.probes.length, probes);
   set.dispose();
 });
+
+test("a cold client gets an offline member's dated lists from an online member", async () => {
+  const { world, set } = setup({ records: [rec('a', [tailnet(A)]), rec('b', [tailnet(T)])], credentials: { a: 'a', b: 'b' } });
+  world.host(A, 'a'); world.host(T, 'b', { online: false });
+  world.lists('a', [], []);
+  world.on('a', 'network.cached_lists', () => ({ snapshot: { machine_id: 'b', fetched_at: '2026-10-01T00:00:00Z', stale: true,
+    projects: [project('p', 'Offline', 'root')], threads: [thread('t', 'p', '2026-10-01T00:00:00Z')] } }));
+  await set.ensureAll(); await set.refresh();
+  assert.equal(set.connection('b').status, 'offline');
+  assert.throws(() => set.clientFor('b'), OfflineError);
+  assert.ok(set.merged().threads.all.some(row => row.machineId === 'b'));
+  set.dispose();
+});
+
+test("offline notes remain readable and edits queue against the cached owner version", async () => {
+  const { ItemCache } = await import('../src/itemCache.ts');
+  const { world, set } = setup({ operationId: () => '00000000-0000-4000-8000-000000000001', itemCache: new ItemCache(), records: [rec('a', [tailnet(A)]), rec('b', [tailnet(T)])], credentials: { a: 'a', b: 'b' } });
+  world.host(A, 'a'); world.host(T, 'b'); world.lists('a', [], []); world.lists('b', [], []);
+  let note = { id: 'n', revision: 4, body: 'owner', updated_at: '2026-10-01T00:00:00Z' };
+  world.on('b', 'notes.get', () => ({ note }));
+  world.on('b', 'notes.update', params => (note = { ...note, ...params, revision: 5 }));
+  let queued;
+  world.on('a', 'outbox.enqueue', params => { queued = params; return { operation_id: params.operation.operation_id }; });
+  await set.ensureAll();
+  await set.handleFor('b').call('notes.get', { id: 'n' });
+  await set.handleFor('b').call('notes.update', { id: 'n', expected_revision: 4, body: 'Saved online' });
+  await set.setPaused('b', true);
+  assert.deepEqual(await set.handleFor('b').call('notes.get', { id: 'n' }), { note });
+  const result = await set.handleFor('b').call('notes.update', { id: 'n', expected_revision: 5, body: 'pending' });
+  assert.equal(result.body, 'pending');
+  assert.equal(result.pending_operation_id, '00000000-0000-4000-8000-000000000001');
+  assert.equal(queued.target, 'b');
+  assert.equal(queued.operation.kind, 'item_edit');
+  assert.equal(queued.operation.payload.expected_updated_at, note.updated_at);
+  assert.equal((await set.handleFor('b').call('notes.get', { id: 'n' })).note.body, 'pending', 'latest queued draft survives navigation');
+  for (const body of ['second', 'third']) {
+    await set.handleFor('b').call('notes.update', { id: 'n', expected_revision: 5, body });
+    assert.equal((await set.handleFor('b').call('notes.get', { id: 'n' })).note.body, body);
+    assert.equal(queued.operation.payload.expected_updated_at, note.updated_at);
+  }
+  world.on('a', 'outbox.list', () => ({ items: [{ operation_id: result.pending_operation_id, state: 'delivered', result: { ...note, body: 'third', revision: 6 } }] }));
+  const delivered = (await set.handleFor('b').call('notes.get', { id: 'n' })).note;
+  assert.equal(delivered.body, 'third');
+  assert.equal(delivered.revision, 6);
+  assert.equal(delivered.pending_operation_id, undefined);
+  await set.removeMachine('b');
+  set.dispose();
+});
