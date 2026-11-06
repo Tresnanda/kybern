@@ -79,7 +79,7 @@ export function Changes({ projectId, number, repo, review, compact = false, view
   // The desktop table sizes its gutters from the currently expanded rows.
   // Native diff knows the full patch, so adjust its digit metric until expanded.
   const diffTheme = useMemo(() => {
-    const theme = desktopDiffTheme(t, false)
+    const theme = desktopDiffTheme(t, false, 13, { syntax: true })
     const lines = parseUnifiedDiff(patch).flatMap(f => f.hunks.flatMap(h => h.lines))
     const maxNumber = (rows: typeof lines) => rows.reduce((n, l) => Math.max(n, l.oldNo ?? 0, l.newNo ?? 0), 1)
     const digits = String(maxNumber(lines)).length
