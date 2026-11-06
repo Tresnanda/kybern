@@ -2,7 +2,7 @@ import { clipboardAttachments, type ClipboardImage } from './composer/clipboard.
 import { StatusGlyph } from './composer/StatusGlyph.tsx'
 import { FooterRow, useFooterFit } from './composer/footerWidth.tsx'
 import { TokenTextarea, type TokenTextareaHandle } from './composer/TokenTextarea.tsx'
-import type { TokenReference } from './composer/token-text.ts'
+import { CHIP_FONT_SIZE, type TokenReference } from './composer/token-text.ts'
 import { type InputSelection } from './native/api.ts'
 export { useComposerOverlayHeight, useMeasureComposerOverlay } from './composer/height.ts'
 import { useMeasureComposerOverlay } from './composer/height.ts'
@@ -1126,7 +1126,7 @@ export function ComposerView(input: ComposerViewProps) {
               }}
               onSubmit={() => { void submit() }}
               theme={{ caret: t.text }}
-              style={{ width: '100%', fontSize: 14, lineHeight: LINE_HEIGHT, color: t.text, fontFamily: FONT_UI, opacity: connected ? 1 : 0.6 }}
+              style={{ width: '100%', fontSize: CHIP_FONT_SIZE, lineHeight: LINE_HEIGHT, color: t.text, fontFamily: FONT_UI, opacity: connected ? 1 : 0.6 }}
             />
           </div>
           {feedback && !error && <div testId="composer-feedback"><Label color={muted(t, 0.6)} size={12}>{feedback}</Label></div>}

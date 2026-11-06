@@ -14,6 +14,8 @@ export interface FontPlan {
   mono: string
   /** The code face's advance in em (Menlo 1233/2048, JetBrains Mono 600/1000). */
   monoAdvance: number
+  /** The UI face's space advance in em (Inter 576/2048, Segoe UI Variable 561/2048); null on macOS, which sizes by Menlo. */
+  uiSpaceAdvance: number | null
 }
 
 /** Inter 4.1's variable roman and italic (`src/assets/fonts`, OFL; THIRD_PARTY_NOTICES.md). */
@@ -27,12 +29,33 @@ export const MONO_WEIGHT_FILES = ['JetBrainsMono-SemiBold.ttf', 'JetBrainsMono-B
 /** Windows 11's variable UI font, in its text optical size. */
 export const SEGOE_VARIABLE = 'Segoe UI Variable Text'
 
+/** Inter's and Segoe UI Variable's space; another `KYBERN_UI_FONT` is assumed to have about Inter's. */
+const INTER_SPACE = 576 / 2048, SEGOE_SPACE = 561 / 2048
+
 /** The plan for a platform. `KYBERN_UI_FONT` names another UI family off macOS (for the checks). */
 export function fontPlan(platform: NodeJS.Platform, env: Record<string, string | undefined>, exists: (file: string) => boolean = existsSync): FontPlan {
-  if (platform === 'darwin') return { systemUi: null, mono: 'Menlo', monoAdvance: 0.602 }
+  if (platform === 'darwin') return { systemUi: null, mono: 'Menlo', monoAdvance: 0.602, uiSpaceAdvance: null }
   const windows = env.WINDIR || env.SystemRoot || 'C:\\Windows'
   const segoe = platform === 'win32' && exists(path.win32.join(windows, 'Fonts', 'SegUIVar.ttf'))
-  return { systemUi: env.KYBERN_UI_FONT || (segoe ? SEGOE_VARIABLE : INTER), mono: 'JetBrains Mono', monoAdvance: 0.6 }
+  const systemUi = env.KYBERN_UI_FONT || (segoe ? SEGOE_VARIABLE : INTER)
+  return { systemUi, mono: 'JetBrains Mono', monoAdvance: 0.6, uiSpaceAdvance: systemUi === SEGOE_VARIABLE ? SEGOE_SPACE : INTER_SPACE }
+}
+
+/** Air kept between a chip's icon and its label, in px. */
+export const CHIP_ICON_GAP = 1.5
+
+/**
+ * The run a composer chip reserves under its icon: the native input draws the first two characters of a chip in the icon's
+ * `font` at the input's own size and paints the icon over them, so the room is whatever those characters advance. macOS
+ * draws two Menlo spaces (`ui: false`). Elsewhere two JetBrains Mono spaces were wider than the icon only while that face
+ * resolved; with the face unregistered (a lab, a fixture) or resolved late they fell back to the UI font's spaces, about
+ * half as wide, and the icon covered the label's first letters. The UI face always resolves, so this pads with its own
+ * spaces (`ui: true`: draw the first two in the UI font) in the count that clears the icon and `CHIP_ICON_GAP`.
+ */
+export function chipPad(plan: FontPlan, fontSize: number, iconSize: number): { text: string; ui: boolean } {
+  if (plan.uiSpaceAdvance === null) return { text: '  ', ui: false }
+  const count = Math.max(2, Math.ceil((iconSize + CHIP_ICON_GAP) / (plan.uiSpaceAdvance * fontSize)))
+  return { text: ' '.repeat(count), ui: true }
 }
 
 export const FONTS = fontPlan(process.platform, process.env)
