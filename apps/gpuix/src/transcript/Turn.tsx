@@ -164,6 +164,7 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
         (block.kind === 'tool' && isAgentLaunchBlock(block, tasksByToolCall.get(block.call.id))) ||
         (block.kind === 'runtime_task' && block.task.kind === 'agent') ||
         isOrchestrationBlock(block) ||
+        (block.kind === 'notice' && !group.answer) ||
         // A question a restart cut off still wants an answer (its "Reply in chat"), and an answer an agent gave for the user
         // ("Answered by Coordinator") is the user's to see: both stay outside the fold.
         (block.kind === 'approval' && (expiredQuestion(block.approval, block.decision) || !!block.answeredBy))
@@ -172,7 +173,7 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
       else if (block.kind !== 'visual') disclosureBlocks.push(block)
     }
     return { agentBlocks, disclosureBlocks }
-  }, [roots, tasksByToolCall])
+  }, [roots, tasksByToolCall, group.answer])
   const [expanded, setExpanded] = useRowState(`work:${group.turnId}`, false)
   // The fold: when this turn settles while it is on screen at the tail, the "Worked for" disclosure first shows its work, then closes
   // with the same 220 ms height tween as a click (the rows fold away instead of vanishing). A turn first rendered settled, one the reader
@@ -308,7 +309,7 @@ export const TurnFooter = memo(function TurnFooter({ group, threadId, isLast }: 
               <Para color={muted(t)}>Reverted to before this turn</Para>
             </div>
           )}
-          {(group.answer || group.end) && (
+          {answerText.trim() && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2, marginLeft: -5 }}>
               <CopyAction text={answerText} testId="answer-copy" />
               <SaveToNoteAction text={answerText} testId="answer-save-note" />
