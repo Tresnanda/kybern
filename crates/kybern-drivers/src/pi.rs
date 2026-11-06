@@ -386,6 +386,7 @@ struct State {
     prompt_pending: bool,
     native_started: bool,
     native_command: Option<String>,
+    compaction_noticed: bool,
     manual_compacting: bool,
     closed: bool,
     model: Value,
@@ -999,6 +1000,7 @@ impl PiSession {
                     let mut st = self.state.lock().await;
                     st.activity_revision += 1;
                     st.compacting = false;
+                    st.compaction_noticed = true;
                 }
                 let error = v.get("errorMessage").and_then(Value::as_str);
                 if v.get("willRetry").and_then(Value::as_bool) == Some(true) && error.is_none() {
@@ -1081,6 +1083,8 @@ impl PiSession {
         st.retrying = false;
         st.compacting = false;
         st.manual_compacting = manual_compacting;
+        st.compaction_noticed = false;
+        st.native_command = None;
         st.turn_started = Some(std::time::Instant::now());
         st.turn_usage = Usage::default();
         st.turn_cost = 0.0;
@@ -1113,7 +1117,7 @@ impl PiSession {
         // A settled callback may start extension compaction or retries. Verify
         // the entire idle/anchor boundary, including events received while the
         // anchor request was pending, before publishing terminal state.
-        let (anchor, usage, cost, duration_ms, error, aborted) = loop {
+        let (anchor, usage, cost, duration_ms, error, aborted, handoff_notice) = loop {
             let revision = {
                 let st = self.state.lock().await;
                 if !st.active || st.closed || st.generation != generation {
@@ -1171,9 +1175,14 @@ impl PiSession {
             st.tool_previews.clear();
             st.bash_commands.clear();
             let duration = st.turn_started.take().map(|t| t.elapsed().as_millis() as u64).unwrap_or(0);
-            break (anchor, std::mem::take(&mut st.turn_usage), st.turn_cost, duration, st.turn_error.take(), st.aborted);
+            let handoff_notice = self.flavor == Flavor::Omp && st.native_command.as_deref() == Some("handoff") && !st.compaction_noticed;
+            break (anchor, std::mem::take(&mut st.turn_usage), st.turn_cost, duration, st.turn_error.take(), st.aborted, handoff_notice);
         };
         self.withdraw_requests().await;
+        // OMP handoff can compact without emitting the compaction lifecycle frames.
+        if handoff_notice && !aborted && error.is_none() {
+            self.emit(DriverEvent::Notice { level: NoticeLevel::Info, text: "Context compacted".into(), data: None }).await;
+        }
         let anchors = crate::TurnAnchors { turn_id: anchor, previous_end: None };
         let ev = if aborted {
             DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, usage, cost_usd: Some(cost), duration_ms, anchors }
