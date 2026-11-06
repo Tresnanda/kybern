@@ -1027,6 +1027,15 @@ export class MachineSet {
         }
       }
       if (isItemRead(method)) await cache.put(machineId, method, params, value);
+      if (isItemEdit(method)) {
+        const note = method === 'notes.update';
+        const item = value as { id: string };
+        const patch = params as { thread_id?: string };
+        const readMethod = note ? 'notes.get' : 'tasks.items.get';
+        const saved = { [note ? 'note' : 'task']: value };
+        await cache.put(machineId, readMethod, { id: item.id }, saved);
+        if (note && patch.thread_id) await cache.put(machineId, readMethod, { thread_id: patch.thread_id }, saved);
+      }
       return value;
     }
     if (isItemRead(method)) {

@@ -33,11 +33,11 @@ proxy.attach(kybernClientFactory(() => ({ close() {}, send() {} }) as never)({
   relayToken: 'tok-mac',
 }))
 
-const realMachines = await import('../machines/index.ts')
+const realMachines = { ...await import('../machines/index.ts') }
 mock.module('../machines/index.ts', () => ({ ...realMachines, clientFor: () => proxy }))
 const { uploadBytes, uploadPath } = await import('./store.ts')
 const dir = mkdtempSync(path.join(tmpdir(), 'kybern-remote-upload-'))
-afterAll(() => { server.stop(true); rmSync(dir, { recursive: true, force: true }) })
+afterAll(() => { mock.module('../machines/index.ts', () => realMachines); server.stop(true); rmSync(dir, { recursive: true, force: true }) })
 
 test('a pasted image reaches another machine through its route, with no address on the proxy', async () => {
   expect(proxy.endpoint.url).toBe('')
