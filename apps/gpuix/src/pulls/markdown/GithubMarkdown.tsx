@@ -9,6 +9,7 @@ import { DocumentMarkdown } from '../../native/markdownDocument.tsx'
 import { ResponseImage } from '../../transcript/images.tsx'
 import { ImageCard } from '../../transcript/ThreadImage.tsx'
 import { column } from '../../usage/controls.tsx'
+import { useBoxWidth } from '../../usage/useBoxWidth.ts'
 import { loadable, useGithubImage, type GithubImageContext } from './githubImage.ts'
 import { githubSegments } from './segments.ts'
 
@@ -26,12 +27,13 @@ export function GithubImages({ value, children }: { value: GithubImageContext; c
   return <Context.Provider value={stable}>{children}</Context.Provider>
 }
 
-export function GithubImage({ source, alt, width, height }: { source: string; alt: string; width?: number; height?: number }) {
+/** `room`: the width of the column the image sits in (0 until measured), so a wide image shrinks to a narrow column. */
+export function GithubImage({ source, alt, width, height, room = 0 }: { source: string; alt: string; width?: number; height?: number; room?: number }) {
   const context = useContext(Context)
   const label = alt || 'Image'
   const image = useGithubImage(context, source)
   if (!loadable(source)) return <ImageCard testId="github-image" label={label} reason="This image source cannot be shown." />
-  if (image.image) return <ResponseImage source={image.image.source} label={label} maxWidth={Math.min(IMAGE_WIDTH, width ?? IMAGE_WIDTH)} maxHeight={Math.min(IMAGE_HEIGHT, height ?? IMAGE_HEIGHT)} />
+  if (image.image) return <ResponseImage source={image.image.source} label={label} maxWidth={Math.min(IMAGE_WIDTH, width ?? IMAGE_WIDTH, room > 0 ? room : IMAGE_WIDTH)} maxHeight={Math.min(IMAGE_HEIGHT, height ?? IMAGE_HEIGHT)} />
   if (!image.failure) return <ImageCard testId="github-image" label={label} loading />
   const retryable = image.failure.status !== 413 && image.failure.status !== 415 && image.failure.status !== -1
   return <ImageCard testId="github-image" label={label} reason={image.failure.reason} onRetry={retryable ? image.retry : undefined} />
@@ -50,10 +52,11 @@ export const GithubMarkdown = memo(function GithubMarkdown({ source, document = 
       ? <DocumentMarkdown key={key} {...props} {...own} source={value} />
       : <markdown key={key} {...props} {...own} source={value} />
   }
+  const [box, room] = useBoxWidth()
   if (segments.length === 1 && segments[0]!.kind === 'text') return text('text', segments[0]!.text, 0)
-  return <div testId="github-markdown" style={{ ...column, gap: BLOCK_GAP, alignItems: 'flex-start' }}>
+  return <div ref={box} testId="github-markdown" style={{ ...column, gap: BLOCK_GAP, alignItems: 'flex-start', alignSelf: 'stretch', minWidth: 0 }}>
     {segments.map((segment, i) => segment.kind === 'text'
       ? <div key={i} style={{ ...column, alignSelf: 'stretch' }}>{text(i, segment.text, i)}</div>
-      : <GithubImage key={i} source={segment.source} alt={segment.alt} {...(segment.width ? { width: segment.width } : {})} {...(segment.height ? { height: segment.height } : {})} />)}
+      : <GithubImage key={i} source={segment.source} alt={segment.alt} {...(segment.width ? { width: segment.width } : {})} {...(segment.height ? { height: segment.height } : {})} room={room} />)}
   </div>
 })

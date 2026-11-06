@@ -71,6 +71,9 @@ function LinkedPull({ pull, project, repo, issue }: { pull: IssueLinkedPull; pro
   </div>
 }
 
+/** Fits "Pull requests", the sidebar's longest label; the sidebar is 12 px wider than the pull request one so values keep their 180 px. */
+const ISSUE_LABEL_WIDTH = 88
+
 function Sidebar({ detail, project, repo, compact }: { detail: IssueDetailResult; project: Project; repo?: string; compact: boolean }) {
   const t = useTheme()
   const { issue } = detail
@@ -78,12 +81,12 @@ function Sidebar({ detail, project, repo, compact }: { detail: IssueDetailResult
   const pulls = detail.pull_requests ?? []
   const body = <>
     <InspectorGroup first={!compact}>
-      <InspectorRow label="Assignees" testId="issue-assignees">{issue.assignees?.length ? issue.assignees.map(a => <Person key={a.login} login={a.login} url={a.avatar_url} />) : none}</InspectorRow>
-      <InspectorRow label="Labels" testId="issue-labels">{issue.labels?.length ? issue.labels.map(l => <StatusChip key={l.name} dot={labelColor(l.color) ?? t.textSecondary}>{l.name}</StatusChip>) : none}</InspectorRow>
-      <InspectorRow label="Milestone" testId="issue-milestone">{issue.milestone ? <Label color={t.text} size={13} lineHeight={20}>{issue.milestone}</Label> : none}</InspectorRow>
+      <InspectorRow labelWidth={ISSUE_LABEL_WIDTH} label="Assignees" testId="issue-assignees">{issue.assignees?.length ? issue.assignees.map(a => <Person key={a.login} login={a.login} url={a.avatar_url} />) : none}</InspectorRow>
+      <InspectorRow labelWidth={ISSUE_LABEL_WIDTH} label="Labels" testId="issue-labels">{issue.labels?.length ? issue.labels.map(l => <StatusChip key={l.name} dot={labelColor(l.color) ?? t.textSecondary}>{l.name}</StatusChip>) : none}</InspectorRow>
+      <InspectorRow labelWidth={ISSUE_LABEL_WIDTH} label="Milestone" testId="issue-milestone">{issue.milestone ? <Label color={t.text} size={13} lineHeight={20}>{issue.milestone}</Label> : none}</InspectorRow>
     </InspectorGroup>
     <InspectorGroup>
-      <InspectorRow label="Pull requests" testId="issue-pulls">
+      <InspectorRow labelWidth={ISSUE_LABEL_WIDTH} label="Pull requests" testId="issue-pulls">
         {pulls.length || issue.linked_pull_requests?.length
           ? <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flexGrow: 1 }}>{pulls.length ? pulls.map(p => <LinkedPull key={p.number} pull={p} project={project} issue={issue} {...(repo ? { repo } : {})} />) : issue.linked_pull_requests!.map(n => <Label key={n} color={t.text} size={13} lineHeight={20}>{`#${n}`}</Label>)}</div>
           : none}
@@ -93,7 +96,7 @@ function Sidebar({ detail, project, repo, compact }: { detail: IssueDetailResult
   if (compact) return <div testId="issue-sidebar" style={{ display: 'flex', flexDirection: 'column' }}>{body}</div>
   return (
     // A cached island sized by its row, like the pull request sidebar: a scroll frame of the description replays it.
-    <div {...FILL_ISLAND} style={{ display: 'flex', flexDirection: 'column', width: 296, flexShrink: 0, minHeight: 0 }}>
+    <div {...FILL_ISLAND} style={{ display: 'flex', flexDirection: 'column', width: 308, flexShrink: 0, minHeight: 0 }}>
       <div testId="issue-sidebar" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, overflowY: 'scroll', paddingLeft: 20, paddingRight: 20, paddingTop: 8, paddingBottom: 24, borderLeftWidth: 1, borderColor: t.surfaceDivider }}>{body}</div>
     </div>
   )
