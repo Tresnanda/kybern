@@ -308,6 +308,10 @@ expression: scopes
   - "orchestration:read"
 - - github.pr.action
   - "orchestration:operate"
+- - github.issue.list
+  - "orchestration:read"
+- - github.issue.detail
+  - "orchestration:read"
 - - github.actions.runs
   - "orchestration:read"
 - - github.actions.run
@@ -343,6 +347,8 @@ expression: scopes
 - - threads.files.write
   - "orchestration:operate"
 - - threads.files.resolve
+  - "orchestration:read"
+- - threads.files.outside
   - "orchestration:read"
 - - skills.list
   - "orchestration:read"

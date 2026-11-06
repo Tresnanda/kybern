@@ -25,6 +25,7 @@ import type { MenuItem } from "../ui/menuModel";
 import { ErrorBanner } from "../ui/primitives";
 import { ProviderMark } from "../ui/ProviderMark";
 import { Toggle } from "../ui/Toggle";
+import { useLists } from "../state/useLists";
 
 /** The computer's global Coordinator defaults, live (`settings.changed`). */
 export function useOrchestrationDefaults(): OrchestrationSettings | null {
@@ -38,7 +39,9 @@ export function saveProjectCoordinator(projectId: string, next: CoordinatorOverr
 
 export function ProjectCoordinatorSection({ projectId }: { projectId: string }) {
   const app = useApp();
-  const saved = app.projects.find((project) => project.id === projectId)?.coordinator ?? null;
+  // Every machine's projects: the computer the phone is at may be away (#245).
+  const lists = useLists(null);
+  const saved = lists.projects.find((project) => project.id === projectId)?.coordinator ?? null;
   const global = useOrchestrationDefaults();
   // Shown at once; `projects.changed` confirms it, a failure puts the saved value back.
   const [pending, setPending] = useState<{ value: CoordinatorOverrides | null } | null>(null);

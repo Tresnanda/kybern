@@ -33,7 +33,7 @@ import {
 import { DURATION, EASE_OUT, MASS, SIZE } from "../components/liquid/motion";
 import type { Thread, ThreadMessageRecord } from "../state/protocol";
 import { count } from "../state/format";
-import { errorText, rpc, useApp, useThreadValue } from "../state/runtime";
+import { errorText, rpc, threadMachine, useApp, useThreadLive, useThreadValue } from "../state/runtime";
 import type { ThreadState } from "../state/transcript";
 import { MenuButton } from "../ui/ActionMenu";
 import { confirm } from "../ui/Alert";
@@ -48,8 +48,8 @@ import { radius, space, useTheme } from "../ui/theme";
  * (`thread_message_held` and `thread_message_resolved` both advance its `last_seq`).
  */
 export function useHeldMessages(threadId: string | undefined, lastSeq: number) {
-  const app = useApp();
-  const connected = app.status === "open";
+  // Held messages live on the thread's own machine (#245).
+  const connected = useThreadLive(threadId);
   const [held, setHeld] = useState<ThreadMessageRecord[]>([]);
   const generation = useRef(0);
   const reload = () => {
@@ -105,7 +105,7 @@ function useResolve(message: ThreadMessageRecord, name: string, onResolved: () =
   async function act(action: Resolution) {
     setBusy(action);
     try {
-      await rpc(action === "deliver" ? "threads.messages.deliver" : "threads.messages.dismiss", { message_id: message.id });
+      await rpc(action === "deliver" ? "threads.messages.deliver" : "threads.messages.dismiss", { message_id: message.id }, threadMachine(message.to_thread_id));
       if (action === "deliver") haptics.success();
       else haptics.commit();
       // Commit the exit animation for this action before the row unmounts.
@@ -117,7 +117,8 @@ function useResolve(message: ThreadMessageRecord, name: string, onResolved: () =
       setBusy(null);
     }
   }
-  return { busy, leaving, act, kind };
+  const live = useThreadLive(message.to_thread_id);
+  return { busy, leaving, act, kind, live };
 }
 
 const openThread = (id: string) => router.push({ pathname: "/thread/[id]", params: { id } });
@@ -223,15 +224,17 @@ function HeldActions({
   name,
   kind,
   busy,
+  live,
   onAct,
 }: {
   name: string;
   kind: string;
+  /** The receiving thread's machine answers. */
+  live: boolean;
   busy: Resolution | null;
   onAct: (action: Resolution) => void;
 }) {
-  const app = useApp();
-  const disabled = app.status !== "open" || busy !== null;
+  const disabled = !live || busy !== null;
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: space.lg }}>
       <Button
@@ -341,13 +344,13 @@ function HeldStackHeader({
   onToggle: () => void;
   onResolved: (id: string) => void;
 }) {
-  const app = useApp();
   const { colors } = useTheme();
   const n = held.length;
+  const live = useThreadLive(held[0]?.to_thread_id);
   async function resolveAll(action: Resolution) {
     for (const message of [...held]) {
       try {
-        await rpc(action === "deliver" ? "threads.messages.deliver" : "threads.messages.dismiss", { message_id: message.id });
+        await rpc(action === "deliver" ? "threads.messages.deliver" : "threads.messages.dismiss", { message_id: message.id }, threadMachine(message.to_thread_id));
         onResolved(message.id);
       } catch (e) {
         haptics.error();
@@ -358,7 +361,7 @@ function HeldStackHeader({
     if (action === "deliver") haptics.success();
     else haptics.commit();
   }
-  const offline = app.status !== "open";
+  const offline = !live;
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: 32 }}>
       <T variant="footnote" tone="secondary" numberOfLines={1} style={{ flex: 1, fontWeight: "600", fontVariant: ["tabular-nums"] }}>
@@ -425,7 +428,7 @@ function HeldBubble({
 }) {
   const { colors } = useTheme();
   const reduced = useReducedMotion();
-  const { busy, leaving, act, kind } = useResolve(message, name, onResolved);
+  const { busy, leaving, act, kind, live } = useResolve(message, name, onResolved);
   const motion = useHeldMotion(leaving);
   const [expanded, setExpanded] = useState(false);
   const [long, setLong] = useState(false);
@@ -499,7 +502,7 @@ function HeldBubble({
       ) : (
         bubble
       )}
-      <HeldActions name={name} kind={kind} busy={busy} onAct={(action) => void act(action)} />
+      <HeldActions name={name} kind={kind} busy={busy} live={live} onAct={(action) => void act(action)} />
     </Animated.View>
   );
 }
@@ -552,7 +555,7 @@ function HeldRow({
   beforeOpen?: () => void;
   onResolved: () => void;
 }) {
-  const { busy, leaving, act, kind } = useResolve(message, name, onResolved);
+  const { busy, leaving, act, kind, live } = useResolve(message, name, onResolved);
   const motion = useHeldMotion(leaving);
   const [expanded, setExpanded] = useState(false);
   return (
@@ -571,7 +574,7 @@ function HeldRow({
             {expanded ? message.body.trim() : plainLine(message.body, 240)}
           </T>
         </Tap>
-        <HeldActions name={name} kind={kind} busy={busy} onAct={(action) => void act(action)} />
+        <HeldActions name={name} kind={kind} busy={busy} live={live} onAct={(action) => void act(action)} />
       </View>
     </Animated.View>
   );

@@ -18,9 +18,12 @@ import {
   loadThread,
   refresh,
   rpc,
+  threadMachine,
   useApp,
   useThread,
+  useThreadLive,
 } from "../src/state/runtime";
+import { useLists } from "../src/state/useLists";
 import { Button, Empty, ErrorBanner, Field, Page } from "../src/ui/primitives";
 import { CONTENT_MAX_WIDTH, space, useTheme } from "../src/ui/theme";
 
@@ -46,9 +49,12 @@ export default function Workspace() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const thread = app.threads.find((t) => t.id === threadId) ?? snapshot.thread;
-  const project = app.projects.find(
+  const lists = useLists();
+  const project = lists.projects.find(
     (p) => p.id === (projectId ?? thread?.project_id),
   );
+  // Checkpoints, renames and workspace actions go to the thread's own machine (#245).
+  const live = useThreadLive(threadId);
   const tab = initialTab ?? (threadId ? "More" : "Files");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -56,7 +62,7 @@ export default function Workspace() {
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
   const [title, setTitle] = useState(thread?.title ?? "");
   useEffect(() => {
-    if (!threadId || app.status !== "open") return;
+    if (!threadId || !live) return;
     let alive = true;
     void Promise.all([rpc("threads.checkpoints", { thread_id: threadId })])
       .then(([c]) => {
@@ -70,14 +76,14 @@ export default function Workspace() {
     return () => {
       alive = false;
     };
-  }, [threadId, tab, app.status]);
+  }, [threadId, tab, live]);
   async function run(work: () => Promise<unknown>, done?: string) {
     setBusy(true);
     setError("");
     try {
       await work();
       if (done) showToast(done);
-      await refresh();
+      await refresh(threadMachine(threadId));
       if (threadId) await loadThread(threadId);
     } catch (e) {
       setError(errorText(e));

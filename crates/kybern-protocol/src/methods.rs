@@ -1156,6 +1156,19 @@ pub struct ThreadsListParams {
     /// Also return the hidden threads that record tool calls other machines made here (`Thread::inbound`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub include_inbound: bool,
+    /// Only threads whose row or activity may have changed after this cursor (the `head_seq` of an earlier
+    /// result): new events, row edits, archiving, and parents whose delegated children changed. Archived threads
+    /// are returned when they changed even without `include_archived`, so a client can drop them. A client
+    /// replaces the activity of every returned thread with its entry in `activity`, or clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since_seq: Option<crate::EventSeq>,
+    /// Per project: every active thread (pinned, running, awaiting approval, or with an activity summary) plus
+    /// at most this many of the newest settled threads by `updated_at`. `omitted` counts the rest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settled_limit: Option<u32>,
+    /// With `settled_limit` and `project_id`: skip this many of the newest settled threads, to page older ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settled_offset: Option<u32>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsListResult {
@@ -1163,6 +1176,20 @@ pub struct ThreadsListResult {
     /// Compact activity summaries for sidebar rendering.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub activity: Vec<ThreadActivitySummary>,
+    /// The event head read before the rows: the `since_seq` for the next call. Daemons without list cursors
+    /// leave it out, and a client then treats the result as the full list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_seq: Option<crate::EventSeq>,
+    /// With `settled_limit`: the settled threads per project this result left out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub omitted: Vec<ProjectThreadCount>,
+}
+
+/// How many threads of one project a `threads.list` result left out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectThreadCount {
+    pub project_id: ProjectId,
+    pub count: u32,
 }
 method!(ThreadsList, "threads.list", Some(Scope::OrchestrationRead), ThreadsListParams, ThreadsListResult);
 
@@ -1318,6 +1345,21 @@ pub struct ThreadsGetParams {
     /// usage, pending questions and approvals, notes) comes back empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_only: Option<bool>,
+    /// Size the page by turns, rows and bytes instead of `transcript_limit`, for first and `before_seq` pages.
+    /// Daemons without page budgets ignore it, so clients still send `transcript_limit` as the fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_budget: Option<TranscriptPageBudget>,
+}
+
+/// A transcript page of the newest rows that cover about `turns` turns (whole turns), at most `max_rows` rows
+/// and `max_bytes` serialized row bytes. Equal-sequence rows stay together and the newest row is always
+/// included, so a page can exceed a cap by one row group. On a first page, unfinished older rows are added as
+/// with `transcript_limit`. Bytes are counted on the projected rows, before `include_tool_output` hydration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TranscriptPageBudget {
+    pub turns: u32,
+    pub max_rows: u32,
+    pub max_bytes: u32,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsGetResult {
@@ -1338,6 +1380,11 @@ pub struct ThreadsGetResult {
     /// Durable latest-state task projection for this thread.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runtime_tasks: Vec<RuntimeTask>,
+    /// The event head read before this snapshot was projected: every event at or below it is reflected.
+    /// On one connection, a `threads.get` sent after an `events.subscribe` reads at or after that subscribe's
+    /// `head_seq`. Older daemons leave it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub as_of_seq: Option<crate::EventSeq>,
 }
 method!(ThreadsGet, "threads.get", Some(Scope::OrchestrationRead), ThreadsGetParams, ThreadsGetResult);
 
@@ -2967,6 +3014,124 @@ pub struct PrActionParams {
 }
 method!(PrAction, "github.pr.action", Some(Scope::OrchestrationOperate), PrActionParams, Empty);
 
+// Repository issues through `gh` (#217): a filtered, paged list and one issue with its comments.
+// Group projects list every member (each row tagged with `repo`) and name the member to open one.
+
+/// One issue as `gh issue list` and `gh issue view` report it.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Issue {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    /// OPEN | CLOSED
+    pub state: String,
+    /// COMPLETED | NOT_PLANNED | REOPENED, when GitHub says why the issue was closed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_reason: Option<String>,
+    pub author: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_avatar_url: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub author_is_bot: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<PrLabel>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assignees: Vec<PrPerson>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub milestone: Option<String>,
+    /// Numbers of the pull requests that will close this issue when they merge.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub linked_pull_requests: Vec<u64>,
+    /// Group projects: the member repository (a `PrListRepo.repo`) the issue is in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IssueListParams {
+    pub project_id: ProjectId,
+    /// open (default) | closed | all
+    #[serde(default = "default_pr_state")]
+    pub state: String,
+    /// GitHub issue search text (title, body and comments).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<String>,
+    /// Only issues with every one of these labels.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
+    /// Only issues assigned to this login (`@me` for the signed-in account).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<String>,
+    /// Issues per page, 1-100.
+    #[serde(default = "default_pr_limit")]
+    pub limit: u32,
+    /// Issues to skip, newest first.
+    #[serde(default)]
+    pub offset: u32,
+    /// Group projects: list just this member repository. Omit to merge every member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IssueListResult {
+    /// Group projects: the issues of every member that answered, tagged with `repo`.
+    pub issues: Vec<Issue>,
+    /// More issues follow the last one returned.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_more: bool,
+    /// The repository's labels (names and colors), for the Labels filter. Group projects: the union.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<PrLabel>,
+    /// Group projects only: one row per member repository, with why it could not be listed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repos: Vec<PrListRepo>,
+}
+method!(IssueList, "github.issue.list", Some(Scope::OrchestrationRead), IssueListParams, IssueListResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IssueDetailParams {
+    pub project_id: ProjectId,
+    pub number: u64,
+    /// Group projects: the member repository (an `Issue.repo`) the issue belongs to. Required for
+    /// a group project; rejected for a single project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IssueComment {
+    pub id: String,
+    pub author: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_avatar_url: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub author_is_bot: bool,
+    pub body: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub url: String,
+}
+/// A pull request that will close an issue.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IssueLinkedPull {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    /// OPEN | MERGED | CLOSED
+    pub state: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IssueDetailResult {
+    pub issue: Issue,
+    pub body: String,
+    /// The first comments, oldest first (at most 100).
+    pub comments: Vec<IssueComment>,
+    /// All comments on the issue; more than `comments` holds when the thread is long.
+    pub comment_count: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pull_requests: Vec<IssueLinkedPull>,
+}
+method!(IssueDetail, "github.issue.detail", Some(Scope::OrchestrationRead), IssueDetailParams, IssueDetailResult);
+
 // GitHub Actions through `gh` (ADE-97): workflow runs on every branch, their jobs and steps, bounded
 // job logs, reruns, cancel and `workflow_dispatch`. Group projects name the member in `repo`.
 
@@ -3104,7 +3269,12 @@ pub struct ActionsRunParams {
     pub project_id: ProjectId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
+    /// The run to read; 0 with `job_id` reads the run that job belongs to.
+    #[serde(default)]
     pub run_id: u64,
+    /// Instead of `run_id`: a job (a check run of GitHub Actions has the job's id) whose run to read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<u64>,
     /// An earlier attempt to read instead of the latest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempt: Option<u32>,
@@ -3425,6 +3595,9 @@ pub struct FilesReadResult {
     /// True when `if_version` still matched; `content` is then empty.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unchanged: bool,
+    /// True for a file outside the workspace the user allowed Kybern to open: no write reaches it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
 }
 method!(FilesRead, "files.read", Some(Scope::OrchestrationRead), FilesReadParams, FilesReadResult);
 
@@ -3497,6 +3670,57 @@ pub struct ThreadFilesResolveResult {
 }
 method!(ThreadFilesResolve, "threads.files.resolve", Some(Scope::OrchestrationRead), ThreadFilesResolveParams, ThreadFilesResolveResult);
 
+/// What the user decided about a file outside the workspace.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OutsideAllow {
+    /// Only ask whether it opens.
+    #[default]
+    Check,
+    /// Open this file, read-only, until the daemon restarts.
+    Once,
+    /// Open every file in the file's folder, read-only, from now on.
+    Folder,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OutsideVerdict {
+    /// `threads.files.read` opens it.
+    Open,
+    /// It opens once the user allows it.
+    Ask,
+    /// It cannot open from this client; see `reason`.
+    Refused,
+}
+/// A link to a file outside the conversation's workspace. Read-only whatever the answer; only the desktop app on the
+/// daemon's own machine can allow a file or folder, other clients see today's refusal unless the folder is allowed.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadFileOutsideParams {
+    pub thread_id: ThreadId,
+    /// As written in the link: absolute, or relative to the thread cwd. A `:line` or `#L10` suffix is ignored.
+    pub path: String,
+    #[serde(default)]
+    pub allow: OutsideAllow,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadFileOutsideResult {
+    pub verdict: OutsideVerdict,
+    /// What `threads.files.read` opens: the file's absolute path outside the workspace, or the workspace-relative path
+    /// when the link turned out to name a workspace file.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub path: String,
+    /// The folder "Always allow" would add; absent when that folder can never be allowed (the file can still open once).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    /// The file is in the system's temporary folder, where agents keep scratch files.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub scratch: bool,
+    /// Why the file cannot open from here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+method!(ThreadFileOutside, "threads.files.outside", Some(Scope::OrchestrationRead), ThreadFileOutsideParams, ThreadFileOutsideResult);
+
 // ---- skills ----
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -3554,6 +3778,11 @@ pub struct EventsSubscribeParams {
     /// an explicit `output_omitted` marker that can be fetched by call id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_tool_output: Option<bool>,
+    /// With `thread_id` and `after_seq`: when the thread has more than 128 events or 1 MiB of events after
+    /// `after_seq`, skip the replay and answer with `snapshot`, this `threads.get` page projected exactly
+    /// through `head_seq` (its `thread_id` and `through_seq` are replaced). Older daemons ignore it and replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap_snapshot: Option<ThreadsGetParams>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EventsSubscribeResult {
@@ -3563,6 +3792,10 @@ pub struct EventsSubscribeResult {
     /// This daemon sends `events.ready` after replay, before live delivery resumes.
     #[serde(default)]
     pub replay_ready: bool,
+    /// Sent instead of a replay when `gap_snapshot` was asked for and the gap was too large. It reflects
+    /// exactly the events through `head_seq`; live events after it follow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<Box<ThreadsGetResult>>,
 }
 method!(EventsSubscribe, "events.subscribe", Some(Scope::OrchestrationRead), EventsSubscribeParams, EventsSubscribeResult);
 
@@ -4971,6 +5204,8 @@ registry!(
     PrDetail,
     PrPage,
     PrAction,
+    IssueList,
+    IssueDetail,
     ActionsRuns,
     ActionsRun,
     ActionsLog,
@@ -4989,6 +5224,7 @@ registry!(
     ThreadFileRead,
     ThreadFileWrite,
     ThreadFilesResolve,
+    ThreadFileOutside,
     SkillsList,
     IntegrationsList,
     HtmlPublish,

@@ -3,6 +3,7 @@ import { startSplitView } from './split/store.ts'
 import { useMeasureComposerOverlay } from './composer/height.ts'
 import { CloseGuard } from './shell/CloseGuard.tsx'
 import { CloseDirtyDialog } from './tabs/CloseDirty.tsx'
+import { OutsideFileDialog } from './transcript/OutsideFileDialog.tsx'
 import { WebPageUi } from './native/WebPageUi.tsx'
 import { WorkspaceDialogs } from './dialogs/Dialogs.tsx'
 import { OnboardingLayer, useOnboardingGate } from './onboarding/Welcome.tsx'
@@ -265,6 +266,7 @@ function Workspace() {
       <WorkspaceDialogs />
       <CloseGuard />
       <CloseDirtyDialog />
+      <OutsideFileDialog />
       <WebPageUi />
       <GhSetupSheet />
       <Toaster />

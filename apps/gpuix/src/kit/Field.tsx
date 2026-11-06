@@ -1,5 +1,5 @@
 // One input language (ADE-55): `FieldShell` is the box, `TextField` the single-line input. `SearchField`, `NumberField` and
-// `TextArea` build on the shell. 28 high (`lg` 32 in dialogs), radius 9, an ink fill with no edge; hover adds a 1 px ink edge,
+// `TextArea` build on the shell. 28 high (`lg` 32 in dialogs, `sm` 24 in toolbars), radius 9, an ink fill with no edge; hover adds a 1 px ink edge,
 // focus a 1.5 px accent edge over a faint accent wash, invalid a 1 px red edge and a 3 px red halo, disabled drops the fill for
 // a 1 px ink edge (the spec's 45° hatch needs a repeating pattern the renderer does not have, so it is the edge alone).
 // Placeholder text is the theme's `textPlaceholder`, painted over the input (the native one is a fixed grey); the caret is the accent.
@@ -7,9 +7,10 @@ import { useGpuix, type InputProps, type PublicInstance, type StyleDesc } from '
 import { useRef, useState, type ReactNode } from 'react'
 import { FONT_MONO, FONT_UI } from '../theme.ts'
 import { Label, useTheme } from '../ui.tsx'
-import { HEIGHT, RADIUS, useControls } from './controls.ts'
+import { CONTROL, HEIGHT, RADIUS, useControls } from './controls.ts'
 
-export type FieldSize = 'md' | 'lg'
+/** `sm` is the toolbar height (24, the radius of a `sm` button): a filter row's search sits level with its segmented control and chips. */
+export type FieldSize = 'sm' | 'md' | 'lg'
 
 export interface FieldShellProps {
   size?: FieldSize
@@ -43,8 +44,8 @@ export function FieldShell({ size = 'md', focused = false, invalid = false, disa
       style={{
         display: 'flex', alignItems: multiline ? 'flex-start' : 'center', gap: 6, minWidth: 0, flexShrink: 1,
         ...(width ? { width } : {}),
-        ...(multiline ? { minHeight: 76, paddingTop: 9, paddingBottom: 9 } : { height: size === 'lg' ? HEIGHT.lg : HEIGHT.md }),
-        ...(bare ? {} : { paddingLeft: size === 'lg' ? 12 : 10, paddingRight: size === 'lg' ? 12 : 10, borderRadius: RADIUS.field,
+        ...(multiline ? { minHeight: 76, paddingTop: 9, paddingBottom: 9 } : { height: size === 'lg' ? HEIGHT.lg : size === 'sm' ? HEIGHT.sm : HEIGHT.md }),
+        ...(bare ? {} : { paddingLeft: size === 'lg' ? 12 : size === 'sm' ? 8 : 10, paddingRight: size === 'lg' ? 12 : size === 'sm' ? 8 : 10, borderRadius: size === 'sm' ? CONTROL.sm.radius : RADIUS.field,
           backgroundColor: disabled ? 'rgba(0, 0, 0, 0)' : focused ? c.field.focusWash : c.field.bg,
           ...(shadow ? { boxShadow: shadow } : {}),
           // The 3 px red halo is an outline: a shadow behind the translucent fill would tint it.
@@ -98,7 +99,7 @@ export function TextField({ label, value, onChange, size = 'md', width, invalid 
   }
   const focusInput = () => { if (!disabled && input.current) renderer?.focusElement?.(input.current.id) }
   const font = mono ? FONT_MONO : FONT_UI
-  const fontSize = typeof style?.fontSize === 'number' ? style.fontSize : size === 'lg' ? 14 : 13
+  const fontSize = typeof style?.fontSize === 'number' ? style.fontSize : size === 'lg' ? 14 : size === 'sm' ? CONTROL.sm.font : 13
   return (
     <FieldShell size={size} focused={focused} invalid={invalid} disabled={disabled} bare={bare} width={width} leading={leading} trailing={trailing} style={shell} onClick={focusInput}>
       <div style={{ position: 'relative', display: 'flex', flexGrow: 1, flexShrink: 1, minWidth: 0, height: '100%' }}>

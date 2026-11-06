@@ -11,13 +11,16 @@ import { InsetGroup, ListRow, SectionFooter, SectionHeader } from "../src/ui/Lis
 import { SearchField } from "../src/ui/Search";
 import { ProviderMark } from "../src/ui/ProviderMark";
 import { space, useTheme } from "../src/ui/theme";
+import { useLists } from "../src/state/useLists";
 
 /** The model a project's Coordinator delegates one kind of work to: an agent, a model, an effort, or the default. */
 export default function CoordinatorModelScreen() {
   const { projectId, role } = useLocalSearchParams<{ projectId?: string; role?: string }>();
   const app = useApp();
+  // Every machine's projects: the computer the phone is at may be away (#245).
+  const lists = useLists(null);
   const { colors } = useTheme();
-  const project = app.projects.find((item) => item.id === projectId);
+  const project = lists.projects.find((item) => item.id === projectId);
   const known = COORDINATOR_ROLES.find((item) => item.role === role);
   const current = known ? cleanRoleDefault(project?.coordinator?.role_defaults?.[known.role]) : null;
   const available = app.providers.filter((provider) => provider.available);

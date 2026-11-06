@@ -62,7 +62,8 @@
           "cameraPermission": "Take photos to attach to messages and scan Kybern pairing codes.",
           "microphonePermission": false
         }
-      ]
+      ],
+      "expo-sqlite"
     ],
     "experiments": {
       "typedRoutes": true

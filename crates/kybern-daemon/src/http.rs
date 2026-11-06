@@ -33,6 +33,7 @@ pub fn routes() -> Router<AppState> {
         .route("/assets", post(upload_asset).options(asset_preflight))
         .route("/assets/{id}", get(get_asset).options(asset_preflight))
         .route("/threads/{id}/image", get(get_thread_image).options(asset_preflight))
+        .route("/threads/{id}/snapshot", post(post_thread_snapshot).options(asset_preflight))
         .route("/threads/{id}/visuals/{visual}/snapshot/{file}", get(get_visual_snapshot).options(asset_preflight))
 }
 
@@ -67,6 +68,83 @@ async fn session(State(state): State<AppState>, headers: HeaderMap) -> Response 
     let mut response = with_asset_cors(response, origin);
     response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
+}
+
+/// Snapshots smaller than this are sent uncompressed: gzip would save little and cost a round of CPU.
+const SNAPSHOT_GZIP_MIN_BYTES: usize = 16 * 1024;
+
+/// `POST /threads/{id}/snapshot`: the `threads.get` result for the JSON body (`ThreadsGetParams` without
+/// `thread_id`), gzip-compressed when the request accepts it. The daemon's WebSocket stack (axum 0.8 over
+/// tungstenite 0.29) has no permessage-deflate, so a client on a slow link fetches a large first page here
+/// instead: transcripts are JSON and shrink about 5-10x. Same token and scope as the `threads.get` RPC.
+async fn post_thread_snapshot(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<Uuid>, body: Bytes) -> Response {
+    let origin = allowed_asset_origin(&headers);
+    if headers.contains_key(header::ORIGIN) && origin.is_none() {
+        return (StatusCode::FORBIDDEN, "origin cannot read threads").into_response();
+    }
+    let response = thread_snapshot_inner(&state, &headers, id, body).await;
+    let mut response = with_asset_cors(response, origin);
+    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+async fn thread_snapshot_inner(state: &AppState, headers: &HeaderMap, id: Uuid, body: Bytes) -> Response {
+    let Some(raw) = bearer(headers) else { return (StatusCode::UNAUTHORIZED, "missing token").into_response() };
+    let scope = kybern_protocol::Scope::OrchestrationRead;
+    match authenticate(&state.store, &raw) {
+        Ok(Some(p)) if p.has(scope) && crate::auth::effective_scopes(state, &p).contains(&scope) => {}
+        Ok(Some(_)) => return (StatusCode::FORBIDDEN, "token cannot read threads").into_response(),
+        _ => return (StatusCode::UNAUTHORIZED, "invalid token").into_response(),
+    }
+    let mut params: serde_json::Value =
+        if body.is_empty() { serde_json::json!({}) } else { serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null) };
+    let Some(object) = params.as_object_mut() else {
+        return (StatusCode::BAD_REQUEST, "send threads.get params as a JSON object").into_response();
+    };
+    object.insert("thread_id".into(), serde_json::Value::String(id.to_string()));
+    let params: kybern_protocol::methods::ThreadsGetParams = match serde_json::from_value(params) {
+        Ok(params) => params,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    let snapshot = match crate::rpc::thread_snapshot(state, params).await {
+        Ok(snapshot) => snapshot,
+        Err(error) if error.code == kybern_protocol::codes::NOT_FOUND => return (StatusCode::NOT_FOUND, error.message).into_response(),
+        Err(error) if error.code == kybern_protocol::codes::INVALID_PARAMS => {
+            return (StatusCode::BAD_REQUEST, error.message).into_response();
+        }
+        Err(error) => return (StatusCode::INTERNAL_SERVER_ERROR, error.message).into_response(),
+    };
+    let gzip = accepts_gzip(headers);
+    let encoded = tokio::task::spawn_blocking(move || -> std::io::Result<(Vec<u8>, bool)> {
+        let json = serde_json::to_vec(&snapshot)?;
+        if !gzip || json.len() < SNAPSHOT_GZIP_MIN_BYTES {
+            return Ok((json, false));
+        }
+        use std::io::Write;
+        let mut encoder = flate2::write::GzEncoder::new(Vec::with_capacity(json.len() / 4), flate2::Compression::fast());
+        encoder.write_all(&json)?;
+        Ok((encoder.finish()?, true))
+    })
+    .await;
+    let Ok(Ok((bytes, compressed))) = encoded else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "could not encode the thread").into_response();
+    };
+    let mut response = ([(header::CONTENT_TYPE, "application/json")], bytes).into_response();
+    if compressed {
+        response.headers_mut().insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+    }
+    response.headers_mut().append(header::VARY, HeaderValue::from_static("Accept-Encoding"));
+    response
+}
+
+/// Whether `Accept-Encoding` lists gzip (or `*`) without `q=0`.
+fn accepts_gzip(headers: &HeaderMap) -> bool {
+    headers.get_all(header::ACCEPT_ENCODING).iter().filter_map(|value| value.to_str().ok()).flat_map(|value| value.split(',')).any(|item| {
+        let mut parts = item.split(';').map(str::trim);
+        let coding = parts.next().unwrap_or_default();
+        let refused = parts.any(|param| param.strip_prefix("q=").and_then(|q| q.trim().parse::<f32>().ok()).is_some_and(|q| q <= 0.0));
+        (coding.eq_ignore_ascii_case("gzip") || coding == "*") && !refused
+    })
 }
 
 fn bearer(headers: &HeaderMap) -> Option<String> {

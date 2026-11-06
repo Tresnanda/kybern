@@ -29,17 +29,20 @@ import { Empty, ErrorBanner, T } from "../src/ui/primitives";
 import { SpaceTile } from "../src/ui/SpaceTile";
 import { CONTENT_MAX_WIDTH, gutter, space, useTheme } from "../src/ui/theme";
 import { showToast } from "../src/ui/Toast";
+import { useLists } from "../src/state/useLists";
 
 // One project: start work in it, open its Coordinator, tasks, notes and files,
 // its repositories (groups), open pull requests, and where it lives.
 export default function ProjectPage() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const app = useApp();
+  // Every machine's projects: the computer the phone is at may be away (#245).
+  const lists = useLists(null);
   const draft = useDraft();
   const spaces = useSpaces();
   const { colors } = useTheme();
   const { width } = useWindowDimensions();
-  const project = app.projects.find((p) => p.id === id);
+  const project = lists.projects.find((p) => p.id === id);
   const [error, setError] = useState("");
   const [coordinator, setCoordinator] = useState<Thread | null>();
   const [opening, setOpening] = useState(false);

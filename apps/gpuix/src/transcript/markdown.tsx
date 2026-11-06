@@ -1,6 +1,9 @@
 import { knownPullTarget } from '../pulls/OpenPullRequest.tsx'
+import { knownRunTarget, openRunTarget } from '../pulls/openRun.ts'
+import { knownIssueTarget, openIssueTarget } from '../pulls/openIssue.ts'
 import { openTabFromPane } from '../tabs/open.ts'
 import { resolveWorkspaceFile } from './fileLinks.ts'
+import { allowOutsideFile, useRefusedFileLinks } from './outsideFile.ts'
 import { useTranscriptRowLease } from './Window.tsx'
 // Native GFM keeps prose, tables and syntax highlighting in single bounded
 // nodes. Code expansion contributes rows to the OUTER transcript virtual list.
@@ -8,6 +11,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode
 import { useGpuix, type PublicInstance } from '@gpuix/react'
 import { chatLink } from '../../../../packages/kybern-client/src/chatLinks.ts'
 import { fileRefCandidates, linkifyFileRefs } from '../../../../packages/kybern-client/src/fileRefs.ts'
+import { absoluteFileLinks, unlinkFileLinks } from '../../../../packages/kybern-client/src/outsideLinks.ts'
 import { TOOL_RESULT_CHAR_LIMIT, TOOL_RESULT_LINE_LIMIT } from '../shared/lib/toolResultText.ts'
 import { threadClient, usePaneAccess } from '../state.ts'
 import { Label, useTheme } from '../ui.tsx'
@@ -257,10 +261,14 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
   const threadId = pane.get().selectedId
   const candidates = useMemo(() => fileRefCandidates(text), [text])
   const fileOf = useFileRefs(threadId, candidates)
+  // A link to a file this client cannot open (outside the workspace, on a machine that did not allow it) reads as plain text.
+  const fileLinks = useMemo(() => absoluteFileLinks(text), [text])
+  const refused = useRefusedFileLinks(threadId, () => threadClient(threadId, pane.get().selectedMachineId), fileLinks)
   const source = useMemo(() => {
     const chips = refs ? chipifyKybernRefs(text, id => notes.find(n => n.id === id), id => tasks[id]) : text
-    return chips.includes('`') ? linkifyFileRefs(chips, fileOf) : chips
-  }, [text, refs, notes, tasks, fileOf])
+    const linked = chips.includes('`') ? linkifyFileRefs(chips, fileOf) : chips
+    return unlinkFileLinks(linked, refused)
+  }, [text, refs, notes, tasks, fileOf, refused])
   const [preview, setPreview] = useState<{ title: string; text: string; code: boolean; line?: number; whole?: boolean; markdown?: boolean; raw?: boolean } | null>(null)
   useTranscriptRowLease(preview !== null)
   const [image, setImage] = useState<string | null>(null)
@@ -272,6 +280,12 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
       if (link.kind === 'external') {
         const target = await knownPullTarget(link.url)
         if (target && openTabFromPane(pane.id, {kind:'pr', ...target})) return
+        // A GitHub Actions run or job of a known repository opens in the Actions view; other links go to the browser.
+        const run = await knownRunTarget(link.url)
+        if (run) { openRunTarget(run); return }
+        // An issue of a known repository opens in the Issues view too.
+        const issue = await knownIssueTarget(link.url)
+        if (issue) { openIssueTarget(issue); return }
         openTarget(link.url).catch(e => reportError('Unable to open link', e)); return
       }
       const client = threadClient(threadId, pane.get().selectedMachineId)
@@ -282,7 +296,13 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
         if (!threadId) return
         // The path as the workspace spells it (an agent writes from its shell's folder); one the daemon cannot place opens as written,
         // and the tab says why.
-        const path = await resolveWorkspaceFile(client, threadId, link.path) ?? link.path
+        let path = await resolveWorkspaceFile(client, threadId, link.path)
+        if (!path) {
+          // Outside the workspace: it opens read-only once the daemon (and, on this machine, the user) allows it.
+          const outside = await allowOutsideFile(client, threadId, link.path)
+          if (outside === 'cancelled') return
+          path = outside ?? link.path
+        }
         if (!openTabFromPane(pane.id, { kind: 'file', path, root: 'thread', ...(link.line ? { line: link.line } : {}) })) {
           const file = await client.call('threads.files.read', { thread_id: threadId, path })
           setPreview({ title: link.line ? `${path}:${link.line}` : path, text: file.content, code: true, line: link.line, markdown: MARKDOWN_FILE.test(path) })

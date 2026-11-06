@@ -12,6 +12,7 @@ import { useNoteSession } from "../src/state/useNoteSession";
 import { activeEnvironment, useApp } from "../src/state/runtime";
 import { Button, T } from "../src/ui/primitives";
 import { CONTENT_MAX_WIDTH, gutter, space, useTheme } from "../src/ui/theme";
+import { useLists } from "../src/state/useLists";
 
 export default function NoteScreen() {
   const { id, new: fresh, projectId } = useLocalSearchParams<{
@@ -20,6 +21,8 @@ export default function NoteScreen() {
     projectId?: string;
   }>();
   const app = useApp();
+  // Every machine's projects: the computer the phone is at may be away (#245).
+  const lists = useLists(null);
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -33,7 +36,7 @@ export default function NoteScreen() {
   const note = s.note;
   const thread = note?.scope === "thread";
   const projectName = (note?.project_id ?? projectId)
-    ? app.projects.find((p) => p.id === (note?.project_id ?? projectId))?.name
+    ? lists.projects.find((p) => p.id === (note?.project_id ?? projectId))?.name
     : undefined;
   const place =
     note?.scope === "thread"

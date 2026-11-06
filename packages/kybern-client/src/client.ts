@@ -18,6 +18,7 @@ import {
   type RpcResponse,
   type SubscriptionId,
   type ThreadEvent,
+  type ThreadsGetResult,
   type Problem,
 } from "./types.ts";
 import { httpBase } from "./address.ts";
@@ -124,8 +125,12 @@ interface EventSubscription {
   generation: number;
   onSubscribed?: (headSeq: number, replay: ReplayState) => void;
   onReady?: (headSeq: number, resumed: boolean) => void;
+  /** The daemon answered `gap_snapshot` with a fresh page instead of a replay. */
+  onSnapshot?: SnapshotHandler;
   ready: { headSeq: number; resumed: boolean } | undefined;
 }
+/** A fresh `threads.get` page as of `headSeq`; live events after it follow. */
+export type SnapshotHandler = (snapshot: ThreadsGetResult, headSeq: number) => void;
 export interface Subscription {
   unsubscribe(): void;
   readonly lastSeq: number | undefined;
@@ -328,12 +333,16 @@ export class KybernClient {
     handler: EventHandler,
     onSubscribed?: (headSeq: number, replay: ReplayState) => void,
     onReady?: (headSeq: number, resumed: boolean) => void,
+    onSnapshot?: SnapshotHandler,
   ): Subscription {
+    // A snapshot nobody takes would silently skip events: ask for one only with a handler.
+    const { gap_snapshot, ...rest } = params;
     const sub: EventSubscription = {
-      params,
+      params: onSnapshot && gap_snapshot ? params : rest,
       handler,
       onSubscribed,
       onReady,
+      onSnapshot,
       ready: undefined,
       lastSeq: params.after_seq,
       remoteId: undefined,
@@ -645,6 +654,11 @@ export class KybernClient {
       // A live-only subscription starts at its acknowledged head even if no
       // new events arrive before the first disconnect.
       sub.lastSeq ??= result.head_seq;
+      if (result.snapshot) {
+        // The replay was skipped: the snapshot covers everything through head.
+        sub.lastSeq = Math.max(sub.lastSeq, result.head_seq);
+        sub.onSnapshot?.(result.snapshot, result.head_seq);
+      }
       if (result.replay_ready) sub.ready = { headSeq: result.head_seq, resumed };
       sub.onSubscribed?.(result.head_seq, { resumed, supported: result.replay_ready === true });
     } catch (error) {

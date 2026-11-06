@@ -2,7 +2,7 @@ import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
 import { Platform, View } from "react-native";
 import { ComposerOptions } from "../src/features/ComposerControls";
-import { errorText, loadThread, useApp, useThread } from "../src/state/runtime";
+import { errorText, loadThread, useApp, useThread, useThreadLive } from "../src/state/runtime";
 import { useLayout } from "../src/state/layout";
 import { ErrorBanner, IconButton, Page, T } from "../src/ui/primitives";
 import { Segmented } from "../src/ui/Segmented";
@@ -21,12 +21,13 @@ export default function ComposerOptionsScreen() {
     requested === "permissions" || requested === "usage" ? requested : "model";
   const app = useApp();
   const snapshot = useThread(threadId ?? "");
+  const live = useThreadLive(threadId);
   const thread = app.threads.find((t) => t.id === threadId) ?? snapshot.thread;
   const [error, setError] = useState("");
   useEffect(() => {
-    if (threadId && !snapshot.loaded && app.status === "open")
+    if (threadId && !snapshot.loaded && live)
       void loadThread(threadId).catch((e) => setError(errorText(e)));
-  }, [threadId, snapshot.loaded, app.status]);
+  }, [threadId, snapshot.loaded, live]);
   const control = (
     <Segmented<Section>
           label="Options"

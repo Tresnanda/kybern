@@ -283,6 +283,15 @@ enum Cmd {
         /// Include archived threads in the list (they are hidden by default).
         #[arg(long)]
         archived: bool,
+        /// Only threads that changed after this cursor (the `head_seq` of an earlier `--json` list).
+        #[arg(long)]
+        since_seq: Option<i64>,
+        /// Per project, every active or pinned thread plus at most this many of the newest settled ones.
+        #[arg(long)]
+        settled_limit: Option<u32>,
+        /// With --settled-limit: skip this many of the newest settled threads.
+        #[arg(long, requires = "settled_limit")]
+        settled_offset: Option<u32>,
     },
     /// Create a thread and send the first message, streaming the turn.
     New {
@@ -350,10 +359,22 @@ enum Cmd {
         /// Show only the newest N entries; JSON output includes an older-page cursor.
         #[arg(long)]
         limit: Option<u32>,
-        #[arg(long, requires = "limit")]
+        #[arg(long)]
         before_seq: Option<i64>,
         #[arg(long)]
         through_seq: Option<i64>,
+        /// Size the page by turns instead of --limit (with --max-rows and --max-bytes).
+        #[arg(long)]
+        turns: Option<u32>,
+        /// With --turns: at most this many rows.
+        #[arg(long, requires = "turns", default_value_t = 500)]
+        max_rows: u32,
+        /// With --turns: at most this many serialized row bytes.
+        #[arg(long, requires = "turns", default_value_t = 1024 * 1024)]
+        max_bytes: u32,
+        /// Leave large settled tool results out of the page (fetch them with tool-output).
+        #[arg(long)]
+        omit_tool_output: bool,
     },
     /// Recover a historical OMP answer from exact retained native block boundaries.
     RecoverOmpAnswer { thread: String, turn: String },
@@ -580,6 +601,14 @@ enum Cmd {
         #[arg(required = true)]
         paths: Vec<String>,
     },
+    /// Whether a file outside a conversation's workspace opens read-only, and allow it (this computer's desktop client only).
+    ThreadOutside {
+        thread: String,
+        path: String,
+        /// Open this file now: `once`, or its `folder` for good.
+        #[arg(long, value_parser = ["once", "folder"])]
+        allow: Option<String>,
+    },
     /// Commit everything in a thread's working directory.
     Commit {
         thread: String,
@@ -590,6 +619,11 @@ enum Cmd {
     Pr {
         #[command(subcommand)]
         cmd: PrCmd,
+    },
+    /// Repository issues via the GitHub CLI.
+    Issue {
+        #[command(subcommand)]
+        cmd: IssueCmd,
     },
     /// GitHub Actions workflow runs via the GitHub CLI.
     Actions {
@@ -1168,6 +1202,42 @@ enum GithubCmd {
     Starred,
     /// Star Tresnanda/kybern as the signed-in GitHub account.
     Star,
+}
+
+#[derive(Subcommand)]
+enum IssueCmd {
+    /// List a project's issues, newest first.
+    List {
+        project: String,
+        /// open, closed or all.
+        #[arg(long, default_value = "open")]
+        state: String,
+        /// Search the issues' text.
+        #[arg(long)]
+        search: Option<String>,
+        /// Only issues with this label (repeat for several).
+        #[arg(long = "label")]
+        labels: Vec<String>,
+        /// Only issues assigned to this login (@me for the signed-in account).
+        #[arg(long)]
+        assignee: Option<String>,
+        #[arg(long, default_value = "30")]
+        limit: u32,
+        /// Issues to skip.
+        #[arg(long, default_value = "0")]
+        offset: u32,
+        /// Only this member repository of a group project.
+        #[arg(long)]
+        repo: Option<String>,
+    },
+    /// Read an issue with its description, comments and the pull requests that close it.
+    View {
+        project: String,
+        number: u64,
+        /// Member repository of a group project.
+        #[arg(long)]
+        repo: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1974,12 +2044,21 @@ pub async fn run() -> Result<()> {
         Cmd::Continue(args) => continue_on::run(&client, args, json).await?,
         Cmd::ContinueAbandon(args) => continue_on::abandon(&client, args, json).await?,
         Cmd::Outbox { cmd } => outbox::run(&client, cmd, json).await?,
-        Cmd::Threads { project, archived } => {
+        Cmd::Threads { project, archived, since_seq, settled_limit, settled_offset } => {
             let project_id = match project {
                 Some(p) => Some(resolve_project(&client, &p, false).await?),
                 None => None,
             };
-            let r = client.call::<ThreadsList>(ThreadsListParams { project_id, include_archived: archived, ..Default::default() }).await?;
+            let r = client
+                .call::<ThreadsList>(ThreadsListParams {
+                    project_id,
+                    include_archived: archived,
+                    since_seq,
+                    settled_limit,
+                    settled_offset,
+                    ..Default::default()
+                })
+                .await?;
             if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::threads(&r.threads) }
         }
         Cmd::New { project, provider, model, effort, mode, worktree, branch, detach, prompt } => {
@@ -1990,7 +2069,12 @@ pub async fn run() -> Result<()> {
             } else {
                 Some(
                     client
-                        .call::<EventsSubscribe>(EventsSubscribeParams { thread_id: None, after_seq: None, include_tool_output: None })
+                        .call::<EventsSubscribe>(EventsSubscribeParams {
+                            thread_id: None,
+                            after_seq: None,
+                            include_tool_output: None,
+                            gap_snapshot: None,
+                        })
                         .await?,
                 )
             };
@@ -2029,6 +2113,7 @@ pub async fn run() -> Result<()> {
                             thread_id: Some(thread_id),
                             after_seq: None,
                             include_tool_output: None,
+                            gap_snapshot: None,
                         })
                         .await?,
                 )
@@ -2188,13 +2273,19 @@ pub async fn run() -> Result<()> {
                 }
             }
         },
-        Cmd::Show { thread, limit, before_seq, through_seq } => {
+        Cmd::Show { thread, limit, before_seq, through_seq, turns, max_rows, max_bytes, omit_tool_output } => {
+            if before_seq.is_some() && limit.is_none() && turns.is_none() {
+                anyhow::bail!("--before-seq needs --limit or --turns");
+            }
+            let page_budget = turns.map(|turns| TranscriptPageBudget { turns, max_rows, max_bytes });
             let r = client
                 .call::<ThreadsGet>(ThreadsGetParams {
                     thread_id: thread.parse()?,
                     transcript_limit: limit,
                     before_seq,
                     through_seq,
+                    page_budget,
+                    include_tool_output: omit_tool_output.then_some(false),
                     ..Default::default()
                 })
                 .await?;
@@ -2220,8 +2311,14 @@ pub async fn run() -> Result<()> {
         }
         Cmd::Watch { thread, after } => {
             let thread_id = thread.map(|t| t.parse::<ThreadId>()).transpose()?;
-            let sub =
-                client.call::<EventsSubscribe>(EventsSubscribeParams { thread_id, after_seq: after, include_tool_output: None }).await?;
+            let sub = client
+                .call::<EventsSubscribe>(EventsSubscribeParams {
+                    thread_id,
+                    after_seq: after,
+                    include_tool_output: None,
+                    gap_snapshot: None,
+                })
+                .await?;
             render::watch(&client, sub.subscription_id, json).await?;
         }
         Cmd::Release { thread } => {
@@ -2688,6 +2785,15 @@ pub async fn run() -> Result<()> {
                 println!("{path}\t{}", resolved.as_deref().unwrap_or("(no file)"));
             }
         }
+        Cmd::ThreadOutside { thread, path, allow } => {
+            let allow = match allow.as_deref() {
+                Some("once") => OutsideAllow::Once,
+                Some(_) => OutsideAllow::Folder,
+                None => OutsideAllow::Check,
+            };
+            let r = client.call::<ThreadFileOutside>(ThreadFileOutsideParams { thread_id: thread.parse()?, path, allow }).await?;
+            println!("{}", serde_json::to_string_pretty(&r)?);
+        }
         Cmd::Write { project, path, from, expected_version } => {
             let content = read_input(&from)?;
             let r = client.call::<FilesWrite>(FilesWriteParams { project_id: project.parse()?, path, content, expected_version }).await?;
@@ -2756,7 +2862,7 @@ pub async fn run() -> Result<()> {
             }
             ActionsCmd::View { project, run, attempt, repo } => {
                 let project_id = resolve_project(&client, &project, false).await?;
-                let r = client.call::<ActionsRun>(ActionsRunParams { project_id, repo, run_id: run, attempt }).await?;
+                let r = client.call::<ActionsRun>(ActionsRunParams { project_id, repo, run_id: run, job_id: None, attempt }).await?;
                 println!("{}", serde_json::to_string_pretty(&r)?);
             }
             ActionsCmd::Log { project, job, offset, limit, excerpt, repo } => {
@@ -2819,6 +2925,28 @@ pub async fn run() -> Result<()> {
             GithubCmd::Star => {
                 client.call::<GithubStar>(GithubStarParams {}).await?;
                 println!("Starred Tresnanda/kybern");
+            }
+        },
+        Cmd::Issue { cmd } => match cmd {
+            IssueCmd::List { project, state, search, labels, assignee, limit, offset, repo } => {
+                let project_id = resolve_project(&client, &project, false).await?;
+                let r =
+                    client.call::<IssueList>(IssueListParams { project_id, state, search, labels, assignee, limit, offset, repo }).await?;
+                for issue in &r.issues {
+                    let repo = issue.repo.as_deref().map(|repo| format!("{repo}  ")).unwrap_or_default();
+                    println!("#{:<5} {:<6} {repo}{}  {}", issue.number, issue.state.to_lowercase(), issue.title, issue.url);
+                }
+                if r.has_more {
+                    eprintln!("More issues follow: pass --offset {}.", offset + limit);
+                }
+                for repo in r.repos.iter().filter(|repo| repo.error.is_some()) {
+                    eprintln!("{}: {}", repo.name, repo.error.as_deref().unwrap_or_default());
+                }
+            }
+            IssueCmd::View { project, number, repo } => {
+                let project_id = resolve_project(&client, &project, false).await?;
+                let result = client.call::<IssueDetail>(IssueDetailParams { project_id, number, repo }).await?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
             }
         },
         Cmd::Pr { cmd } => match cmd {

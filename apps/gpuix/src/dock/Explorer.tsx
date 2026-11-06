@@ -215,7 +215,7 @@ export const FileViewer = memo(function FileViewer({ projectId, threadId, path, 
   const [error, setError] = useState<string | null>(null)
   const [preview, setPreview] = useState(() => markdownFile && !line)
   const [reload, setReload] = useState(0)
-  const editable = !!file && !file.binary && !file.truncated && file.size <= EDITABLE_BYTES
+  const editable = !!file && !file.binary && !file.truncated && !file.read_only && file.size <= EDITABLE_BYTES
   const buffer = useBufferState(editable ? key : null)
   const editor = useRef<FileEditorHandle | null>(null)
   const wrap = useWrapLines()
@@ -229,7 +229,7 @@ export const FileViewer = memo(function FileViewer({ projectId, threadId, path, 
       const same = cached && cached.content === result.content && cached.truncated === result.truncated && cached.binary === result.binary
       if (!same) rememberRead(owner, path, result)
       setFile(same ? cached : result)
-      if (result.binary || result.truncated || result.size > EDITABLE_BYTES) return
+      if (result.binary || result.truncated || result.read_only || result.size > EDITABLE_BYTES) return
       const before = getBuffer(key)
       openBuffer(root, path, result)
       if (before) { const shown = adoptRead(key, result); if (shown != null) editor.current?.replace(shown) }
@@ -309,7 +309,7 @@ export const FileViewer = memo(function FileViewer({ projectId, threadId, path, 
     </div>}
     <ErrorLine error={error ?? buffer?.error ?? null} retry={error ? () => setReload((n) => n + 1) : undefined} />
     {file ? <Rise kind="pane" play={play} style={{ flexGrow: 1, minHeight: 0, minWidth: 0 }}>{file.binary ? <DockEmpty icon={N.note} title="Binary file" body="Open this file in your editor to view it." /> : <>
-      {!editable && <ReadOnlyNote size={file.size} />}
+      {!editable && <ReadOnlyNote size={file.size} outside={file.read_only} />}
       {showPreview && key ? <virtual-list testId="dock-file-content" {...EXPLORER_SCROLL_LAYOUT} overdraw={0} style={{ flexGrow: 1, minHeight: 0, overflowX: 'scroll' }}>
         <div style={{ padding: 12 }}><DocumentMarkdown source={getBuffer(key)?.text ?? file.content} theme={cachedMarkdownTheme(t)} /></div>
       </virtual-list> : editable && key && buffer ? <FileEditor key={key} bufferKey={key} path={path} wrap={wrap} line={line} handle={editor} />
@@ -332,9 +332,9 @@ function SendToMenu({ thread, path, separated = false }: { thread?: { id: string
 }
 
 /** Why a file opened read-only. */
-function ReadOnlyNote({ size }: { size: number }) {
+function ReadOnlyNote({ size, outside }: { size: number; outside?: boolean }) {
   const t = useTheme()
-  const reason = size > EDITABLE_BYTES ? `This file is ${(Math.ceil(size / 1024 / 1024 * 10) / 10).toFixed(1)} MB, over the 2 MB the editor opens` : 'Only part of this file could be read'
+  const reason = outside ? 'This file is outside the workspace' : size > EDITABLE_BYTES ? `This file is ${(Math.ceil(size / 1024 / 1024 * 10) / 10).toFixed(1)} MB, over the 2 MB the editor opens` : 'Only part of this file could be read'
   return <div testId="file-read-only" style={{ display: 'flex', alignItems: 'center', minHeight: 32, paddingLeft: 12, paddingRight: 12, flexShrink: 0, borderBottomWidth: 0.6, borderColor: t.borderLight }}>
     <Label color={t.textSecondary} size={12}>{`Read-only. ${reason}; open it in your editor to change it.`}</Label>
   </div>

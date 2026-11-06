@@ -21,6 +21,7 @@ import type { IconName } from "../ui/icons";
 import { radius, space, useTheme } from "../ui/theme";
 import { PreviewPane } from "./Preview";
 import { ThreadNotes } from "./ThreadNotes";
+import { useLists } from "../state/useLists";
 
 const TABS: { key: InspectorTab; label: string; icon: IconName }[] = [
   { key: "changes", label: "Changes", icon: "doc.badge.plus" },
@@ -39,12 +40,14 @@ const LABEL_MIN = 84;
 // WebView session and each pane's scroll/selection survive tab switches.
 function Inspector({ threadId }: { threadId: string }) {
   const app = useApp();
+  // Every machine's projects: the computer the phone is at may be away (#245).
+  const lists = useLists(null);
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const { inspectorTab, setInspectorTab, closeInspector } = useLayout();
   const snapshot = useThread(threadId);
   const thread = app.threads.find((t) => t.id === threadId) ?? snapshot.thread;
-  const project = app.projects.find((p) => p.id === thread?.project_id);
+  const project = lists.projects.find((p) => p.id === thread?.project_id);
 
   const [seen, setSeen] = useState<Set<InspectorTab>>(
     () => new Set([inspectorTab]),

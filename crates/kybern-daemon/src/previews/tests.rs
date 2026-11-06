@@ -24,7 +24,7 @@ impl Drop for Dir {
 /// A policy whose system list is empty so temp dirs (under /var on macOS)
 /// stay grantable; the system list has its own test.
 fn policy(home: &Path, data: &Path) -> GrantPolicy {
-    GrantPolicy { home: Some(home.to_path_buf()), data_dir: data.to_path_buf(), system: Vec::new() }
+    GrantPolicy { home: Some(home.to_path_buf()), data_dir: data.to_path_buf(), system: Vec::new(), temp: Vec::new() }
 }
 
 /// Home and data directory far from every temp dir the tests create.

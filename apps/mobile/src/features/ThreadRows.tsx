@@ -11,7 +11,8 @@ import { attentionSignals, dismissAttention, markRead, markUnread, useListState 
 import { count } from "../state/format";
 import { PROVIDER_DISPLAY_NAME, type Thread, type ThreadActivitySummary } from "../state/protocol";
 import type { ThreadMachine } from "../state/machineLists";
-import { errorText, mutate, refresh, threadHasActivity, useApp } from "../state/runtime";
+import { errorText, isThreadCached, mutate, refresh, threadHasActivity, useApp } from "../state/runtime";
+import { markThreadTap } from "../state/devTiming";
 import type { StatusPhase } from "../state/status";
 import { relativeTime, type ThreadRow } from "../state/threadList";
 import { ContextMenu } from "../ui/ActionMenu";
@@ -176,6 +177,7 @@ export type ThreadRowContext = {
 };
 
 function open(thread: Thread, variant: ThreadRowContext["variant"]) {
+  markThreadTap(thread.id, isThreadCached(thread.id));
   const target = { pathname: "/thread/[id]" as const, params: { id: thread.id } };
   if (variant === "sidebar") router.navigate(target);
   else router.push(target);

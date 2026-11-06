@@ -41,6 +41,7 @@ import { useMachineTarget } from "../src/state/machineTarget";
 import { useProviders } from "../src/state/machineProviders";
 import { useTheme } from "../src/ui/theme";
 import { modelChoices } from "../../../packages/kybern-client/src/models";
+import { useLists } from "../src/state/useLists";
 
 const permissions: { value: PermissionMode; title: string; detail: string }[] =
   [
@@ -71,6 +72,8 @@ export default function Configure() {
     handoff?: string;
   }>();
   const app = useApp();
+  // Every machine's projects: the computer the phone is at may be away (#245).
+  const lists = useLists(null);
   const { colors } = useTheme();
   const thread = app.threads.find((t) => t.id === threadId);
   const [options, setOptions] = useState<DraftOptions>(() =>
@@ -93,7 +96,7 @@ export default function Configure() {
   const [error, setError] = useState("");
   const [section, setSection] = useState("");
   const [modelQuery, setModelQuery] = useState("");
-  const project = app.projects.find((p) => p.id === options.projectId);
+  const project = lists.projects.find((p) => p.id === options.projectId);
   // A new thread's agents are those of the machine it will run on (`state/machineTarget.ts`); an open thread keeps its own.
   const target = useMachineTarget(threadId ? undefined : project);
   const providers = useProviders(!threadId && target.remote && target.chosen ? { machineId: target.chosen.machineId, reachable: target.reachable } : undefined);
@@ -267,7 +270,7 @@ export default function Configure() {
             onPress={() => setSection(section === "project" ? "" : "project")}
           />
           {section === "project" &&
-            app.projects.map((p) =>
+            lists.projects.map((p) =>
               choose(
                 p.name,
                 p.id,
@@ -279,7 +282,7 @@ export default function Configure() {
                 p.path,
               ),
             )}
-          {!app.projects.length && (
+          {!lists.projects.length && (
             <Button onPress={() => router.push("/projects")}>
               Add a project
             </Button>

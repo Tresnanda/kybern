@@ -55,6 +55,8 @@ fn main() {
     add::<TerminalExitedNotification>(&mut types, "TerminalExitedNotification");
     add::<RuntimeTask>(&mut types, "RuntimeTask");
     add::<ThreadActivitySummary>(&mut types, "ThreadActivitySummary");
+    add::<TranscriptPageBudget>(&mut types, "TranscriptPageBudget");
+    add::<ProjectThreadCount>(&mut types, "ProjectThreadCount");
     add::<CoordinatorOpenResult>(&mut types, "CoordinatorOpenResult");
     add::<ThreadReadMessage>(&mut types, "ThreadReadMessage");
     add::<ThreadSearchHit>(&mut types, "ThreadSearchHit");
@@ -244,6 +246,8 @@ fn main() {
     method::<PrDetail>(&mut methods);
     method::<PrPage>(&mut methods);
     method::<PrAction>(&mut methods);
+    method::<IssueList>(&mut methods);
+    method::<IssueDetail>(&mut methods);
     method::<ActionsRuns>(&mut methods);
     method::<ActionsRun>(&mut methods);
     method::<ActionsLog>(&mut methods);
@@ -262,6 +266,7 @@ fn main() {
     method::<ThreadFileRead>(&mut methods);
     method::<ThreadFileWrite>(&mut methods);
     method::<ThreadFilesResolve>(&mut methods);
+    method::<ThreadFileOutside>(&mut methods);
     method::<SkillsList>(&mut methods);
     method::<IntegrationsList>(&mut methods);
     method::<HtmlPublish>(&mut methods);

@@ -2689,7 +2689,8 @@ pub struct Settings {
     /// longest wait it can set (`kybern_ask_user`).
     pub ask_deadlines: AskDeadlineSettings,
     /// Folders outside a project the user allowed the Preview panel to serve
-    /// files from. Canonical absolute paths; a grant covers descendants.
+    /// files from, and chat links to open read-only (`threads.files.outside`).
+    /// Canonical absolute paths; a grant covers descendants.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub preview_allowed_folders: Vec<String>,
     /// Joining and staying joined to the machine network.
