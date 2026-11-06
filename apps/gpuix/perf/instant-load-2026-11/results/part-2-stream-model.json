@@ -1,0 +1,1967 @@
+{
+  "boundary": "synthetic sensitivity model, 10 seconds of input applied in a synchronous burst; no socket, relay, real Tailscale, UI, timers or paced streaming",
+  "summary": [
+    {
+      "hz": 20,
+      "batch": 1,
+      "n": 30,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2,
+      "medianApplyMsPerTenSeconds": 0.19470000000000098,
+      "p95ApplyMsPerTenSeconds": 0.3139000000000003,
+      "medianCpuMsPerTenSeconds": 0
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "n": 30,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2,
+      "medianApplyMsPerTenSeconds": 0.2364999999999995,
+      "p95ApplyMsPerTenSeconds": 1.4908000000000001,
+      "medianCpuMsPerTenSeconds": 0
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "n": 30,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7,
+      "medianApplyMsPerTenSeconds": 0.09510000000000218,
+      "p95ApplyMsPerTenSeconds": 0.1302999999999983,
+      "medianCpuMsPerTenSeconds": 0
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "n": 30,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3,
+      "medianApplyMsPerTenSeconds": 0.4192999999999998,
+      "p95ApplyMsPerTenSeconds": 1.4044000000000025,
+      "medianCpuMsPerTenSeconds": 0
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "n": 30,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1,
+      "medianApplyMsPerTenSeconds": 0.08970000000000056,
+      "p95ApplyMsPerTenSeconds": 0.14039999999999964,
+      "medianCpuMsPerTenSeconds": 0
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "n": 30,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3,
+      "medianApplyMsPerTenSeconds": 0.8204000000000065,
+      "p95ApplyMsPerTenSeconds": 1.7271999999999963,
+      "medianCpuMsPerTenSeconds": 0
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "n": 30,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2,
+      "medianApplyMsPerTenSeconds": 0.07800000000000296,
+      "p95ApplyMsPerTenSeconds": 0.1285999999999916,
+      "medianCpuMsPerTenSeconds": 0
+    }
+  ],
+  "samples": [
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 1,
+      "ms": 0.33340000000000103,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 2,
+      "ms": 0.3139000000000003,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 3,
+      "ms": 0.221700000000002,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 4,
+      "ms": 0.2093999999999987,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 5,
+      "ms": 0.19550000000000267,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 6,
+      "ms": 0.19979999999999976,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 7,
+      "ms": 0.18400000000000105,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 8,
+      "ms": 0.17980000000000018,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 9,
+      "ms": 0.19470000000000098,
+      "cpuMs": 15,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 10,
+      "ms": 0.1958999999999982,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 11,
+      "ms": 0.18149999999999977,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 12,
+      "ms": 0.18570000000000064,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 13,
+      "ms": 0.2109000000000023,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 14,
+      "ms": 0.18089999999999762,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 15,
+      "ms": 0.18489999999999895,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 16,
+      "ms": 0.18209999999999837,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 17,
+      "ms": 0.19030000000000058,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 18,
+      "ms": 0.2715000000000032,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 19,
+      "ms": 0.20279999999999987,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 20,
+      "ms": 0.19930000000000092,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 21,
+      "ms": 0.2149000000000001,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 22,
+      "ms": 0.19010000000000105,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 23,
+      "ms": 0.1916000000000011,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 24,
+      "ms": 0.17760000000000176,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 25,
+      "ms": 0.18900000000000006,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 26,
+      "ms": 0.17950000000000088,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 27,
+      "ms": 0.20049999999999812,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 28,
+      "ms": 0.22469999999999857,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 29,
+      "ms": 0.18909999999999982,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 20,
+      "batch": 1,
+      "run": 30,
+      "ms": 0.19539999999999935,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 7649.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 1,
+      "ms": 0.5675999999999988,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 2,
+      "ms": 0.6100999999999992,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 3,
+      "ms": 0.3565000000000005,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 4,
+      "ms": 0.3365000000000009,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 5,
+      "ms": 0.3277000000000001,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 6,
+      "ms": 2.4300999999999995,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 7,
+      "ms": 0.21920000000000073,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 8,
+      "ms": 0.2441999999999993,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 9,
+      "ms": 0.21880000000000166,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 10,
+      "ms": 0.2364999999999995,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 11,
+      "ms": 0.21679999999999922,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 12,
+      "ms": 0.21709999999999852,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 13,
+      "ms": 0.21749999999999758,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 14,
+      "ms": 0.21950000000000003,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 15,
+      "ms": 0.21739999999999782,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 16,
+      "ms": 0.2248999999999981,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 17,
+      "ms": 0.21629999999999683,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 18,
+      "ms": 0.3033000000000001,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 19,
+      "ms": 0.4001000000000019,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 20,
+      "ms": 0.3856000000000037,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 21,
+      "ms": 0.21589999999999776,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 22,
+      "ms": 0.22469999999999857,
+      "cpuMs": 15,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 23,
+      "ms": 0.21419999999999817,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 24,
+      "ms": 0.285499999999999,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 25,
+      "ms": 0.22320000000000562,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 26,
+      "ms": 0.4140999999999977,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 27,
+      "ms": 0.5812000000000026,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 28,
+      "ms": 1.4908000000000001,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 29,
+      "ms": 0.25159999999999627,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 1,
+      "run": 30,
+      "ms": 0.22509999999999764,
+      "cpuMs": 0,
+      "messagesPerSecond": 50,
+      "bytesPerSecond": 19139.2
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 1,
+      "ms": 0.09949999999999903,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 2,
+      "ms": 0.1302999999999983,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 3,
+      "ms": 0.09479999999999933,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 4,
+      "ms": 0.0958000000000041,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 5,
+      "ms": 0.09399999999999409,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 6,
+      "ms": 0.09370000000000545,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 7,
+      "ms": 0.0940000000000012,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 8,
+      "ms": 0.0940000000000012,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 9,
+      "ms": 0.09359999999999502,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 10,
+      "ms": 0.09210000000000207,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 11,
+      "ms": 0.13410000000000366,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 12,
+      "ms": 0.10400000000000631,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 13,
+      "ms": 0.0952000000000055,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 14,
+      "ms": 0.09300000000000352,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 15,
+      "ms": 0.09649999999999892,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 16,
+      "ms": 0.09949999999999903,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 17,
+      "ms": 0.0951999999999984,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 18,
+      "ms": 0.09150000000000347,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 19,
+      "ms": 0.1051000000000002,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 20,
+      "ms": 0.09320000000000306,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 21,
+      "ms": 0.09700000000000131,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 22,
+      "ms": 0.09300000000000352,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 23,
+      "ms": 0.09550000000000125,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 24,
+      "ms": 0.09259999999999735,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 25,
+      "ms": 0.09409999999999741,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 26,
+      "ms": 0.09260000000000446,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 27,
+      "ms": 0.09510000000000218,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 28,
+      "ms": 0.09559999999999746,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 29,
+      "ms": 0.09709999999999752,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 50,
+      "batch": 2,
+      "run": 30,
+      "ms": 0.09839999999999804,
+      "cpuMs": 0,
+      "messagesPerSecond": 25,
+      "bytesPerSecond": 9944.7
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 1,
+      "ms": 0.4118999999999957,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 2,
+      "ms": 0.4466999999999999,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 3,
+      "ms": 0.40740000000000265,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 4,
+      "ms": 0.42320000000000135,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 5,
+      "ms": 0.4066000000000045,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 6,
+      "ms": 0.43310000000000315,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 7,
+      "ms": 0.41320000000000334,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 8,
+      "ms": 0.41669999999999874,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 9,
+      "ms": 0.41450000000000387,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 10,
+      "ms": 0.4192999999999998,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 11,
+      "ms": 1.4044000000000025,
+      "cpuMs": 32,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 12,
+      "ms": 0.5150000000000006,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 13,
+      "ms": 0.7107000000000028,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 14,
+      "ms": 0.6044000000000054,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 15,
+      "ms": 0.5097999999999985,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 16,
+      "ms": 0.4106000000000023,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 17,
+      "ms": 0.4251000000000005,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 18,
+      "ms": 0.4077999999999946,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 19,
+      "ms": 0.4474000000000018,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 20,
+      "ms": 0.4356000000000009,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 21,
+      "ms": 0.4416000000000011,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 22,
+      "ms": 2.644300000000001,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 23,
+      "ms": 0.472999999999999,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 24,
+      "ms": 0.41440000000000055,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 25,
+      "ms": 0.4077000000000055,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 26,
+      "ms": 0.4106000000000023,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 27,
+      "ms": 0.4381999999999948,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 28,
+      "ms": 0.4082000000000008,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 29,
+      "ms": 0.4176000000000002,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 1,
+      "run": 30,
+      "ms": 0.40789999999999793,
+      "cpuMs": 0,
+      "messagesPerSecond": 100,
+      "bytesPerSecond": 38289.3
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 1,
+      "ms": 0.07920000000000016,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 2,
+      "ms": 0.07989999999999498,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 3,
+      "ms": 0.08959999999999724,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 4,
+      "ms": 0.07809999999999917,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 5,
+      "ms": 0.07990000000000208,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 6,
+      "ms": 0.07920000000000016,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 7,
+      "ms": 0.07699999999999818,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 8,
+      "ms": 0.07920000000000016,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 9,
+      "ms": 0.08970000000000056,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 10,
+      "ms": 1.3066999999999922,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 11,
+      "ms": 0.1355000000000075,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 12,
+      "ms": 0.13479999999999848,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 13,
+      "ms": 0.13219999999999743,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 14,
+      "ms": 0.13349999999999795,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 15,
+      "ms": 0.13949999999999818,
+      "cpuMs": 15,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 16,
+      "ms": 0.12989999999999213,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 17,
+      "ms": 0.13049999999999784,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 18,
+      "ms": 0.12369999999999948,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 19,
+      "ms": 0.12379999999998859,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 20,
+      "ms": 0.13599999999999568,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 21,
+      "ms": 0.1390999999999991,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 22,
+      "ms": 0.14039999999999964,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 23,
+      "ms": 0.09669999999999845,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 24,
+      "ms": 0.08129999999999882,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 25,
+      "ms": 0.07789999999999964,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 26,
+      "ms": 0.07850000000000534,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 27,
+      "ms": 0.07810000000000628,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 28,
+      "ms": 0.07980000000000587,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 29,
+      "ms": 0.08719999999999573,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 100,
+      "batch": 5,
+      "run": 30,
+      "ms": 0.14000000000000057,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 8858.1
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 1,
+      "ms": 0.9985999999999962,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 2,
+      "ms": 2.400899999999993,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 3,
+      "ms": 0.839100000000002,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 4,
+      "ms": 0.8490999999999929,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 5,
+      "ms": 0.8410000000000082,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 6,
+      "ms": 0.8415999999999997,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 7,
+      "ms": 1.3992000000000075,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 8,
+      "ms": 0.8121000000000009,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 9,
+      "ms": 0.787700000000001,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 10,
+      "ms": 0.7787000000000006,
+      "cpuMs": 16,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 11,
+      "ms": 0.776600000000002,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 12,
+      "ms": 0.780699999999996,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 13,
+      "ms": 1.2556999999999903,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 14,
+      "ms": 0.8355999999999995,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 15,
+      "ms": 1.1942999999999984,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 16,
+      "ms": 0.774799999999999,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 17,
+      "ms": 0.7824999999999989,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 18,
+      "ms": 0.7896000000000072,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 19,
+      "ms": 0.7771000000000043,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 20,
+      "ms": 1.7082999999999942,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 21,
+      "ms": 0.7823999999999955,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 22,
+      "ms": 0.7924000000000007,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 23,
+      "ms": 1.0623999999999967,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 24,
+      "ms": 0.8204000000000065,
+      "cpuMs": 31,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 25,
+      "ms": 0.7878999999999934,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 26,
+      "ms": 1.7271999999999963,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 27,
+      "ms": 0.7800000000000011,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 28,
+      "ms": 1.288800000000009,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 29,
+      "ms": 1.2102000000000004,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 1,
+      "run": 30,
+      "ms": 0.783299999999997,
+      "cpuMs": 0,
+      "messagesPerSecond": 200,
+      "bytesPerSecond": 76689.3
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 1,
+      "ms": 0.07789999999999964,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 2,
+      "ms": 0.10079999999999245,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 3,
+      "ms": 0.09480000000000643,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 4,
+      "ms": 0.0782000000000096,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 5,
+      "ms": 0.07550000000000523,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 6,
+      "ms": 0.07800000000000296,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 7,
+      "ms": 0.07640000000000668,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 8,
+      "ms": 0.07739999999999725,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 9,
+      "ms": 0.1285999999999916,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 10,
+      "ms": 0.11899999999999977,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 11,
+      "ms": 1.2974999999999994,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 12,
+      "ms": 0.07970000000000255,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 13,
+      "ms": 0.07899999999999352,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 14,
+      "ms": 0.08570000000000277,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 15,
+      "ms": 0.07569999999999766,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 16,
+      "ms": 0.07670000000000243,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 17,
+      "ms": 0.07840000000000202,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 18,
+      "ms": 0.07739999999999725,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 19,
+      "ms": 0.10119999999999152,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 20,
+      "ms": 0.07759999999998968,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 21,
+      "ms": 0.0764999999999958,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 22,
+      "ms": 0.07689999999999486,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 23,
+      "ms": 0.0782999999999987,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 24,
+      "ms": 0.07639999999999247,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 25,
+      "ms": 0.0893999999999977,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 26,
+      "ms": 0.08299999999999841,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 27,
+      "ms": 0.0771000000000015,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 28,
+      "ms": 0.08409999999999229,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 29,
+      "ms": 0.07500000000000284,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    },
+    {
+      "hz": 200,
+      "batch": 10,
+      "run": 30,
+      "ms": 0.07529999999999859,
+      "cpuMs": 0,
+      "messagesPerSecond": 20,
+      "bytesPerSecond": 10369.2
+    }
+  ]
+}

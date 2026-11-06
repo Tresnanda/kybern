@@ -1,0 +1,2071 @@
+{
+  "boundary": "RPC send to parsed response; no rendering; fresh daemon per run; cold OS file cache not controlled",
+  "summary": [
+    {
+      "case": "long-cold",
+      "rtt": 0,
+      "n": 10,
+      "medianMs": 120.23050000000012,
+      "p95Ms": 134.59820000000002,
+      "bytes": 67269,
+      "roundTrips": 1
+    },
+    {
+      "case": "long-warm",
+      "rtt": 0,
+      "n": 10,
+      "medianMs": 1.739400000000046,
+      "p95Ms": 2.396099999999933,
+      "bytes": 67269,
+      "roundTrips": 1
+    },
+    {
+      "case": "medium-cold",
+      "rtt": 0,
+      "n": 10,
+      "medianMs": 6.145099999999729,
+      "p95Ms": 9.070699999999988,
+      "bytes": 20345,
+      "roundTrips": 1
+    },
+    {
+      "case": "medium-warm",
+      "rtt": 0,
+      "n": 10,
+      "medianMs": 0.6829000000000178,
+      "p95Ms": 0.9980000000000473,
+      "bytes": 20345,
+      "roundTrips": 1
+    },
+    {
+      "case": "short-cold",
+      "rtt": 0,
+      "n": 10,
+      "medianMs": 1.0089000000000397,
+      "p95Ms": 1.2364000000000033,
+      "bytes": 10611,
+      "roundTrips": 1
+    },
+    {
+      "case": "short-warm",
+      "rtt": 0,
+      "n": 10,
+      "medianMs": 0.45970000000033906,
+      "p95Ms": 0.580099999999959,
+      "bytes": 10611,
+      "roundTrips": 1
+    },
+    {
+      "case": "list-head-parallel",
+      "rtt": 0,
+      "n": 10,
+      "medianMs": 36.35550000000012,
+      "p95Ms": 45.29829999999993,
+      "bytes": 221426,
+      "roundTrips": 1
+    },
+    {
+      "case": "list-head-serial",
+      "rtt": 0,
+      "n": 10,
+      "medianMs": 36.14869999999996,
+      "p95Ms": 58.6241,
+      "bytes": 221428,
+      "roundTrips": 2
+    },
+    {
+      "case": "long-cold",
+      "rtt": 40,
+      "n": 10,
+      "medianMs": 193.53639999999905,
+      "p95Ms": 225.26299999999992,
+      "bytes": 67269,
+      "roundTrips": 1
+    },
+    {
+      "case": "long-warm",
+      "rtt": 40,
+      "n": 10,
+      "medianMs": 71.47249999999985,
+      "p95Ms": 72.32809999999881,
+      "bytes": 67269,
+      "roundTrips": 1
+    },
+    {
+      "case": "medium-cold",
+      "rtt": 40,
+      "n": 10,
+      "medianMs": 57.6200000000008,
+      "p95Ms": 60.897500000000946,
+      "bytes": 20345,
+      "roundTrips": 1
+    },
+    {
+      "case": "medium-warm",
+      "rtt": 40,
+      "n": 10,
+      "medianMs": 51.2507999999998,
+      "p95Ms": 51.86769999999888,
+      "bytes": 20345,
+      "roundTrips": 1
+    },
+    {
+      "case": "short-cold",
+      "rtt": 40,
+      "n": 10,
+      "medianMs": 47.6836000000003,
+      "p95Ms": 47.97280000000046,
+      "bytes": 10611,
+      "roundTrips": 1
+    },
+    {
+      "case": "short-warm",
+      "rtt": 40,
+      "n": 10,
+      "medianMs": 46.82600000000093,
+      "p95Ms": 47.52050000000054,
+      "bytes": 10611,
+      "roundTrips": 1
+    },
+    {
+      "case": "list-head-parallel",
+      "rtt": 40,
+      "n": 10,
+      "medianMs": 168.03459999999995,
+      "p95Ms": 195.45069999999942,
+      "bytes": 221426,
+      "roundTrips": 1
+    },
+    {
+      "case": "list-head-serial",
+      "rtt": 40,
+      "n": 10,
+      "medianMs": 210.0722999999998,
+      "p95Ms": 239.0013999999992,
+      "bytes": 221428,
+      "roundTrips": 2
+    }
+  ],
+  "samples": [
+    {
+      "case": "long-cold",
+      "rtt": 0,
+      "run": 0,
+      "ms": 117.16769999999997,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "long-warm",
+      "rtt": 0,
+      "run": 0,
+      "ms": 1.739400000000046,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-cold",
+      "rtt": 0,
+      "run": 0,
+      "ms": 6.048699999999997,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-warm",
+      "rtt": 0,
+      "run": 0,
+      "ms": 0.5560999999999581,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "short-cold",
+      "rtt": 0,
+      "run": 0,
+      "ms": 0.7846999999999866,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "short-warm",
+      "rtt": 0,
+      "run": 0,
+      "ms": 0.580099999999959,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "list-head-parallel",
+      "rtt": 0,
+      "run": 0,
+      "ms": 33.19920000000002,
+      "bytes": 221426,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 1
+    },
+    {
+      "case": "list-head-serial",
+      "rtt": 0,
+      "run": 0,
+      "ms": 33.7543,
+      "bytes": 221428,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 2
+    },
+    {
+      "case": "long-cold",
+      "rtt": 0,
+      "run": 1,
+      "ms": 134.59820000000002,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "long-warm",
+      "rtt": 0,
+      "run": 1,
+      "ms": 2.1212999999999056,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-cold",
+      "rtt": 0,
+      "run": 1,
+      "ms": 7.3275000000001,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-warm",
+      "rtt": 0,
+      "run": 1,
+      "ms": 0.711400000000026,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "short-cold",
+      "rtt": 0,
+      "run": 1,
+      "ms": 1.1965999999999894,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "short-warm",
+      "rtt": 0,
+      "run": 1,
+      "ms": 0.4994000000000369,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "list-head-parallel",
+      "rtt": 0,
+      "run": 1,
+      "ms": 36.7568,
+      "bytes": 221426,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 1
+    },
+    {
+      "case": "list-head-serial",
+      "rtt": 0,
+      "run": 1,
+      "ms": 34.11799999999994,
+      "bytes": 221428,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 2
+    },
+    {
+      "case": "long-cold",
+      "rtt": 0,
+      "run": 2,
+      "ms": 123.36779999999999,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "long-warm",
+      "rtt": 0,
+      "run": 2,
+      "ms": 1.8131999999998243,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-cold",
+      "rtt": 0,
+      "run": 2,
+      "ms": 9.070699999999988,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-warm",
+      "rtt": 0,
+      "run": 2,
+      "ms": 0.7822999999998501,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "short-cold",
+      "rtt": 0,
+      "run": 2,
+      "ms": 1.2364000000000033,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "short-warm",
+      "rtt": 0,
+      "run": 2,
+      "ms": 0.4818000000000211,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "list-head-parallel",
+      "rtt": 0,
+      "run": 2,
+      "ms": 39.522500000000036,
+      "bytes": 221426,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 1
+    },
+    {
+      "case": "list-head-serial",
+      "rtt": 0,
+      "run": 2,
+      "ms": 37.14619999999991,
+      "bytes": 221428,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 2
+    },
+    {
+      "case": "long-cold",
+      "rtt": 0,
+      "run": 3,
+      "ms": 123.55590000000007,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "long-warm",
+      "rtt": 0,
+      "run": 3,
+      "ms": 1.90949999999998,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-cold",
+      "rtt": 0,
+      "run": 3,
+      "ms": 5.995000000000118,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-warm",
+      "rtt": 0,
+      "run": 3,
+      "ms": 0.6829000000000178,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "short-cold",
+      "rtt": 0,
+      "run": 3,
+      "ms": 1.0089000000000397,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "short-warm",
+      "rtt": 0,
+      "run": 3,
+      "ms": 0.4556999999999789,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "list-head-parallel",
+      "rtt": 0,
+      "run": 3,
+      "ms": 35.96510000000012,
+      "bytes": 221426,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 1
+    },
+    {
+      "case": "list-head-serial",
+      "rtt": 0,
+      "run": 3,
+      "ms": 36.14869999999996,
+      "bytes": 221428,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 2
+    },
+    {
+      "case": "long-cold",
+      "rtt": 0,
+      "run": 4,
+      "ms": 122.16420000000016,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "long-warm",
+      "rtt": 0,
+      "run": 4,
+      "ms": 2.360700000000179,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-cold",
+      "rtt": 0,
+      "run": 4,
+      "ms": 6.315599999999904,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-warm",
+      "rtt": 0,
+      "run": 4,
+      "ms": 0.8106000000002496,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "short-cold",
+      "rtt": 0,
+      "run": 4,
+      "ms": 1.1164999999996326,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "short-warm",
+      "rtt": 0,
+      "run": 4,
+      "ms": 0.5733000000000175,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "list-head-parallel",
+      "rtt": 0,
+      "run": 4,
+      "ms": 38.997299999999996,
+      "bytes": 221426,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 1
+    },
+    {
+      "case": "list-head-serial",
+      "rtt": 0,
+      "run": 4,
+      "ms": 58.6241,
+      "bytes": 221428,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 2
+    },
+    {
+      "case": "long-cold",
+      "rtt": 0,
+      "run": 5,
+      "ms": 115.93669999999975,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "long-warm",
+      "rtt": 0,
+      "run": 5,
+      "ms": 1.5675999999998567,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-cold",
+      "rtt": 0,
+      "run": 5,
+      "ms": 6.145099999999729,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-warm",
+      "rtt": 0,
+      "run": 5,
+      "ms": 0.6990000000000691,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "short-cold",
+      "rtt": 0,
+      "run": 5,
+      "ms": 1.0300000000002,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "short-warm",
+      "rtt": 0,
+      "run": 5,
+      "ms": 0.39620000000013533,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "list-head-parallel",
+      "rtt": 0,
+      "run": 5,
+      "ms": 36.35550000000012,
+      "bytes": 221426,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 1
+    },
+    {
+      "case": "list-head-serial",
+      "rtt": 0,
+      "run": 5,
+      "ms": 36.83629999999994,
+      "bytes": 221428,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 2
+    },
+    {
+      "case": "long-cold",
+      "rtt": 0,
+      "run": 6,
+      "ms": 118.47609999999986,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "long-warm",
+      "rtt": 0,
+      "run": 6,
+      "ms": 1.5923000000002503,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-cold",
+      "rtt": 0,
+      "run": 6,
+      "ms": 6.06020000000035,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-warm",
+      "rtt": 0,
+      "run": 6,
+      "ms": 0.4908999999997832,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "short-cold",
+      "rtt": 0,
+      "run": 6,
+      "ms": 0.8815999999997075,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "short-warm",
+      "rtt": 0,
+      "run": 6,
+      "ms": 0.45970000000033906,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "list-head-parallel",
+      "rtt": 0,
+      "run": 6,
+      "ms": 34.23190000000022,
+      "bytes": 221426,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 1
+    },
+    {
+      "case": "list-head-serial",
+      "rtt": 0,
+      "run": 6,
+      "ms": 32.64339999999993,
+      "bytes": 221428,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 2
+    },
+    {
+      "case": "long-cold",
+      "rtt": 0,
+      "run": 7,
+      "ms": 120.23050000000012,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "long-warm",
+      "rtt": 0,
+      "run": 7,
+      "ms": 1.5215000000002874,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-cold",
+      "rtt": 0,
+      "run": 7,
+      "ms": 6.207300000000032,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-warm",
+      "rtt": 0,
+      "run": 7,
+      "ms": 0.5677000000000589,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "short-cold",
+      "rtt": 0,
+      "run": 7,
+      "ms": 0.9424999999996544,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "short-warm",
+      "rtt": 0,
+      "run": 7,
+      "ms": 0.5244000000002416,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "list-head-parallel",
+      "rtt": 0,
+      "run": 7,
+      "ms": 37.53679999999986,
+      "bytes": 221426,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 1
+    },
+    {
+      "case": "list-head-serial",
+      "rtt": 0,
+      "run": 7,
+      "ms": 36.403999999999996,
+      "bytes": 221428,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 2
+    },
+    {
+      "case": "long-cold",
+      "rtt": 0,
+      "run": 8,
+      "ms": 132.67889999999989,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "long-warm",
+      "rtt": 0,
+      "run": 8,
+      "ms": 2.396099999999933,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-cold",
+      "rtt": 0,
+      "run": 8,
+      "ms": 7.038100000000213,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-warm",
+      "rtt": 0,
+      "run": 8,
+      "ms": 0.9980000000000473,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "short-cold",
+      "rtt": 0,
+      "run": 8,
+      "ms": 1.0731999999998152,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "short-warm",
+      "rtt": 0,
+      "run": 8,
+      "ms": 0.4238000000000284,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "list-head-parallel",
+      "rtt": 0,
+      "run": 8,
+      "ms": 45.29829999999993,
+      "bytes": 221426,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 1
+    },
+    {
+      "case": "list-head-serial",
+      "rtt": 0,
+      "run": 8,
+      "ms": 39.29019999999991,
+      "bytes": 221428,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 2
+    },
+    {
+      "case": "long-cold",
+      "rtt": 0,
+      "run": 9,
+      "ms": 112.05529999999999,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "long-warm",
+      "rtt": 0,
+      "run": 9,
+      "ms": 1.6896999999999025,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-cold",
+      "rtt": 0,
+      "run": 9,
+      "ms": 5.806700000000092,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-warm",
+      "rtt": 0,
+      "run": 9,
+      "ms": 0.5643000000000029,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "short-cold",
+      "rtt": 0,
+      "run": 9,
+      "ms": 0.8729000000002998,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "short-warm",
+      "rtt": 0,
+      "run": 9,
+      "ms": 0.3841999999995096,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "list-head-parallel",
+      "rtt": 0,
+      "run": 9,
+      "ms": 33.6300999999994,
+      "bytes": 221426,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 1
+    },
+    {
+      "case": "list-head-serial",
+      "rtt": 0,
+      "run": 9,
+      "ms": 32.860099999999875,
+      "bytes": 221428,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 2
+    },
+    {
+      "case": "long-cold",
+      "rtt": 40,
+      "run": 0,
+      "ms": 225.26299999999992,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "long-warm",
+      "rtt": 40,
+      "run": 0,
+      "ms": 70.33389999999963,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-cold",
+      "rtt": 40,
+      "run": 0,
+      "ms": 57.28389999999945,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-warm",
+      "rtt": 40,
+      "run": 0,
+      "ms": 51.33470000000034,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "short-cold",
+      "rtt": 40,
+      "run": 0,
+      "ms": 47.6836000000003,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "short-warm",
+      "rtt": 40,
+      "run": 0,
+      "ms": 46.44800000000032,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "list-head-parallel",
+      "rtt": 40,
+      "run": 0,
+      "ms": 170.23949999999968,
+      "bytes": 221426,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 1
+    },
+    {
+      "case": "list-head-serial",
+      "rtt": 40,
+      "run": 0,
+      "ms": 208.92999999999938,
+      "bytes": 221428,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 2
+    },
+    {
+      "case": "long-cold",
+      "rtt": 40,
+      "run": 1,
+      "ms": 193.94830000000002,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "long-warm",
+      "rtt": 40,
+      "run": 1,
+      "ms": 71.47249999999985,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-cold",
+      "rtt": 40,
+      "run": 1,
+      "ms": 58.530799999999545,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-warm",
+      "rtt": 40,
+      "run": 1,
+      "ms": 51.772899999999936,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "short-cold",
+      "rtt": 40,
+      "run": 1,
+      "ms": 47.97280000000046,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "short-warm",
+      "rtt": 40,
+      "run": 1,
+      "ms": 46.53819999999996,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "list-head-parallel",
+      "rtt": 40,
+      "run": 1,
+      "ms": 168.03459999999995,
+      "bytes": 221426,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 1
+    },
+    {
+      "case": "list-head-serial",
+      "rtt": 40,
+      "run": 1,
+      "ms": 216.1971999999996,
+      "bytes": 221428,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 2
+    },
+    {
+      "case": "long-cold",
+      "rtt": 40,
+      "run": 2,
+      "ms": 182.65530000000035,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "long-warm",
+      "rtt": 40,
+      "run": 2,
+      "ms": 71.50669999999991,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-cold",
+      "rtt": 40,
+      "run": 2,
+      "ms": 58.72470000000067,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-warm",
+      "rtt": 40,
+      "run": 2,
+      "ms": 50.496000000000095,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "short-cold",
+      "rtt": 40,
+      "run": 2,
+      "ms": 46.552700000000186,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "short-warm",
+      "rtt": 40,
+      "run": 2,
+      "ms": 46.70789999999943,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "list-head-parallel",
+      "rtt": 40,
+      "run": 2,
+      "ms": 166.1921000000002,
+      "bytes": 221426,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 1
+    },
+    {
+      "case": "list-head-serial",
+      "rtt": 40,
+      "run": 2,
+      "ms": 209.7565999999997,
+      "bytes": 221428,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 2
+    },
+    {
+      "case": "long-cold",
+      "rtt": 40,
+      "run": 3,
+      "ms": 181.40369999999893,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "long-warm",
+      "rtt": 40,
+      "run": 3,
+      "ms": 71.86329999999907,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-cold",
+      "rtt": 40,
+      "run": 3,
+      "ms": 57.07480000000032,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-warm",
+      "rtt": 40,
+      "run": 3,
+      "ms": 51.2507999999998,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "short-cold",
+      "rtt": 40,
+      "run": 3,
+      "ms": 47.81670000000122,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "short-warm",
+      "rtt": 40,
+      "run": 3,
+      "ms": 46.96299999999974,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "list-head-parallel",
+      "rtt": 40,
+      "run": 3,
+      "ms": 164.77700000000004,
+      "bytes": 221426,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 1
+    },
+    {
+      "case": "list-head-serial",
+      "rtt": 40,
+      "run": 3,
+      "ms": 209.2507000000005,
+      "bytes": 221428,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 2
+    },
+    {
+      "case": "long-cold",
+      "rtt": 40,
+      "run": 4,
+      "ms": 189.88770000000113,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "long-warm",
+      "rtt": 40,
+      "run": 4,
+      "ms": 70.88639999999941,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-cold",
+      "rtt": 40,
+      "run": 4,
+      "ms": 56.26729999999952,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-warm",
+      "rtt": 40,
+      "run": 4,
+      "ms": 51.569799999999304,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "short-cold",
+      "rtt": 40,
+      "run": 4,
+      "ms": 47.247299999999086,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "short-warm",
+      "rtt": 40,
+      "run": 4,
+      "ms": 46.82600000000093,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "list-head-parallel",
+      "rtt": 40,
+      "run": 4,
+      "ms": 175.9388999999992,
+      "bytes": 221426,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 1
+    },
+    {
+      "case": "list-head-serial",
+      "rtt": 40,
+      "run": 4,
+      "ms": 205.76870000000054,
+      "bytes": 221428,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 2
+    },
+    {
+      "case": "long-cold",
+      "rtt": 40,
+      "run": 5,
+      "ms": 193.53639999999905,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "long-warm",
+      "rtt": 40,
+      "run": 5,
+      "ms": 70.2419000000009,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-cold",
+      "rtt": 40,
+      "run": 5,
+      "ms": 58.699000000000524,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-warm",
+      "rtt": 40,
+      "run": 5,
+      "ms": 51.13750000000073,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "short-cold",
+      "rtt": 40,
+      "run": 5,
+      "ms": 47.749399999998786,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "short-warm",
+      "rtt": 40,
+      "run": 5,
+      "ms": 47.08429999999862,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "list-head-parallel",
+      "rtt": 40,
+      "run": 5,
+      "ms": 181.53689999999915,
+      "bytes": 221426,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 1
+    },
+    {
+      "case": "list-head-serial",
+      "rtt": 40,
+      "run": 5,
+      "ms": 212.4899000000005,
+      "bytes": 221428,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 2
+    },
+    {
+      "case": "long-cold",
+      "rtt": 40,
+      "run": 6,
+      "ms": 200.08359999999993,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "long-warm",
+      "rtt": 40,
+      "run": 6,
+      "ms": 71.82730000000083,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-cold",
+      "rtt": 40,
+      "run": 6,
+      "ms": 60.897500000000946,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-warm",
+      "rtt": 40,
+      "run": 6,
+      "ms": 51.58059999999932,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "short-cold",
+      "rtt": 40,
+      "run": 6,
+      "ms": 47.71559999999954,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "short-warm",
+      "rtt": 40,
+      "run": 6,
+      "ms": 46.76249999999891,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "list-head-parallel",
+      "rtt": 40,
+      "run": 6,
+      "ms": 189.26940000000104,
+      "bytes": 221426,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 1
+    },
+    {
+      "case": "list-head-serial",
+      "rtt": 40,
+      "run": 6,
+      "ms": 210.0722999999998,
+      "bytes": 221428,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 2
+    },
+    {
+      "case": "long-cold",
+      "rtt": 40,
+      "run": 7,
+      "ms": 182.67639999999847,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "long-warm",
+      "rtt": 40,
+      "run": 7,
+      "ms": 72.32809999999881,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-cold",
+      "rtt": 40,
+      "run": 7,
+      "ms": 57.877300000000105,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-warm",
+      "rtt": 40,
+      "run": 7,
+      "ms": 51.22679999999855,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "short-cold",
+      "rtt": 40,
+      "run": 7,
+      "ms": 47.79869999999937,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "short-warm",
+      "rtt": 40,
+      "run": 7,
+      "ms": 46.93369999999959,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "list-head-parallel",
+      "rtt": 40,
+      "run": 7,
+      "ms": 195.45069999999942,
+      "bytes": 221426,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 1
+    },
+    {
+      "case": "list-head-serial",
+      "rtt": 40,
+      "run": 7,
+      "ms": 217.07790000000023,
+      "bytes": 221428,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 2
+    },
+    {
+      "case": "long-cold",
+      "rtt": 40,
+      "run": 8,
+      "ms": 203.19750000000022,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "long-warm",
+      "rtt": 40,
+      "run": 8,
+      "ms": 70.85910000000149,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-cold",
+      "rtt": 40,
+      "run": 8,
+      "ms": 56.67230000000018,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-warm",
+      "rtt": 40,
+      "run": 8,
+      "ms": 51.86769999999888,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "short-cold",
+      "rtt": 40,
+      "run": 8,
+      "ms": 46.84180000000015,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "short-warm",
+      "rtt": 40,
+      "run": 8,
+      "ms": 47.01839999999902,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "list-head-parallel",
+      "rtt": 40,
+      "run": 8,
+      "ms": 167.57330000000002,
+      "bytes": 221426,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 1
+    },
+    {
+      "case": "list-head-serial",
+      "rtt": 40,
+      "run": 8,
+      "ms": 239.0013999999992,
+      "bytes": 221428,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 2
+    },
+    {
+      "case": "long-cold",
+      "rtt": 40,
+      "run": 9,
+      "ms": 207.5641999999989,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "long-warm",
+      "rtt": 40,
+      "run": 9,
+      "ms": 72.26460000000043,
+      "bytes": 67269,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-cold",
+      "rtt": 40,
+      "run": 9,
+      "ms": 57.6200000000008,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "medium-warm",
+      "rtt": 40,
+      "run": 9,
+      "ms": 50.989699999998265,
+      "bytes": 20345,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 40
+    },
+    {
+      "case": "short-cold",
+      "rtt": 40,
+      "run": 9,
+      "ms": 47.53939999999966,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "short-warm",
+      "rtt": 40,
+      "run": 9,
+      "ms": 47.52050000000054,
+      "bytes": 10611,
+      "calls": [
+        "threads.get"
+      ],
+      "roundTrips": 1,
+      "rows": 17
+    },
+    {
+      "case": "list-head-parallel",
+      "rtt": 40,
+      "run": 9,
+      "ms": 165.3724000000002,
+      "bytes": 221426,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 1
+    },
+    {
+      "case": "list-head-serial",
+      "rtt": 40,
+      "run": 9,
+      "ms": 212.7469999999994,
+      "bytes": 221428,
+      "calls": [
+        "threads.list",
+        "threads.get"
+      ],
+      "roundTrips": 2
+    }
+  ]
+}
