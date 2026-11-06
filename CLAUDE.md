@@ -15,6 +15,14 @@
   for CI with blocking commands, and finish with the full report (see
   "Delegated agents and branches" in `AGENTS.md`).
 
+## Errors people can act on
+
+Every error a feature can show follows "Errors people can act on" in
+`AGENTS.md`: a plain headline, one sentence on what to do, a fix button where
+one exists, and the technical text only behind Show details. Use the shared
+problem components and `describeProblem`; never show `String(e)` or a raw
+message, and keep the raw-error lint's allowlist empty.
+
 ## Disk usage and cleanup
 
 Follow the **Disk usage and cleanup** rules in `AGENTS.md` for every build and
