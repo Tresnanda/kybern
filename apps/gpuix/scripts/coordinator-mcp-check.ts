@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
+import { tmpdir } from 'node:os'
 import { launchFixture, waitForPainted } from '../src/requests/harness.ts'
 const out = path.resolve(process.env.SHOT_OUT ?? '.shots/coordinator-mcp')
 mkdirSync(out, { recursive: true })
 for (const theme of ['dark', 'light']) {
-  const scratch = path.resolve(process.env.TEMP!, 'coordinator-mcp-' + theme)
+  const scratch = path.resolve(tmpdir(), 'coordinator-mcp-' + theme)
   mkdirSync(scratch, { recursive: true })
   const fixture = await launchFixture(path.join(import.meta.dir, '../src/settings/coordinator-mcp.fixture.tsx'), {
     GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: theme, KYBERN_OPAQUE: '1', KYBERN_REDUCED_MOTION: '1',
