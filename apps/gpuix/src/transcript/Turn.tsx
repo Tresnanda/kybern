@@ -451,6 +451,7 @@ function EditedFileRow({ file, threadId, turnId, first, border, repo }: { file: 
   const t = useTheme()
   const g = useGlass()
   const [hover, setHover] = useState(false)
+  const [actionFocus, setActionFocus] = useState(false)
   const [open, setOpen] = useRowState(`file:${turnId}:${file.path}`, false)
   // The patch is cached outside the row: the virtual list and the card's
   // disclosure both remount rows, and an open row must not come back empty.
@@ -502,9 +503,9 @@ function EditedFileRow({ file, threadId, turnId, first, border, repo }: { file: 
         <div style={{ flexGrow: 1 }} />
         <DiffStat additions={file.additions} deletions={file.deletions} />
         </div>
-        <div style={{ display: 'flex', opacity: hover ? 1 : 0, pointerEvents: hover ? undefined : 'none' }}>
-        <IconButton label="Open" icon={N.external} size="sm" onClick={() => void actOnThreadFile(threadId, file.path, 'open')} />
-        <IconButton label={osLabels().reveal} icon={N.folder} size="sm" onClick={() => void actOnThreadFile(threadId, file.path, 'reveal')} />
+        <div style={{ display: 'flex', opacity: hover || actionFocus ? 1 : 0, pointerEvents: hover || actionFocus ? undefined : 'none' }}>
+        <IconButton onFocus={() => setActionFocus(true)} onBlur={() => setActionFocus(false)} label="Open" icon={N.external} size="sm" onClick={() => void actOnThreadFile(threadId, file.path, 'open')} />
+        <IconButton onFocus={() => setActionFocus(true)} onBlur={() => setActionFocus(false)} label={osLabels().reveal} icon={N.folder} size="sm" onClick={() => void actOnThreadFile(threadId, file.path, 'reveal')} />
         </div>
         <Menu testId={`edited-actions-${file.path}`} align="end" trigger={() => <IconButton icon={N.ellipsis} label="File actions" size="sm" />}>
           <MenuItem id="reveal" label={osLabels().reveal} icon={N.folder} onSelect={() => void actOnThreadFile(threadId, file.path, 'reveal')} />
