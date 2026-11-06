@@ -504,3 +504,33 @@ async fn opening_the_coordinator_with_a_client_id_uses_it_and_a_repeat_reports_t
         .unwrap();
     assert!(!other.created && other.thread.id == thread_id);
 }
+
+#[test]
+fn coordinator_mcp_policy_is_opt_in_per_harness_and_restarts_only_lead_sessions() {
+    let fixture = Fixture::new();
+    std::fs::create_dir_all(&fixture.root).unwrap();
+    let servers = json!({"mcpServers":{"coord-test-memory":{"command":"memory"},"coord-test-other":{"command":"other"}}});
+    std::fs::write(fixture.root.join(".mcp.json"), servers.to_string()).unwrap();
+    for folder in [".omp", ".pi"] {
+        std::fs::create_dir_all(fixture.root.join(folder)).unwrap();
+        std::fs::write(fixture.root.join(folder).join("mcp.json"), servers.to_string()).unwrap();
+    }
+    std::fs::write(fixture.root.join("opencode.json"), json!({"mcp":{"coord-test-memory":{"type":"local","command":["memory"]},"coord-test-other":{"type":"local","command":["other"]}}}).to_string()).unwrap();
+    for kind in [ProviderKind::ClaudeCode, ProviderKind::Opencode, ProviderKind::Pi, ProviderKind::Omp] {
+        let mut thread = fixture.thread(ThreadStatus::Idle);
+        thread.provider = ProviderInstance::default_for(kind);
+        let regular_identity = fixture.orchestrator.session_identity(&thread).unwrap();
+        let mut lead = thread.clone();
+        lead.coordinator_project_id = Some(fixture.project.id);
+        let before = fixture.orchestrator.session_identity(&lead).unwrap();
+        assert!(fixture.orchestrator.native_tool_restrictions(&lead).unwrap().allowed_mcp_servers.is_empty());
+        let mut settings = fixture.orchestrator.inner.settings.get();
+        settings.coordinator_mcp_servers.insert(kind, vec!["coord-test-memory".into()]);
+        fixture.orchestrator.inner.settings.set(settings).unwrap();
+        let policy = fixture.orchestrator.native_tool_restrictions(&lead).unwrap();
+        assert_eq!(policy.allowed_mcp_servers.keys().collect::<Vec<_>>(), vec!["coord-test-memory"], "{kind:?}");
+        assert_eq!(fixture.orchestrator.native_tool_restrictions(&thread).unwrap(), kybern_drivers::NativeToolRestrictions::default());
+        assert_ne!(fixture.orchestrator.session_identity(&lead).unwrap(), before);
+        assert_eq!(fixture.orchestrator.session_identity(&thread).unwrap(), regular_identity);
+    }
+}

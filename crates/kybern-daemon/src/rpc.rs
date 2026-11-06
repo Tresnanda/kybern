@@ -170,8 +170,23 @@ async fn dispatch_part_2(state: &AppState, ctx: &ConnectionCtx, method: &str, sl
                         .ok_or_else(|| RpcError::not_found("project"))
                 })
                 .transpose()?;
+            let settings = state.settings.get();
+            let coordinator_mcp_servers = [ProviderKind::ClaudeCode, ProviderKind::Opencode, ProviderKind::Pi, ProviderKind::Omp]
+                .into_iter()
+                .filter_map(|kind| {
+                    let provider = crate::settings::provider_settings(&settings, kind, cwd.as_deref().and_then(|p| p.to_str()));
+                    let mut names = std::collections::BTreeSet::new();
+                    for instance in std::iter::once("default").chain(provider.accounts.keys().map(String::as_str)) {
+                        let Ok(env) = crate::provider_accounts::environment(&provider, kind, instance) else { continue };
+                        let context = kybern_drivers::ProbeContext { binary: None, cwd: cwd.clone(), env };
+                        names.extend(kybern_drivers::coordinator_mcp::servers(kind, &context).into_keys());
+                    }
+                    let names: Vec<_> = names.into_iter().collect();
+                    (!names.is_empty()).then_some((kind, names))
+                })
+                .collect();
             let providers = crate::network::machine_info::provider_statuses(state, p.project_id, cwd, p.force_refresh).await;
-            ok(ProvidersListResult { providers })
+            ok(ProvidersListResult { providers, coordinator_mcp_servers })
         }
         AccountsCreate::NAME => ok(crate::provider_accounts::create(state, parse(params)?).map_err(bad)?),
         AccountsSignIn::NAME => ok(crate::provider_accounts::sign_in(state, parse(params)?).map_err(provider_err)?),

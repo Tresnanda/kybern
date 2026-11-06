@@ -312,13 +312,19 @@ impl Orchestrator {
     }
 
     pub(super) fn session_identity(&self, thread: &Thread) -> Result<String> {
-        let bytes = Sha256::digest(serde_json::to_vec(&(
+        let mut input = serde_json::to_vec(&(
             thread.provider.clone(),
             thread.model.clone(),
             thread.effort.clone(),
             thread.permission_mode,
             self.environment_fingerprint(thread)?,
-        ))?);
+        ))?;
+        // Apply tool-policy changes on the next turn, without changing ordinary session identities.
+        if thread.coordinator_project_id.is_some() && super::lead::lead_restrictions_enforced(thread.provider.kind) {
+            let allowed = self.inner.settings.get().coordinator_mcp_servers.get(&thread.provider.kind).cloned().unwrap_or_default();
+            input.extend(serde_json::to_vec(&allowed)?);
+        }
+        let bytes = Sha256::digest(input);
         Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
     }
 

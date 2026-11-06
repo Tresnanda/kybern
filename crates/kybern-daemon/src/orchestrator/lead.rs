@@ -127,6 +127,7 @@ pub(super) fn lead_restrictions(kind: ProviderKind) -> NativeToolRestrictions {
         denied_tools: Vec::new(),
         require_enforcement: lead_restrictions_enforced(kind),
         allow_read_only_builtins: true,
+        allowed_mcp_servers: Default::default(),
     }
 }
 
@@ -295,7 +296,19 @@ impl Orchestrator {
         if thread.coordinator_project_id.is_none() {
             return Ok(NativeToolRestrictions::default());
         }
-        Ok(lead_restrictions(thread.provider.kind))
+        let mut restrictions = lead_restrictions(thread.provider.kind);
+        let settings = self.inner.settings.get();
+        if restrictions.require_enforcement
+            && let Some(allowed) = settings.coordinator_mcp_servers.get(&thread.provider.kind).filter(|names| !names.is_empty())
+        {
+            let context =
+                kybern_drivers::ProbeContext { binary: None, cwd: Some(thread.cwd.clone().into()), env: self.account_environment(thread)? };
+            restrictions.allowed_mcp_servers = kybern_drivers::coordinator_mcp::servers(thread.provider.kind, &context)
+                .into_iter()
+                .filter(|(name, _)| allowed.contains(name))
+                .collect();
+        }
+        Ok(restrictions)
     }
 
     /// Whether `thread` descends from its project's Coordinator through delegation.

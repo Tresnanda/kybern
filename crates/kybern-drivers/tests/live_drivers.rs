@@ -286,6 +286,7 @@ async fn run_native_bridge_turn(kind: ProviderKind) {
             denied_tools: vec!["write".into(), "edit".into(), "bash".into()],
             require_enforcement: strict,
             allow_read_only_builtins: false,
+            allowed_mcp_servers: Default::default(),
         },
     };
     let driver = DriverRegistry::with_defaults().get(kind).expect("driver registered");
