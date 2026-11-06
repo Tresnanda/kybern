@@ -206,7 +206,7 @@ export const FileViewer = memo(function FileViewer({ projectId, threadId, path, 
   const markdownFile = /\.(md|mdx|markdown)$/i.test(path)
   const project = useApp((s) => s.projects.find((p) => p.id === projectId))
   const thread = useApp((s) => threadId ? s.threads.find((th) => th.id === threadId) : undefined)
-  const absolutePath = threadId ? absoluteThreadFile(threadId, path) : project ? `${project.path}/${path}` : null
+  const absolutePath = threadId ? absoluteThreadFile(threadId, path, projectId ? 'project' : 'thread') : project ? `${project.path}/${path}` : null
   // A project root is read through the machine of the thread that shows it.
   const root = useMemo<FileRoot | null>(() => projectId ? { projectId, ...(threadId ? { threadId } : {}) } : threadId ? { threadId } : null, [projectId, threadId])
   const key = root ? bufferKey(root, path) : null
@@ -262,6 +262,9 @@ export const FileViewer = memo(function FileViewer({ projectId, threadId, path, 
     if (!target || !absolutePath || (!activeEnvironment().local || !!(threadId && machineOfThreadId(threadId)))) return
     openInEditor(target, absolutePath, editor.current?.caretLine() ?? line ?? 1).catch((e: unknown) => toastProblem(e, { action: `open the file in ${target.name}` }))
   }, [absolutePath, line])
+  useEffect(() => {
+    if (file && threadId && (file.binary || /\.(?:pdf|mp4|mov|mkv|webm|avi|zip|docx?|xlsx?|pptx?)$/i.test(path))) void actOnThreadFile(threadId, absolutePath ?? path, 'open')
+  }, [file?.binary, threadId, path, absolutePath])
   const canPreview = markdownFile && !!file && !file.binary
   const showPreview = preview && canPreview
   const showPreviewRef = useRef(showPreview)
@@ -296,8 +299,8 @@ export const FileViewer = memo(function FileViewer({ projectId, threadId, path, 
           {editors.map((candidate) => <MenuItem key={candidate.id} id={`open-${candidate.id}`} label={candidate.name} shortcut={candidate.id === preferred?.id ? '⌘⇧O' : undefined} testId={`file-open-${candidate.id}`} onSelect={() => openIn(candidate)} />)}
           <MenuSeparator />
         </>}
-        <MenuItem id="open" label="Open" disabled={!threadId} onSelect={() => { if (threadId) void actOnThreadFile(threadId, path, 'open') }} />
-        <MenuItem id="reveal" label={osLabels().reveal} icon={N.folder} disabled={!threadId} onSelect={() => { if (threadId) void actOnThreadFile(threadId, path, 'reveal') }} />
+        <MenuItem id="open" label="Open" disabled={!threadId} onSelect={() => { if (threadId) void actOnThreadFile(threadId, absolutePath ?? path, 'open') }} />
+        <MenuItem id="reveal" label={osLabels().reveal} icon={N.folder} disabled={!threadId} onSelect={() => { if (threadId) void actOnThreadFile(threadId, absolutePath ?? path, 'reveal') }} />
         <SendToMenu thread={projectId && !path.startsWith('/') ? thread : undefined} path={path} separated />
         <MenuItem id="relative" label="Copy relative path" onSelect={() => copyText(path)} />
         <MenuItem id="absolute" label="Copy absolute path" disabled={!absolutePath} onSelect={() => { if (absolutePath) copyText(absolutePath) }} />

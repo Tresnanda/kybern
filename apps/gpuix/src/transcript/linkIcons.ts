@@ -15,6 +15,7 @@ export function useLinkIcons(source: string, threadId: string | null, t: Theme) 
   const [metadata, setMetadata] = useState<Record<string, LinkMetadata>>({})
   useEffect(() => {
     let live = true
+    const abort = new AbortController()
     const client = threadClient(threadId)
     if (!client) return
     void (async () => {
@@ -26,14 +27,15 @@ export function useLinkIcons(source: string, threadId: string | null, t: Theme) 
         const key = `${threadId}:${href}`, hit = cache.get(key)
         let value = hit && hit.until > Date.now() ? hit.value : undefined
         if (!value) {
-          try { const response = await client.fetch(`/links/icon?url=${encodeURIComponent(href)}`); value = response.ok ? await response.json() as LinkMetadata : {} } catch { value = {} }
+          try { const response = await client.fetch(`/links/icon?url=${encodeURIComponent(href)}`, { signal: abort.signal }); value = response.ok ? await response.json() as LinkMetadata : {} } catch { value = {} }
+          if (abort.signal.aborted) break
           if (cache.size >= 256) cache.delete(cache.keys().next().value!)
           cache.set(key, { until: Date.now() + 300_000, value })
         }
         if (live) setMetadata(old => ({ ...old, [href]: value! }))
       }
     })()
-    return () => { live = false }
+    return () => { live = false; abort.abort() }
   }, [links, threadId])
   return useMemo(() => links.flatMap(href => {
     const target = classifyLink(href), data = metadata[href]

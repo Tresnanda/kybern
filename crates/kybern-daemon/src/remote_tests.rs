@@ -2906,4 +2906,29 @@ async fn downloaded_files_preserve_binary_bytes_and_revalidate() {
             .status(),
         reqwest::StatusCode::FORBIDDEN
     );
+    // A worktree thread's Explorer can still open files in its own project's checkout.
+    let worktree = host.root.join("worktree");
+    std::fs::create_dir_all(&worktree).unwrap();
+    let mut moved = thread;
+    moved.cwd = worktree.to_string_lossy().into_owned();
+    host.state.store.thread_upsert(&moved).unwrap();
+    let response = http
+        .get(&url)
+        .bearer_auth(&host.state.bootstrap_token)
+        .query(&[("path", host.root.join("report.pdf").to_string_lossy().as_ref())])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(response.bytes().await.unwrap().as_ref(), bytes);
+    assert_eq!(
+        http.get(&url)
+            .bearer_auth(&host.state.bootstrap_token)
+            .query(&[("path", host.root.join(".env").to_string_lossy().as_ref())])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
 }

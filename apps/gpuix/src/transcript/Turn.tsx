@@ -506,7 +506,7 @@ function EditedFileRow({ file, threadId, turnId, first, border, repo }: { file: 
         <IconButton label="Open" icon={N.external} size="sm" onClick={() => void actOnThreadFile(threadId, file.path, 'open')} />
         <IconButton label={osLabels().reveal} icon={N.folder} size="sm" onClick={() => void actOnThreadFile(threadId, file.path, 'reveal')} />
         </div>
-        <Menu align="end" trigger={() => <IconButton icon={N.ellipsis} label="File actions" size="sm" />}>
+        <Menu testId={`edited-actions-${file.path}`} align="end" trigger={() => <IconButton icon={N.ellipsis} label="File actions" size="sm" />}>
           <MenuItem id="reveal" label={osLabels().reveal} icon={N.folder} onSelect={() => void actOnThreadFile(threadId, file.path, 'reveal')} />
           <MenuItem id="open" label="Open" onSelect={() => void actOnThreadFile(threadId, file.path, 'open')} />
           <MenuItem id="explorer" label="Show in Kybern Explorer" onSelect={() => showThreadFile(threadId, file.path)} />

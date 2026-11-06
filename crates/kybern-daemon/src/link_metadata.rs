@@ -17,6 +17,17 @@ pub async fn load(cache: &Path, raw: &str) -> Value {
         url.set_path("/");
     }
     let key = Sha256::digest(url.as_str().as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    // Concurrent rows asking for one URL share its refresh; expired lock entries retain no work.
+    type Locks = std::collections::HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>;
+    static LOCKS: std::sync::LazyLock<std::sync::Mutex<Locks>> = std::sync::LazyLock::new(Default::default);
+    let lock = {
+        let mut locks = LOCKS.lock().unwrap();
+        locks.retain(|_, value| value.strong_count() > 0);
+        let lock = locks.get(&key).and_then(std::sync::Weak::upgrade).unwrap_or_else(|| std::sync::Arc::new(tokio::sync::Mutex::new(())));
+        locks.insert(key.clone(), std::sync::Arc::downgrade(&lock));
+        lock
+    };
+    let _refresh = lock.lock().await;
     let directory = cache.join("link-icons");
     let file = directory.join(key);
     if let Ok(meta) = tokio::fs::metadata(&file).await

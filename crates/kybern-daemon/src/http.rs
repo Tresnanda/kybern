@@ -363,7 +363,18 @@ async fn get_thread_file(
     let reference = crate::files::resolve_reference(&state.file_indexes, &root, &root, &mut None, &query.path).await;
     let file = match reference {
         Ok(crate::files::Reference::Found(relative)) => crate::files::resolve(&root, &relative).ok(),
-        Ok(crate::files::Reference::Outside(file)) if crate::files_outside::access(&state, id, false).allows(&file) => Some(file),
+        Ok(crate::files::Reference::Outside(file)) => {
+            // The Explorer can show the project's checkout beside a worktree thread.
+            // Keep the ordinary project-file policy, including credential refusals.
+            let project_root = match state.store.project_get(thread.project_id) {
+                Ok(Some(project)) => tokio::fs::canonicalize(project.path).await.ok(),
+                _ => None,
+            };
+            let project_file = project_root.as_ref().and_then(|root| {
+                file.strip_prefix(root).ok().and_then(|relative| crate::files::resolve(root, &relative.to_string_lossy()).ok())
+            });
+            (project_file.as_ref() == Some(&file) || crate::files_outside::access(&state, id, false).allows(&file)).then_some(file)
+        }
         _ => None,
     };
     let Some(file) = file else { return StatusCode::FORBIDDEN.into_response() };

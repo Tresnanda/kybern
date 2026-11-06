@@ -13,17 +13,19 @@ export function ReplyLinkIcon({ href }: { href: string }) {
   const [data, setData] = useState<LinkMetadata>({})
   useEffect(() => {
     let live = true
+    const abort = new AbortController()
     if (!['web', 'issue', 'pull'].includes(kind)) return
     const machine = ownerMachine({ threadId: context?.threadId }), client = machineClient(machine)
     if (!client) return
     const key = `${machine}:${href}`, known = cache.get(key)
     if (known && known.until > Date.now()) { setData(known.value); return }
-    void client.fetch(`/links/icon?url=${encodeURIComponent(href)}`).then(async response => response.ok ? await response.json() as LinkMetadata : {}).catch(() => ({})).then(value => {
+    void client.fetch(`/links/icon?url=${encodeURIComponent(href)}`, { signal: abort.signal }).then(async response => response.ok ? await response.json() as LinkMetadata : {}).catch(() => ({})).then(value => {
+      if (!live) return
       if (cache.size >= 256) cache.delete(cache.keys().next().value!)
       cache.set(key, { until: Date.now() + 300_000, value })
       if (live) setData(value)
     })
-    return () => { live = false }
+    return () => { live = false; abort.abort() }
   }, [href, kind, context?.threadId])
   if (kind === 'none') return null
   if (kind === 'web' && data.favicon) return <Image source={{ uri: data.favicon }} style={{ width: 14, height: 14 }} />

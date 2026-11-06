@@ -3,7 +3,7 @@ import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { mkdir, readFile, rename, writeFile, access, open, unlink } from 'node:fs/promises'
-import { getState, machineOfThreadId, requireThreadClient } from '../state.ts'
+import { getState, machineOfThreadId, requireThreadClient, ownProjectId } from '../state.ts'
 import { machineHub } from '../machines/index.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { downloadsDir, openTarget, revealPath } from '../platform/os.ts'
@@ -12,12 +12,18 @@ import { toastProblem } from '../problems/toast.ts'
 import { showFileInExplorer } from '../dock/explorerSelection.ts'
 
 export const threadFilesAreLocal = (id: string) => activeEnvironment().local && !machineOfThreadId(id)
-export function absoluteThreadFile(id: string, file: string): string | null {
+export function absoluteThreadFile(id: string, file: string, root: 'thread' | 'project' = 'thread'): string | null {
   if (file.startsWith('file://')) file = imageSource(file)?.value ?? file
   if (threadFilesAreLocal(id) && file.startsWith('~/')) file = path.join(homedir(), file.slice(2))
   const thread = getState().threads.find(th => th.id === id) ?? (getState().open.thread?.id === id ? getState().open.thread : undefined)
-  const p = /^[a-z]:[\\/]/i.test(thread?.cwd ?? file) ? path.win32 : path.posix
-  return p.isAbsolute(file) ? file : thread ? p.resolve(thread.cwd, file) : null
+  let cwd = thread?.cwd
+  if (root === 'project' && thread) {
+    const hub = machineHub(), machine = machineOfThreadId(id) ?? hub.localMachineId
+    cwd = hub.view().projects.flatMap(p => p.instances).find(p => p.machineId === machine && p.project.id === ownProjectId(thread))?.project.path
+      ?? getState().projects.find(p => p.id === thread.project_id)?.path ?? cwd
+  }
+  const p = /^[a-z]:[\\/]/i.test(cwd ?? file) ? path.win32 : path.posix
+  return p.isAbsolute(file) ? file : cwd ? p.resolve(cwd, file) : null
 }
 export function showThreadFile(id: string, file: string) {
   const thread = getState().threads.find(th => th.id === id)

@@ -330,8 +330,8 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
   const rendered = !!preview?.markdown && !preview.raw
   const shown = preview && fromLine(preview.text, preview.whole || rendered ? undefined : preview.line)
   return <>
-    <markdown source={source} theme={theme} onLinkClick={e => { if (e.value) void open(e.value) }} onLinkContextMenu={e => { if (!e.value) return; const target = chatLink(e.value); if (target.kind === 'file') setFileMenu({ path: target.path, at: { x: e.x ?? 0, y: e.y ?? 0 } }) }} style={{ color: t.text, userSelect: 'text' }} />
-    {fileMenu && threadId && <ContextMenu at={fileMenu.at} onClose={() => setFileMenu(null)}>
+    <markdown testId="reply-prose" source={source} theme={theme} onLinkClick={e => { if (e.value) void open(e.value) }} onLinkContextMenu={e => { if (!e.value) return; const target = chatLink(e.value); if (target.kind === 'file') setFileMenu({ path: target.path, at: { x: e.x ?? 0, y: e.y ?? 0 } }) }} style={{ color: t.text, userSelect: 'text' }} />
+    {fileMenu && threadId && <ContextMenu testId="reply-file-menu" at={fileMenu.at} onClose={() => setFileMenu(null)}>
       <MenuItem id="reveal" label={osLabels().reveal} onSelect={() => void actOnThreadFile(threadId, fileMenu.path, 'reveal')} />
       <MenuItem id="open" label="Open" onSelect={() => void actOnThreadFile(threadId, fileMenu.path, 'open')} />
       <MenuItem id="explorer" label="Show in Kybern Explorer" onSelect={() => showThreadFile(threadId, fileMenu.path)} />
