@@ -534,6 +534,9 @@ async fn computer_tools_run_on_the_machine_that_has_them_ready_and_ask_there() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn messaging_a_finished_remote_child_reopens_both_copies_and_notifies_again() {
     let Some(p) = Pair::new().await else { return };
+    // Exercise delivery after authorization; supervised forwarding otherwise waits
+    // on the unrelated Operate consent card before any message reaches the child.
+    p.set_mode(PermissionMode::Auto);
     let started = p.delegate(json!({"task":"Initial remote findings"})).await;
     let task = task_id_of(&started);
     let agent = p.agent("Initial remote findings").await;
