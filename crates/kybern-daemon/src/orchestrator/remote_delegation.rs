@@ -999,6 +999,45 @@ impl Orchestrator {
         }
     }
 
+    /// A follow-up can start a new turn after the previous follower exited. Read the
+    /// target's new lifecycle before restarting it, so an old terminal reply cannot
+    /// overwrite the reopened mirror or replay its previous result.
+    pub(super) async fn remote_refresh_after_message(&self, parent: ThreadId, target: &str, thread: ThreadId) {
+        let Some(hub) = self.remote_hub() else { return };
+        let Ok(children) = self.inner.store.remote_children_of(parent) else { return };
+        for child in children.into_iter().filter(|child| child.target == target && child.remote_thread_id == Some(thread)) {
+            let params = PeerDelegationGetParams { task_id: child.task_id, since_seq: None, wait_ms: None };
+            let Ok(value) = hub.call(target, PeerDelegationGet::NAME, serde_json::to_value(params).unwrap_or(Value::Null)).await else {
+                continue;
+            };
+            let Ok(view) = serde_json::from_value::<PeerDelegationView>(value) else { continue };
+            if view.last_seq <= child.last_seq || (view.status != DelegationStatus::Running && view.completed_at <= child.info.completed_at)
+            {
+                continue;
+            }
+            if child.state.is_terminal() {
+                let _ = self.remote_update(child.task_id, |current| {
+                    if current.last_seq > view.last_seq {
+                        return false;
+                    }
+                    current.state = RemoteChildState::Running;
+                    current.info.status = DelegationStatus::Running;
+                    current.info.result = None;
+                    current.info.error = None;
+                    current.info.completed_at = None;
+                    current.info.parent_notified = true;
+                    current.completed_at_from_target = false;
+                    // Reject any in-flight poll from before this follow-up.
+                    current.last_seq = view.last_seq;
+                    true
+                });
+                self.delegation_allow_next_result(child.task_id);
+            }
+            self.apply_view(&child, view);
+            self.remote_follow(child.task_id);
+        }
+    }
+
     /// Start the follower of a remote child unless one is running.
     pub(super) fn remote_follow(&self, task_id: Uuid) {
         let Some(hub) = self.remote_hub().cloned() else { return };
@@ -1007,8 +1046,15 @@ impl Orchestrator {
         }
         let this = self.clone();
         tokio::spawn(async move {
+            let shutdown = hub.shutdown();
             this.follow(hub, task_id).await;
             this.inner.remote.followers.lock().unwrap_or_else(|error| error.into_inner()).remove(&task_id);
+            // A follow-up may have reopened it while this follower was returning.
+            if !shutdown.is_cancelled()
+                && this.inner.store.remote_child_get(task_id).ok().flatten().is_some_and(|child| !child.state.is_terminal())
+            {
+                this.remote_follow(task_id);
+            }
         });
     }
 
@@ -1112,6 +1158,9 @@ impl Orchestrator {
 
     /// Fold the target's view into the mirror; a terminal view ends the child (first result wins).
     fn apply_view(&self, child: &RemoteChild, view: PeerDelegationView) -> Follow {
+        if self.inner.store.remote_child_get(child.task_id).ok().flatten().is_some_and(|current| view.last_seq < current.last_seq) {
+            return Follow::Continue;
+        }
         let terminal = view.status != DelegationStatus::Running;
         let apply = |child: &mut RemoteChild| {
             child.remote_thread_id = Some(view.thread_id);

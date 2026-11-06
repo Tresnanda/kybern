@@ -611,6 +611,8 @@ fn mcp_config(base: Option<&String>, bridge: &NativeToolBridge) -> Result<Value>
             "url": endpoint,
             "enabled": true,
             "oauth": false,
+            // Kybern owns the wait on question/approval cards. OpenCode defaults to 60 s.
+            "timeout": 21_600_000,
             "headers": { "Authorization": format!("Bearer {authorization}") },
         }),
     );

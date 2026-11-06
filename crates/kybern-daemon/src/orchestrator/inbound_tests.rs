@@ -530,3 +530,31 @@ async fn computer_tools_run_on_the_machine_that_has_them_ready_and_ask_there() {
     eventually(|| async { (!p.b.state.network.features().iter().any(|feature| feature == kybern_protocol::features::COMPUTER_USE_V1)).then_some(()) })
         .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn messaging_a_finished_remote_child_reopens_both_copies_and_notifies_again() {
+    let Some(p) = Pair::new().await else { return };
+    let started = p.delegate(json!({"task":"Initial remote findings"})).await;
+    let task = task_id_of(&started);
+    let agent = p.agent("Initial remote findings").await;
+    agent.finish("first remote result").await;
+    eventually(|| async { (p.row(task).state == RemoteChildState::Completed).then_some(()) }).await;
+    let child = p.child_on_b(task).unwrap();
+    let old_seq = p.row(task).last_seq;
+    let sent = p.on_b("kybern_thread_send", json!({"thread_id":child.id,"body":"Continue checking the second case"})).await.unwrap();
+    assert!(sent["message_id"].is_string());
+    // The inbound proxy has a different id from the delegating parent on a.
+    eventually(|| async { agent.transcript().await.contains("Continue checking the second case").then_some(()) }).await;
+    assert_eq!(p.child_on_b(task).unwrap().delegation.unwrap().status, DelegationStatus::Running);
+    eventually(|| async { (p.row(task).state == RemoteChildState::Running).then_some(()) }).await;
+    let reopened = p.row(task);
+    assert!(reopened.last_seq > old_seq);
+    assert!(reopened.info.result.is_none() && reopened.info.completed_at.is_none());
+    let status = p.tool("kybern_agent_status", json!({"task_ids":[task]})).await.unwrap();
+    assert_eq!(status["agents"][0]["status"], "running");
+    p.end_parent_turn().await;
+    agent.finish("second remote result").await;
+    eventually(|| async { p.results().iter().any(|item| item.task_id == task && item.result.as_deref() == Some("second remote result")).then_some(()) }).await;
+    eventually(|| async { (p.row(task).state == RemoteChildState::Completed && p.row(task).info.parent_notified).then_some(()) }).await;
+    assert_eq!(p.row(task).info.result.as_deref(), Some("second remote result"));
+}

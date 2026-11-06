@@ -5,7 +5,8 @@
 // which remounts the surface's tree from scratch.
 import { errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
 import { ProblemRow } from '../kit/Problem.tsx'
-import { Component, Fragment, type ReactNode } from 'react'
+import { Component, Fragment, type ErrorInfo, type ReactNode } from 'react'
+import { logBoundaryError } from '../platform/boundaryLog.ts'
 
 interface State {
   error: Error | null
@@ -16,16 +17,30 @@ interface State {
 export class ErrorBoundary extends Component<{ children: ReactNode; label?: string; compact?: boolean }, State> {
   state: State = { error: null, attempt: 0 }
 
+  private failures: number[] = []
+  private retry: ReturnType<typeof setTimeout> | undefined
+
+  componentWillUnmount() { clearTimeout(this.retry) }
+
   static getDerivedStateFromError(error: Error): Partial<State> {
     return { error }
   }
 
-  componentDidCatch(error: Error) {
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    const now = Date.now()
+    this.failures = this.failures.filter(at => now - at < 10_000)
+    const retried = this.failures.length < 2
+    this.failures.push(now)
     console.error(`[error-boundary] ${this.props.label ?? 'view'}:`, error)
+    logBoundaryError(this.props.label ?? 'view', error, info.componentStack ?? '', retried)
+    // Defer the remount beyond this commit. A permanently broken child gets two retries,
+    // then the ordinary reload card; no synchronous render loop or idle retry timer.
+    if (retried) this.retry = setTimeout(() => this.setState(s => ({ error: null, attempt: s.attempt + 1 })), 0)
   }
 
   render() {
     if (!this.state.error) return <Fragment key={this.state.attempt}>{this.props.children}</Fragment>
+    if (this.failures.filter(at => Date.now() - at < 10_000).length < 2) return null
     return <Fallback label={this.props.label ?? 'this view'} error={this.state.error} compact={this.props.compact} onReload={() => this.setState((s) => ({ error: null, attempt: s.attempt + 1 }))} />
   }
 }

@@ -19,7 +19,26 @@ const fixture = actionFixture({ checkLinks: true })
 const f = await launchFixture(path.join(import.meta.dir, '../main.tsx'), { KYBERN_WINDOW_SIZE: '1280x820', ...fixture.env, KYBERN_APPEARANCE: mode })
 const a = f.app
 const shot = async (name: string) => { if (out) await a.screenshot({ path: `${out}/${name}-${mode}.png` }) }
-const click = async (id: string) => { try { await a.getByTestId(id).waitFor({ timeoutMs: 10000 }); await a.getByTestId(id).click() } catch (e) { throw new Error(`click ${id}: ${e}`) } await Bun.sleep(450) }
+/** A retained row can exist before paint, or move while the list finishes measuring. */
+const paintedBounds = async (id: string) => {
+  const end = Date.now() + 10000
+  let previous = ''
+  while (Date.now() < end) {
+    try {
+      const box = await a.getByTestId(id).bounds()
+      const key = JSON.stringify(box)
+      if (box.width > 0 && box.height > 0 && key === previous) return box
+      previous = key
+    } catch { previous = '' }
+    await Bun.sleep(100)
+  }
+  assert.fail(`no stable painted bounds for ${id}`)
+}
+const click = async (id: string) => {
+  try { await a.getByTestId(id).waitFor({ timeoutMs: 10000 }); await paintedBounds(id); await a.getByTestId(id).click() }
+  catch (e) { throw new Error(`click ${id}: ${e}`) }
+  await Bun.sleep(450)
+}
 const painted = async () => (await a.call('getPaintedText', {})).text.join('\n')
 const until = async (re: RegExp) => { const end = Date.now() + 10000; while (Date.now() < end) { if (re.test(await painted())) return; await Bun.sleep(200) } assert.fail(`never painted ${re}\n${(await painted()).slice(0, 3000)}`) }
 const waitFor = async (id: string, timeoutMs: number) => { try { await a.getByTestId(id).waitFor({ timeoutMs }) } catch (e) { throw new Error(`waitFor ${id}: ${e}`) } }
@@ -171,6 +190,7 @@ try {
   assert.equal(lastList().labels, undefined)
   await a.getByTestId('issues-list').wheel(0, -100000); await Bun.sleep(500)
   await waitFor('issues-more', 10000)
+  await paintedBounds('issues-more')
   await click('issues-more')
   await Bun.sleep(500)
   assert.equal(lastList().offset, 30)
@@ -180,6 +200,8 @@ try {
   await waitFor('issue-row-217', 10000)
   await click('issue-row-217')
   await waitFor('issue-start-thread', 10000)
+  await until(/GitHub: list and open a repository’s issues/)
+  assert.equal(fixture.params.filter(p => p.method === 'github.issue.detail').at(-1)?.params.number, 217, 'selected issue is #217 before starting a thread')
   await click('issue-start-thread')
   await Bun.sleep(800)
   const created = fixture.params.find(p => p.method === 'threads.create')?.params as { project_id: string; title: string; message: { parts: { text: string }[] } } | undefined

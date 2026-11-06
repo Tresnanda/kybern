@@ -51,9 +51,9 @@ function Lab() {
   return <div testId="ready" onKeyDown={e => action(e.key ?? '')} style={{width: '100%', height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: '#202024', color: '#eeeeee'}}>
     <div style={{display: 'flex', height: 350, flexShrink: 0}}>
       <div cache="fill" style={{width: 360, height: 350}}><div cache style={{width: 360, height: 350}}>
-        {shown && <diff key={generation} testId="diff-a" patch={rows ? patch('alpha', rows) : ''} scroll={scroll} cacheLayout style={{width: 360, height: 350, overflow: 'hidden'}} />}
+        {shown && <diff key={generation} testId="diff-a" patch={rows ? patch('alpha', rows) : ''} scroll={scroll} {...({ cacheLayout: true } as object)} style={{width: 360, height: 350, overflow: 'hidden'}} />}
       </div></div>
-      <diff testId="diff-b" patch={patch('beta')} scroll cacheLayout style={{width: 360, height: 350}} />
+      <diff testId="diff-b" patch={patch('beta')} scroll {...({ cacheLayout: true } as object)} style={{width: 360, height: 350}} />
     </div>
     <virtual-list testId="list" estimatedItemHeight={24} style={{width: 360, height: 100, flexShrink: 0}}>
       {Array.from({length: 100}, (_, i) => <div key={i} style={{height: 24}}><text>{`ordinary row ${i}`}</text></div>)}

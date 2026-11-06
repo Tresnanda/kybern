@@ -1309,6 +1309,10 @@ impl Orchestrator {
         Ok(Some(updated))
     }
 
+    pub(super) fn delegation_allow_next_result(&self, task_id: Uuid) {
+        self.inner.delegation.inline_delivered.lock().unwrap_or_else(|error| error.into_inner()).remove(&task_id);
+    }
+
     /// A message from the delegating parent reopens a finished child: its
     /// delegation goes back to `running` (result and error cleared) so the next
     /// completion notifies the parent again. Returns the previous delegation to
