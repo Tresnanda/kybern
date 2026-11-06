@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.22.1
+
+<!-- kybern-release-title: Images and comments on issues and pull requests -->
+<!-- kybern-release-summary: Issues and pull requests show their images, and you can comment on them right from the page. -->
+
+- Issues and pull requests show their images: screenshots in descriptions and comments, including the ones GitHub stores for private repositories. Click one to open it full size. An image that can't load says why instead of showing its HTML.
+- Comment on an issue or a pull request from the box at the end of its timeline: type and press ⌘↩ or **Comment**. The comment appears right away, and an unsent draft stays with its issue when you look at another one. **Review** is still there for approving or requesting changes.
+- The space under the Pull requests, Actions and Issues tabs is even, and the refresh button no longer runs past the edge of a narrow list.
+- Label dots line up with their names, and the issue sidebar's values start on one line.
+
 ## 0.22.0
 
 <!-- kybern-release-title: Instant threads, Grok Build, issues, and errors that say how to fix them -->
