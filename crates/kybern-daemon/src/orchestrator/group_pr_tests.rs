@@ -330,3 +330,86 @@ fn pull_request_calls_run_in_the_chosen_member_folder() {
     group.members.clear();
     assert_eq!(super::groups::pr_repo_dir(&group, None).unwrap_err(), "fixture has no repositories yet. Add one in its settings.");
 }
+
+/// A fake `gh` for issues: `api` has #3 and #9, `ops` (any other member) #1 (the newest), and `web` is signed out.
+#[cfg(unix)]
+fn fake_issue_gh(dir: &std::path::Path) -> std::path::PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    let script = dir.join("gh");
+    let body = r#"#!/bin/sh
+name=$(basename "$PWD")
+if [ "$1 $2" = "label list" ]; then
+  case "$name" in
+    api) echo '[{"name":"bug","color":"d73a4a"}]' ;;
+    *) echo '[{"name":"bug","color":"000000"},{"name":"docs","color":"0075ca"}]' ;;
+  esac
+  exit 0
+fi
+case "$name" in
+  web) echo "HTTP 401: Bad credentials" >&2; exit 1 ;;
+  api) echo '[{"number":9,"title":"Nine","url":"https://github.com/acme/api/issues/9","state":"OPEN","author":{"login":"me"},"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"},{"number":3,"title":"Three","url":"https://github.com/acme/api/issues/3","state":"OPEN","author":{"login":"me"},"createdAt":"2026-01-02T00:00:00Z","updatedAt":"2026-01-02T00:00:00Z"}]' ;;
+  *) echo '[{"number":1,"title":"One","url":"https://github.com/acme/ops/issues/1","state":"OPEN","author":{"login":"me"},"createdAt":"2026-01-03T00:00:00Z","updatedAt":"2026-01-03T00:00:00Z"}]' ;;
+esac
+"#;
+    kybern_protocol::process::write_executable(&script, body).unwrap();
+    script
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn group_issue_list_merges_members_newest_first_and_keeps_going_past_a_failing_one() {
+    let fixture = Fixture::new();
+    let folder = fixture.root.join("acme");
+    for name in ["api", "web", "infra", "ops"] {
+        let dir = folder.join(name);
+        pr_init_member(&dir, "a.txt");
+        if name != "infra" {
+            git_in(&dir, &["remote", "add", "origin", &format!("https://github.com/acme/{name}.git")]);
+        }
+    }
+    let mut project = fixture.project.clone();
+    project.kind = ProjectKind::Group;
+    project.path = folder.to_string_lossy().into_owned();
+    project.members = ["api", "web", "infra", "ops"]
+        .into_iter()
+        .map(|path| ProjectMember { path: path.into(), name: path.into(), status: MemberStatus::Ok })
+        .collect();
+    let gh = fake_issue_gh(&fixture.root.join("bin")).to_string_lossy().into_owned();
+    let params = |limit, offset| methods::IssueListParams {
+        project_id: project.id,
+        state: "open".into(),
+        search: None,
+        labels: Vec::new(),
+        assignee: None,
+        limit,
+        offset,
+        repo: None,
+    };
+
+    let first = fixture.orchestrator.group_issue_list(&project, &params(2, 0), &gh).await.unwrap();
+    let listed: Vec<_> = first.issues.iter().map(|i| (i.repo.as_deref().unwrap(), i.number)).collect();
+    assert_eq!((listed, first.has_more), (vec![("ops", 1), ("api", 3)], true), "newest first across members, each tagged");
+    let labels: Vec<_> = first.labels.iter().map(|l| (l.name.as_str(), l.color.as_str())).collect();
+    assert_eq!(labels, [("bug", "d73a4a"), ("docs", "0075ca")], "the union, the first colour wins");
+    let rows: Vec<_> = first.repos.iter().map(|r| (r.repo.as_str(), r.error.as_deref(), r.skipped)).collect();
+    assert_eq!(
+        rows,
+        [
+            ("api", None, false),
+            ("web", Some("gh isn't signed in. Run gh auth login and try again. (HTTP 401: Bad credentials)"), false),
+            ("infra", Some("No GitHub remote"), true),
+            ("ops", None, false),
+        ]
+    );
+    assert_eq!(first.repos[1].problem.as_ref().map(|p| p.kind), Some(kybern_protocol::rpc::ProblemKind::SignedOut));
+
+    let second = fixture.orchestrator.group_issue_list(&project, &params(2, 2), &gh).await.unwrap();
+    assert_eq!((second.issues.iter().map(|i| i.number).collect::<Vec<_>>(), second.has_more, second.labels.len()), (vec![9], false, 0));
+    // A bad request fails once, not once per member.
+    let mut bad = params(2, 0);
+    bad.state = "merged".into();
+    assert!(fixture.orchestrator.group_issue_list(&project, &bad, &gh).await.is_err());
+    // The wire form of a single repository's answer leaves the group fields out.
+    let single = methods::IssueListResult { issues: Vec::new(), has_more: false, labels: Vec::new(), repos: Vec::new() };
+    assert_eq!(serde_json::to_value(&single).unwrap(), serde_json::json!({"issues": []}));
+}

@@ -2705,3 +2705,114 @@ async fn trusted_setup_enables_only_unconfigured_and_preserves_off_after_restart
     assert!(!persisted.get().network.enabled);
     assert!(client.call::<NetworkSetEnabled>(NetworkSetEnabledParams { enabled: false, only_if_unconfigured: true }).await.is_err());
 }
+
+/// #220: a link to a file outside the workspace opens read-only after the desktop allows it, once or by folder; every other
+/// client keeps the refusal unless the folder was allowed, and nothing writes to the file.
+#[tokio::test]
+async fn files_outside_the_workspace_open_read_only_after_the_desktop_allows_them() {
+    let host = Host::start().await;
+    let mut thread = host.thread();
+    let desktop = host.client().await;
+    // A phone paired the normal way holds a device token, not the bootstrap token.
+    let http = reqwest::Client::new();
+    let (code, _) = host.state.pairing.create(None).unwrap();
+    let paired: PairResponse = http
+        .post(format!("{}/pair", host.url))
+        .json(&PairRequest { code, device_name: Some("Phone".into()) })
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let phone = Client::connect(&Endpoint { url: format!("{}/ws", host.url.replace("http:", "ws:")), token: paired.token }).await.unwrap();
+    phone.call::<DaemonInfoMethod>(Empty {}).await.unwrap();
+
+    // Under the build's target folder rather than the system temp folder, like the preview test above.
+    let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target").join(format!("outside-e2e-{}", Uuid::now_v7()));
+    let workspace = base.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::create_dir_all(base.join("elsewhere")).unwrap();
+    let base = base.canonicalize().unwrap();
+    let elsewhere = base.join("elsewhere");
+    thread.cwd = base.join("workspace").to_string_lossy().into_owned();
+    host.state.store.thread_upsert(&thread).unwrap();
+    std::fs::write(base.join("workspace/inside.txt"), "inside").unwrap();
+    for (name, text) in [("plan.md", "# plan"), ("sibling.md", "sibling"), ("other.md", "other"), (".env", "TOKEN=1")] {
+        std::fs::write(elsewhere.join(name), text).unwrap();
+    }
+    let path = |name: &str| elsewhere.join(name).to_string_lossy().into_owned();
+
+    let id = thread.id;
+    async fn check(client: &Client, thread_id: ThreadId, path: String, allow: OutsideAllow) -> anyhow::Result<ThreadFileOutsideResult> {
+        client.call::<ThreadFileOutside>(ThreadFileOutsideParams { thread_id, path, allow }).await
+    }
+    async fn read(client: &Client, thread_id: ThreadId, path: String) -> anyhow::Result<FilesReadResult> {
+        client.call::<ThreadFileRead>(ThreadFileReadParams { thread_id, path, max_bytes: 4096, if_version: None }).await
+    }
+
+    // Nothing is allowed yet: the desktop is asked, everything else is refused, and reads keep today's refusal.
+    let asked = check(&desktop, id, path("plan.md"), OutsideAllow::Check).await.unwrap();
+    assert_eq!(asked.verdict, OutsideVerdict::Ask);
+    assert_eq!(asked.folder.as_deref(), Some(crate::files_outside::display_path(&elsewhere).as_str()));
+    let refused = check(&phone, id, path("plan.md"), OutsideAllow::Check).await.unwrap();
+    assert_eq!(refused.verdict, OutsideVerdict::Refused);
+    assert!(refused.reason.unwrap().contains("outside the conversation's workspace"));
+    for client in [&desktop, &phone] {
+        let error = read(client, id, path("plan.md")).await.unwrap_err().to_string();
+        assert!(error.contains("outside the conversation's workspace"), "{error}");
+    }
+    // Only the desktop can allow anything.
+    assert!(check(&phone, id, path("plan.md"), OutsideAllow::Once).await.is_err());
+    assert!(check(&phone, id, path("plan.md"), OutsideAllow::Folder).await.is_err());
+    assert!(host.state.settings.get().preview_allowed_folders.is_empty());
+
+    // Once: this file only, for the desktop only, and nothing is stored.
+    let once = check(&desktop, id, path("plan.md"), OutsideAllow::Once).await.unwrap();
+    assert_eq!(once.verdict, OutsideVerdict::Open);
+    let file = read(&desktop, id, path("plan.md")).await.unwrap();
+    assert_eq!((file.content.as_str(), file.read_only), ("# plan", true));
+    assert!(read(&desktop, id, path("sibling.md")).await.is_err(), "a sibling is a different file");
+    assert!(read(&phone, id, path("plan.md")).await.is_err(), "the phone cannot use what the desktop opened once");
+    assert!(host.state.settings.get().preview_allowed_folders.is_empty());
+
+    // Never a write, whoever asks and whatever was allowed.
+    for client in [&desktop, &phone] {
+        let write = client
+            .call::<ThreadFileWrite>(ThreadFileWriteParams {
+                thread_id: thread.id,
+                path: path("plan.md"),
+                content: "changed".into(),
+                expected_version: None,
+            })
+            .await;
+        assert!(write.is_err());
+    }
+    assert_eq!(std::fs::read_to_string(elsewhere.join("plan.md")).unwrap(), "# plan");
+
+    // A folder: persisted, reused without asking, and open to the phone too.
+    let folder = check(&desktop, id, path("sibling.md"), OutsideAllow::Folder).await.unwrap();
+    assert_eq!(folder.verdict, OutsideVerdict::Open);
+    assert_eq!(host.state.settings.get().preview_allowed_folders, vec![elsewhere.to_string_lossy().into_owned()]);
+    for client in [&desktop, &phone] {
+        assert_eq!(check(client, id, path("other.md"), OutsideAllow::Check).await.unwrap().verdict, OutsideVerdict::Open);
+        let file = read(client, id, path("other.md")).await.unwrap();
+        assert_eq!((file.content.as_str(), file.read_only), ("other", true));
+    }
+    // An allowed folder still keeps secrets closed.
+    assert_eq!(check(&desktop, id, path(".env"), OutsideAllow::Check).await.unwrap().verdict, OutsideVerdict::Refused);
+    assert!(read(&desktop, id, path(".env")).await.is_err());
+
+    // The data directory is never opened or allowed; a workspace file is an ordinary, writable read.
+    let token = host.root.join("daemon.token").to_string_lossy().into_owned();
+    assert_eq!(check(&desktop, id, token.clone(), OutsideAllow::Check).await.unwrap().verdict, OutsideVerdict::Refused);
+    assert!(check(&desktop, id, token.clone(), OutsideAllow::Once).await.is_err());
+    assert!(check(&desktop, id, token, OutsideAllow::Folder).await.is_err());
+    let inside = check(&desktop, id, "inside.txt".into(), OutsideAllow::Check).await.unwrap();
+    assert_eq!((inside.verdict, inside.path.as_str()), (OutsideVerdict::Open, "inside.txt"));
+    assert!(!read(&desktop, id, "inside.txt".into()).await.unwrap().read_only);
+
+    let _ = std::fs::remove_dir_all(&base);
+}

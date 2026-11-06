@@ -577,6 +577,14 @@ enum Cmd {
         #[arg(required = true)]
         paths: Vec<String>,
     },
+    /// Whether a file outside a conversation's workspace opens read-only, and allow it (this computer's desktop client only).
+    ThreadOutside {
+        thread: String,
+        path: String,
+        /// Open this file now: `once`, or its `folder` for good.
+        #[arg(long, value_parser = ["once", "folder"])]
+        allow: Option<String>,
+    },
     /// Commit everything in a thread's working directory.
     Commit {
         thread: String,
@@ -587,6 +595,11 @@ enum Cmd {
     Pr {
         #[command(subcommand)]
         cmd: PrCmd,
+    },
+    /// Repository issues via the GitHub CLI.
+    Issue {
+        #[command(subcommand)]
+        cmd: IssueCmd,
     },
     /// GitHub Actions workflow runs via the GitHub CLI.
     Actions {
@@ -1165,6 +1178,42 @@ enum GithubCmd {
     Starred,
     /// Star Tresnanda/kybern as the signed-in GitHub account.
     Star,
+}
+
+#[derive(Subcommand)]
+enum IssueCmd {
+    /// List a project's issues, newest first.
+    List {
+        project: String,
+        /// open, closed or all.
+        #[arg(long, default_value = "open")]
+        state: String,
+        /// Search the issues' text.
+        #[arg(long)]
+        search: Option<String>,
+        /// Only issues with this label (repeat for several).
+        #[arg(long = "label")]
+        labels: Vec<String>,
+        /// Only issues assigned to this login (@me for the signed-in account).
+        #[arg(long)]
+        assignee: Option<String>,
+        #[arg(long, default_value = "30")]
+        limit: u32,
+        /// Issues to skip.
+        #[arg(long, default_value = "0")]
+        offset: u32,
+        /// Only this member repository of a group project.
+        #[arg(long)]
+        repo: Option<String>,
+    },
+    /// Read an issue with its description, comments and the pull requests that close it.
+    View {
+        project: String,
+        number: u64,
+        /// Member repository of a group project.
+        #[arg(long)]
+        repo: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2683,6 +2732,15 @@ pub async fn run() -> Result<()> {
                 println!("{path}\t{}", resolved.as_deref().unwrap_or("(no file)"));
             }
         }
+        Cmd::ThreadOutside { thread, path, allow } => {
+            let allow = match allow.as_deref() {
+                Some("once") => OutsideAllow::Once,
+                Some(_) => OutsideAllow::Folder,
+                None => OutsideAllow::Check,
+            };
+            let r = client.call::<ThreadFileOutside>(ThreadFileOutsideParams { thread_id: thread.parse()?, path, allow }).await?;
+            println!("{}", serde_json::to_string_pretty(&r)?);
+        }
         Cmd::Write { project, path, from, expected_version } => {
             let content = read_input(&from)?;
             let r = client.call::<FilesWrite>(FilesWriteParams { project_id: project.parse()?, path, content, expected_version }).await?;
@@ -2751,7 +2809,7 @@ pub async fn run() -> Result<()> {
             }
             ActionsCmd::View { project, run, attempt, repo } => {
                 let project_id = resolve_project(&client, &project, false).await?;
-                let r = client.call::<ActionsRun>(ActionsRunParams { project_id, repo, run_id: run, attempt }).await?;
+                let r = client.call::<ActionsRun>(ActionsRunParams { project_id, repo, run_id: run, job_id: None, attempt }).await?;
                 println!("{}", serde_json::to_string_pretty(&r)?);
             }
             ActionsCmd::Log { project, job, offset, limit, excerpt, repo } => {
@@ -2814,6 +2872,28 @@ pub async fn run() -> Result<()> {
             GithubCmd::Star => {
                 client.call::<GithubStar>(GithubStarParams {}).await?;
                 println!("Starred Tresnanda/kybern");
+            }
+        },
+        Cmd::Issue { cmd } => match cmd {
+            IssueCmd::List { project, state, search, labels, assignee, limit, offset, repo } => {
+                let project_id = resolve_project(&client, &project, false).await?;
+                let r =
+                    client.call::<IssueList>(IssueListParams { project_id, state, search, labels, assignee, limit, offset, repo }).await?;
+                for issue in &r.issues {
+                    let repo = issue.repo.as_deref().map(|repo| format!("{repo}  ")).unwrap_or_default();
+                    println!("#{:<5} {:<6} {repo}{}  {}", issue.number, issue.state.to_lowercase(), issue.title, issue.url);
+                }
+                if r.has_more {
+                    eprintln!("More issues follow: pass --offset {}.", offset + limit);
+                }
+                for repo in r.repos.iter().filter(|repo| repo.error.is_some()) {
+                    eprintln!("{}: {}", repo.name, repo.error.as_deref().unwrap_or_default());
+                }
+            }
+            IssueCmd::View { project, number, repo } => {
+                let project_id = resolve_project(&client, &project, false).await?;
+                let result = client.call::<IssueDetail>(IssueDetailParams { project_id, number, repo }).await?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
             }
         },
         Cmd::Pr { cmd } => match cmd {

@@ -21,6 +21,7 @@ import { column, row } from '../usage/controls.tsx'
 import { HEADER_COMPACT_PULLS, PullsHeader } from './PullsTabs.tsx'
 import { usePullsTab } from './actions/store.ts'
 import { ActionsPage } from './actions/ActionsPage.tsx'
+import { IssuesPage } from './issues/IssuesPage.tsx'
 import { Button } from '../kit/Button.tsx'
 import { IconButton } from '../kit/IconButton.tsx'
 import { SearchField } from '../kit/SearchField.tsx'
@@ -47,10 +48,10 @@ const refOf = (projectId: string, number: number, repo?: string) => `${projectId
 /** The repositories chosen per group project, kept across launches (`list/model.ts`, bounded). */
 const REPO_MEMORY_KEY = 'pulls.repos'
 
-/** The page's two tabs: pull requests, and the repository's Actions runs (ADE-97). */
+/** The page's three tabs: pull requests, the repository's Actions runs (ADE-97) and its issues (#217). */
 export function PullRequestsPage() {
   const tab = usePullsTab(s => s.tab)
-  return tab === 'actions' ? <ActionsPage /> : <PullRequestsList />
+  return tab === 'actions' ? <ActionsPage /> : tab === 'issues' ? <IssuesPage /> : <PullRequestsList />
 }
 
 function PullRequestsList() {
@@ -154,7 +155,7 @@ function PullRequestsList() {
         {scopeProject && isGroup(scopeProject) && <RepoChips project={scopeProject} scope={scope} onChange={changeScope} />}
         <div style={{ ...row, gap: 6 }}>
           <Segmented size="sm" aria-label="State" value={filter} options={FILTERS.map(([value, label]) => ({ value, label, ...(value === filter && data && data.rows.length < 30 ? { count: data.rows.length } : {}) }))} onChange={v => { setFilter(v as Filter); setFocus(null) }} testId="pr-filter" />
-          <div style={{ flexGrow: 1, minWidth: 0 }}><SearchField ref={search} label="Search pull requests" testId="pr-search" value={query} placeholder="Search" onChange={setQuery} width="100%" onKeyDown={e => { if (e.key === 'down' && flat[0]) { setFocus(keyFor(flat[0])); } }} /></div>
+          <div style={{ flexGrow: 1, minWidth: 0 }}><SearchField ref={search} size="sm" label="Search pull requests" testId="pr-search" value={query} placeholder="Search" onChange={setQuery} width="100%" onKeyDown={e => { if (e.key === 'down' && flat[0]) { setFocus(keyFor(flat[0])); } }} /></div>
         </div>
       </div>
       <virtual-list {...PR_SCROLL_LAYOUT} testId="pr-list" estimatedItemHeight={72} style={{ flexGrow: 1, minHeight: 0 }}>

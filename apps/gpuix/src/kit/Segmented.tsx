@@ -52,6 +52,9 @@ export interface SegmentedProps {
 
 type Box = { x: number; w: number }
 
+/** The small track's thumb sits concentric inside the track (the track's radius less its 2 px inset), so a toolbar's segmented control shares a `sm` button's corner. */
+const THUMB_SM = CONTROL.sm.radius - 2
+
 export function Segmented({ options, value, onChange, busy = false, 'aria-label': label, size = 'md', segmentPadX, fill = false, tone = 'accent', testId, style }: SegmentedProps) {
   const t = useTheme()
   const c = useControls()
@@ -151,12 +154,12 @@ export function Segmented({ options, value, onChange, busy = false, 'aria-label'
       }}
       style={{
         position: 'relative', display: 'flex', alignItems: 'center', alignSelf: fill ? 'stretch' : 'flex-start', gap: 0, padding: 2, minWidth: 0, flexShrink: fill ? 1 : 0,
-        height: segmentHeight + 4, borderRadius: size === 'sm' ? RADIUS.md : RADIUS.segTrack, overflow: 'hidden', backgroundColor: c.segmented.track,
+        height: segmentHeight + 4, borderRadius: size === 'sm' ? CONTROL.sm.radius : RADIUS.segTrack, overflow: 'hidden', backgroundColor: c.segmented.track,
         ...style,
       }}
     >
       {pill && (() => {
-        const style = { position: 'absolute', top: 2, height: segmentHeight, borderRadius: size === 'sm' ? RADIUS.sm : RADIUS.segThumb, backgroundColor: thumb, pointerEvents: 'none',
+        const style = { position: 'absolute', top: 2, height: segmentHeight, borderRadius: size === 'sm' ? THUMB_SM : RADIUS.segThumb, backgroundColor: thumb, pointerEvents: 'none',
           ...(neutral ? { boxShadow: { offsetX: 0, offsetY: 1, blurRadius: 2, spreadRadius: 0, color: t.variant === 'light' ? 'rgba(0, 0, 0, 0.08)' : 'rgba(0, 0, 0, 0.25)' } } : {}) } as const
         const ease = [...EASE.smoothOut] as [number, number, number, number]
         const thumbId = testId ? `${testId}-thumb` : undefined
@@ -191,7 +194,7 @@ export function Segmented({ options, value, onChange, busy = false, 'aria-label'
             onClick={() => choose(option.value)}
             onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') choose(option.value) }}
             style={{
-              position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, height: segmentHeight, minWidth: option.icon ? segmentHeight + 8 : 0, paddingLeft: option.icon ? 7 : padX, paddingRight: option.icon ? 7 : padX, borderRadius: size === 'sm' ? RADIUS.sm : RADIUS.segThumb,
+              position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, height: segmentHeight, minWidth: option.icon ? segmentHeight + 8 : 0, paddingLeft: option.icon ? 7 : padX, paddingRight: option.icon ? 7 : padX, borderRadius: size === 'sm' ? THUMB_SM : RADIUS.segThumb,
               cursor: busy || blocked ? 'default' : 'pointer', ...(fill ? { flexGrow: 1, flexBasis: 0, minWidth: 0 } : { flexShrink: 0 }),
               ...(busy || blocked ? {} : { focusVisible: { outlineWidth: 2, outlineColor: c.focus, outlineOffset: 0 } }),
             }}

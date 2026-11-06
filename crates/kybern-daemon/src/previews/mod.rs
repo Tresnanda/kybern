@@ -167,6 +167,8 @@ pub struct GrantPolicy {
     pub data_dir: PathBuf,
     /// System directories (canonical or not; both forms are compared).
     pub system: Vec<PathBuf>,
+    /// The system's temporary folders (canonical), where agents keep scratch files.
+    pub temp: Vec<PathBuf>,
 }
 
 impl GrantPolicy {
@@ -181,7 +183,35 @@ impl GrantPolicy {
             home: home.map(|home| home.canonicalize().unwrap_or(home)),
             data_dir: data_dir.canonicalize().unwrap_or_else(|_| data_dir.to_path_buf()),
             system: list.iter().map(PathBuf::from).collect(),
+            temp: temp_roots(),
         }
+    }
+
+    /// Whether `folder` (canonical) is a temporary folder's own root: where every program keeps scratch files.
+    pub fn is_temp_root(&self, folder: &Path) -> bool {
+        self.temp.iter().any(|root| root == folder)
+    }
+
+    /// Whether `path` (canonical) lies inside a temporary folder, such as an agent's scratchpad, and not in a dot folder there.
+    pub fn in_temp(&self, path: &Path) -> bool {
+        self.temp.iter().any(|root| {
+            path.strip_prefix(root).is_ok_and(|rest| {
+                !rest.as_os_str().is_empty()
+                    && rest
+                        .components()
+                        .all(|part| matches!(part, Component::Normal(name) if name.to_str().is_some_and(|name| !name.starts_with('.'))))
+            })
+        })
+    }
+
+    /// Whether a link to a file in `folder` (canonical) may be allowed for good: the preview rules (`grantable`), plus
+    /// folders inside a temporary folder, which sit under a system path on macOS (`/private/var/folders`). Never the
+    /// temporary folder itself, and never the data directory.
+    pub fn file_grantable(&self, folder: &Path) -> bool {
+        if self.is_temp_root(folder) {
+            return false;
+        }
+        self.grantable(folder) || (self.in_temp(folder) && !(self.data_dir.starts_with(folder) || folder.starts_with(&self.data_dir)))
     }
 
     /// Whether `folder` (canonical) may be granted.
@@ -230,16 +260,32 @@ impl GrantPolicy {
     }
 }
 
+/// The system's temporary folders, canonical.
+fn temp_roots() -> Vec<PathBuf> {
+    let mut roots = vec![std::env::temp_dir()];
+    if cfg!(unix) {
+        roots.push(PathBuf::from("/tmp"));
+    }
+    let mut canonical: Vec<PathBuf> = roots.into_iter().filter_map(|root| root.canonicalize().ok()).collect();
+    canonical.dedup();
+    canonical
+}
+
 /// Canonical folders from `Settings.preview_allowed_folders` that are still
 /// valid grants. Re-validated on every open: a stale or tampered entry that is
 /// no longer grantable, missing, or not a directory is ignored.
 fn valid_grants(allowed: &[String], policy: &GrantPolicy) -> Vec<PathBuf> {
+    valid_grants_by(allowed, |folder| policy.grantable(folder))
+}
+
+/// The same list as `valid_grants`, judged by `grantable` (a link to a file also allows temporary folders).
+pub(crate) fn valid_grants_by(allowed: &[String], grantable: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
     allowed
         .iter()
         .filter_map(|raw| {
             let path = Path::new(raw);
             let canonical = path.canonicalize().ok()?;
-            (canonical.is_dir() && policy.grantable(&canonical)).then_some(canonical)
+            (canonical.is_dir() && grantable(&canonical)).then_some(canonical)
         })
         .collect()
 }

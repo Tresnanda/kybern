@@ -155,6 +155,8 @@ expression: names
 - github.pr.detail
 - github.pr.page
 - github.pr.action
+- github.issue.list
+- github.issue.detail
 - github.actions.runs
 - github.actions.run
 - github.actions.log
@@ -173,6 +175,7 @@ expression: names
 - threads.files.read
 - threads.files.write
 - threads.files.resolve
+- threads.files.outside
 - skills.list
 - integrations.list
 - threads.visuals.publish

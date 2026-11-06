@@ -2967,6 +2967,124 @@ pub struct PrActionParams {
 }
 method!(PrAction, "github.pr.action", Some(Scope::OrchestrationOperate), PrActionParams, Empty);
 
+// Repository issues through `gh` (#217): a filtered, paged list and one issue with its comments.
+// Group projects list every member (each row tagged with `repo`) and name the member to open one.
+
+/// One issue as `gh issue list` and `gh issue view` report it.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Issue {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    /// OPEN | CLOSED
+    pub state: String,
+    /// COMPLETED | NOT_PLANNED | REOPENED, when GitHub says why the issue was closed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_reason: Option<String>,
+    pub author: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_avatar_url: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub author_is_bot: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<PrLabel>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assignees: Vec<PrPerson>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub milestone: Option<String>,
+    /// Numbers of the pull requests that will close this issue when they merge.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub linked_pull_requests: Vec<u64>,
+    /// Group projects: the member repository (a `PrListRepo.repo`) the issue is in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IssueListParams {
+    pub project_id: ProjectId,
+    /// open (default) | closed | all
+    #[serde(default = "default_pr_state")]
+    pub state: String,
+    /// GitHub issue search text (title, body and comments).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<String>,
+    /// Only issues with every one of these labels.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
+    /// Only issues assigned to this login (`@me` for the signed-in account).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<String>,
+    /// Issues per page, 1-100.
+    #[serde(default = "default_pr_limit")]
+    pub limit: u32,
+    /// Issues to skip, newest first.
+    #[serde(default)]
+    pub offset: u32,
+    /// Group projects: list just this member repository. Omit to merge every member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IssueListResult {
+    /// Group projects: the issues of every member that answered, tagged with `repo`.
+    pub issues: Vec<Issue>,
+    /// More issues follow the last one returned.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_more: bool,
+    /// The repository's labels (names and colors), for the Labels filter. Group projects: the union.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<PrLabel>,
+    /// Group projects only: one row per member repository, with why it could not be listed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repos: Vec<PrListRepo>,
+}
+method!(IssueList, "github.issue.list", Some(Scope::OrchestrationRead), IssueListParams, IssueListResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IssueDetailParams {
+    pub project_id: ProjectId,
+    pub number: u64,
+    /// Group projects: the member repository (an `Issue.repo`) the issue belongs to. Required for
+    /// a group project; rejected for a single project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IssueComment {
+    pub id: String,
+    pub author: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_avatar_url: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub author_is_bot: bool,
+    pub body: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub url: String,
+}
+/// A pull request that will close an issue.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IssueLinkedPull {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    /// OPEN | MERGED | CLOSED
+    pub state: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IssueDetailResult {
+    pub issue: Issue,
+    pub body: String,
+    /// The first comments, oldest first (at most 100).
+    pub comments: Vec<IssueComment>,
+    /// All comments on the issue; more than `comments` holds when the thread is long.
+    pub comment_count: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pull_requests: Vec<IssueLinkedPull>,
+}
+method!(IssueDetail, "github.issue.detail", Some(Scope::OrchestrationRead), IssueDetailParams, IssueDetailResult);
+
 // GitHub Actions through `gh` (ADE-97): workflow runs on every branch, their jobs and steps, bounded
 // job logs, reruns, cancel and `workflow_dispatch`. Group projects name the member in `repo`.
 
@@ -3104,7 +3222,12 @@ pub struct ActionsRunParams {
     pub project_id: ProjectId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
+    /// The run to read; 0 with `job_id` reads the run that job belongs to.
+    #[serde(default)]
     pub run_id: u64,
+    /// Instead of `run_id`: a job (a check run of GitHub Actions has the job's id) whose run to read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<u64>,
     /// An earlier attempt to read instead of the latest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempt: Option<u32>,
@@ -3425,6 +3548,9 @@ pub struct FilesReadResult {
     /// True when `if_version` still matched; `content` is then empty.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unchanged: bool,
+    /// True for a file outside the workspace the user allowed Kybern to open: no write reaches it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
 }
 method!(FilesRead, "files.read", Some(Scope::OrchestrationRead), FilesReadParams, FilesReadResult);
 
@@ -3496,6 +3622,57 @@ pub struct ThreadFilesResolveResult {
     pub paths: Vec<Option<String>>,
 }
 method!(ThreadFilesResolve, "threads.files.resolve", Some(Scope::OrchestrationRead), ThreadFilesResolveParams, ThreadFilesResolveResult);
+
+/// What the user decided about a file outside the workspace.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OutsideAllow {
+    /// Only ask whether it opens.
+    #[default]
+    Check,
+    /// Open this file, read-only, until the daemon restarts.
+    Once,
+    /// Open every file in the file's folder, read-only, from now on.
+    Folder,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OutsideVerdict {
+    /// `threads.files.read` opens it.
+    Open,
+    /// It opens once the user allows it.
+    Ask,
+    /// It cannot open from this client; see `reason`.
+    Refused,
+}
+/// A link to a file outside the conversation's workspace. Read-only whatever the answer; only the desktop app on the
+/// daemon's own machine can allow a file or folder, other clients see today's refusal unless the folder is allowed.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadFileOutsideParams {
+    pub thread_id: ThreadId,
+    /// As written in the link: absolute, or relative to the thread cwd. A `:line` or `#L10` suffix is ignored.
+    pub path: String,
+    #[serde(default)]
+    pub allow: OutsideAllow,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadFileOutsideResult {
+    pub verdict: OutsideVerdict,
+    /// What `threads.files.read` opens: the file's absolute path outside the workspace, or the workspace-relative path
+    /// when the link turned out to name a workspace file.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub path: String,
+    /// The folder "Always allow" would add; absent when that folder can never be allowed (the file can still open once).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    /// The file is in the system's temporary folder, where agents keep scratch files.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub scratch: bool,
+    /// Why the file cannot open from here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+method!(ThreadFileOutside, "threads.files.outside", Some(Scope::OrchestrationRead), ThreadFileOutsideParams, ThreadFileOutsideResult);
 
 // ---- skills ----
 
@@ -4967,6 +5144,8 @@ registry!(
     PrDetail,
     PrPage,
     PrAction,
+    IssueList,
+    IssueDetail,
     ActionsRuns,
     ActionsRun,
     ActionsLog,
@@ -4985,6 +5164,7 @@ registry!(
     ThreadFileRead,
     ThreadFileWrite,
     ThreadFilesResolve,
+    ThreadFileOutside,
     SkillsList,
     IntegrationsList,
     HtmlPublish,

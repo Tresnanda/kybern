@@ -48,10 +48,11 @@ function ChecksBar({ summary }: { summary: NonNullable<PrDetailResult['pull_requ
   return <div testId="pr-checks-bar" style={{ display: 'flex', gap: 2, height: 4, marginTop: 4, marginBottom: 8 }}>{barSegments(summary).map(s => <div key={s.bucket} style={{ flexGrow: s.flex, flexBasis: 0, height: 4, borderRadius: 2, backgroundColor: s.bucket === 'skipped' ? (t.variant === 'dark' ? 'rgba(252, 252, 252, 0.2)' : 'rgba(13, 13, 13, 0.18)') : toneColor(t, BUCKET_TONE[s.bucket]) }} />)}</div>
 }
 
-function CheckRow({ group, canAgent, onFix }: { group: CheckGroup; canAgent: boolean; onFix: (group: CheckGroup) => void }) {
+function CheckRow({ group, canAgent, onFix, onOpenCheck }: { group: CheckGroup; canAgent: boolean; onFix: (group: CheckGroup) => void; onOpenCheck?: (url: string) => Promise<boolean> }) {
   const t = useTheme()
   const subtitle = groupSubtitle(group)
-  const open = group.url ? () => openUrl(group.url) : undefined
+  // A GitHub Actions check opens its run in Kybern; any other check, or one that cannot be placed, opens in the browser.
+  const open = group.url ? () => { const url = group.url!; void (onOpenCheck?.(url) ?? Promise.resolve(false)).then(done => { if (!done) openUrl(url) }) } : undefined
   return (
     <div testId="pr-check-row" style={{ display: 'flex', flexDirection: 'column', marginLeft: -6, marginRight: -6 }}>
       <div onClick={open} role={open ? 'link' : undefined} aria-label={`${group.label}${subtitle ? `, ${subtitle}` : ''}`} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: 6, borderRadius: 7, ...(open ? { cursor: 'pointer', hover: { backgroundColor: t.hover } } : {}) }}>
@@ -67,7 +68,7 @@ function CheckRow({ group, canAgent, onFix }: { group: CheckGroup; canAgent: boo
   )
 }
 
-function ChecksSection({ groups, summary, canAgent, onFix, onOpenActions }: { groups: CheckGroup[]; summary: NonNullable<PrDetailResult['pull_request']['checks_summary']>; canAgent: boolean; onFix: (group: CheckGroup) => void; onOpenActions?: () => void }) {
+function ChecksSection({ groups, summary, canAgent, onFix, onOpenActions, onOpenCheck }: { groups: CheckGroup[]; summary: NonNullable<PrDetailResult['pull_request']['checks_summary']>; canAgent: boolean; onFix: (group: CheckGroup) => void; onOpenActions?: () => void; onOpenCheck?: (url: string) => Promise<boolean> }) {
   const t = useTheme()
   const [expanded, setExpanded] = useState(false)
   const rows = foldChecks(groups)
@@ -76,7 +77,7 @@ function ChecksSection({ groups, summary, canAgent, onFix, onOpenActions }: { gr
     <div testId="pr-checks" style={{ display: 'flex', flexDirection: 'column' }}>
       <SectionHeader title="Checks" trailing={checksSummaryLine(summary)} />
       <ChecksBar summary={summary} />
-      {rows.open.map(g => <CheckRow key={g.key} group={g} canAgent={canAgent} onFix={onFix} />)}
+      {rows.open.map(g => <CheckRow key={g.key} group={g} canAgent={canAgent} onFix={onFix} {...(onOpenCheck ? { onOpenCheck } : {})} />)}
       {rows.folded.length > 0 && <>
         <div testId="pr-checks-fold" role="button" aria-expanded={expanded} aria-label={words.join(', ')} onClick={() => setExpanded(!expanded)} style={{ display: 'flex', alignItems: 'center', gap: 6, minHeight: 30, marginLeft: -6, marginRight: -6, paddingLeft: 6, paddingRight: 6, borderRadius: 7, cursor: 'pointer', hover: { backgroundColor: t.hover } }}>
           <Icon source={expanded ? N.chevronDown : N.chevronRight} size={12} color={t.textTertiary} />
@@ -84,7 +85,7 @@ function ChecksSection({ groups, summary, canAgent, onFix, onOpenActions }: { gr
           {rows.passed > 0 && rows.skipped > 0 && <Label color={t.textTertiary} size={12.5} lineHeight={16}>·</Label>}
           {rows.skipped > 0 && <><Icon source={G.skip} size={13} color={toneColor(t, 'neutral')} /><Label color={t.textSecondary} size={12.5} lineHeight={16}>{`${rows.skipped} skipped`}</Label></>}
         </div>
-        {expanded && rows.folded.map(g => <CheckRow key={g.key} group={g} canAgent={false} onFix={onFix} />)}
+        {expanded && rows.folded.map(g => <CheckRow key={g.key} group={g} canAgent={false} onFix={onFix} {...(onOpenCheck ? { onOpenCheck } : {})} />)}
       </>}
       {onOpenActions && <div testId="pr-checks-actions" role="link" aria-label="Open this branch's runs in Actions" onClick={onOpenActions} style={{ display: 'flex', alignItems: 'center', gap: 4, minHeight: 30, marginLeft: -6, marginRight: -6, paddingLeft: 6, paddingRight: 6, borderRadius: 7, cursor: 'pointer', hover: { backgroundColor: t.hover } }}>
         <Label color={t.link} size={12.5} lineHeight={16}>Open runs in Actions</Label>
@@ -139,7 +140,7 @@ function Details({ detail, onTimeline }: { detail: PrDetailResult; onTimeline: (
   </>
 }
 
-export function Sidebar({ detail, assessment, groups, compact, pending, error, canAgent, onRequest, onFixChecks, onFixGroup, onAddressFeedback, onTimeline, onOpenActions }: {
+export function Sidebar({ detail, assessment, groups, compact, pending, error, canAgent, onRequest, onFixChecks, onFixGroup, onAddressFeedback, onTimeline, onOpenActions, onOpenCheck }: {
   detail: PrDetailResult
   assessment: PrAssessment
   groups: CheckGroup[]
@@ -155,13 +156,15 @@ export function Sidebar({ detail, assessment, groups, compact, pending, error, c
   onTimeline: () => void
   /** The checks' link to this branch's runs in the Actions tab (ADE-97). */
   onOpenActions?: () => void
+  /** Opens a check's link inside Kybern; false when it is not a run of this repository's Actions. */
+  onOpenCheck?: (url: string) => Promise<boolean>
 }) {
   const t = useTheme()
   const [open, setOpen] = useState(false)
   const summary = detail.pull_request.checks_summary ?? { total: detail.checks.length, passed: detail.checks.filter(c => checkBucket(c) === 'passed').length, failed: detail.checks.filter(c => checkBucket(c) === 'failed').length, pending: detail.checks.filter(c => checkBucket(c) === 'pending').length, skipped: detail.checks.filter(c => checkBucket(c) === 'skipped').length }
   const reviewers = reviewerRows(detail)
   const card = <VerdictCard assessment={assessment} pending={pending} error={error} canAgent={canAgent} onRequest={onRequest} onFixChecks={onFixChecks} onAddressFeedback={onAddressFeedback} />
-  const checks = groups.length > 0 && <InspectorGroup first={!compact}><ChecksSection groups={groups} summary={summary} canAgent={canAgent} onFix={onFixGroup} onOpenActions={onOpenActions} /></InspectorGroup>
+  const checks = groups.length > 0 && <InspectorGroup first={!compact}><ChecksSection groups={groups} summary={summary} canAgent={canAgent} onFix={onFixGroup} onOpenActions={onOpenActions} {...(onOpenCheck ? { onOpenCheck } : {})} /></InspectorGroup>
   const rest = <Details detail={detail} onTimeline={onTimeline} />
   if (compact) {
     const brief = [checksSummaryLine(summary).split(' · ').find(s => /running|failed/.test(s)), reviewers.find(r => r.state === 'requested') ? `${reviewers.filter(r => r.state === 'requested').length} requested` : ''].filter(Boolean).join(' · ')

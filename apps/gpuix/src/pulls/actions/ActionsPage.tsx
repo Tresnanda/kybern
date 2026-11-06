@@ -53,10 +53,10 @@ const PLAY_SIZE = 18
 /** A triangle's visual centre sits left of its box: 1 pt toward its point. */
 const PLAY_NUDGE = { paddingLeft: 2 }
 
-interface Choice extends ActionsRepo { name: string; project: Project }
+export interface Choice extends ActionsRepo { name: string; project: Project }
 
 /** Every repository the space can list runs for: single projects, and each member of a group project. */
-function repoChoices(projects: readonly Project[]): Choice[] {
+export function repoChoices(projects: readonly Project[]): Choice[] {
   return projects.filter(hasPullRequests).flatMap(p => isGroup(p)
     ? listableMembers(p).map(m => ({ projectId: p.id, repo: m.path, name: `${p.name} / ${m.name}`, project: p }))
     : [{ projectId: p.id, name: p.name, project: p }])
@@ -101,6 +101,7 @@ function ActionsTab() {
   const [workflows, setWorkflows] = useState<{ key: string; result: ActionsWorkflowsResult } | null>(null)
   const [current, setCurrent] = useState<{ key: string; branch: string | null } | null>(null)
   const [selected, setSelected] = useState<number | null>(null)
+  const [opened, setOpened] = useState<{ jobId?: number; attempt?: number } | null>(null)
   const [dispatching, setDispatching] = useState(false)
   const [selectedActive, setSelectedActive] = useState(false)
   const visible = useWindowVisible()
@@ -126,6 +127,7 @@ function ActionsTab() {
     pick(focus)
     setStatus(''); setBranch(focus.branch ?? '')
     setSelected(focus.runId ?? null)
+    setOpened(focus.runId && (focus.jobId || focus.attempt) ? { ...(focus.jobId ? { jobId: focus.jobId } : {}), ...(focus.attempt ? { attempt: focus.attempt } : {}) } : null)
   }, [focusSeq])
 
   useEffect(() => {
@@ -168,7 +170,7 @@ function ActionsTab() {
   const workflowList = workflows?.key === key ? workflows.result.workflows : []
   const workflowName = workflowList.find(w => String(w.id) === workflow)?.name ?? 'All workflows'
   const failure = shown?.error
-  const open = useCallback((id: number) => { setSelected(id); setDispatching(false) }, [])
+  const open = useCallback((id: number) => { setSelected(id); setOpened(null); setDispatching(false) }, [])
   const selectedRun = runs.find(r => r.id === selected)
   const detailWidth = available - (wide ? list.width : 0)
   const listWidth = wide ? list.width : available
@@ -204,13 +206,13 @@ function ActionsTab() {
       <div style={{ ...column, gap: 8, paddingLeft: 12, paddingRight: 12, paddingTop: 2, paddingBottom: 10 }}>
         <Segmented size="sm" fill aria-label="Status" testId="actions-status" value={status} options={STATUSES.map(([value, label]) => ({ value, label }))} onChange={v => { setStatus(v as Status); setLimit(PAGE) }} />
         <div style={{ ...row, gap: 6 }}>
-          <div style={{ display: 'flex', flexShrink: 0 }}><Menu testId="actions-workflow" align="start" width={264} trigger={open => <PickerChip size="sm" open={open} truncate maxWidth={150} selected={!!workflow} label={`Workflow: ${workflowName}`}>{workflowName}</PickerChip>}>
+          <div style={{ display: 'flex', flexShrink: 0 }}><Menu testId="actions-workflow" align="start" width={264} trigger={open => <PickerChip testId="actions-workflow-chip" size="sm" square open={open} truncate maxWidth={150} selected={!!workflow} label={`Workflow: ${workflowName}`}>{workflowName}</PickerChip>}>
             <MenuItem id="all" label="All workflows" onSelect={() => { setWorkflow(''); setLimit(PAGE) }} />
             {workflowList.length > 0 && <MenuSeparator />}
             {workflowList.map(w => <MenuItem key={w.id} id={String(w.id)} testId={`actions-workflow-${w.id}`} label={w.name} {...(w.state !== 'active' ? { detail: 'Off' } : {})} onSelect={() => { setWorkflow(String(w.id)); setLimit(PAGE) }} />)}
           </Menu></div>
           <div style={{ flexGrow: 1, minWidth: 0 }}>
-            <SearchField label="Filter by branch" testId="actions-branch" value={branch} placeholder="Branch" width="100%" onChange={setBranch} />
+            <SearchField size="sm" label="Filter by branch" testId="actions-branch" value={branch} placeholder="Branch" width="100%" onChange={setBranch} />
           </div>
         </div>
       </div>
@@ -235,7 +237,7 @@ function ActionsTab() {
     </div>}
     {dispatching ? <Dispatch key={`dispatch-${key}`} target={choice} workflows={workflowList} defaultBranch={workflows?.key === key ? workflows.result.default_branch ?? '' : ''} ownBranch={ownBranch ?? null} initial={workflow} showBack={!wide}
         onClose={() => setDispatching(false)} onStarted={() => { setDispatching(false); refresh(n => n + 1) }} />
-      : selected !== null ? <RunDetail key={`${key}:${selected}`} target={choice} runId={selected} listed={selectedRun} {...(reference ? { reference } : {})} usual={usual} width={detailWidth} height={windowHeight} showBack={!wide} visible={visible} onBack={() => setSelected(null)} onActive={setSelectedActive} onChanged={() => refresh(n => n + 1)} />
+      : selected !== null ? <RunDetail key={`${key}:${selected}${opened ? `:${focusSeq}` : ''}`} target={choice} runId={selected} {...(opened ? { initial: opened } : {})} listed={selectedRun} {...(reference ? { reference } : {})} usual={usual} width={detailWidth} height={windowHeight} showBack={!wide} visible={visible} onBack={() => setSelected(null)} onActive={setSelectedActive} onChanged={() => refresh(n => n + 1)} />
       : wide && <div style={{ ...column, flexGrow: 1, alignItems: 'center', justifyContent: 'center', gap: 16, padding: 24 }}>
         <Icon source={PLAY} size={24} color={t.textSecondary} />
         <Label color={t.text} size={16} weight={500}>Select a run</Label>
@@ -244,13 +246,14 @@ function ActionsTab() {
   </div>
 }
 
-function RepoPicker({ choices, current, onPick, compact = false }: { choices: Choice[]; current: Choice; onPick: (c: ActionsRepo) => void; compact?: boolean }) {
+/** The header's repository menu; `testId` names it for the page that uses it (Actions, Issues). */
+export function RepoPicker({ choices, current, onPick, compact = false, testId = 'actions-repo' }: { choices: Choice[]; current: Choice; onPick: (c: ActionsRepo) => void; compact?: boolean; testId?: string }) {
   const t = useTheme()
   const groups = [...new Set(choices.filter(c => c.repo).map(c => c.projectId))]
-  return <Menu testId="actions-repo" align="end" width={264} {...(compact ? { rootStyle: { flexShrink: 0 } } : {})} trigger={open => compact
+  return <Menu testId={testId} align="end" width={264} {...(compact ? { rootStyle: { flexShrink: 0 } } : {})} trigger={open => compact
     ? <IconButton icon={FOLDER} label={`Repository: ${current.name}`} active={open} />
     : <PickerChip size="sm" open={open} truncate maxWidth={150} label={`Repository: ${current.name}`}>{current.repo ? current.name.split(' / ').pop()! : current.name}</PickerChip>}>
-    {choices.filter(c => !c.repo).map(c => <MenuItem key={repoKey(c)} id={repoKey(c)} testId={`actions-repo-${c.projectId}`} label={c.name} iconNode={<Lead on={repoKey(c) === repoKey(current)} color={t.link} />} onSelect={() => onPick(c)} />)}
+    {choices.filter(c => !c.repo).map(c => <MenuItem key={repoKey(c)} id={repoKey(c)} testId={`${testId}-${c.projectId}`} label={c.name} iconNode={<Lead on={repoKey(c) === repoKey(current)} color={t.link} />} onSelect={() => onPick(c)} />)}
     {groups.map(id => <div key={id} style={column}>
       <MenuSeparator />
       <MenuLabel>{choices.find(c => c.projectId === id)!.project.name}</MenuLabel>

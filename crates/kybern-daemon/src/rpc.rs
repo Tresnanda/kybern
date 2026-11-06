@@ -1081,15 +1081,23 @@ async fn dispatch_part_12(state: &AppState, ctx: &ConnectionCtx, method: &str, s
         ThreadFileRead::NAME => {
             let p: ThreadFileReadParams = parse(params)?;
             let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            let outside = crate::files_outside::access(state, thread.id, crate::auth::is_bootstrap(state, &ctx.principal));
             ok(crate::files::read_thread_file(
                 &state.file_indexes,
                 std::path::Path::new(&thread.cwd),
                 &p.path,
                 p.max_bytes,
                 p.if_version.as_deref(),
+                &outside,
             )
             .await
             .map_err(bad)?)
+        }
+        ThreadFileOutside::NAME => {
+            let p: ThreadFileOutsideParams = parse(params)?;
+            let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            let local = crate::auth::is_bootstrap(state, &ctx.principal);
+            ok(crate::files_outside::outside(state, local, &thread, &p).await.map_err(bad)?)
         }
         ThreadFileWrite::NAME => {
             let p: ThreadFileWriteParams = parse(params)?;
@@ -1383,6 +1391,7 @@ async fn dispatch_part_15(state: &AppState, ctx: &ConnectionCtx, method: &str, s
             }
             ok(Empty {})
         }
+        IssueList::NAME | IssueDetail::NAME => issues_call(state, "gh", method, params).await,
         ActionsRuns::NAME
         | ActionsRun::NAME
         | ActionsLog::NAME
@@ -1623,6 +1632,35 @@ async fn dispatch_part_17(state: &AppState, _ctx: &ConnectionCtx, method: &str, 
     }
 }
 
+/// The `github.issue.*` methods (#217), run with the `gh` program named here so tests can fake it.
+pub(crate) async fn issues_call(state: &AppState, gh: &str, method: &str, params: Value) -> Result<Value, RpcError> {
+    match method {
+        IssueList::NAME => {
+            let p: IssueListParams = parse(params)?;
+            let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
+            if project.kind == ProjectKind::Group && p.repo.is_none() {
+                return ok(state.orchestrator.group_issue_list(&project, &p, gh).await.map_err(gh_bad)?);
+            }
+            let mut listed = crate::github_issues::list(gh, &pr_dir(&project, p.repo.as_deref())?, &p).await.map_err(gh_bad)?;
+            // Group calls always name their member (`pr_dir`); single projects stay untagged.
+            for issue in &mut listed.issues {
+                issue.repo.clone_from(&p.repo);
+            }
+            ok(listed)
+        }
+        IssueDetail::NAME => {
+            let p: IssueDetailParams = parse(params)?;
+            let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
+            let dir = pr_dir(&project, p.repo.as_deref())?;
+            let mut detail = crate::github_issues::detail(gh, &dir, p.number).await.map_err(gh_bad)?;
+            // Group calls always name their member (`pr_dir`); single projects stay untagged.
+            detail.issue.repo = p.repo;
+            ok(detail)
+        }
+        _ => Err(RpcError::method_not_found(method)),
+    }
+}
+
 /// The `github.actions.*` methods (ADE-97), run with the `gh` program named here so tests can fake it.
 pub(crate) async fn actions_call(state: &AppState, gh: &str, method: &str, params: Value) -> Result<Value, RpcError> {
     use crate::github_actions as actions;
@@ -1638,7 +1676,12 @@ pub(crate) async fn actions_call(state: &AppState, gh: &str, method: &str, param
         }
         ActionsRun::NAME => {
             let p: ActionsRunParams = parse(params)?;
-            ok(actions::run_detail(gh, &dir(state, p.project_id, p.repo.as_deref())?, p.run_id, p.attempt).await.map_err(gh_bad)?)
+            let dir = dir(state, p.project_id, p.repo.as_deref())?;
+            let run_id = match p.job_id.filter(|_| p.run_id == 0) {
+                Some(job) => actions::run_of_job(gh, &dir, job).await.map_err(gh_bad)?,
+                None => p.run_id,
+            };
+            ok(actions::run_detail(gh, &dir, run_id, p.attempt).await.map_err(gh_bad)?)
         }
         ActionsLog::NAME => {
             let p: ActionsLogParams = parse(params)?;

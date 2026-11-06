@@ -244,6 +244,8 @@ fn main() {
     method::<PrDetail>(&mut methods);
     method::<PrPage>(&mut methods);
     method::<PrAction>(&mut methods);
+    method::<IssueList>(&mut methods);
+    method::<IssueDetail>(&mut methods);
     method::<ActionsRuns>(&mut methods);
     method::<ActionsRun>(&mut methods);
     method::<ActionsLog>(&mut methods);
@@ -262,6 +264,7 @@ fn main() {
     method::<ThreadFileRead>(&mut methods);
     method::<ThreadFileWrite>(&mut methods);
     method::<ThreadFilesResolve>(&mut methods);
+    method::<ThreadFileOutside>(&mut methods);
     method::<SkillsList>(&mut methods);
     method::<IntegrationsList>(&mut methods);
     method::<HtmlPublish>(&mut methods);

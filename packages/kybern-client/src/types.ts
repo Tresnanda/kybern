@@ -3163,6 +3163,80 @@ export interface PrListRepo {
   problem?: Problem;
 }
 
+/** One issue (`github.issue.list`, `github.issue.detail`). */
+export interface Issue {
+  number: number
+  title: string
+  url: string
+  /** OPEN | CLOSED */
+  state: string
+  /** COMPLETED | NOT_PLANNED | REOPENED, when GitHub says why the issue was closed. */
+  state_reason?: string
+  author: string
+  author_avatar_url?: string
+  author_is_bot?: boolean
+  created_at: string
+  updated_at: string
+  labels?: PrLabel[]
+  assignees?: PrPerson[]
+  milestone?: string
+  /** Numbers of the pull requests that will close this issue when they merge. */
+  linked_pull_requests?: number[]
+  /** Group projects: the member repository the issue is in. */
+  repo?: string
+}
+export interface IssueListParams {
+  project_id: ProjectId
+  /** open (default) | closed | all */
+  state?: string
+  search?: string
+  /** Only issues with every one of these labels. */
+  labels?: string[]
+  /** A login, or `@me`. */
+  assignee?: string
+  /** 1-100, default 30. */
+  limit?: number
+  /** Issues to skip, newest first. */
+  offset?: number
+  /** Group projects: only this member repository (omit to merge every member). */
+  repo?: string
+}
+export interface IssueListResult {
+  /** Group projects: every member's issues, each tagged with `repo`. */
+  issues: Issue[]
+  has_more?: boolean
+  /** The repository's labels for the Labels filter (first page only). */
+  labels?: PrLabel[]
+  /** Group projects only: one row per member, with why its list is missing. */
+  repos?: PrListRepo[]
+}
+export interface IssueDetailParams { project_id: ProjectId; number: number; repo?: string }
+export interface IssueComment {
+  id: string
+  author: string
+  author_avatar_url?: string
+  author_is_bot?: boolean
+  body: string
+  created_at: string
+  url: string
+}
+export interface IssueLinkedPull {
+  number: number
+  title: string
+  url: string
+  /** OPEN | MERGED | CLOSED */
+  state: string
+}
+export interface IssueDetailResult {
+  issue: Issue
+  body: string
+  /** The first comments, oldest first (at most 100). */
+  comments: IssueComment[]
+  /** All comments; more than `comments` holds when the thread is long. */
+  comment_count: number
+  pull_requests?: IssueLinkedPull[]
+}
+
 /** `repo`: the member of a group project (a `PullRequest.repo`); a group project requires it. */
 export interface PrDetailParams { project_id: ProjectId; number: number; repo?: string }
 export interface PrCheck {
@@ -3333,7 +3407,7 @@ export interface BranchPull { branch: string; number: number; state: string }
 export interface WorkflowStep { number: number; name: string; status: string; conclusion?: string; started_at?: DateTime; completed_at?: DateTime }
 export interface WorkflowJob { id: number; name: string; status: string; conclusion?: string; started_at?: DateTime; completed_at?: DateTime; url: string; labels?: string[]; steps: WorkflowStep[] }
 /** `attempt`: an earlier attempt instead of the latest. */
-export interface ActionsRunParams { project_id: ProjectId; repo?: string; run_id: number; attempt?: number }
+export interface ActionsRunParams { project_id: ProjectId; repo?: string; run_id?: number; job_id?: number; attempt?: number }
 export interface ActionsRunResult {
   run: WorkflowRun
   jobs: WorkflowJob[]
@@ -3465,6 +3539,27 @@ export interface ThreadFilesResolveResult {
   paths: (string | null)[];
 }
 
+export type OutsideAllow = "check" | "once" | "folder";
+export type OutsideVerdict = "open" | "ask" | "refused";
+export interface ThreadFileOutsideParams {
+  thread_id: ThreadId;
+  /** As written in the link: absolute, or relative to the thread cwd. */
+  path: string;
+  /** `once` / `folder`: allow it (the desktop app on the daemon's own machine only). Absent: only ask. */
+  allow?: OutsideAllow;
+}
+export interface ThreadFileOutsideResult {
+  verdict: OutsideVerdict;
+  /** What `threads.files.read` opens. */
+  path?: string;
+  /** The folder "Always allow this folder" would add; absent when it can never be allowed. */
+  folder?: string;
+  /** In the system's temporary folder, where agents keep scratch files. */
+  scratch?: boolean;
+  /** Why the file cannot open from this client. */
+  reason?: string;
+}
+
 export interface FilesReadResult {
   content: string;
   truncated: boolean;
@@ -3474,6 +3569,8 @@ export interface FilesReadResult {
   version?: string;
   /** True when `if_version` still matched; `content` is empty. */
   unchanged?: boolean;
+  /** A file outside the workspace the user allowed Kybern to open: nothing writes to it. */
+  read_only?: boolean;
 }
 
 export type SkillScope =
@@ -4697,6 +4794,7 @@ export interface Methods {
   "threads.files.read": [ThreadFileReadParams, FilesReadResult];
   "threads.files.write": [ThreadFileWriteParams, FilesWriteResult];
   "threads.files.resolve": [ThreadFilesResolveParams, ThreadFilesResolveResult];
+  "threads.files.outside": [ThreadFileOutsideParams, ThreadFileOutsideResult];
   "skills.list": [SkillsListParams, SkillsListResult];
   "threads.visuals.publish": [{ thread_id: ThreadId; html: string; title: string; height: number; await_answer?: boolean | null; answer_schema?: JsonValue | null; timeout_seconds?: number | null }, { visual: HtmlVisual }];
   "threads.visuals.snapshot": [{ thread_id: ThreadId; visual_id: Uuid; width: number; theme: JsonValue; lock?: JsonValue | null }, HtmlSnapshotResult];
@@ -4804,6 +4902,8 @@ export interface Methods {
   "github.pr.create_group": [PrCreateGroupParams, PrCreateGroupResult];
   "github.pr.list": [PrListParams, PrListResult];
   "github.pr.detail": [PrDetailParams, PrDetailResult];
+  "github.issue.list": [IssueListParams, IssueListResult];
+  "github.issue.detail": [IssueDetailParams, IssueDetailResult];
   "github.pr.page": [PrPageParams, PrPageResult];
   "github.pr.action": [PrActionParams, Empty];
   "github.actions.runs": [ActionsRunsParams, ActionsRunsResult];

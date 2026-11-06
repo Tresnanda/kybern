@@ -31,6 +31,10 @@ import { actionFailure, actionKind, agentPrompt, failingNames, type ActionReques
 import { readView, saveView, type PrSection } from './viewState.ts'
 import { useFlash } from './detail/useFlash.ts'
 import { focusActions } from './actions/store.ts'
+import { prCall } from './client.ts'
+import { completeRun } from './knownPulls.ts'
+import { openRunTarget } from './openRun.ts'
+import { githubPull, resolveActions } from './tabTargets.ts'
 import { goPage } from '../nav/history.ts'
 
 type Tab = PrSection
@@ -92,6 +96,14 @@ export function Detail({ project, number, repo, onBack, width, onChanged, showBa
   const requestChanges = detail?.reviews?.filter(r => r.state === 'CHANGES_REQUESTED').map(r => r.login) ?? []
   const side = detail && assessment && <Sidebar detail={detail} assessment={assessment} groups={groups} compact={width < SIDEBAR_BREAKPOINT} pending={pending} error={cardFailed && !confirmation ? `${actionFailure(review.actionError ?? 'The action failed')} Check the pull request on GitHub and try again.` : null} canAgent={!repo && !busyThread && !!settings}
     onRequest={request} onFixChecks={() => startAgent('checks', failingNames(groups))} onFixGroup={(group: CheckGroup) => startAgent('checks', [group.label])} onAddressFeedback={() => startAgent('feedback', requestChanges)} onTimeline={() => go('timeline')}
+    onOpenCheck={pr ? async url => {
+      // Only this pull request's own repository: a check that points elsewhere keeps its browser link.
+      const remote = githubPull(pr.url)?.remote
+      const target = remote ? resolveActions(url, [{ projectId: project.id, ...(repo ? { repo } : {}), remote }]) : null
+      const run = target && await completeRun(target, prCall)
+      if (run) openRunTarget(run)
+      return !!run
+    } : undefined}
     onOpenActions={pr ? () => { goPage('pulls'); focusActions({ projectId: project.id, ...(repo ? { repo } : {}), branch: pr.head }) } : undefined} />
   return <div testId="pr-detail" style={{ ...column, flexGrow: 1, minHeight: 0 }}>
     <div style={{ ...row, flexWrap: 'wrap', gap: 6, minHeight: 46, paddingLeft: 12, paddingRight: 12, paddingTop: 4, paddingBottom: 4, borderBottomWidth: 1, borderColor: t.border }}>

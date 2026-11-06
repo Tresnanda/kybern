@@ -103,6 +103,64 @@ impl Orchestrator {
         methods::PrListResult { pull_requests: lists.into_iter().flatten().collect(), repos }
     }
 
+    /// `github.issue.list` of a group project: the newest issues of every member, merged and paged as one list.
+    /// A member that can't be listed gets its reason in `repos` and never fails the others.
+    pub async fn group_issue_list(&self, project: &Project, p: &methods::IssueListParams, gh: &str) -> Result<methods::IssueListResult> {
+        let work: Vec<(ProjectMember, Result<PathBuf, String>)> =
+            project.members.iter().map(|member| (member.clone(), super::groups::pr_repo_dir(project, Some(&member.path)))).collect();
+        // A bad request is the caller's, not every member's failure.
+        crate::github_issues::validate(p)?;
+        let first_page = p.offset == 0;
+        let rows: Vec<(methods::PrListRepo, Vec<methods::Issue>, Vec<methods::PrLabel>)> = stream::iter(work)
+            .map(|(member, dir)| async move {
+                let listed = match dir {
+                    Err(reason) => Err((reason, false)),
+                    Ok(dir) if !github::has_any_remote(&dir).await => Err(("No GitHub remote".to_string(), true)),
+                    Ok(dir) => {
+                        let (issues, labels) = if first_page {
+                            tokio::join!(crate::github_issues::fetch(gh, &dir, p), crate::github_issues::repo_labels(gh, &dir))
+                        } else {
+                            (crate::github_issues::fetch(gh, &dir, p).await, Vec::new())
+                        };
+                        issues.map(|issues| (issues, labels)).map_err(|error| {
+                            let reason = failure_reason(&error);
+                            if not_on_github(&reason) { ("No GitHub remote".to_string(), true) } else { (reason, false) }
+                        })
+                    }
+                };
+                let listed = listed.map_err(|(reason, skipped)| match github::friendly_problem(anyhow::anyhow!("{reason}")) {
+                    (words, Some(problem)) if !skipped => (words, skipped, Some(problem)),
+                    _ => (reason, skipped, None),
+                });
+                let (issues, labels, error, skipped, problem) = match listed {
+                    Ok((mut issues, labels)) => {
+                        for issue in &mut issues {
+                            issue.repo = Some(member.path.clone());
+                        }
+                        (issues, labels, None, false, None)
+                    }
+                    Err((reason, skipped, kind)) => (Vec::new(), Vec::new(), Some(reason), skipped, kind),
+                };
+                (methods::PrListRepo { repo: member.path, name: member.name, error, skipped, problem }, issues, labels)
+            })
+            .buffered(PARALLEL)
+            .collect()
+            .await;
+        let mut repos = Vec::new();
+        let (mut issues, mut labels) = (Vec::new(), Vec::<methods::PrLabel>::new());
+        for (repo, listed, repo_labels) in rows {
+            repos.push(repo);
+            issues.extend(listed);
+            for label in repo_labels {
+                if !labels.iter().any(|known| known.name == label.name) {
+                    labels.push(label);
+                }
+            }
+        }
+        let (issues, has_more) = crate::github_issues::page(issues, p);
+        Ok(methods::IssueListResult { issues, has_more, labels, repos })
+    }
+
     /// `git.status` of a group thread: the fields are the primary's, `repos`
     /// has every member in order, deselected and missing ones included.
     pub async fn group_git_status(&self, thread: &Thread) -> Result<GitStatus> {
