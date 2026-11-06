@@ -546,6 +546,9 @@ async fn messaging_a_finished_remote_child_reopens_both_copies_and_notifies_agai
     let old_seq = p.row(task).last_seq;
     let sent = p.on_b("kybern_thread_send", json!({"thread_id":child.id,"body":"Continue checking the second case"})).await.unwrap();
     assert!(sent["message_id"].is_string());
+    // The harness runs the network/outbox workers, but the production queue
+    // worker lives in lib.rs. Consume the accepted follow-up explicitly here.
+    p.b.state.orchestrator.drain_queues().await.unwrap();
     // The inbound proxy has a different id from the delegating parent on a.
     eventually(|| async { agent.transcript().await.contains("Continue checking the second case").then_some(()) }).await;
     assert_eq!(p.child_on_b(task).unwrap().delegation.unwrap().status, DelegationStatus::Running);
