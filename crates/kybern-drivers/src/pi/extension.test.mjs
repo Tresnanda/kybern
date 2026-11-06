@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 
-const extensionPath = process.env.KYBERN_PI_EXTENSION_TEST_PATH ?? new URL('./extension.ts', import.meta.url).pathname;
+const extensionPath = process.env.KYBERN_PI_EXTENSION_TEST_PATH ?? process.argv[2] ?? new URL('./extension.ts', import.meta.url).pathname;
 const { default: loadExtension } = await import(pathToFileURL(extensionPath));
 
 function fakePi(initialMode = "supervised", configuredTools, policy = {}) {
