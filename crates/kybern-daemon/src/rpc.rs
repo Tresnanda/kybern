@@ -1276,7 +1276,7 @@ async fn dispatch_part_15(state: &AppState, ctx: &ConnectionCtx, method: &str, s
             }
             ok(Empty {})
         }
-        IssueList::NAME | IssueDetail::NAME => issues_call(state, "gh", method, params).await,
+        IssueList::NAME | IssueDetail::NAME | IssueCommentCreate::NAME => issues_call(state, "gh", method, params).await,
         ActionsRuns::NAME
         | ActionsRun::NAME
         | ActionsLog::NAME
@@ -1517,7 +1517,7 @@ async fn dispatch_part_17(state: &AppState, _ctx: &ConnectionCtx, method: &str, 
     }
 }
 
-/// The `github.issue.*` methods (#217), run with the `gh` program named here so tests can fake it.
+/// The `github.issue.*` methods (#217; `github.issue.comment` also takes pull request numbers), run with the `gh` program named here so tests can fake it.
 pub(crate) async fn issues_call(state: &AppState, gh: &str, method: &str, params: Value) -> Result<Value, RpcError> {
     match method {
         IssueList::NAME => {
@@ -1541,6 +1541,12 @@ pub(crate) async fn issues_call(state: &AppState, gh: &str, method: &str, params
             // Group calls always name their member (`pr_dir`); single projects stay untagged.
             detail.issue.repo = p.repo;
             ok(detail)
+        }
+        IssueCommentCreate::NAME => {
+            let p: IssueCommentParams = parse(params)?;
+            let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
+            let dir = pr_dir(&project, p.repo.as_deref())?;
+            ok(crate::github_issues::comment(gh, &dir, p.number, &p.body).await.map_err(gh_bad)?)
         }
         _ => Err(RpcError::method_not_found(method)),
     }
@@ -1625,7 +1631,7 @@ fn secrets_workspace(state: &AppState, workspace: &SecretsWorkspace) -> Result<S
 }
 
 /// The folder a pull request call runs in: the project, or the member `repo` of a group project.
-fn pr_dir(project: &Project, repo: Option<&str>) -> Result<std::path::PathBuf, RpcError> {
+pub(crate) fn pr_dir(project: &Project, repo: Option<&str>) -> Result<std::path::PathBuf, RpcError> {
     crate::orchestrator::pr_repo_dir(project, repo).map_err(RpcError::invalid_params)
 }
 

@@ -3,7 +3,7 @@
 // a scroll frame lays out the description only). Narrow, the sidebar leads the list, under the header, as one column.
 import { useCallback, useMemo, useState, type ReactNode } from 'react'
 import type { PublicInstance } from '@gpuix/react'
-import { DocumentMarkdown } from '../../native/markdownDocument.tsx'
+import { GithubImages, GithubMarkdown } from '../markdown/GithubMarkdown.tsx'
 import { cachedMarkdownTheme as markdownTheme } from '../../transcript/kit.tsx'
 import { useTheme } from '../../ui.tsx'
 import { column } from '../../usage/controls.tsx'
@@ -28,8 +28,11 @@ export function Summary({ detail, projectId, repo, repoName, width, side, viewKe
   const t = useTheme()
   const compact = width < SIDEBAR_BREAKPOINT
   const theme = useMemo(() => { const base = markdownTheme(t); return { ...base, markdown: { ...base.markdown, codeWrap: true } } }, [t])
-  const body = detail.body.replace(/<!--[\s\S]*?-->/g, '').trim()
-  const description = <div testId="pr-body" style={{ ...column, maxWidth: READING_WIDTH, marginTop: 24, paddingTop: 22, borderTopWidth: 1, borderColor: t.surfaceDivider }}><DocumentMarkdown ref={viewKey ? bodyMounted : undefined} source={body || 'No description provided.'} theme={theme} style={{ color: t.text, fontSize: 14, userSelect: 'text' }} onLinkClick={e => e.value && openUrl(e.value)} /></div>
+  const body = detail.body.trim()
+  const images = useMemo(() => ({ projectId, number: detail.pull_request.number, ...(repo ? { repo } : {}) }), [projectId, detail.pull_request.number, repo])
+  const description = <div testId="pr-body" style={{ ...column, maxWidth: READING_WIDTH, marginTop: 24, paddingTop: 22, borderTopWidth: 1, borderColor: t.surfaceDivider }}>
+    <GithubImages value={images}><GithubMarkdown document ref={viewKey ? bodyMounted : undefined} source={body || 'No description provided.'} theme={theme} style={{ color: t.text, fontSize: 14, userSelect: 'text' }} onLinkClick={e => e.value && openUrl(e.value)} /></GithubImages>
+  </div>
   const heading = <Heading detail={detail} projectId={projectId} {...(repo ? { repo } : {})} repoName={repoName} compact={compact} />
   if (compact) {
     return <virtual-list ref={scroll} {...PR_SCROLL_LAYOUT} testId="pr-summary" style={{ flexGrow: 1, minHeight: 0 }} estimatedItemHeight={400}><div key="summary" style={{ ...column, gap: 18, padding: 16, paddingTop: 12, paddingBottom: 64 }}>{side}<div style={column}>{heading}{description}</div></div></virtual-list>

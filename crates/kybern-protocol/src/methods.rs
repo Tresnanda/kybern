@@ -3132,6 +3132,22 @@ pub struct IssueDetailResult {
 }
 method!(IssueDetail, "github.issue.detail", Some(Scope::OrchestrationRead), IssueDetailParams, IssueDetailResult);
 
+/// Comment on an issue, or on a pull request's conversation (GitHub keeps both as issue comments).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IssueCommentParams {
+    pub project_id: ProjectId,
+    /// The issue or pull request number.
+    pub number: u64,
+    /// Markdown, 1 to 65,536 characters.
+    pub body: String,
+    /// Group projects: the member repository the issue or pull request is in. Required for a group project;
+    /// rejected for a single project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+}
+// The result is the comment GitHub made, as `github.issue.detail` lists comments.
+method!(IssueCommentCreate, "github.issue.comment", Some(Scope::OrchestrationOperate), IssueCommentParams, IssueComment);
+
 // GitHub Actions through `gh` (ADE-97): workflow runs on every branch, their jobs and steps, bounded
 // job logs, reruns, cancel and `workflow_dispatch`. Group projects name the member in `repo`.
 
@@ -5206,6 +5222,7 @@ registry!(
     PrAction,
     IssueList,
     IssueDetail,
+    IssueCommentCreate,
     ActionsRuns,
     ActionsRun,
     ActionsLog,

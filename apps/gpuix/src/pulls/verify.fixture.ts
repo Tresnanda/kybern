@@ -9,7 +9,7 @@ import { ACTION_PULLS, actionRun, actionRuns } from './verify.actions-fixture.ts
 import { issueDetail, issueList } from './verify.issues-fixture.ts'
 import type { PrDetailResult, PrFile, PrReviewEntry, PrTimelineEvent, PullRequest, UsageRow } from '../../../../packages/kybern-client/src/types.ts'
 
-export function actionFixture(options: { /** A TypeScript and a Rust file with real source, for the Changes view's syntax colours. */ syntax?: boolean; /** A TypeScript file with long lines, for the Changes view's Wrap lines. */ wrap?: boolean; /** With `wrap`: a second hunk of this many long added lines, for scroll timing. */ wrapLines?: number; long?: boolean; horizontal?: boolean; picker?: boolean; paged?: boolean; slowFiles?: boolean; /** Extra running checks beyond the one in the base fixture. */ running?: number; /** A group project of three repositories (ADE-79): api and docs both have #108, web fails, infra is skipped. */ group?: boolean; /** ADE-85 list and Timeline: a group project of three repositories with pull requests in every readiness group, and a timeline history. */ readiness?: boolean; /** 65 distinct files in folders, with short patches (30 a page), for the Changes tab. */ changes?: boolean; /** A verdict state of the detail page (`verify.states.ts`). */ state?: PrState; /** ADE-97: 100 runs over 24 branches and a 40-job run, for the Actions performance check. */ actionsBig?: boolean; /** ADE-112: the linked thread is the project's Coordinator, so the dock has its Project panel. */ coordinator?: boolean; /** #247: the pull request is on github.com/acme/api and its checks link to Actions jobs and to another app's page. */ checkLinks?: boolean; /** `github.pr.list` fails this way until `problem(null)`. */ problem?: 'missing' | 'auth' | 'auth-text' | 'other' } = {}) {
+export function actionFixture(options: { /** A TypeScript and a Rust file with real source, for the Changes view's syntax colours. */ syntax?: boolean; /** A TypeScript file with long lines, for the Changes view's Wrap lines. */ wrap?: boolean; /** With `wrap`: a second hunk of this many long added lines, for scroll timing. */ wrapLines?: number; long?: boolean; horizontal?: boolean; picker?: boolean; paged?: boolean; slowFiles?: boolean; /** Extra running checks beyond the one in the base fixture. */ running?: number; /** A group project of three repositories (ADE-79): api and docs both have #108, web fails, infra is skipped. */ group?: boolean; /** ADE-85 list and Timeline: a group project of three repositories with pull requests in every readiness group, and a timeline history. */ readiness?: boolean; /** 65 distinct files in folders, with short patches (30 a page), for the Changes tab. */ changes?: boolean; /** A verdict state of the detail page (`verify.states.ts`). */ state?: PrState; /** ADE-97: 100 runs over 24 branches and a 40-job run, for the Actions performance check. */ actionsBig?: boolean; /** ADE-112: the linked thread is the project's Coordinator, so the dock has its Project panel. */ coordinator?: boolean; /** #247: the pull request is on github.com/acme/api and its checks link to Actions jobs and to another app's page. */ checkLinks?: boolean; /** `github.pr.list` fails this way until `problem(null)`. */ problem?: 'missing' | 'auth' | 'auth-text' | 'other'; /** The timeline's last comment holds an image (`/github/image`). */ images?: boolean } = {}) {
   const actionRunList = actionRuns(options.actionsBig)
   const scratch = mkdtempSync(path.join(tmpdir(), 'gpuix-scratch-pages-'))
   const now = new Date().toISOString()
@@ -58,6 +58,17 @@ export function actionFixture(options: { /** A TypeScript and a Rust file with r
         if (req.method === 'OPTIONS') return new Response(null, { headers })
         if (req.method === 'POST' && req.headers.get('authorization') === 'Bearer local-fixture') return Response.json({ ticket: 'fixture-ticket' }, { headers })
         return new Response('Unauthorized', { status: 401, headers })
+      }
+      // Images of issues and pull requests (`/github/image`): two real pictures from the repository; an address with
+      // "missing" in it is one GitHub didn't share.
+      const at = new URL(req.url)
+      if (at.pathname === '/github/image') {
+        if (req.headers.get('authorization') !== 'Bearer local-fixture') return new Response('token cannot read images', { status: 403 })
+        const image = at.searchParams.get('url') ?? ''
+        params.push({ method: 'GET /github/image', params: Object.fromEntries(at.searchParams) })
+        if (image.includes('missing')) return new Response("GitHub didn't share this image.", { status: 404 })
+        const file = image.includes('2222') ? '../../../../assets/readme/gatekeeper-confirm.png' : '../../../../assets/release-background.png'
+        return new Response(Bun.file(path.join(import.meta.dir, file)), { headers: { 'content-type': 'image/png' } })
       }
       if (server.upgrade(req)) return
       return new Response('Not found', { status: 404 })
@@ -112,7 +123,7 @@ export function actionFixture(options: { /** A TypeScript and a Rust file with r
           case 'github.pr.detail': if ((options.group || options.readiness) && message.params.project_id === project.id && typeof message.params.repo !== 'string') { error = 'Acme has several repositories, so this pull request needs its repository.'; break }
             result = { ...detail, ...(options.long ? { body: Array.from({length: 40}, (_,i) => `### Verification ${i+1}\n\nPreserve **formatted content**, reading position and selection while scrolling.\n\n- Stable rows keep their identity.\n- The complete description remains reachable.\n\n\`row.id\` survives a refresh.`).join('\n\n') } : {}), pull_request: { ...pr, number: Number(message.params.number) } }; if (options.state) { const rich = stateDetail(options.state, result as PrDetailResult); result = { ...rich, pull_request: { ...rich.pull_request, number: Number(message.params.number) } } } break
           case 'github.pr.page': if (options.paged && message.params.kind === 'timeline') { const second=message.params.cursor==='page-2'; result={files:[],entries:[],page:second?2:1,has_more:!second,...(!second?{next_cursor:'page-2'}:{}),timeline:Array.from({length:30},(_,i)=>({id:`paged-${(second?30:0)+i}`,kind:'comment',created_at:now,author:'reviewer',body:`### Timeline item ${(second?30:0)+i+1}\n\nPreserve this later-page reading anchor.\n\n- Keep the selected history.\n- Rehydrate before restoring.`}))}; break }
-            if (message.params.kind === 'timeline') { result = timelinePage(now, typeof message.params.cursor === 'string' ? message.params.cursor : undefined, options.long); break }
+            if (message.params.kind === 'timeline') { result = timelinePage(now, typeof message.params.cursor === 'string' ? message.params.cursor : undefined, options.long, options.images); break }
             result = { files: message.params.kind === 'files' ? (options.syntax ? syntaxFiles : options.wrap ? wrapFiles : options.changes ? Array.from({ length: Math.max(0, Math.min(30, 65 - (((Number(message.params.page) || 1) - 1) * 30))) }, (_, i) => changedFile(((Number(message.params.page) || 1) - 1) * 30 + i)) : files) : [], entries: message.params.kind === 'files' ? [] : entries, page: message.params.page ?? 1, has_more: (Number(message.params.page) || 1) < 3 }; break
           // ADE-97: fake GitHub Actions. Writes are only recorded in `actions`.
           case 'github.actions.runs': {
@@ -129,12 +140,18 @@ export function actionFixture(options: { /** A TypeScript and a Rust file with r
           // #217: fake issues. A thread started from one is only recorded in `params`.
           case 'github.issue.list': result = issueList(now, message.params); break
           case 'github.issue.detail': result = issueDetail(now, Number(message.params.number)); break
+          // A comment posted from the box; "#signed-out" in it fails like a signed-out gh. Answered after 600 ms (below).
+          case 'github.issue.comment':
+            if (String(message.params.body).includes('#signed-out')) { error = GH_PROBLEMS.auth.message; errorData = GH_PROBLEMS.auth.data; break }
+            result = { id: `IC_posted_${params.filter(p => p.method === 'github.issue.comment').length}`, author: 'tresnanda', body: String(message.params.body), created_at: new Date().toISOString(), url: `https://github.com/acme/api/issues/${message.params.number}#issuecomment-9` }
+            break
           case 'threads.create': result = { ...thread, id: 'issue-thread', title: String(message.params.title ?? 'New thread') }; break
           case 'threads.send': result = {}; break
           default: if (!['events.unsubscribe', 'ping'].includes(message.method)) error = `Fixture rejects ${message.method}`
         }
         const response=JSON.stringify(error ? { jsonrpc: '2.0', id: message.id, error: { code: -32000, message: error, ...(errorData ? { data: errorData } : {}) } } : { jsonrpc: '2.0', id: message.id, result })
         if(options.slowFiles && message.method==='github.pr.page' && message.params.kind==='files' && Number(message.params.page)>1)setTimeout(()=>{try{ws.send(response)}catch{}},300)
+        else if (message.method === 'github.issue.comment') setTimeout(() => { try { ws.send(response) } catch {} }, 600)
         else ws.send(response)
       },
     },
@@ -196,7 +213,7 @@ export function readinessPulls(now: string, state: string): PullRequest[] {
 }
 
 /** The history of #2860: two timeline pages (30 events would be a full page; the fixture keeps them short). */
-export function timelinePage(now: string, cursor: string | undefined, long = false): { files: []; entries: []; page: number; has_more: boolean; timeline: PrTimelineEvent[]; next_cursor?: string } {
+export function timelinePage(now: string, cursor: string | undefined, long = false, images = false): { files: []; entries: []; page: number; has_more: boolean; timeline: PrTimelineEvent[]; next_cursor?: string } {
   const e = (id: string, minutes: number, over: Partial<PrTimelineEvent> & Pick<PrTimelineEvent, 'kind'>): PrTimelineEvent => ({ id, created_at: ago(now, minutes), author: 'tresnanda', ...over })
   const first: PrTimelineEvent[] = [
     e('c1', 120, { kind: 'commit', sha: 'a1f3c2e9d0b1', body: 'IG review: neutral content wording (#2858)' }),
@@ -211,6 +228,7 @@ export function timelinePage(now: string, cursor: string | undefined, long = fal
     e('c4', 7, { kind: 'commit', sha: 'e9e5375a1b22', body: 'Guard the insert and note the rollback' }),
     e('r2', 5, { kind: 'review', author: 'kevin', state: 'APPROVED', body: '' }),
     e('x1', 2, { kind: 'comment', author: 'github-actions', author_is_bot: true, body: 'Preview deployed.' }),
+    ...(images ? [e('i1', 1, { kind: 'comment', author: 'kevin', body: 'Staging after the fix:\n\n<img width="420" alt="Staging" src="https://github.com/user-attachments/assets/2f0c6a1e-1111-4a5b-9c3d-000000000108" />' })] : []),
   ]
   // Scroll runs read a full page of long comments (the first one, `r1`, is selectable like the old first entry).
   if (long) return { files: [], entries: [], page: 1, has_more: false, timeline: Array.from({ length: 30 }, (_, i) => e(i === 0 ? 'r1' : `l${i}`, 300 - i, { kind: i === 0 ? 'review' : 'comment', author: i % 2 ? 'teammate' : 'reviewer', state: 'COMMENTED', body: `### Finding ${i + 1}\n\nKeep this row stable while streaming.\n\n\`row.id\` should survive a refresh.\n\n- Preserve focus\n- Preserve selection\n- Preserve reading position` })) }

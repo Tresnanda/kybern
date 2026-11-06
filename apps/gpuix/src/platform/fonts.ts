@@ -16,6 +16,13 @@ export interface FontPlan {
   monoAdvance: number
   /** The UI face's space advance in em (Inter 576/2048, Segoe UI Variable 561/2048); null on macOS, which sizes by Menlo. */
   uiSpaceAdvance: number | null
+  /**
+   * How far below the middle of its line box the UI face's x-height is centred, in em: (ascent − descent − x-height) / 2,
+   * whatever the line height. SF (952 / 241 / 527 per mille) 0.092, Inter 4.1 (1984 / 494 / 1118 of 2048) 0.091, Segoe UI
+   * Variable (2210 / 514 / 1024 of 2048, its win metrics) 0.164. A mark beside text (a label's dot) sits there, not on the
+   * middle of the line box.
+   */
+  uiXCentre: number
 }
 
 /** Inter 4.1's variable roman and italic (`src/assets/fonts`, OFL; THIRD_PARTY_NOTICES.md). */
@@ -31,15 +38,24 @@ export const SEGOE_VARIABLE = 'Segoe UI Variable Text'
 
 /** Inter's and Segoe UI Variable's space; another `KYBERN_UI_FONT` is assumed to have about Inter's. */
 const INTER_SPACE = 576 / 2048, SEGOE_SPACE = 561 / 2048
+/** `FontPlan.uiXCentre` of SF, Inter (also assumed for another `KYBERN_UI_FONT`) and Segoe UI Variable. */
+const SF_X_CENTRE = (0.952 - 0.241 - 0.527) / 2, INTER_X_CENTRE = (1984 - 494 - 1118) / 2 / 2048, SEGOE_X_CENTRE = (2210 - 514 - 1024) / 2 / 2048
 
 /** The plan for a platform. `KYBERN_UI_FONT` names another UI family off macOS (for the checks). */
 export function fontPlan(platform: NodeJS.Platform, env: Record<string, string | undefined>, exists: (file: string) => boolean = existsSync): FontPlan {
-  if (platform === 'darwin') return { systemUi: null, mono: 'Menlo', monoAdvance: 0.602, uiSpaceAdvance: null }
+  if (platform === 'darwin') return { systemUi: null, mono: 'Menlo', monoAdvance: 0.602, uiSpaceAdvance: null, uiXCentre: SF_X_CENTRE }
   const windows = env.WINDIR || env.SystemRoot || 'C:\\Windows'
   const segoe = platform === 'win32' && exists(path.win32.join(windows, 'Fonts', 'SegUIVar.ttf'))
   const systemUi = env.KYBERN_UI_FONT || (segoe ? SEGOE_VARIABLE : INTER)
-  return { systemUi, mono: 'JetBrains Mono', monoAdvance: 0.6, uiSpaceAdvance: systemUi === SEGOE_VARIABLE ? SEGOE_SPACE : INTER_SPACE }
+  const segoeFace = systemUi === SEGOE_VARIABLE
+  return { systemUi, mono: 'JetBrains Mono', monoAdvance: 0.6, uiSpaceAdvance: segoeFace ? SEGOE_SPACE : INTER_SPACE, uiXCentre: segoeFace ? SEGOE_X_CENTRE : INTER_X_CENTRE }
 }
+
+/**
+ * How far to move a mark centred on a UI-font text line (`alignItems: 'center'`) down so its centre is on the text's x-height
+ * centre, in px, for text of `fontSize`: a label's colour dot.
+ */
+export const xCentreNudge = (fontSize: number, plan: FontPlan = FONTS) => Math.round(plan.uiXCentre * fontSize * 100) / 100
 
 /** Air kept between a chip's icon and its label, in px. */
 export const CHIP_ICON_GAP = 1.5

@@ -8,6 +8,7 @@ import { Icon } from '../../icons.tsx'
 import { Avatar } from '../../kit/Avatar.tsx'
 import { RADIUS } from '../../kit/controls.ts'
 import { HoverCard } from '../../kit/HoverCard.tsx'
+import { LABEL_DOT_GAP, LabelDot } from '../../kit/StatusChip.tsx'
 import { N } from '../../nav/glyphs.ts'
 import { ink, Label, useTheme } from '../../ui.tsx'
 import { column, row } from '../../usage/controls.tsx'
@@ -33,8 +34,8 @@ export const IssueRow = memo(function IssueRow({ issue, repoName, projectId, sel
         <div style={{ ...row, gap: 8 }}>
           <RepoBadge testId="issue-badge-repo" name={repoName} projectId={projectId} {...(issue.repo ? { repo: issue.repo } : {})} />
           <div style={{ ...row, gap: 8, flexGrow: 1, flexShrink: 1, minWidth: 0 }}>
-            {labels.slice(0, LABELS_SHOWN).map(l => <div key={l.name} testId="issue-label" style={{ ...row, gap: 4, flexShrink: 1, minWidth: 0 }}>
-              <div style={{ width: 7, height: 7, borderRadius: 3.5, flexShrink: 0, backgroundColor: labelColor(l.color) ?? t.textSecondary }} />
+            {labels.slice(0, LABELS_SHOWN).map(l => <div key={l.name} testId="issue-label" style={{ ...row, gap: LABEL_DOT_GAP, flexShrink: 1, minWidth: 0 }}>
+              <LabelDot color={labelColor(l.color) ?? t.textSecondary} fontSize={12} />
               <Label color={t.textSecondary} size={12} lineHeight={16} truncate>{l.name}</Label>
             </div>)}
             {labels.length > LABELS_SHOWN && <Label color={t.textTertiary} size={12} lineHeight={16} style={{ flexShrink: 0 }}>{`+${labels.length - LABELS_SHOWN}`}</Label>}

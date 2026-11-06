@@ -6,10 +6,10 @@ import {
   CheckmarkCircle02Icon, Comment01Icon, File01Icon, GitCommitIcon, GitMergeIcon, GitPullRequestClosedIcon, GitPullRequestDraftIcon,
   GitPullRequestIcon, Message01Icon, MessageEdit01Icon, Refresh01Icon, UserAdd01Icon,
 } from '@hugeicons/core-free-icons'
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import { relativeTime } from '@/lib/format'
 import { toggleReviewFinding } from '@/state/prReviewModel'
-import type { PrTimelineEvent } from '../../../../../packages/kybern-client/src/types.ts'
+import type { IssueComment, PrTimelineEvent } from '../../../../../packages/kybern-client/src/types.ts'
 import { glyph, Icon } from '../../icons.tsx'
 import { Button } from '../../kit/Button.tsx'
 import { Checkbox } from '../../kit/Checkbox.tsx'
@@ -28,6 +28,10 @@ import { findingFor, filterCounts, reviewFindings, reviewVerb, shortSha, timelin
 import { useReadingPosition } from '../useReadingPosition.ts'
 import { readView, saveView } from '../viewState.ts'
 import { useTimeline } from './useTimeline.ts'
+import { CommentBox } from '../comment/CommentBox.tsx'
+import { commentEvents } from '../issues/model.ts'
+import { GithubImages, GithubMarkdown } from '../markdown/GithubMarkdown.tsx'
+import { githubSegments } from '../markdown/segments.ts'
 
 const DOT = {
   opened: glyph(GitPullRequestIcon), comment: glyph(Message01Icon), commented: glyph(Comment01Icon), approved: glyph(CheckmarkCircle02Icon), changes: glyph(MessageEdit01Icon),
@@ -36,6 +40,16 @@ const DOT = {
 }
 const MAX_WIDTH = 780
 const COMMITS_SHOWN = 6
+
+/** Comments posted from the box, per pull request, until the timeline's own copy has them: they outlive a tab switch. */
+const posted = new Map<string, IssueComment[]>()
+function keep(key: string, change: (held: IssueComment[]) => IssueComment[]) {
+  const next = change(posted.get(key) ?? [])
+  posted.delete(key)
+  if (next.length) posted.set(key, next)
+  while (posted.size > 16) posted.delete(posted.keys().next().value!)
+  return next
+}
 
 export function Timeline({ projectId, number, repo, review, onSend, viewKey }: { viewKey?: string; projectId: string; number: number; repo?: string; review: Review; onSend: () => void }) {
   const t = useTheme()
@@ -50,8 +64,19 @@ export function Timeline({ projectId, number, repo, review, onSend, viewKey }: {
   const pr = review.detail?.pull_request
   // The pull request's own opening is not a timeline item on GitHub; it leads the history.
   const events = useMemo<PrTimelineEvent[]>(() => pr?.created_at ? [{ id: `opened:${pr.number}`, kind: 'ready_for_review', created_at: pr.created_at, author: pr.author, ...(pr.author_avatar_url ? { avatar_url: pr.author_avatar_url } : {}), ...(pr.author_is_bot ? { author_is_bot: true } : {}) }, ...loaded] : loaded, [pr, loaded])
-  const items = useMemo(() => timelineItems(events, filter), [events, filter])
-  const counts = filterCounts(loaded, review.detail?.timeline_counts)
+  // Comments posted from the box follow the history until a refresh brings GitHub's own copy (same id).
+  const postedKey = `${projectId}/${repo ?? ''}:${number}`
+  const [mine, setMine] = useState(() => ({ key: postedKey, comments: posted.get(postedKey) ?? [] }))
+  const own = mine.key === postedKey ? mine.comments : posted.get(postedKey) ?? []
+  const change = useCallback((fn: (held: IssueComment[]) => IssueComment[]) => setMine({ key: postedKey, comments: keep(postedKey, fn) }), [postedKey])
+  const extra = useMemo(() => { const ids = new Set(loaded.map(e => e.id)); return commentEvents(own.filter(c => !ids.has(c.id))) }, [own, loaded])
+  // GitHub's copy is in the history now: the posted one is no longer needed.
+  useEffect(() => { if (own.some(c => loaded.some(e => e.id === c.id))) change(held => held.filter(c => !loaded.some(e => e.id === c.id))) }, [own, loaded, change])
+  const all = useMemo(() => extra.length ? [...events, ...extra] : events, [events, extra])
+  const items = useMemo(() => timelineItems(all, filter), [all, filter])
+  const held = filterCounts(loaded, review.detail?.timeline_counts)
+  const counts = extra.length ? { ...held, all: held.all + extra.length, comments: held.comments + extra.length } : held
+  const target = useMemo(() => ({ projectId, number, ...(repo ? { repo } : {}) }), [projectId, number, repo])
   const selected = review.draft.selected
   const toggle = (finding: Finding) => review.saveDraft(toggleReviewFinding(review.draft, finding.id, finding.entry))
   const select = (findings: Finding[]) => {
@@ -60,7 +85,7 @@ export function Timeline({ projectId, number, repo, review, onSend, viewKey }: {
     review.saveDraft(draft)
     onSend()
   }
-  return <div testId="pr-timeline" style={{ ...column, flexGrow: 1, minHeight: 0 }}>
+  return <GithubImages value={target}><div testId="pr-timeline" style={{ ...column, flexGrow: 1, minHeight: 0 }}>
     <div style={{ ...row, gap: 8, paddingLeft: 24, paddingRight: 24, paddingTop: 16, paddingBottom: 10, flexShrink: 0 }}>
       <Segmented size="sm" aria-label="Timeline filter" value={filter} options={TIMELINE_FILTERS.map(f => ({ value: f.value, label: f.label, ...(review.detail?.timeline_counts || loaded.length ? { count: counts[f.value] } : {}) }))} onChange={v => { setFilter(v as TimelineFilter); if (viewKey) saveView(viewKey, { filter: v }) }} tone="neutral" testId="pr-timeline-filter" />
       <div style={{ flexGrow: 1 }} />
@@ -73,9 +98,14 @@ export function Timeline({ projectId, number, repo, review, onSend, viewKey }: {
         {hasMore && <Button testId="pr-timeline-more" size="sm" busy={loading} disabled={loading} onClick={more}>{loading ? 'Loading…' : 'Load more'}</Button>}
         {full && <Button size="sm" variant="ghost" onClick={() => openUrl(pr.url)}>Open on GitHub to read the rest</Button>}
       </div>}
+      {pr && <CommentBox key="comment" target={target} testId="pr-comment"
+        onPending={comment => change(held => [...held, comment])}
+        onPosted={(id, comment) => change(held => held.map(c => c.id === id ? comment : c))}
+        onFailed={id => change(held => held.filter(c => c.id !== id))} />}
+      {pr && <div key="end" style={{ height: 32 }} />}
     </virtual-list>}
     {selectable && selected.length > 0 && <div style={{ ...row, justifyContent: 'center', paddingBottom: 12, paddingTop: 4, flexShrink: 0 }}><Label color={t.text} size={13}>{`${selected.length} selected`}</Label><Button variant="ghost" size="sm" onClick={() => review.updateDraft({ selected: [], findings: {} })}>Clear</Button><Button size="sm" icon="bot" onClick={onSend}>Send to agent</Button></div>}
-  </div>
+  </div></GithubImages>
 }
 
 function dotFor(event: PrTimelineEvent): { icon: string; tone: 'green' | 'red' | 'warning' | 'link' | 'plain' } {
@@ -164,10 +194,13 @@ function Body({ text }: { text: string }) {
   const t = useTheme(); const [clamped, setClamped] = useState(true)
   const lines = text.split('\n'); const tall = lines.length > 16
   return <div style={{ ...column, gap: 4, marginTop: 6, paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: tall ? 6 : 8, borderRadius: RADIUS.lg, backgroundColor: ink(t, .035), borderWidth: 1, borderColor: t.cardEdge }}>
-    <markdown source={tall && clamped ? lines.slice(0, 16).join('\n') : text} theme={markdownTheme(t)} onLinkClick={e => e.value && openUrl(e.value)} style={{ userSelect: 'text', color: t.text, fontSize: 14 }} />
+    <GithubMarkdown source={tall && clamped ? lines.slice(0, 16).join('\n') : text} theme={markdownTheme(t)} onLinkClick={e => e.value && openUrl(e.value)} style={{ userSelect: 'text', color: t.text, fontSize: 14 }} />
     {tall && <Button variant="ghost" size="sm" style={{ alignSelf: 'flex-start' }} onClick={() => setClamped(!clamped)}>{clamped ? 'Show more' : 'Show less'}</Button>}
   </div>
 }
+
+/** An inline comment is plain text unless it holds an image, which then draws (`GithubMarkdown`). */
+const hasImage = (body: string) => /!\[|<img\b/i.test(body) && githubSegments(body).some(s => s.kind === 'image')
 
 /** One inline comment of a review: the file and line it is on, then what was said. */
 function InlineComment({ path, line, body, finding, selected, onToggle }: { path: string; line?: number; body: string; finding: Finding | null; selected: string[]; onToggle: (finding: Finding) => void }) {
@@ -179,6 +212,8 @@ function InlineComment({ path, line, body, finding, selected, onToggle }: { path
       {line ? <Label color={t.textTertiary} size={12} lineHeight={16}>{`line ${line}`}</Label> : <Label color={t.textTertiary} size={12} lineHeight={16}>outdated</Label>}
       {finding && <Checkbox testId="pr-select-inline" aria-label="Select inline comment for agent" tone="neutral" checked={selected.includes(finding.id)} onCheckedChange={() => onToggle(finding)} />}
     </div>
-    <div style={{ paddingLeft: 10, paddingRight: 10, paddingTop: 6, paddingBottom: 6 }}><Label color={t.text} size={13} lineHeight={20} style={{ userSelect: 'text' }}>{body}</Label></div>
+    <div style={{ paddingLeft: 10, paddingRight: 10, paddingTop: 6, paddingBottom: 6 }}>{hasImage(body)
+      ? <GithubMarkdown source={body} theme={markdownTheme(t)} onLinkClick={e => e.value && openUrl(e.value)} style={{ userSelect: 'text', color: t.text, fontSize: 13 }} />
+      : <Label color={t.text} size={13} lineHeight={20} style={{ userSelect: 'text' }}>{body}</Label>}</div>
   </div>
 }

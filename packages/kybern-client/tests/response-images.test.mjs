@@ -5,6 +5,8 @@ import { imageSource, responseImages, imageSafeOutput, imageSafeValue, localImag
 test("image URLs retain machine-local paths and reject active or unknown schemes", () => {
   assert.deepEqual(imageSource("screens/first%20pass.png"), { kind: "local", value: "screens/first pass.png" })
   assert.deepEqual(imageSource("file:///workspace/a%20b.png"), { kind: "local", value: "/workspace/a b.png" })
+  assert.deepEqual(imageSource("D:\\cache\\images\\a%20b.png"), { kind: "local", value: "D:\\cache\\images\\a%20b.png" }, "a Windows drive path is a file, kept as written")
+  assert.deepEqual(imageSource("C:/Users/a.png"), { kind: "local", value: "C:/Users/a.png" })
   for (const src of ["javascript:alert(1)", "data:text/html;base64,YQ==", "data:image/svg+xml;base64,YQ==", "file://other/a.png", "//other/a.png", "%zz"]) assert.equal(imageSource(src), null)
 })
 

@@ -1,5 +1,5 @@
-//! Repository issues through the user's `gh` CLI (#217): `github.issue.list` and `github.issue.detail`,
-//! built like the pull request calls in `github.rs` and `github_review.rs`.
+//! Repository issues through the user's `gh` CLI (#217): `github.issue.list`, `github.issue.detail` and
+//! `github.issue.comment`, built like the pull request calls in `github.rs` and `github_review.rs`.
 
 use std::path::Path;
 
@@ -7,7 +7,7 @@ use anyhow::{Result, anyhow, ensure};
 use kybern_protocol::methods::*;
 use serde_json::Value;
 
-use crate::github::{avatar_url, run};
+use crate::github::{avatar_url, run, run_stdin};
 
 const LIST_FIELDS: &str =
     "number,title,url,state,stateReason,author,labels,assignees,milestone,createdAt,updatedAt,closedByPullRequestsReferences";
@@ -24,6 +24,8 @@ const MAX_COMMENTS: usize = 100;
 const MAX_LINKED: usize = 10;
 /// Characters kept of a body or a comment.
 const MAX_BODY: usize = 60_000;
+/// Most characters GitHub keeps in one comment.
+const MAX_COMMENT: usize = 65_536;
 /// Labels offered to the Labels filter.
 const MAX_REPO_LABELS: usize = 100;
 
@@ -253,6 +255,43 @@ pub async fn detail(gh: &str, cwd: &Path, number: u64) -> Result<IssueDetailResu
     })
 }
 
+/// A comment as GitHub's REST API answers a new one (`POST …/issues/{n}/comments`), in `github.issue.detail`'s shape: the
+/// GraphQL node id, so the timeline's copy of the same comment replaces it.
+pub(crate) fn parse_rest_comment(v: &Value) -> Option<IssueComment> {
+    let author = v.pointer("/user/login").and_then(Value::as_str).unwrap_or_default().to_owned();
+    let author_is_bot = v.pointer("/user/type").and_then(Value::as_str) == Some("Bot");
+    let url = text(v, "html_url");
+    Some(IssueComment {
+        id: v.get("node_id")?.as_str().filter(|id| !id.is_empty())?.to_owned(),
+        author_avatar_url: avatar_url(&url, &author, author_is_bot),
+        author,
+        author_is_bot,
+        body: truncated(&text(v, "body"), MAX_BODY),
+        created_at: time(v, "created_at")?,
+        url,
+    })
+}
+
+/// What `github.issue.comment` posts, or why it can't: a number, and Markdown GitHub accepts.
+fn validate_comment(number: u64, body: &str) -> Result<()> {
+    ensure!(number > 0, "Choose an issue number greater than zero.");
+    ensure!(!body.trim().is_empty(), "Write the comment first.");
+    ensure!(body.chars().count() <= MAX_COMMENT, "Shorten the comment to 65,536 characters or fewer.");
+    Ok(())
+}
+
+/// `github.issue.comment`: post `body` on issue (or pull request) `number` of the repository in `cwd`. The body goes in on
+/// standard input, so no part of it can be read as a flag.
+pub async fn comment(gh: &str, cwd: &Path, number: u64, body: &str) -> Result<IssueComment> {
+    validate_comment(number, body)?;
+    let endpoint = format!("repos/{{owner}}/{{repo}}/issues/{number}/comments");
+    let input = serde_json::json!({ "body": body }).to_string();
+    let json = run_stdin(cwd, gh, &["api", &endpoint, "--method", "POST", "--input", "-"], &input).await?;
+    let v: Value = serde_json::from_str(&json)
+        .map_err(|_| anyhow!("GitHub posted the comment, but its answer couldn't be read. Refresh to see it."))?;
+    parse_rest_comment(&v).ok_or_else(|| anyhow!("GitHub posted the comment, but its answer couldn't be read. Refresh to see it."))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,6 +403,30 @@ mod tests {
         assert!(parse_comment(&serde_json::json!({"author": {"login": "ada"}}), url).is_none());
     }
 
+    #[test]
+    fn a_new_comment_reads_like_a_listed_one() {
+        let v = serde_json::json!({
+            "id": 1, "node_id": "IC_9", "html_url": "https://github.com/acme/api/issues/12#issuecomment-1", "body": "Thanks",
+            "created_at": "2026-01-02T00:00:00Z", "user": {"login": "ada", "type": "User"}
+        });
+        let c = parse_rest_comment(&v).unwrap();
+        assert_eq!((c.id.as_str(), c.author.as_str(), c.body.as_str(), c.author_is_bot), ("IC_9", "ada", "Thanks", false));
+        assert_eq!(c.author_avatar_url.as_deref(), Some("https://github.com/ada.png?size=40"));
+        let mut bot = v.clone();
+        bot["user"]["type"] = "Bot".into();
+        assert!(parse_rest_comment(&bot).unwrap().author_is_bot);
+        assert!(parse_rest_comment(&serde_json::json!({"node_id": "IC_1"})).is_none(), "an answer without a time is refused");
+    }
+
+    #[test]
+    fn a_comment_needs_words_a_number_and_githubs_size() {
+        assert!(validate_comment(1, "Looks good").is_ok());
+        assert!(validate_comment(0, "x").is_err());
+        assert!(validate_comment(1, " \n\t").is_err());
+        assert!(validate_comment(1, &"é".repeat(MAX_COMMENT)).is_ok());
+        assert!(validate_comment(1, &"é".repeat(MAX_COMMENT + 1)).is_err());
+    }
+
     /// A fake `gh` that logs its arguments and answers `issue list`, `issue view`, `pr view` and `label list`.
     #[cfg(unix)]
     fn fake_gh(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
@@ -377,10 +440,12 @@ case "$1 $2" in
   "issue view") echo '{{"number":2,"title":"B","url":"https://github.com/acme/api/issues/2","state":"OPEN","author":{{"login":"ada"}},"createdAt":"2026-01-02T00:00:00Z","updatedAt":"2026-01-02T00:00:00Z","body":"Body","comments":[{{"id":"IC_1","author":{{"login":"grace"}},"body":"first","createdAt":"2026-01-03T00:00:00Z","url":"u1"}},{{"id":"IC_2","author":{{"login":"spam"}},"body":"hidden","createdAt":"2026-01-04T00:00:00Z","url":"u2","isMinimized":true}}],"closedByPullRequestsReferences":[{{"number":30,"repository":{{"name":"api","owner":{{"login":"acme"}}}}}}]}}' ;;
   "pr view") echo '{{"number":30,"title":"Fix B","state":"MERGED","url":"https://github.com/acme/api/pull/30"}}' ;;
   "label list") echo '[{{"name":"bug","color":"d73a4a"}}]' ;;
+  "api repos/{{owner}}/{{repo}}/issues/2/comments") cat > '{input}'; echo '{{"node_id":"IC_9","html_url":"https://github.com/acme/api/issues/2#issuecomment-9","body":"posted","created_at":"2026-01-05T00:00:00Z","user":{{"login":"ada","type":"User"}}}}' ;;
   *) echo "unexpected: $@" >&2; exit 1 ;;
 esac
 "#,
-            log = log.display()
+            log = log.display(),
+            input = dir.join("input.json").display()
         );
         kybern_protocol::process::write_executable(&script, &body).unwrap();
         (script, log)
@@ -418,6 +483,15 @@ esac
         assert!(calls.contains("pr view 30 --json number,title,state,url --repo acme/api"), "{calls}");
         assert_eq!(calls.matches("label list").count(), 1, "labels are read once a minute: {calls}");
         assert!(detail(&gh, &root, 0).await.is_err());
+
+        let body = "--web\n\"quoted\" `code`";
+        let posted = comment(&gh, &root, 2, body).await.unwrap();
+        assert_eq!((posted.id.as_str(), posted.author.as_str()), ("IC_9", "ada"));
+        let sent: Value = serde_json::from_str(&std::fs::read_to_string(root.join("bin").join("input.json")).unwrap()).unwrap();
+        assert_eq!(sent["body"], body, "the body goes in whole, on standard input");
+        let calls = std::fs::read_to_string(root.join("bin").join("calls.log")).unwrap();
+        assert!(calls.contains("api repos/{owner}/{repo}/issues/2/comments --method POST --input -"), "{calls}");
+        assert!(comment(&gh, &root, 2, "  ").await.is_err(), "an empty comment never reaches gh");
         let _ = std::fs::remove_dir_all(root);
     }
 }
@@ -437,6 +511,8 @@ case "$1 $2" in
   "issue list") echo '[{"number":2,"title":"B","url":"https://github.com/acme/api/issues/2","state":"OPEN","author":{"login":"ada"},"createdAt":"2026-01-02T00:00:00Z","updatedAt":"2026-01-02T00:00:00Z"},{"number":1,"title":"A","url":"https://github.com/acme/api/issues/1","state":"OPEN","author":{"login":"ada"},"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}]' ;;
   "issue view") echo '{"number":2,"title":"B","url":"https://github.com/acme/api/issues/2","state":"OPEN","author":{"login":"ada"},"createdAt":"2026-01-02T00:00:00Z","updatedAt":"2026-01-02T00:00:00Z","body":"Body","comments":[]}' ;;
   "label list") echo '[]' ;;
+  "api repos/{owner}/{repo}/issues/2/comments") cat > /dev/null; echo '{"node_id":"IC_9","html_url":"https://github.com/acme/api/issues/2#issuecomment-9","body":"posted","created_at":"2026-01-05T00:00:00Z","user":{"login":"ada"}}' ;;
+  "api repos/{owner}/{repo}/issues/3/comments") cat > /dev/null; echo 'gh: Must have push access to this repository. (HTTP 403)' >&2; exit 1 ;;
   *) echo "unexpected: $@" >&2; exit 1 ;;
 esac
 "#;
@@ -473,10 +549,22 @@ esac
         assert!(call(IssueList::NAME, json!({"project_id": project.id, "state": "merged"})).await.is_err());
         assert!(call(IssueList::NAME, json!({"project_id": uuid::Uuid::now_v7()})).await.is_err(), "unknown project");
 
+        // A comment comes back as the timeline lists it; one GitHub refuses says so, with the typed problem.
+        let posted: IssueComment = serde_json::from_value(
+            call(IssueCommentCreate::NAME, json!({"project_id": project.id, "number": 2, "body": "Thanks"})).await.unwrap(),
+        )
+        .unwrap();
+        assert_eq!((posted.id.as_str(), posted.body.as_str()), ("IC_9", "posted"));
+        let refused = call(IssueCommentCreate::NAME, json!({"project_id": project.id, "number": 3, "body": "Thanks"})).await.unwrap_err();
+        assert_eq!(refused.data.as_ref().unwrap()["problem"]["kind"].as_str(), Some("permission"), "{}", refused.message);
+        assert!(call(IssueCommentCreate::NAME, json!({"project_id": project.id, "number": 2, "body": " "})).await.is_err());
+
         // A signed-out `gh` reads like the pull request page's: the words and the typed problem to recover by.
-        for (method, params) in
-            [(IssueList::NAME, json!({"project_id": broken.id})), (IssueDetail::NAME, json!({"project_id": broken.id, "number": 2}))]
-        {
+        for (method, params) in [
+            (IssueList::NAME, json!({"project_id": broken.id})),
+            (IssueDetail::NAME, json!({"project_id": broken.id, "number": 2})),
+            (IssueCommentCreate::NAME, json!({"project_id": broken.id, "number": 2, "body": "Thanks"})),
+        ] {
             let error = call(method, params).await.unwrap_err();
             assert!(error.message.starts_with("gh isn't signed in"), "{}", error.message);
             let problem = &error.data.as_ref().unwrap()["problem"];

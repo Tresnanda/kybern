@@ -1,4 +1,5 @@
-/** ADE-85 Timeline on a single project: filters, selecting findings and "Address feedback" feed Send to agent. Mock RPC only. */
+/** ADE-85 Timeline on a single project: filters, selecting findings and "Address feedback" feed Send to agent; an image in a
+ * comment, and the comment box at the end (⌘↩ / Ctrl+Enter, shown at once, the draft kept across tabs). Mock RPC only. */
 import assert from 'node:assert/strict'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
@@ -9,7 +10,8 @@ import { actionFixture } from './verify.fixture.ts'
 const mode = process.argv.includes('--light') ? 'light' : 'dark'
 const out = process.env.KYBERN_VERIFY_OUTPUT ?? '/Users/mymac/projects/ade/.kybern-artifacts/ade-85/l3'
 mkdirSync(out, { recursive: true })
-const fixture = actionFixture()
+const fixture = actionFixture({ images: true })
+const send = process.platform === 'darwin' ? 'cmd-enter' : 'ctrl-enter'
 const f = await launchFixture(path.join(import.meta.dir, '../main.tsx'), { ...fixture.env, KYBERN_APPEARANCE: mode })
 const a = f.app
 const shot = async (name: string) => { const file = `${out}/${name}-${mode}.png`; try { captureWindow(f.pid, file) } catch { await a.screenshot({ path: file }) } }
@@ -39,6 +41,36 @@ try {
   await Bun.sleep(400)
   assert.match(await painted(), /3 selected/, 'review summary plus two inline comments')
   await shot('7-timeline-selected')
+  await a.getByTestId('pr-timeline-entries').wheel(0, -100000); await Bun.sleep(400)
+  await click('pr-timeline-more')
+  await a.getByTestId('pr-timeline-entries').wheel(0, -100000); await Bun.sleep(800)
+
+  // The last comment's image loads through the project's machine.
+  { const end = Date.now() + 15000; while (Date.now() < end && (await a.getByTestId('response-image').count()) < 1) await Bun.sleep(250) }
+  assert.equal(await a.getByTestId('response-image').count(), 1, 'the comment image is drawn')
+  assert.doesNotMatch(await painted(), /<img/, 'never as HTML')
+
+  // The comment box: no menu, ⌘↩ / Ctrl+Enter posts, and the comment shows at once.
+  await a.getByTestId('pr-comment-input').click()
+  await a.getByTestId('pr-comment-input').fill('Thanks, merging after the deploy.')
+  await shot('8-timeline-comment-box')
+  await a.getByTestId('pr-comment-input').press(send)
+  await Bun.sleep(150)
+  assert.match(await painted(), /Thanks, merging after the deploy/, 'shown before GitHub answers')
+  await Bun.sleep(900)
+  const posted = fixture.params.filter(p => p.method === 'github.issue.comment').map(p => p.params)
+  assert.deepEqual(posted, [{ project_id: 'pages-fixture', number: 108, body: 'Thanks, merging after the deploy.' }])
+  assert.equal(await a.getByTestId('pr-timeline-IC_posted_1').count(), 1, "GitHub's copy replaced the pending one")
+
+  // The draft survives a tab switch.
+  await a.getByTestId('pr-comment-input').fill('Draft on the timeline')
+  await Bun.sleep(300)
+  await click('pr-tab-summary')
+  await click('pr-tab-timeline')
+  await a.getByTestId('pr-timeline-entries').wheel(0, -100000); await Bun.sleep(800)
+  assert.match(await painted(), /Draft on the timeline/, 'the draft is kept')
+  assert.match(await painted(), /Thanks, merging after the deploy/, 'the posted comment is kept')
+  await shot('9-timeline-commented')
   console.log(`PASS ${mode}: timeline filters, selection and Address feedback`)
 } catch (error) {
   await shot('failure-timeline').catch(() => {})

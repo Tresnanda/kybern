@@ -312,6 +312,8 @@ expression: scopes
   - "orchestration:read"
 - - github.issue.detail
   - "orchestration:read"
+- - github.issue.comment
+  - "orchestration:operate"
 - - github.actions.runs
   - "orchestration:read"
 - - github.actions.run

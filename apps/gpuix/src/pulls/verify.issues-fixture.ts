@@ -52,9 +52,24 @@ const BODY = `Kybern shows a project’s pull requests and Actions runs, but not
 
 A project with a GitHub remote lists its issues, filters them, and opens one with its comments.`
 
+/** #228: GitHub's own HTML image, a Markdown image, and an image GitHub doesn't share (its caption shows instead). */
+export const IMAGES_BODY = `Pairing stops at the second step when the daemon is reached over Tailscale.
+
+<img width="512" height="320" alt="Pairing error" src="https://github.com/user-attachments/assets/2f0c6a1e-1111-4a5b-9c3d-000000000228" />
+
+The daemon's log:
+
+![Daemon log](https://github.com/user-attachments/assets/2f0c6a1e-2222-4a5b-9c3d-000000000228)
+
+<img alt="Phone settings" src="https://github.com/user-attachments/assets/missing-0000-0000-0000-000000000228">`
+
 /** `github.issue.detail`: #217 has a description, comments and two pull requests; the others a short description and one comment. */
 export function issueDetail(now: string, number: number): IssueDetailResult {
   const issue = allIssues(now).find(i => i.number === number) ?? allIssues(now)[0]!
+  if (number === 228) return {
+    issue, comment_count: 1, body: IMAGES_BODY,
+    comments: [{ id: 'c-228', author: 'arifw', body: 'Same on Android 15:\n\n![Android](https://github.com/user-attachments/assets/2f0c6a1e-2222-4a5b-9c3d-000000000228)', created_at: hours(now, 30), url: `${issue.url}#issuecomment-1` }],
+  }
   if (number !== 217) return { issue, body: `Details of “${issue.title}”.`, comments: [{ id: `c-${number}`, author: 'arifw', body: 'I can reproduce this.', created_at: hours(now, 30), url: `${issue.url}#issuecomment-1` }], comment_count: 1 }
   return {
     issue, body: BODY, comment_count: 2,

@@ -60,7 +60,11 @@ pub(crate) async fn run(cwd: &Path, program: &str, args: &[&str]) -> Result<Stri
 pub(crate) async fn run_stdin(cwd: &Path, program: &str, args: &[&str], input: &str) -> Result<String> {
     let mut child = spawn(cwd, program, args, std::process::Stdio::piped())?;
     let mut stdin = child.stdin.take().context("program stdin")?;
-    tokio::io::AsyncWriteExt::write_all(&mut stdin, input.as_bytes()).await.with_context(|| format!("write to {program}"))?;
+    // A program that fails before reading its input (signed out) closes the pipe: its exit status and stderr say why.
+    match tokio::io::AsyncWriteExt::write_all(&mut stdin, input.as_bytes()).await {
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {}
+        other => other.with_context(|| format!("write to {program}"))?,
+    }
     drop(stdin);
     let out = child.wait_with_output().await.with_context(|| format!("run {program}"))?;
     if !out.status.success() {

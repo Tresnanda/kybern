@@ -248,6 +248,7 @@ fn main() {
     method::<PrAction>(&mut methods);
     method::<IssueList>(&mut methods);
     method::<IssueDetail>(&mut methods);
+    method::<IssueCommentCreate>(&mut methods);
     method::<ActionsRuns>(&mut methods);
     method::<ActionsRun>(&mut methods);
     method::<ActionsLog>(&mut methods);

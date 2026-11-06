@@ -6,7 +6,7 @@ import { CancelCircleIcon, CheckmarkCircle02Icon, GitMergeIcon, LinkSquare02Icon
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { agoPhrase } from '@/views/pullRequests/prFormat'
 import { FILL_ISLAND } from '../../MatrixLoader.tsx'
-import type { Issue, IssueDetailResult, IssueLinkedPull, Project } from '../../../../../packages/kybern-client/src/types.ts'
+import type { Issue, IssueComment, IssueDetailResult, IssueLinkedPull, Project } from '../../../../../packages/kybern-client/src/types.ts'
 import { ensureLoaded, useComposer } from '../../composer/store.ts'
 import { glyph, Icon } from '../../icons.tsx'
 import { Avatar } from '../../kit/Avatar.tsx'
@@ -16,7 +16,6 @@ import { InspectorGroup, InspectorRow } from '../../kit/Inspector.tsx'
 import { StatusChip } from '../../kit/StatusChip.tsx'
 import { SpinIcon } from '../../kit/Spin.tsx'
 import { N } from '../../nav/glyphs.ts'
-import { DocumentMarkdown } from '../../native/markdownDocument.tsx'
 import { Menu, MenuItem } from '../../nav/overlay.tsx'
 import { cachedMarkdownTheme as markdownTheme, alpha } from '../../transcript/kit.tsx'
 import { ink, Label, useTheme } from '../../ui.tsx'
@@ -30,6 +29,9 @@ import { PR_SCROLL_LAYOUT } from '../scroll-layout.ts'
 import { githubPull, githubRepo } from '../tabTargets.ts'
 import { timelineItems } from '../timeline/model.ts'
 import { TimelineRow } from '../timeline/Timeline.tsx'
+import { CommentBox } from '../comment/CommentBox.tsx'
+import { GithubImages, GithubMarkdown } from '../markdown/GithubMarkdown.tsx'
+import type { GithubImageContext } from '../markdown/githubImage.ts'
 import { commentEvents, stateWord, type IssueStateWord } from './model.ts'
 import { startIssueThread } from './startThread.ts'
 import { useIssue } from './useIssue.ts'
@@ -102,7 +104,7 @@ function Reading({ detail, compact }: { detail: IssueDetailResult; compact: bool
   const t = useTheme()
   const { issue } = detail
   const theme = useMemo(() => { const base = markdownTheme(t); return { ...base, markdown: { ...base.markdown, codeWrap: true } } }, [t])
-  const body = detail.body.replace(/<!--[\s\S]*?-->/g, '').trim()
+  const body = detail.body.trim()
   return <div testId="issue-reading" style={{ ...column, width: '100%', maxWidth: COLUMN, alignSelf: 'center', paddingLeft: 24, paddingRight: 24, paddingTop: compact ? 12 : 28, paddingBottom: 24 }}>
     <div style={{ ...column, gap: 10 }}>
       <Label color={t.text} size={compact ? 20 : 22} lineHeight={compact ? 26 : 28} weight={600}>{issue.title}</Label>
@@ -113,14 +115,25 @@ function Reading({ detail, compact }: { detail: IssueDetailResult; compact: bool
       </div>
     </div>
     <div testId="issue-body" style={{ ...column, maxWidth: READING, marginTop: 24, paddingTop: 22, borderTopWidth: 1, borderColor: t.surfaceDivider }}>
-      <DocumentMarkdown source={body || 'No description provided.'} theme={theme} style={{ color: t.text, fontSize: 14, userSelect: 'text' }} onLinkClick={e => e.value && openUrl(e.value)} />
+      <GithubMarkdown document source={body || 'No description provided.'} theme={theme} style={{ color: t.text, fontSize: 14, userSelect: 'text' }} onLinkClick={e => e.value && openUrl(e.value)} />
     </div>
   </div>
 }
 
 export function IssueDetail({ project, number, repo, onBack, showBack = true, width }: { project: Project; number: number; /** Group projects: the member repository the issue is in. */ repo?: string; onBack: () => void; showBack?: boolean; width: number }) {
   const t = useTheme()
-  const { detail, loading, error, refresh } = useIssue(project.id, number, repo)
+  const { detail, loading, error, refresh, update } = useIssue(project.id, number, repo)
+  const target = useMemo<GithubImageContext>(() => ({ projectId: project.id, number, ...(repo ? { repo } : {}) }), [project.id, number, repo])
+  // A comment posted from the box: shown at once, then GitHub's copy; one that failed goes back to the box.
+  const onPending = useCallback((comment: IssueComment) => update(d => ({ ...d, comments: [...d.comments, comment], comment_count: d.comment_count + 1 })), [update])
+  // A refresh may have landed meanwhile: it dropped the pending comment, or already brings GitHub's copy.
+  const onPosted = useCallback((id: string, comment: IssueComment) => update(d => {
+    const pending = d.comments.some(c => c.id === id), known = d.comments.some(c => c.id === comment.id)
+    if (!pending) return known ? d : { ...d, comments: [...d.comments, comment], comment_count: d.comment_count + 1 }
+    const comments = d.comments.filter(c => c.id !== comment.id).map(c => c.id === id ? comment : c)
+    return { ...d, comments, comment_count: known ? d.comment_count - 1 : d.comment_count }
+  }), [update])
+  const onFailed = useCallback((id: string) => update(d => d.comments.some(c => c.id === id) ? { ...d, comments: d.comments.filter(c => c.id !== id), comment_count: d.comment_count - 1 } : d), [update])
   const settings = useComposer(s => s.settings)
   useEffect(() => { ensureLoaded() }, [])
   const [starting, setStarting] = useState(false)
@@ -144,6 +157,7 @@ export function IssueDetail({ project, number, repo, onBack, showBack = true, wi
     {unread > 0 && issue && <div key="more" style={{ ...row, justifyContent: 'center', paddingLeft: 24, paddingRight: 24, paddingBottom: 24, paddingTop: 4 }}>
       <Button size="sm" variant="ghost" testId="issue-more-comments" onClick={() => openUrl(issue.url)}>Open on GitHub to read the rest</Button>
     </div>}
+    <CommentBox key="comment" target={target} onPending={onPending} onPosted={onPosted} onFailed={onFailed} testId="issue-comment" />
     <div key="end" style={{ height: 48 }} />
   </>
   return <div testId="issue-detail" style={{ ...column, flexGrow: 1, minHeight: 0, minWidth: 0 }}>
@@ -163,7 +177,7 @@ export function IssueDetail({ project, number, repo, onBack, showBack = true, wi
     </div>
     {error && !detail && <div style={{ padding: 24 }}><Problem error={error} projectId={project.id} noun="this issue" refresh={refresh} /></div>}
     {!detail && !error && <div style={{ padding: 24 }}><PrLoading label="Loading issue…" /></div>}
-    {detail && (compact
+    {detail && <GithubImages value={target}>{compact
       ? <virtual-list {...PR_SCROLL_LAYOUT} testId="issue-scroll" estimatedItemHeight={200} style={{ flexGrow: 1, minHeight: 0 }}>
         <div key="side" style={{ ...column, paddingLeft: 24, paddingRight: 24, paddingTop: 12 }}>{side}</div>
         <Reading key="reading" detail={detail} compact />
@@ -175,6 +189,6 @@ export function IssueDetail({ project, number, repo, onBack, showBack = true, wi
           {rows}
         </virtual-list>
         {side}
-      </div>)}
+      </div>}</GithubImages>}
   </div>
 }
