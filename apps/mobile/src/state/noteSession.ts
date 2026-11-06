@@ -132,7 +132,7 @@ export class NoteSession {
   private pendingTimer?: ReturnType<typeof setTimeout>;
   private watchPending() {
     clearTimeout(this.pendingTimer);
-    if (!(this.base as (Note & { pending_operation_id?: string }) | null)?.pending_operation_id || !this.off) return;
+    if (!(this.base as (Note & { pending_operation_id?: string }) | null)?.pending_operation_id || !this.off || this.status === "error" || this.conflict) return;
     this.pendingTimer = setTimeout(async () => {
       await this.sync();
       this.watchPending();

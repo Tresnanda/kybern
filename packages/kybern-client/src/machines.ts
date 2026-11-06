@@ -1051,7 +1051,13 @@ export class MachineSet {
       const identity = patch.id ? { id: patch.id } : patch.key ? { key: patch.key } : { thread_id: patch.thread_id };
       const cached = await cache.read(machineId, get, identity) as Record<string, Record<string, unknown>> | undefined;
       const pending = cached?.[method === 'notes.update' ? 'note' : 'task'];
-      if (pending?.pending_operation_id) live = undefined;
+      if (pending?.pending_operation_id) {
+        const resolved = await this.itemCall(machineId, get, identity) as Record<string, Record<string, unknown>>;
+        const owner = resolved[method === 'notes.update' ? 'note' : 'task'];
+        if (owner?.pending_error) throw Object.assign(new Error(String(owner.pending_error)), { code: -32004 });
+        if (owner && !owner.pending_operation_id) params = { ...patch, expected_revision: owner.revision };
+        live = undefined;
+      }
     }
     if (live) {
       let value = await live();
