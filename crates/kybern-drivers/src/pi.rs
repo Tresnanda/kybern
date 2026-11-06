@@ -692,7 +692,7 @@ impl PiSession {
                     st.message_seq += 1;
                     let id = format!("command-{}", st.message_seq);
                     let command = st.native_command.as_deref().unwrap_or("command");
-                    let text = format!("### omp · /{command}\n\n{text}");
+                    let text = format!("### omp · /{command}\n\n{}", crate::account_auth::strip_ansi(text));
                     drop(st);
                     self.emit(DriverEvent::MessageCompleted { message_id: id, origin: EventOrigin::Root, text, thinking: None }).await;
                 }
@@ -2138,7 +2138,7 @@ mod tests {
         assert_eq!(commands[0].aliases, ["limits"]);
         assert_eq!(commands[0].input_hint.as_deref(), Some("account"));
         assert_eq!(commands[0].subcommands[0].name, "all");
-        session.handle_frame(json!({"type":"command_output","text":"**Available:** 90%"})).await;
+        session.handle_frame(json!({"type":"command_output","text":"**Available:** \u{1b}[32m90%\u{1b}[0m"})).await;
         let Some(DriverEvent::MessageCompleted { text, .. }) = rx.recv().await else { panic!("output missing") };
         assert_eq!(text, "### omp · /usage\n\n**Available:** 90%");
         child.kill().await;

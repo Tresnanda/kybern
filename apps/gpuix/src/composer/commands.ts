@@ -60,7 +60,7 @@ export function useThreadCommands(thread: StateThread | null, attach: () => void
     // The names, hints and order are the desktop's (`lib/threadCommands.ts`); only the icons and handlers are ours.
     return threadCommandSpecs({ freeChat, canCompact, providerKind: thread.provider.kind, nativeCommands }).map((spec): SlashCommand =>
       spec.kind === 'native'
-        ? { name: spec.name, invocation: spec.invocation, hint: spec.hint, icon: G.terminal, insert: true, run: () => {} }
+        ? { name: spec.name, label: spec.label, invocation: spec.invocation, hint: spec.hint, icon: G.terminal, insert: true, run: () => {} }
         : { name: spec.name, hint: spec.hint, ...handlers[spec.id] })
   }, [thread?.id, thread?.project_id, thread?.provider.kind, freeChat, canCompact, nativeCommands, attach])
 }

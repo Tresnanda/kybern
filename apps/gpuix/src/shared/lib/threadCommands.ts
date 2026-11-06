@@ -9,14 +9,14 @@ export type ThreadCommandId =
   | "resume" | "sessions" | "compact" | "new" | "reconnect" | "stop" | "activity" | "agents" | "attach"
   | "terminal" | "changes" | "files" | "environment" | "pr" | "archive" | "settings" | "usage"
 
-/** Names a harness may also define; its own command gets a `harness:` prefix so both stay reachable. */
+/** Names a harness may also define; its own short name prefixes collisions so both stay reachable. */
 export { LOCAL_COMMAND_NAMES }
 
 export interface NativeThreadCommand { name: string; description: string }
 
 export type ThreadCommandSpec =
   | { kind: "local"; id: ThreadCommandId; name: ThreadCommandId; hint: string }
-  | { kind: "native"; name: string; invocation: string; hint: string }
+  | { kind: "native"; name: string; label: string; invocation: string; hint: string }
 
 export function threadCommandSpecs(options: { freeChat: boolean; canCompact: boolean; providerKind?: ProviderKind; nativeCommands: readonly NativeThreadCommand[] }): ThreadCommandSpec[] {
   const { freeChat, canCompact, providerKind, nativeCommands } = options
@@ -28,6 +28,7 @@ export function threadCommandSpecs(options: { freeChat: boolean; canCompact: boo
     ...nativeCommandSpecs(nativeCommands, providerKind).map((command): ThreadCommandSpec => ({
       kind: "native",
       name: command.name,
+      label: command.label,
       invocation: command.invocation,
       hint: `${PROVIDER_LABEL[providerKind ?? "codex"]} · ${command.description}`,
     })),

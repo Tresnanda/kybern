@@ -15,7 +15,7 @@ for (const appearance of ['dark','light']) {
     await Bun.sleep(700)
     await f.app.screenshot({path:path.join(out,`usage-${appearance}.png`)})
     await f.app.getByTestId('composer').fill('/')
-    await waitForPainted(f.app, 'harness:usage')
+    await waitForPainted(f.app, 'omp:usage')
     await f.app.screenshot({path:path.join(out,`menu-${appearance}.png`)})
   } finally { await f.close() }
 }

@@ -14,10 +14,10 @@ describe('thread slash commands (shared with the desktop)', () => {
     expect(names(specs)).toEqual(['resume', 'sessions', 'new', 'reconnect', 'stop', 'activity', 'agents', 'attach', 'terminal', 'archive', 'settings', 'usage'])
     expect(specs.find(spec => spec.name === 'new')?.hint).toBe('Start a new free chat')
   })
-  test('harness commands come after compact, collide through a harness: prefix, and never repeat compact', () => {
+  test('harness commands come after compact, use their short name for collisions, and never repeat compact', () => {
     const specs = threadCommandSpecs({ freeChat: false, canCompact: true, providerKind: 'claude-code', nativeCommands: native })
-    expect(names(specs).slice(0, 6)).toEqual(['resume', 'sessions', 'compact', 'review', 'harness:stop', 'new'])
-    expect(specs.find(spec => spec.name === 'harness:stop')).toMatchObject({ kind: 'native', invocation: 'stop' })
+    expect(names(specs).slice(0, 6)).toEqual(['resume', 'sessions', 'compact', 'review', 'claude:stop', 'new'])
+    expect(specs.find(spec => spec.name === 'claude:stop')).toMatchObject({ kind: 'native', invocation: 'stop', label: 'Stop', hint: 'Claude Code · Harness stop' })
     expect(specs.find(spec => spec.name === 'review')?.hint).toBe('Claude Code · Review a diff')
   })
   test('every local command is reserved against harness names', () => {
