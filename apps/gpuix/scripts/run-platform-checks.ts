@@ -56,6 +56,10 @@ const CHECKS: Record<string, Check> = {
     description: 'Rounded overflow clip: hit tests, painted corners, cached replay, virtual list, code scroll/wrap, dark/light x motion',
     runs: () => [{ name: 'clip', args: [native('clip-check.ts')], minutes: 25 }],
   },
+  'diff-wrap': {
+    description: 'Soft-wrapped <diff> (Pull requests "Wrap lines"): first-line numbers, full row tints, line clicks, no horizontal scroll, width re-measure, exact anchors inside wrapped rows, Show more; dark/light',
+    runs: ({ capture }) => capture === 'none' ? [] : [{ name: 'diff-wrap', args: [native('diff-wrap-check.ts')], minutes: 10 }],
+  },
   rounded: {
     description: 'Rounded input backgrounds: painted corners, outset clamps, wrapped fragments, selection overlay',
     runs: () => [{ name: 'rounded', args: [native('rounded-check.ts')], minutes: 15 }],

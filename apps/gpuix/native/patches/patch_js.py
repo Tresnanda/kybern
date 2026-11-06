@@ -71,6 +71,7 @@ edit('dist/renderer-state.d.ts', 'import type { EventPayload }', 'export declare
 edit('dist/host.d.ts', '"setWindowKeyEvents" |', '"resolveKeyEvent" | "setCloseGuard" | "resolveCloseRequest" | "setWindowKeyEvents" |')
 edit('dist/host.d.ts', '"setWindowKeyEvents" |', '"setSubtreeTranslation" | "setWindowKeyEvents" |')
 edit('dist/host.d.ts', 'export interface CodeProps extends HostProps {', 'export interface CodeProps extends HostProps {\n    /** Wrap highlighted lines at the available width. */\n    softWrap?: boolean;')
+edit('dist/host.d.ts', 'export interface DiffProps extends HostProps {', 'export interface DiffProps extends HostProps {\n    /** Wrap long lines at the available width (no horizontal scroller); rows grow to fit. */\n    softWrap?: boolean;')
 edit('dist/host.d.ts', 'export interface MotionStyle {', 'export interface MotionStyle {\n    translateX?: number;\n    translateY?: number;')
 edit('dist/host.d.ts', 'export interface MotionStyle {', 'export interface MotionStyle {\n    /** SVG rotation, in degrees about the centre. */\n    rotate?: number;')
 edit('dist/host.d.ts', 'export interface MotionTransition {', 'export interface MotionTransition {\n    stiffness?: number;\n    damping?: number;\n    mass?: number;')
