@@ -42,8 +42,12 @@ repo=https://github.com/Tresnanda/gpuix.git
 # gpuix `diff-wrap`: that plus `<diff softWrap>` (wrapped line rows grow, numbers on the first visual line, no
 # horizontal scroller, measured rows with per-row hints; code_wrap shared with `<code softWrap>`); no zed change.
 # Built and checked on macOS, then fast-forwarded into the forks' `next` and `kybern` (gpuix ce3961a, zed a2275d8, 2026-11-06).
-commit=ce3961a95684f3c0a6775e372f49b77ac1d716c1
+commit=efb24b4cf07ee38383f48c2ccbf93d7339e2a80e
 # The zed submodule commit `commit` records; update.sh refuses a checkout that differs.
 zed=a2275d84c575f48d149e8f1768248c843fc66040
 # The upstream tag `commit` is based on. It must be `@gpuix/native@<VERSION>`.
 upstream=@gpuix/native@0.11.0
+
+# gpuix generated-files: Markdown linkContextMenu events carry the hit-tested URL and pointer position.
+# No zed or shader change. Built on Windows and macOS; fast-forwarded into
+# gpuix next and kybern at efb24b4 (2026-11-07).

@@ -1,6 +1,7 @@
 import path from 'node:path'
 import { useSyncExternalStore } from 'react'
-import { getState } from '../state.ts'
+import { machineHub } from '../machines/index.ts'
+import { getState, machineOfThreadId, ownProjectId } from '../state.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { chooseTab, setDock } from './store.ts'
 export interface ExplorerContext { environmentId: string; revision: number; threadId: string; projectId: string; cwd: string; projectRoot: string }
@@ -8,9 +9,10 @@ export interface ExplorerSelection extends ExplorerContext { path: string; ances
 /** files.list/read are rooted at the project, so never map a different worktree
  * onto a same-named project file. The request also expires on workspace changes. */
 export function explorerSelection(context: ExplorerContext, absolute: string): ExplorerSelection | null {
-  const relative = path.relative(context.projectRoot, absolute)
-  if (!relative || path.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${path.sep}`)) return null
-  const parts = relative.split(path.sep), ancestors = parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join('/'))
+  const paths = /^[a-z]:[\\/]/i.test(context.projectRoot) ? path.win32 : path.posix
+  const relative = paths.relative(context.projectRoot, absolute)
+  if (!relative || paths.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${paths.sep}`)) return null
+  const parts = relative.split(paths.sep), ancestors = parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join('/'))
   return { ...context, path: parts.join('/'), ancestors }
 }
 export function sameExplorerContext(a: ExplorerContext, b: ExplorerContext) { return a.environmentId === b.environmentId && a.revision === b.revision && a.threadId === b.threadId && a.projectId === b.projectId && a.cwd === b.cwd && a.projectRoot === b.projectRoot }
@@ -18,7 +20,9 @@ let pending: ExplorerSelection | null = null
 const listeners = new Set<() => void>(), emit = () => listeners.forEach(l => l())
 function contextFor(threadId: string, projectId: string): ExplorerContext | null {
   const state = getState(), thread = state.threads.find(t => t.id === threadId && t.project_id === projectId), project = state.projects.find(p => p.id === projectId), environment = activeEnvironment()
-  return thread && project ? { environmentId: environment.id, revision: environment.revision, threadId, projectId, cwd: thread.cwd, projectRoot: project.path } : null
+  const machine = machineOfThreadId(threadId) ?? machineHub().localMachineId
+  const instance = thread && machineHub().view().projects.flatMap(p => p.instances).find(p => p.machineId === machine && p.project.id === ownProjectId(thread))
+  return thread && project ? { environmentId: environment.id, revision: environment.revision, threadId, projectId, cwd: thread.cwd, projectRoot: instance?.project.path ?? project.path } : null
 }
 export function canShowFileInExplorer(threadId: string, projectId: string, absolute: string) { const context = contextFor(threadId, projectId); return !!context && !!explorerSelection(context, absolute) }
 export function showFileInExplorer(threadId: string, projectId: string, absolute: string) {
