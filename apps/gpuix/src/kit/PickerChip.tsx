@@ -44,6 +44,8 @@ export interface PickerChipProps {
   /** An unselected chip reads in secondary ink until hovered (a filter row), instead of full ink. */
   muted?: boolean
   size?: 'sm' | 'md'
+  /** The size's rounded rectangle instead of a pill: in a toolbar row beside a segmented control and a search field. */
+  square?: boolean
   disabled?: boolean
   /** Let the chip shrink and its label truncate (a footer row that must fit); `maxWidth` caps it. */
   truncate?: boolean
@@ -56,7 +58,7 @@ export interface PickerChipProps {
   style?: StyleDesc
 }
 
-export function PickerChip({ children, icon, mark, dot, lead, secondary, chevron = true, open = false, selected = false, neutral = false, quiet = false, bare = false, muted = false, size = 'md', disabled = false, truncate = false, maxWidth, onClick, onKeyboard, label, testId, style }: PickerChipProps) {
+export function PickerChip({ children, icon, mark, dot, lead, secondary, chevron = true, open = false, selected = false, neutral = false, quiet = false, bare = false, muted = false, size = 'md', square = false, disabled = false, truncate = false, maxWidth, onClick, onKeyboard, label, testId, style }: PickerChipProps) {
   const t = useTheme()
   const c = useControls()
   const g = CONTROL[size]
@@ -86,7 +88,7 @@ export function PickerChip({ children, icon, mark, dot, lead, secondary, chevron
       paintTransform={pressTransform(!disabled && !!onClick, SCALE.large)}
       style={{
         display: 'flex', alignItems: 'center', gap: size === 'sm' ? 5 : 6, height: g.height, ...(truncate ? { minWidth: 0, flexShrink: 1 } : { flexShrink: 0 }), ...(maxWidth ? { maxWidth, minWidth: 0 } : {}),
-        paddingLeft: hasLead ? 8 : 10, paddingRight: chevron ? 7 : 10, borderRadius: RADIUS.pill, backgroundColor: rest, cursor: disabled ? 'default' : 'pointer',
+        paddingLeft: hasLead ? 8 : 10, paddingRight: chevron ? 7 : 10, borderRadius: square ? g.radius : RADIUS.pill, backgroundColor: rest, cursor: disabled ? 'default' : 'pointer',
         ...(disabled ? {} : { hover: { backgroundColor: hoverBg }, active: { backgroundColor: selected ? selectedBg : c.chip.open }, focusVisible: { outlineWidth: 2, outlineColor: c.focus, outlineOffset: 0 } }),
         ...style,
       }}
