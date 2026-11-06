@@ -1,6 +1,6 @@
 // On-screen check of failed turns (#234): a signed-out agent paints "Claude Code is signed out" with Sign in and Use another account, a
 // lost connection paints its headline with Try again, the harness's technical text stays behind Show details, and a failure Kybern cannot
-// name keeps the plain error line. Light and dark screenshots go to KYBERN_VERIFY_OUTPUT, else native/build/errors-p5.
+// name still reads as words. Light and dark screenshots go to KYBERN_VERIFY_OUTPUT, else native/build/errors-p5.
 //   bun scripts/errors-p5-check.ts
 import assert from 'node:assert/strict'
 import path from 'node:path'
@@ -36,8 +36,8 @@ async function run(appearance: 'light' | 'dark') {
       assert.ok(text.includes('Show details'), 'the disclosure is painted')
     })
 
-    await step(`${appearance}: a failure Kybern cannot name keeps the plain line`, async () => {
-      assert.ok(text.includes('claude: error_during_execution'), 'the unnamed failure is still shown')
+    await step(`${appearance}: a failure Kybern cannot name is still a row, not a red line`, async () => {
+      assert.ok(text.includes("Couldn't finish this reply"), 'the unnamed failure gets a plain headline')
     })
     await Bun.sleep(300)
     await capture(f, path.join(out, `errors-p5-${appearance}.png`))
