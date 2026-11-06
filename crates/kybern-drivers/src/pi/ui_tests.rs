@@ -11,6 +11,10 @@ struct UiHarness {
 
 impl UiHarness {
     fn new(event_capacity: usize) -> Self {
+        Self::with_extension(event_capacity, false)
+    }
+
+    fn with_extension(event_capacity: usize, extension: bool) -> Self {
         let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
         let (events, receiver) = mpsc::channel(event_capacity);
         let session = Arc::new(PiSession {
@@ -23,9 +27,9 @@ impl UiHarness {
             ready: Mutex::new(None),
             initialized: tokio::sync::watch::channel(Some(Ok(()))).1,
             command_gate: Mutex::new(()),
-            extension: None,
+            extension: extension.then(|| extension::StagedExtension::new(PermissionMode::FullAccess).unwrap()),
             pending_app_tools: Mutex::new(HashMap::new()),
-            app_tool_names: extension::DEFAULT_APP_TOOL_NAMES.iter().map(|name| (*name).to_string()).collect(),
+            app_tool_names: extension::APP_TOOL_NAMES.iter().map(|name| (*name).to_string()).collect(),
         });
         let handle = Arc::new(Handle(session.clone(), crate::ndjson::SessionLifetime::new(child)));
         Self { session, handle, events: receiver }
@@ -122,4 +126,32 @@ async fn permission_response_after_stop_is_rejected_and_withdrawal_owns_cancella
     assert_eq!(wire["id"], "stopped");
     assert_eq!(wire["cancelled"], true);
     assert!(matches!(harness.next_event().await, DriverEvent::PermissionWithdrawn { request_id } if request_id == "stopped"));
+}
+
+#[tokio::test]
+async fn app_cards_survive_two_minutes_and_only_daemon_answers_or_stop_finish_them() {
+    use base64::Engine;
+    for name in ["kybern_ask_user", "kybern_request_pick", "kybern_request_secret", "kybern_html_publish", "kybern_note_create"] {
+        let mut harness = UiHarness::with_extension(8, true);
+        let title = format!(
+            "{}{}",
+            extension::APP_TOOL_TITLE_PREFIX,
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+                json!({
+                    "version":1, "id":"wait", "name":name, "arguments":{}, "toolCallId":"tool-wait"
+                })
+                .to_string()
+            )
+        );
+        harness.session.handle_ui_request(&json!({"id":"wait", "method":"input", "title":title})).await;
+        assert!(matches!(harness.next_event().await, DriverEvent::AppToolRequest { .. }));
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(121)).await;
+        tokio::task::yield_now().await;
+        assert!(harness.session.pending_app_tools.lock().await.contains_key("wait"), "{name} was expired by the driver");
+        tokio::time::resume();
+        harness.handle.respond_app_tool("wait", Ok(json!({"status":"answered"}))).await.unwrap();
+        assert!(harness.wire().await["value"].is_string());
+        assert!(harness.session.pending_app_tools.lock().await.is_empty());
+    }
 }

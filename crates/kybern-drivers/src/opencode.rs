@@ -611,6 +611,8 @@ fn mcp_config(base: Option<&String>, bridge: &NativeToolBridge) -> Result<Value>
             "url": endpoint,
             "enabled": true,
             "oauth": false,
+            // Kybern owns person-facing waits; both config APIs map this to tool execution.
+            "timeout": 21_600_000,
             "headers": { "Authorization": format!("Bearer {authorization}") },
         }),
     );
@@ -2078,6 +2080,7 @@ mod tests {
         let value: Value = serde_json::from_str(&config).unwrap();
         assert_eq!(value["theme"], "dark");
         assert_eq!(value["mcp"]["kybern"]["type"], "remote");
+        assert_eq!(value["mcp"]["kybern"]["timeout"], 21_600_000, "human waits outlive short MCP defaults");
         assert_eq!(value["mcp"]["kybern"]["headers"]["Authorization"], "Bearer session-capability");
         assert_eq!(value["tools"]["*"], false);
         assert_eq!(value["tools"]["kybern_*"], true);

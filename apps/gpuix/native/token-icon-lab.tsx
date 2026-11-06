@@ -21,7 +21,7 @@ function Fonts({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false)
   useEffect(() => {
     // KYBERN_LAB_NO_FONTS=1: the code face is not registered, as in a fixture that skips `main.tsx`'s fonts.
-    for (const file of process.env.KYBERN_LAB_NO_FONTS ? [] : FONTS) (renderer as { registerFont: (bytes: Uint8Array) => void }).registerFont(readFileSync(new URL(`../src/assets/fonts/${file}`, import.meta.url)))
+    for (const file of process.env.KYBERN_LAB_NO_FONTS ? [] : FONTS) renderer.registerFont!(readFileSync(new URL(`../src/assets/fonts/${file}`, import.meta.url)))
     installUiFont(renderer)
     setReady(true)
   }, [renderer])

@@ -257,6 +257,11 @@ impl Orchestrator {
             Ok(value) => {
                 let mut result: PeerToolCallResult =
                     serde_json::from_value(value).map_err(|error| anyhow!("{}: unreadable answer: {error}", target.name))?;
+                if name == "kybern_thread_send"
+                    && let Some(id) = params.args.get("thread_id").and_then(Value::as_str).and_then(|id| Uuid::parse_str(id).ok())
+                {
+                    self.remote_refresh_after_message(thread.id, &target.id, id).await;
+                }
                 if let Some(object) = result.result.as_object_mut()
                     && !object.contains_key("_kybern_content")
                 {

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 
-const extensionPath = process.argv.at(-1);
+const extensionPath = process.env.KYBERN_PI_EXTENSION_TEST_PATH ?? process.argv[2] ?? new URL('./extension.ts', import.meta.url).pathname;
 const { default: loadExtension } = await import(pathToFileURL(extensionPath));
 
 function fakePi(initialMode = "supervised", configuredTools, policy = {}) {
@@ -138,7 +138,7 @@ test("configured HTML tools retain schemas, route requests, and allow rendering 
       hasUI: true,
       ui: {
         input: async (title, _prompt, options) => {
-          assert.equal(options.timeout, 70_000);
+          assert.equal(options.timeout, undefined, "the daemon owns the call deadline");
           assert.match(title, /^kybern_app_tool_request:/);
           const request = JSON.parse(Buffer.from(title.split(":")[1], "base64url").toString());
           assert.equal(request.name, definition.name);
@@ -413,3 +413,15 @@ if (validationModule) {
     );
   });
 }
+
+test("human waits and approvals leave deadlines to Kybern", async () => {
+  for (const name of ["kybern_ask_user", "kybern_request_pick", "kybern_request_secret", "kybern_html_publish", "kybern_note_create"]) {
+    const harness = fakePi("full_access", [{ name, description: name, parameters: { type: "object", properties: {} } }]);
+    const ctx = context();
+    ctx.ui.input = async (_title, _placeholder, options) => {
+      assert.equal(options.timeout, undefined, name);
+      return Buffer.from(JSON.stringify({ version: 1, success: true, data: { status: "answered" } })).toString("base64url");
+    };
+    await harness.tools.get(name).execute("human-wait", { await_answer: true, deadline_seconds: 30 }, undefined, undefined, ctx);
+  }
+});

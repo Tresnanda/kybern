@@ -317,10 +317,12 @@ impl Orchestrator {
             }],
         };
 
-        let reopened = match (&recipient.delegation, record.from_thread_id) {
-            (Some(info), Some(from))
-                if from == info.parent_thread_id
-                    && info.status != DelegationStatus::Running
+        // Delivery has already passed message authorization. An inbound proxy's id
+        // differs from a remote delegating parent's id, so reopen on the accepted
+        // follow-up itself before it queues, rather than comparing local sender ids.
+        let reopened = match &recipient.delegation {
+            Some(info)
+                if info.status != DelegationStatus::Running
                     && matches!(
                         record.purpose,
                         ThreadMessagePurpose::Message | ThreadMessagePurpose::Question | ThreadMessagePurpose::Reply

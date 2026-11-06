@@ -3,6 +3,7 @@ mod continue_on;
 mod coordinator;
 mod credentials;
 mod fork;
+mod image_preview;
 mod machines;
 mod mcp_bridge;
 mod outbox;
@@ -131,6 +132,14 @@ enum VisualsCmd {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Make a bounded display copy without connecting to a daemon (used by the desktop).
+    #[command(hide = true)]
+    ImagePreview {
+        input: PathBuf,
+        output: PathBuf,
+        #[arg(long)]
+        width: u32,
+    },
     /// Install or sign in to the official Cursor SDK on this machine.
     Cursor {
         #[command(subcommand)]
@@ -1658,6 +1667,9 @@ pub async fn run() -> Result<()> {
         let code = credentials::run(cmd);
         std::process::exit(code);
     }
+    if let Cmd::ImagePreview { input, output, width } = &cli.cmd {
+        return image_preview::make(input, output, *width);
+    }
     let ep = Endpoint::resolve(cli.url.clone(), cli.token.clone(), cli.data_dir.clone())?;
     let explicit = cli.url.is_some() || cli.data_dir.is_some() || std::env::var_os("KYBERN_URL").is_some();
     let client = Client::connect(&ep).await.map_err(|error| {
@@ -1670,6 +1682,7 @@ pub async fn run() -> Result<()> {
     let json = cli.json;
 
     match cli.cmd {
+        Cmd::ImagePreview { .. } => unreachable!("local image helper handled before connecting"),
         Cmd::Cursor { .. } => unreachable!("local Cursor setup handled before connecting"),
         Cmd::Askpass { .. } => unreachable!("askpass handled before connecting"),
         Cmd::McpBridge => unreachable!("mcp-bridge handled before connecting"),

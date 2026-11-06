@@ -4,7 +4,7 @@ import {mkdirSync} from "node:fs"
 import path from "node:path"
 import assert from "node:assert/strict"
 import {pixels} from "./png.ts"
-const out="/Users/mymac/projects/ade/previews/gpuix/p1g"
+const out=process.env.KYBERN_VERIFY_OUTPUT??import.meta.dir+'/build/surface-check'
 mkdirSync(out,{recursive:true})
 for(const mode of ["dark","light"]){
  const f=await launchFixture(path.join(import.meta.dir,"surface-lab.tsx"),{KYBERN_APPEARANCE:mode,GPUIX_BACKGROUND:"1"}),a=f.app

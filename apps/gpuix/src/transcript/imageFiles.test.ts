@@ -3,6 +3,7 @@ import { expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { bundledCommand } from '../shell/daemon.ts'
 import { gradientPng } from '../../visual/fixture.ts'
 
 const dir = mkdtempSync(path.join(tmpdir(), 'kybern-image-files-'))
@@ -16,12 +17,13 @@ test('a data URL becomes the original file and a copy at most maxPx wide', async
   const files = (await imageFiles(`data:image/png;base64,${Buffer.from(png).toString('base64')}`, 560, 1600))!
   expect(files.full.startsWith(path.join(dir, 'image-cache'))).toBe(true)
   expect(width(files.full)).toBe(1600)
-  // The narrow copy is made with `sips` (macOS); elsewhere the original is shown inline.
-  const mac = process.platform === 'darwin'
-  expect(width(files.inline)).toBe(mac ? 560 : 1600)
+  // Packaged Windows/Linux use the bundled CLI. An unbuilt source checkout falls back to the original.
+  const helper = bundledCommand('kybern')
+  const converts = process.platform === 'darwin' || (!!helper && existsSync(helper))
+  expect(width(files.inline)).toBe(converts ? 560 : 1600)
   // The same bytes again: one original, one copy, no new work.
   expect(await imageFiles(`data:image/png;base64,${Buffer.from(png).toString('base64')}`, 560, 1600)).toEqual(files)
-  expect(readdirSync(path.join(dir, 'image-cache')).filter(f => !f.endsWith('.tmp'))).toHaveLength(mac ? 2 : 1)
+  expect(readdirSync(path.join(dir, 'image-cache')).filter(f => !f.endsWith('.tmp'))).toHaveLength(converts ? 2 : 1)
 })
 
 test('a local file narrow enough for its slot is used in place', async () => {

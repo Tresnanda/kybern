@@ -4,7 +4,7 @@ import path from 'node:path'
 import assert from 'node:assert/strict'
 import {pixels} from './png.ts'
 import {mkdirSync} from 'node:fs'
-const out='/Users/mymac/projects/ade/previews/gpuix/p1e'
+const out=process.env.KYBERN_VERIFY_OUTPUT??import.meta.dir+'/build/markdown-check'
 mkdirSync(out,{recursive:true})
 for(const mode of ['dark','light']) for(const wrap of ['0','1']) {
  const f=await launchFixture(path.join(import.meta.dir,'markdown-lab.tsx'),{KYBERN_APPEARANCE:mode,GPUIX_BACKGROUND:'1',MD_WRAP:wrap})

@@ -131,7 +131,7 @@ export function githubSyntax(variant: 'dark' | 'light', profile?: string) {
 }
 
 /** An icon source (`#000` strokes, tinted by the mask elsewhere) with its real colour, for icons drawn as images. */
-export const tinted = (svg: string, color: string) => svg.replaceAll('#000', color)
+export const tinted = (svg: string, color: string) => svg.replace(/(fill|stroke)=(['"])(?!none\2|transparent\2)[^'"]+\2/g, (_match, attr, quote) => `${attr}=${quote}${color}${quote}`)
 /** `kybern://note/…` and `kybern://task/…` links read as the desktop's chips: an icon before the label. */
 function kybernLinkIcons(t: Theme) {
   const chip = t.v('--color-accent-blue')

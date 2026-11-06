@@ -2282,6 +2282,11 @@ impl Orchestrator {
                 (&format!("pending_permission_target:{thread_id}"), ""),
             ])?;
         }
+        // A new turn is the lifecycle boundary, including messages forwarded through
+        // an inbound proxy on another machine (whose sender id differs from the parent).
+        if thread.delegation.is_some() {
+            self.delegation_reopen(thread.id)?;
+        }
         self.messaging_turn_started(thread.id, turn_id, message_id);
 
         // The user's intent is persisted and broadcast, so the call returns now
