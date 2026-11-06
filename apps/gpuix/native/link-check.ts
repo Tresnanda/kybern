@@ -3,7 +3,7 @@ import {launchFixture} from '../src/requests/harness.ts'
 import {pixels} from './png.ts'
 import path from 'node:path'
 import assert from 'node:assert/strict'
-const out='/Users/mymac/projects/ade/previews/gpuix/p1g'
+const out=process.env.KYBERN_VERIFY_OUTPUT??import.meta.dir+'/build/link-check'
 for(const mode of ['dark','light']){
  const f=await launchFixture(path.join(import.meta.dir,'link-lab.tsx'),{KYBERN_APPEARANCE:mode,GPUIX_BACKGROUND:'1'}),a=f.app
  try{

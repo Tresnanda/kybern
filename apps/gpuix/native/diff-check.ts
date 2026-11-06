@@ -1,10 +1,13 @@
 import '../src/native/local-build.ts'
 import assert from 'node:assert/strict'
+import { mkdirSync } from 'node:fs'
 import {launchFixture,waitForPainted} from '../src/requests/harness.ts'
+const out=process.env.KYBERN_VERIFY_OUTPUT??import.meta.dir+'/build/diff-check'
+mkdirSync(out,{recursive:true})
 for(const mode of ['dark','light']) {
  const f=await launchFixture(import.meta.dir+'/diff-lab.tsx',{KYBERN_APPEARANCE:mode,GPUIX_BACKGROUND:'1'})
  try {await f.app.getByTestId('ready').waitFor();await waitForPainted(f.app,'Updated instructions');
- await f.app.screenshot({path:`/Users/mymac/projects/ade/previews/gpuix/p1f/diff-${mode}-gpuix.png`});
+ await f.app.screenshot({path:`${out}/diff-${mode}-gpuix.png`});
  assert.ok((await f.app.call('getPaintedText',{})).text.join('\n').includes('Lines 25–26'))
  const bounds=await f.app.getByTestId('sample').bounds()
  await f.app.mouse.click({x:bounds.x+20,y:bounds.y+36});await f.app.clock.fastForward(32)
@@ -12,7 +15,7 @@ for(const mode of ['dark','light']) {
  await f.app.mouse.click({x:bounds.x+42,y:bounds.y+36});await f.app.clock.fastForward(32)
  assert.equal(await f.app.getByTestId('result').textContent(),'old:- new:1')
  await f.app.mouse.wheel({x:bounds.x+200,y:bounds.y+60},-100000,0);await f.app.clock.fastForward(64)
- await f.app.screenshot({path:`/Users/mymac/projects/ade/previews/gpuix/p1f/diff-scroll-${mode}.png`})
+ await f.app.screenshot({path:`${out}/diff-scroll-${mode}.png`})
  await f.app.getByTestId('diff-header-src/greeting.ts').click();await f.app.clock.fastForward(64)
  assert.equal(await f.app.getByTestId('sample').count(),0)
  await f.app.getByTestId('diff-header-src/greeting.ts').click();await waitForPainted(f.app,'Greeting factory')
