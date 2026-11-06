@@ -951,11 +951,11 @@ export function shouldRevealLiveText(text: string, complete: boolean): boolean {
 }
 
 function splitAssistantForPresentation(block: AssistantBlock): {
-  answer: AssistantBlock
+  answer: AssistantBlock | null
   reasoning: AssistantBlock | null
 } {
   return {
-    answer: block.thinking ? { ...block, thinking: "" } : block,
+    answer: block.text.trim() ? (block.thinking ? { ...block, thinking: "" } : block) : null,
     reasoning: block.thinking.trim()
       ? { ...block, id: `reasoning:${block.id}`, text: "" }
       : null,
@@ -1090,6 +1090,7 @@ export function groupTurns(blocks: Block[]): TurnGroup[] {
     return g
   }
   for (const b of blocks) {
+    if (b.kind === "assistant" && b.complete && !b.text.trim() && !b.thinking.trim()) continue
     const g = get(b.turnId)
     switch (b.kind) {
       case "user":

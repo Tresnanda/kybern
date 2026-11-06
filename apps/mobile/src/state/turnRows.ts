@@ -236,9 +236,10 @@ export function createTurnRows(threadId: string) {
         flush();
         addProcesses();
       } else {
-        const work = group.work.filter((block) => folds(block) && !runningProcess(block));
+        const folded = (block: Block) => folds(block) && !(block.kind === "notice" && !group.answer);
+        const work = group.work.filter((block) => folded(block) && !runningProcess(block));
         group.work
-          .filter((block) => !folds(block) && !runningProcess(block) && !shadowed(block))
+          .filter((block) => !folded(block) && !runningProcess(block) && !shadowed(block))
           .forEach((block) => (agentLaunch(block) ? addLaunch(block) : add(block)));
         if (work.length) {
           const summary = runSummary(work);

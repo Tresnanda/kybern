@@ -918,3 +918,35 @@ test("a turn without visuals has no visual position", () => {
   const state = applyEvent(emptyThreadState(), { ...start, turn_id: T, seq: 1, thread_id: "thread", at: AT })
   assert.equal(groupTurns(state.blocks)[0].visualsAt, undefined)
 })
+
+
+test("omp /handoff keeps its compaction notices without an empty assistant reply", () => {
+  const events = [
+    { ...start, message: { parts: [{ type: "text", text: "/handoff" }] } },
+    { kind: "provider_notice", level: "info", text: "compacting context" },
+    { kind: "assistant_message_completed", message_id: "empty", text: "", thinking: "" },
+    { kind: "provider_notice", level: "info", text: "Context compacted" },
+    { ...done, terminal_message_id: "empty" },
+  ];
+  const state = fold(events);
+  for (const group of [groupTurns(state.blocks)[0], createTurnGrouper()(state.blocks)[0]]) {
+    assert.equal(group.answer, null);
+    assert.deepEqual(group.work.map(block => block.text), ["compacting context", "Context compacted"]);
+  }
+  const reloaded = seedFromGet({ thread: { last_seq: 5 }, notes: [], pending_approvals: [], transcript: [
+    { role: "user", id: "u1", turn_id: T, at: AT, seq: 1, message: events[0].message },
+    { role: "assistant", id: "empty", turn_id: T, at: AT, seq: 3, text: "", complete: true },
+    { role: "notice", turn_id: T, at: AT, seq: 4, level: "info", text: "Context compacted" },
+    { role: "turn_end", turn_id: T, at: AT, seq: 5, stop_reason: "completed", usage: USAGE, duration_ms: 5, terminal_message_id: "empty" },
+  ] });
+  const [group] = groupTurns(reloaded.blocks);
+  assert.equal(group.answer, null);
+  assert.equal(group.work.at(-1).text, "Context compacted");
+});
+
+test("a reasoning-only final message has no empty answer and preserves its thinking", () => {
+  const state = fold([start, { kind: "assistant_message_completed", message_id: "thought", text: " ", thinking: "Planning" }, { ...done, terminal_message_id: "thought" }]);
+  const [group] = groupTurns(state.blocks);
+  assert.equal(group.answer, null);
+  assert.equal(group.work[0].thinking, "Planning");
+});
