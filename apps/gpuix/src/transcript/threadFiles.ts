@@ -1,3 +1,6 @@
+import { imageSource } from '../../../../packages/kybern-client/src/responseImages.ts'
+import { homedir } from 'node:os'
+import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { mkdir, readFile, rename, writeFile, access, open, unlink } from 'node:fs/promises'
 import { getState, machineOfThreadId, requireThreadClient } from '../state.ts'
@@ -10,6 +13,8 @@ import { showFileInExplorer } from '../dock/explorerSelection.ts'
 
 export const threadFilesAreLocal = (id: string) => activeEnvironment().local && !machineOfThreadId(id)
 export function absoluteThreadFile(id: string, file: string): string | null {
+  if (file.startsWith('file://')) file = imageSource(file)?.value ?? file
+  if (threadFilesAreLocal(id) && file.startsWith('~/')) file = path.join(homedir(), file.slice(2))
   const thread = getState().threads.find(th => th.id === id) ?? (getState().open.thread?.id === id ? getState().open.thread : undefined)
   const p = /^[a-z]:[\\/]/i.test(thread?.cwd ?? file) ? path.win32 : path.posix
   return p.isAbsolute(file) ? file : thread ? p.resolve(thread.cwd, file) : null
@@ -35,7 +40,8 @@ async function downloadFile(id: string, file: string): Promise<string> {
   if (!response.ok || !response.body) throw Error('Unable to download the file. Check that the machine is connected and the file is allowed, then retry.')
   const notice = `download:${id}:${file}`
   const total = Number(response.headers.get('content-length'))
-  const output = await open(target + '.kybern-part', 'w')
+  const partial = `${target}.${randomUUID()}.kybern-part`
+  const output = await open(partial, 'wx')
   const reader = response.body.getReader()
   let bytes = 0, last = 0
   try {
@@ -46,12 +52,12 @@ async function downloadFile(id: string, file: string): Promise<string> {
       if (Date.now() - last > 250 && bytes > 1024 * 1024) { last = Date.now(); toast(`Downloading ${path.basename(target)}…${total ? ` ${Math.round(bytes / total * 100)}%` : ''}`, { id: notice, duration: Infinity }) }
     }
     await output.close()
-    await rename(target + '.kybern-part', target)
+    await rename(partial, target)
     await writeFile(target + '.kybern-etag', JSON.stringify({ identity, etag: response.headers.get('etag') ?? '' }))
     toast.dismiss(notice)
     toast(`Downloaded a copy from ${name}. Changes stay on this computer.`)
     return target
-  } finally { await output.close().catch(() => {}); reader.releaseLock(); toast.dismiss(notice); await unlink(target + '.kybern-part').catch(() => {}) }
+  } finally { await output.close().catch(() => {}); reader.releaseLock(); toast.dismiss(notice); await unlink(partial).catch(() => {}) }
 }
 export async function actOnThreadFile(id: string, file: string, action: 'open' | 'reveal') {
   try {

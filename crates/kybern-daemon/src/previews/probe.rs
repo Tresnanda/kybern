@@ -475,7 +475,12 @@ pub async fn public_favicon(raw: &str) -> Option<String> {
             return None;
         }
         let page = fetch(url.clone(), &host, &addrs, true, timeout).await;
-        let raw = favicon_data_url(url.as_str(), page.favicon_href.as_deref(), addrs[0], timeout).await?;
+        if let Some(raw) = favicon_data_url(url.as_str(), page.favicon_href.as_deref(), addrs[0], timeout).await
+            && let Some(icon) = normalize_icon(&raw).await
+        {
+            return Some(icon);
+        }
+        let raw = favicon_data_url(url.as_str(), None, addrs[0], timeout).await?;
         normalize_icon(&raw).await
     };
     tokio::time::timeout(timeout, work).await.ok().flatten()
