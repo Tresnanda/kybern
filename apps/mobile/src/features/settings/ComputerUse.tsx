@@ -133,7 +133,7 @@ function ComputerUseBody() {
                   onPress: () =>
                     void saveComputerNote(note, "")
                       .then(() => showToast(`Deleted the note for ${note.app}`))
-                      .catch((e) => showToast(`Unable to delete the note. ${errorText(e)}`)),
+                      .catch((e) => showToast(errorText(e, "delete the note"))),
                 },
               ]}
             />

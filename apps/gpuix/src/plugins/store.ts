@@ -1,10 +1,10 @@
 // The plugins on every machine (ADE-86): `plugins.network_view` read from the machine the user is at, which asks the other
 // members. Read while Settings → Plugins shows it, and again when the outbox or a machine changes. Copies go to the same
 // daemon (`plugins.copy`), which forwards one to the machine that sends the plugin declaration.
+import { problemSentence } from '../problems/sentence.ts'
 import { useEffect, useSyncExternalStore } from 'react'
 import type { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 import { NETWORK_MACHINE_CHANGED_NOTIFICATION, OUTBOX_CHANGED_NOTIFICATION, type PluginsCopyParams, type PluginsCopyResult, type PluginsNetworkView } from '../../../../packages/kybern-client/src/types.ts'
-import { errorText } from '../nav/actions.ts'
 import { getClient } from '../state.ts'
 
 interface PluginsState { view: PluginsNetworkView | null; error: string; loading: boolean }
@@ -33,7 +33,7 @@ export async function refreshPlugins(): Promise<void> {
         if (pluginsClient() !== client) return
         emit({ view, error: '', loading: false })
       } catch (e) {
-        if (pluginsClient() === client) emit({ error: `Unable to read your plugins. ${errorText(e)}`, loading: false })
+        if (pluginsClient() === client) emit({ error: problemSentence(e, { action: 'read your plugins' }), loading: false })
       }
     } while (again)
   } finally { reading = false }

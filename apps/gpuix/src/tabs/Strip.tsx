@@ -3,8 +3,7 @@
 // own in the dock: a terminal (or an agent CLI), the browser preview, Review, and all changes.
 import { OpenPullRequest } from '../pulls/OpenPullRequest.tsx'
 import { terminalTabLabel } from '../terminal/title.ts'
-import { toast } from '../shell/toasts.tsx'
-import { errorText } from '../nav/actions.ts'
+import { toastProblem } from '../problems/toast.ts'
 import { memo, useMemo, useState, type ReactNode } from 'react'
 import { fadeTo } from '../shell/motion.ts'
 import { BrowserIcon, FlowchartIcon, Image01Icon } from '@hugeicons/core-free-icons'
@@ -139,7 +138,7 @@ function AddMenu({ leafId, threadId, size }: { leafId: string; threadId: string;
     try {
       const info = await threadClient(threadId)!.call('terminals.create', { thread_id: threadId, cols: 100, rows: 24, ...(command ? { command } : {}) })
       openTab(threadId, { kind: 'terminal', id: info.id, title: cli ? providers.find((p) => p.kind === cli)?.display_name : undefined, ...(cli ? { cli } : {}) }, { leaf: leafId })
-    } catch (error) { toast.error('Unable to open a terminal', { description: errorText(error) }) }
+    } catch (error) { toastProblem(error, { action: 'open a terminal', retry: () => void terminal(command, cli), projectId: thread?.project_id }) }
   }
   const clis = providers.filter((p) => p.available && p.binary_path)
   if (thread?.subagent) return null

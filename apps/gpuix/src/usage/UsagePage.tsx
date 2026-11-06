@@ -1,4 +1,6 @@
 import { N } from '../nav/glyphs.ts'
+import { ProblemLine } from '../problems/Line.tsx'
+import { asError } from '../../../../packages/kybern-client/src/problem.ts'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { tokens, usd } from '@/lib/format'
 import { PROVIDER_NAMES, limitLabel, limitLeftLabel, limitPace, limitUsed, limitTone, resetIn, staleCaption, updatedAgo } from '@/lib/providerUsage'
@@ -54,7 +56,7 @@ export function UsagePage() {
   const [group, setGroup] = useState<UsageGroup>('provider')
   const [revision, refresh] = useState(0)
   const [loaded, setLoaded] = useState<Loaded | null>(null)
-  const [failure, setFailure] = useState<{ scope: string; text: string } | null>(null)
+  const [failure, setFailure] = useState<{ scope: string; error: Error } | null>(null)
   const [activeDay, setActiveDay] = useState<string | null>(null)
   const [entryPlayed, setEntryPlayed] = useState(false)
   const [entryMotion] = useState(() => !getNav().keyboardNav)
@@ -76,11 +78,11 @@ export function UsagePage() {
     const daily = group === 'day' ? summary : client.call('usage.summary', { group_by: 'day', since })
     void Promise.all([summary, daily]).then(([summary, daily]) => {
       if (!canceled) { setLoaded({ scope, revision, summary, daily, end: now.toISOString().slice(0, 10) }); setFailure(null) }
-    }, e => { if (!canceled) setFailure({ scope, text: String(e) }) })
+    }, e => { if (!canceled) setFailure({ scope, error: asError(e) }) })
     return () => { canceled = true }
   }, [scope, period, group, revision, connection])
   const data = loaded?.scope === scope ? loaded : null
-  const error = failure?.scope === scope ? failure.text : null
+  const error = failure?.scope === scope ? failure.error : null
   const loading = (!data || data.revision !== revision) && !error
   // The headline numbers keep the last answer while the next one loads, so they can swap instead of vanishing.
   const stats = data ?? loaded
@@ -125,7 +127,7 @@ export function UsagePage() {
     for (const group of groups) sections.push({ key: `limits-${group.kind}`, content: <div style={{ ...column, gap: 10 }}><div style={row}><ProviderMark kind={group.kind} size={14} /><Label color={t.textSecondary} size={12} weight={500}>{PROVIDER_NAMES[group.kind] ?? group.kind}</Label></div><div style={{ ...row, width: '100%', alignItems: 'stretch', flexWrap: 'wrap', gap: 14 }}>{group.cards.map(({ entry, account }) => <LimitCard key={account?.provider.instance ?? 'default'} entry={entry} account={account} showDefault={group.cards.length > 1} play={entryMotion} />)}</div></div> })
   }
   if (loading && !stats) sections.push({ key: 'loading', content: <div role="status" style={{ ...column, gap: 16 }}><Label color={t.textSecondary} size={12}>Loading usage…</Label><div style={{ height: 150, borderRadius: 10, backgroundColor: t.buttonSecondary }} /></div> })
-  if (error) sections.push({ key: 'error', content: <div role="alert" style={{ ...column, gap: 10 }}><Label color={t.text}>{data ? 'Unable to refresh usage' : 'Unable to load usage'}</Label><Label color={t.textSecondary}>{`${error}${data ? ' Showing the last loaded totals.' : ''}`}</Label><Button onClick={refreshAll}>Try again</Button></div> })
+  if (error) sections.push({ key: 'error', content: <div role="alert" style={{ ...column, gap: 10 }}><ProblemLine error={error} action={data ? 'refresh usage' : 'load usage'} retry={refreshAll} testId="usage-problem" />{data && <Label color={t.textSecondary}>Showing the last loaded totals.</Label>}</div> })
   if (stats) {
     const total = stats.summary.total
     sections.push({ key: 'stats', content: <div testId="usage-stats" style={{ ...row, width: '100%', alignItems: 'flex-start', gap: 24, paddingTop: 8, paddingBottom: 26, borderBottomWidth: 1, borderColor: t.border }}>

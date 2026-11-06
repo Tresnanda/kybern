@@ -727,7 +727,7 @@ async fn failed_children_report_their_error_to_the_parent() {
     let result = t.delegate(json!({"task": "doomed job"})).await;
     t.end_parent_turn().await;
     let agent = t.agent("doomed job").await;
-    agent.tx.send(DriverEvent::TurnFailed { error: "rate limited".into() }).await.unwrap();
+    agent.tx.send(DriverEvent::TurnFailed { error: "rate limited".into(), problem: None }).await.unwrap();
     let items = eventually(|| async { t.queued_results().into_iter().next() }).await;
     assert_eq!((items[0].status, items[0].error.as_deref()), (DelegationStatus::Failed, Some("rate limited")));
     assert_eq!(t.delegation(&result["task_id"]).delegation.unwrap().status, DelegationStatus::Failed);
@@ -1300,7 +1300,7 @@ fn long_errors_and_result_batches_are_capped() {
 async fn a_failed_turn_error_is_capped_on_the_delegation() {
     let t = Delegating::new().await;
     let result = t.delegate(json!({"task": "noisy failure"})).await;
-    t.agent("noisy failure").await.tx.send(DriverEvent::TurnFailed { error: "x".repeat(20_000) }).await.unwrap();
+    t.agent("noisy failure").await.tx.send(DriverEvent::TurnFailed { error: "x".repeat(20_000), problem: None }).await.unwrap();
     let info = eventually(|| async {
         let info = t.delegation(&result["task_id"]).delegation.unwrap();
         (info.status == DelegationStatus::Failed).then_some(info)

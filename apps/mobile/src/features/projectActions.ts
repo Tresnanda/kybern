@@ -18,7 +18,7 @@ export function projectMenuItems(
     onRemoved?: () => void;
   },
 ): MenuItem[] {
-  const fail = (e: unknown) => options.onError(errorText(e));
+  const fail = (e: unknown) => options.onError(errorText(e, "change the project"));
   const items: MenuItem[] = [];
   if (options.order)
     items.push(

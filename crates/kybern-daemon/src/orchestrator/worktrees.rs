@@ -312,6 +312,7 @@ impl Orchestrator {
                 level: NoticeLevel::Info,
                 text: "Checkout context delivered to the agent.".into(),
                 data: Some(serde_json::json!({"workspace_transition_delivered":sequence})),
+                problem: None,
             },
         )?;
         Ok(())
@@ -412,6 +413,7 @@ impl Orchestrator {
                 format!("Pull request #{} checkout changed the workspace but did not verify the reviewed commit. Refresh and inspect it before sending repair findings.", p.number)
             },
             data: Some(serde_json::json!({"workspace_transition":{"number":p.number,"branch":thread.worktree.as_ref().unwrap().branch,"head":head,"verified":verified}})),
+            problem: None,
         })?;
         Ok(())
     }

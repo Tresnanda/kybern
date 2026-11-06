@@ -1,6 +1,7 @@
 // Installing and signing in to the GitHub CLI from a pull request surface: the command is typed into a terminal on the
 // project's machine (the same sheet the agents scene uses) and runs when the person presses Return. Closing the sheet
 // checks again: the daemon finds a gh installed while it ran (`gh_locate`), so no restart is needed.
+import { describe } from '../problems/describe.ts'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import type { TerminalInfo } from '../../../../packages/kybern-client/src/types.ts'
@@ -32,7 +33,7 @@ const timers = new Set<ReturnType<typeof setTimeout>>()
 const later = (ms: number, fn: () => void) => { const id = setTimeout(() => { timers.delete(id); fn() }, ms); timers.add(id) }
 
 /** The project's machine runs the command; only this computer's own OS and installers are known. */
-function machineFor(projectId: string) {
+export function machineFor(projectId: string) {
   const client = prClient(projectId)
   return { client, local: !!client && machineOfProjectId(projectId) === undefined && activeEnvironment().local }
 }
@@ -47,8 +48,16 @@ async function open(projectId: string, title: string, command: string, done: () 
     const info = await openTypedTerminal(client, command, { cwd: local ? homedir() : '/', wanted, later })
     if (info) ghSheet.set((s) => ({ sheet: s.sheet ? { ...s.sheet, info } : s.sheet }))
   } catch (error) {
-    ghSheet.set((s) => ({ sheet: s.sheet ? { ...s.sheet, error: error instanceof Error ? error.message : String(error) } : s.sheet }))
+    ghSheet.set((s) => ({ sheet: s.sheet ? { ...s.sheet, error: describe(error, { action: 'open a terminal' }).body } : s.sheet }))
   }
+}
+
+/**
+ * Type `command` into a terminal sheet on the project's machine, for any fix that runs a command (`problems/actions.ts` installs
+ * Git, Node.js, Tailscale and the agents this way). The sheet is the one `GhSetupSheet` mounts for the window; `done` runs when it closes.
+ */
+export function runInSetupSheet(projectId: string, title: string, command: string, done: () => void): void {
+  void open(projectId, title, command, done)
 }
 
 /** "Install GitHub CLI": winget on Windows, Homebrew on a Mac that has it, else the install guide. `done` runs when the sheet closes. */

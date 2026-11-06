@@ -26,7 +26,7 @@ export default function ComposerOptionsScreen() {
   const [error, setError] = useState("");
   useEffect(() => {
     if (threadId && !snapshot.loaded && live)
-      void loadThread(threadId).catch((e) => setError(errorText(e)));
+      void loadThread(threadId).catch((e) => setError(errorText(e, "load the thread options")));
   }, [threadId, snapshot.loaded, live]);
   const control = (
     <Segmented<Section>

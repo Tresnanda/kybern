@@ -15,10 +15,11 @@ import {
   latestRun,
 } from "../state/tasksModel";
 import type { TaskItem, TaskPriority, TaskStatus } from "../state/protocol";
-import { errorText } from "../state/runtime";
+import { problemFor } from "../state/runtime";
 
 function fail(e: unknown) {
-  Alert.alert("Unable to update the task", errorText(e), [{ text: "OK" }]);
+  const problem = problemFor(e, "update the task");
+  Alert.alert(problem.title, problem.body, [{ text: "OK" }]);
 }
 /** Run an action and tell the reader what to do if it fails. */
 export function attempt(work: () => Promise<unknown>, after?: () => void) {

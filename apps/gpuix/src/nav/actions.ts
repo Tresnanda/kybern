@@ -1,6 +1,7 @@
 // Thread and project writes from the panel, title bar and dialogs, with the
 // desktop's RPCs (`state/rpc.ts`). Each updates the lists at once; the events
 // subscription confirms them.
+import { errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
 import { seedFromGet } from '../../../../packages/kybern-client/src/transcript.ts'
 import type { ProviderInstance, SavedSession, Thread, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 import { getState, projectClient, refreshLists, selectDraft, selectThread, set, threadClient } from '../state.ts'
@@ -17,7 +18,7 @@ function rpc(owner: { thread?: ThreadId; project?: string } = {}) {
 
 /** The message an error carries, for a dialog line. */
 export function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  return errorMessage(error)
 }
 
 function replaceThread(thread: Thread) {

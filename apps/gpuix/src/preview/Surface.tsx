@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { problemSentence } from '../problems/sentence.ts'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { observeElementBounds, type ElementBoundsEvent } from '../native/layout.ts'
 import { webHost } from '../native/webview.ts'
@@ -99,7 +100,7 @@ export function PreviewSurface({ threadId }: { threadId: string }) {
       }
     })
     try { generation = webHost.create(id, entry.frameUrl ?? entry.url, entry.kind, entry.trust) }
-    catch (error) { setPreview(threadId, { error: String(error) }) }
+    catch (error) { setPreview(threadId, { error: problemSentence(error, { action: 'show the page' }) }) }
     return () => { alive = false; ready.current = false; clearTimeout(hiddenTimer.current); hiddenTimer.current = undefined; stop(); webHost.destroy(id); releasePreviewEntry(entry) }
   }, [id, threadId, entry])
   useEffect(() => { placements.get(threadId)?.() }, [s.floating, s.device, s.width, s.height, s.busy, s.load.phase])

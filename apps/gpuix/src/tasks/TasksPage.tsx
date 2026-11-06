@@ -1,4 +1,5 @@
 import { SelectionBar } from './SelectionBar.tsx'
+import { ProblemLine } from '../problems/Line.tsx'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   boardColumns,
@@ -230,17 +231,8 @@ export function TasksPage() {
       ) : (
         <>
           {s.error && (
-            <div style={{ padding: 20, display: 'flex', gap: 12 }}>
-              <Label color={t.red} size={13}>
-                {s.error}
-              </Label>
-              <Button
-                onClick={() => {
-                  void refreshTasks()
-                }}
-              >
-                Try again
-              </Button>
+            <div style={{ padding: 20 }}>
+              <ProblemLine error={s.error.error} action={s.error.action} retry={() => void refreshTasks()} testId="tasks-problem" />
             </div>
           )}
           {s.allMachines && footerOf(s.federation, 'tasks') && <div testId="tasks-federation-footer" style={{ paddingLeft: 20, paddingRight: 20, paddingTop: 8, paddingBottom: 8 }}><Label color={t.textTertiary} size={12} lineHeight={18}>{footerOf(s.federation, 'tasks')!}</Label></div>}

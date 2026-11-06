@@ -50,7 +50,7 @@ function ManageAccess() {
     let live = true;
     rpc("access.tokens.list", {})
       .then((r) => live && setTokens(r.tokens.filter((t) => !t.revoked)))
-      .catch((e) => live && setError(errorText(e)));
+      .catch((e) => live && setError(errorText(e, "load the access tokens")));
     return () => {
       live = false;
     };
@@ -63,7 +63,7 @@ function ManageAccess() {
       onConfirm: () => {
         rpc("access.tokens.revoke", { token_id: token.id })
           .then(() => setTokens((list) => list?.filter((t) => t.id !== token.id) ?? null))
-          .catch((e) => setError(errorText(e)));
+          .catch((e) => setError(errorText(e, "revoke that access")));
       },
     });
   return (
@@ -78,7 +78,7 @@ function ManageAccess() {
             setBusy(true);
             rpc("access.exposure.set", { tailscale: value })
               .then(() => loadSettings())
-              .catch((e) => setError(errorText(e)))
+              .catch((e) => setError(errorText(e, "change who can reach this computer")))
               .finally(() => setBusy(false));
           }}
         />

@@ -226,6 +226,10 @@ pub enum EventPayload {
     },
     TurnFailed {
         error: String,
+        /// What the failure means for the person: signed out, the agent isn't installed, rate limited, and so
+        /// on. Absent on events from before it existed and when Kybern can't tell; `error` is then all there is.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        problem: Option<crate::rpc::Problem>,
     },
     ProviderCommandsUpdated {
         commands: Vec<crate::ProviderCommand>,
@@ -246,6 +250,9 @@ pub enum EventPayload {
         level: NoticeLevel,
         text: String,
         data: Option<Value>,
+        /// Set on an error notice whose cause Kybern could classify (see `TurnFailed::problem`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        problem: Option<crate::rpc::Problem>,
     },
     /// A git checkpoint was taken or completed for this turn.
     CheckpointUpdated {
@@ -434,7 +441,11 @@ mod kind_tests {
                 text: "done".into(),
                 thinking: None,
             },
-            EventPayload::ProviderNotice { level: NoticeLevel::Info, text: "notice".into(), data: None },
+            EventPayload::ProviderNotice { level: NoticeLevel::Info, text: "notice".into(), data: None, problem: None },
+            EventPayload::TurnFailed {
+                error: "Invalid API key".into(),
+                problem: Some(crate::rpc::Problem::new(crate::rpc::ProblemKind::SignedOut, "Invalid API key")),
+            },
             EventPayload::ProviderUsageUpdated { usage: Default::default() },
             EventPayload::ProviderCommandsUpdated { commands: Vec::new() },
             EventPayload::WorkspaceReverted { to_turn_id: TurnId::nil(), commit: "abc".into() },

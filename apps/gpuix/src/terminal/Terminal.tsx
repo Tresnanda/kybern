@@ -19,6 +19,8 @@ import { Icon } from '../icons.tsx'
 import { DOCK_ICONS } from '../dock/icons.ts'
 import { Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { ErrorLine } from '../dock/parts.tsx'
+import { asError } from '../../../../packages/kybern-client/src/problem.ts'
+import { OfflineError } from '../../../../packages/kybern-client/src/machineClient.ts'
 import { Tabs, type TabsItem } from '../kit/Tabs.tsx'
 import { DURATION, EASE, revealTransform } from '../motion/kit.tsx'
 import { fadeTo } from '../shell/motion.ts'
@@ -69,14 +71,14 @@ export function TerminalPane({ threadId, width }: { threadId: string; width: num
   const [titles, setTitles] = useState<Record<string, string>>({})
   const kinds = useRef(new Map<string, string>())
   const [providers, setProviders] = useState<ProviderStatus[]>([])
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<Error | null>(null)
   const [busy, setBusy] = useState(false)
   const alive = useRef(true)
   const current = tabs.find(tab => tab.id === selected) ?? tabs[tabs.length - 1]
   const cols = () => Math.max(20, fitTerminal(width, 0, CELL, ROW).cols)
   const refresh = async () => {
     try { const result = await threadClient(threadId)!.call('terminals.list', { thread_id: threadId }); if (alive.current) setTabs(result.terminals) }
-    catch (e) { if (alive.current) setError(String(e)) }
+    catch (e) { if (alive.current) setError(asError(e)) }
   }
   const create = async (command?: string[], kind = 'shell') => {
     if (busy) return
@@ -85,7 +87,7 @@ export function TerminalPane({ threadId, width }: { threadId: string; width: num
       const tab = await threadClient(threadId)!.call('terminals.create', { thread_id: threadId, cols: cols(), rows: 24, ...(command ? { command } : {}) })
       kinds.current.set(tab.id, kind)
       if (alive.current) { setTabs(old => [...old.filter(t => t.id !== tab.id), tab]); select(tab.id) }
-    } catch (e) { if (alive.current) setError(String(e)) } finally { if (alive.current) setBusy(false) }
+    } catch (e) { if (alive.current) setError(asError(e)) } finally { if (alive.current) setBusy(false) }
   }
   const close = async (id: string) => {
     try {
@@ -94,7 +96,7 @@ export function TerminalPane({ threadId, width }: { threadId: string; width: num
       setTabs(left); if (selected === id) select(null)
       // The pane always shows a live terminal: closing the last tab opens a fresh shell.
       if (!left.length) void create()
-    } catch (e) { setError(String(e)) }
+    } catch (e) { setError(asError(e)) }
   }
   useEffect(() => {
     alive.current = true
@@ -105,7 +107,7 @@ export function TerminalPane({ threadId, width }: { threadId: string; width: num
       if (!live) return
       setTabs(result.terminals)
       if (!result.terminals.length) await create()
-    }).catch(e => { if (live) setError(String(e)) })
+    }).catch(e => { if (live) setError(asError(e)) })
     void localClient()!.call('providers.list', {}).then(result => { if (live) setProviders(result.providers) }).catch(() => {})
     const off = client.onNotification('terminal.exited', () => void refresh())
     return () => { live = false; alive.current = false; off() }
@@ -142,7 +144,7 @@ export function TerminalPane({ threadId, width }: { threadId: string; width: num
         <div style={{ opacity: current ? 1 : 0.45 }}><SidebarIconButton icon={DOCK_ICONS.trash} size="sm" label="Close active terminal tab" tooltip="Close terminal" tooltipSide="bottom" testId={current ? `terminal-close-${current.id}` : undefined} onClick={() => { if (current) void close(current.id) }} /></div>
       </div>
     </div>
-    <ErrorLine error={error} retry={() => void refresh()} />
+    <ErrorLine error={error} action="open the terminal" retry={() => void refresh()} />
     {current ? <div key={current.id} paintTransform={PATCHED_NATIVE && fadeFor.current === current.id ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.quick, ease: [...EASE.out] as [number, number, number, number] } } : undefined} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0 }}>
       <Screen info={current} threadId={threadId} width={width} onTitle={title => setTitles(old => old[current.id] === title ? old : { ...old, [current.id]: title })} onExit={() => void close(current.id)} />
     </div> : <Button style={{ alignSelf: 'flex-start', margin: 8 }} onClick={() => void create()}>Open terminal</Button>}
@@ -231,7 +233,7 @@ export function Screen({ info, threadId, machineId, width, onTitle, onExit }: { 
   model.colors = terminalColors(t.variant, t.surface)
   model.blinkOption = true // the desktop terminal sets `cursorBlink: true`
   const [version, update] = useState(0)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<Error | null>(null)
   const [exit, setExit] = useState<number | null>(info.alive ? null : info.exit_code ?? 0)
   const [range, setRange] = useState({ start: 0, end: 48 })
   const follow = useRef(true)
@@ -278,7 +280,7 @@ export function Screen({ info, threadId, machineId, width, onTitle, onExit }: { 
   }
   const send = (text: string, encoding: 'utf8' | 'latin1' = 'utf8') => { if (text) input.current?.push(Buffer.from(text, encoding)) }
   useEffect(() => {
-    const stream = createInputStream(data => { const client = clientOf(); return client ? client.call('terminals.input', { terminal_id: info.id, data }) : Promise.reject(new Error('This machine is not reachable. Reopen the terminal when it is back.')) }, e => setError(String(e)))
+    const stream = createInputStream(data => { const client = clientOf(); return client ? client.call('terminals.input', { terminal_id: info.id, data }) : Promise.reject(new OfflineError(machineId ?? '', false)) }, e => setError(asError(e)))
     input.current = stream
     return () => { stream.close(); if (input.current === stream) input.current = null }
   }, [info.id, machineId, threadId])
@@ -289,13 +291,13 @@ export function Screen({ info, threadId, machineId, width, onTitle, onExit }: { 
     const { cols, rows } = fitTerminal(bounds.width, bounds.height, CELL, ROW)
     if (cols === model.cols && rows === model.rows) return Promise.resolve()
     model.resize(cols, rows); update(v => v + 1)
-    return Promise.resolve(clientOf()?.call('terminals.resize', { terminal_id: info.id, cols: model.cols, rows: model.rows })).then(() => {}, e => { setError(String(e)) })
+    return Promise.resolve(clientOf()?.call('terminals.resize', { terminal_id: info.id, cols: model.cols, rows: model.rows })).then(() => {}, e => { setError(asError(e)) })
   }
   useEffect(() => {
     let live = true, timer: ReturnType<typeof setTimeout> | undefined, syncGuard: ReturnType<typeof setTimeout> | undefined, closing: ReturnType<typeof setTimeout> | undefined
     const decoder = new Utf8ToUtf32()
     const client = clientOf()
-    if (!client) { setError('This machine is not reachable. Reopen the terminal when it is back.'); return }
+    if (!client) { setError(new OfflineError(machineId ?? '', false)); return }
     model.titleChanged = title => { const short = shortTitle(title); if (short) titleRef.current?.(short) }
     const changed = () => {
       // Synchronized output (DECSET 2026) holds the picture until the program finishes its update, for at most a second.
@@ -314,7 +316,7 @@ export function Screen({ info, threadId, machineId, width, onTitle, onExit }: { 
     })
     // The pty takes the pane's size before the replay starts, so the scrollback is drawn at the width it is shown at (a replay at
     // the old width, resized afterwards, scrambled lines on a remote terminal).
-    const attach = () => fit().then(() => client.call('terminals.subscribe', { terminal_id: info.id, replay: true })).then(() => { if (live) { void fit(); update(v => v + 1); if (host.current) renderer?.focusElement?.(host.current.id) } }).catch(e => { if (live) setError(String(e)) })
+    const attach = () => fit().then(() => client.call('terminals.subscribe', { terminal_id: info.id, replay: true })).then(() => { if (live) { void fit(); update(v => v + 1); if (host.current) renderer?.focusElement?.(host.current.id) } }).catch(e => { if (live) setError(asError(e)) })
     // The daemon dropped output for this client: start over from its replay.
     const lagged = client.onNotification('terminal.lagged', params => { if ((params as { terminal_id: string }).terminal_id === info.id) { model.write('\x1bc'); void attach() } })
     // The daemon keeps a terminal's subscription per connection: after a reconnect a screen that stays mounted (the sign-in sheets'),
@@ -347,7 +349,7 @@ export function Screen({ info, threadId, machineId, width, onTitle, onExit }: { 
       // xterm.js turns pasted newlines into carriage returns.
       follow.current = true; send(terminalPaste(stdout.replace(/\r?\n/g, '\r'), model.bracketedPaste))
     },
-    (error) => setError(String(error instanceof Error ? error.message : error)),
+    (error) => setError(asError(error)),
   )
   const machines = useMachines()
   const pasteFrom = (source: SendTarget) => void readClipboardFrom(source).then((text) => { if (text !== null) { follow.current = true; send(terminalPaste(text.replace(/\r?\n/g, '\r'), model.bracketedPaste)) } })
@@ -387,7 +389,7 @@ export function Screen({ info, threadId, machineId, width, onTitle, onExit }: { 
   const cursorVisible = model.cursorVisible && model.cursorInitialized && exit === null && (!focused || blinkOn)
   const renderLine = (line: Line, index: number) => <TerminalLine key={line.id} line={line} revision={line.revision} model={model} palette={palette} surface={t.surface} selectionColor={palette.selection} cursorColor={model.cursorOverride ? `rgb(${model.cursorOverride.join(',')})` : palette.cursor} selection={selectionColumns(indexedSelection, index, model.cols)} selectCell={selectCell} reportMouse={reportMouse} press={press} cursorShape={shape} cursor={cursorVisible && index === cursorLine ? Math.min(model.x, model.cols - 1) : -1} />
   return <>
-    <ErrorLine error={error} />
+    <ErrorLine error={error} action="keep the terminal running" machine={machineId ? machines.find(m => m.machineId === machineId)?.name : undefined} />
     {search !== null && <div style={{ display: 'flex', alignItems: 'center', height: 32, gap: 4, paddingLeft: 8 }}>
       <TextField testId="terminal-search" autoFocus label="Search terminal scrollback" value={search} placeholder="Search scrollback…" onChange={v => { find(v, false, -1) }} onSubmit={() => find(search)} onKeyDown={e => { if (e.key === 'escape') { setSearch(null); if (host.current) renderer?.focusElement?.(host.current.id) } }} shell={{ flexGrow: 1 }} />
       <Label color={t.textSecondary} size={10}>{match < 0 ? 'No match' : `Line ${match + 1}`}</Label><Button variant="ghost" size="sm" label="Previous match" onClick={() => find(search, true)}>↑</Button><Button variant="ghost" size="sm" label="Next match" onClick={() => find(search)}>↓</Button><Button variant="ghost" size="sm" onClick={() => setSearch(null)}>Close</Button>

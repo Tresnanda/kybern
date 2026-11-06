@@ -3,6 +3,7 @@
 // the tray, the badge card, the Repositories dialog and the instructions offer, and the worktree preparation progress
 // (`threads.workspace_progress`) the first turn of a new chat reports. Labels, ordering and validation live in
 // `packages/kybern-client/src/groups.ts`.
+import { problemSentence } from '../problems/sentence.ts'
 import { useSyncExternalStore } from 'react'
 import {
   THREADS_WORKSPACE_PROGRESS_NOTIFICATION,
@@ -58,7 +59,7 @@ export function loadMemberStatus(projectId: ProjectId, force = false): Promise<P
       return result
     },
     (error: unknown) => {
-      if (getClient() === client) setStatus(projectId, { error: error instanceof Error ? error.message : String(error) })
+      if (getClient() === client) setStatus(projectId, { error: problemSentence(error, { action: 'check the group' }) })
       return null
     },
   ).finally(() => inflight.delete(projectId))

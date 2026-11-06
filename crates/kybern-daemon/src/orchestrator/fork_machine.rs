@@ -260,6 +260,7 @@ impl Orchestrator {
                     level: NoticeLevel::Info,
                     text,
                     data: Some(json!({ "kind": "fork_queued", "machine_id": target.id, "machine_name": target.name, "operation_id": operation_id })),
+                    problem: None,
                 },
             );
         }
@@ -601,7 +602,7 @@ impl Orchestrator {
         if self.inner.store.thread_get(payload.source_thread_id).ok().flatten().is_none() {
             return;
         }
-        match self.emit(payload.source_thread_id, None, EventPayload::ProviderNotice { level, text, data: Some(data) }) {
+        match self.emit(payload.source_thread_id, None, EventPayload::ProviderNotice { level, text, data: Some(data), problem: None }) {
             Ok(_) => {
                 let _ = self.inner.store.meta_set(&key, "1");
             }

@@ -230,6 +230,16 @@ Filtered empty: “No notes match “quarterly”.” + a plain “Clear search�
 An inline `Empty` with an `action` puts one plain button at the row's end
 (“No notes in kybern yet.” + New note).
 
+### Failures (`Problem.tsx`, `state/problems.ts`)
+
+Never show a raw error. `problemFor(e, "send your message")` (or `errorText` for a plain sentence) words any failure through the shared
+`describeProblem`: a headline that states the outcome or the fix with no period, one sentence, at most two buttons and the technical text
+behind **Show details** with a copy button. Draw it in the form that fits: `ProblemState` for a page or pane that couldn't load (never a
+banner), `ErrorBanner` above or below content, `ProblemRow` inside an `InsetGroup`, `failedToast()` for a command that failed.
+The phone never installs, signs in or updates on a computer: a fix there is a sentence that names the machine (“Install it on SatyaMas,
+then check again.”) and the button checks again. Pass the `action` as a verb phrase (“load the changes”) and say when work is safe with
+`note`. Test text that decides behaviour with `rawErrorMessage`, never with `errorText`.
+
 ### ChromeBar (`ChromeBar.tsx`)
 
 For custom floating chrome (the thread screen). Wrap the screen in

@@ -35,6 +35,7 @@ import {
 import { buildLists, cachedSingleLists, singleMachineLists, type ListsView } from "./machineLists";
 import type { MachineId } from "./protocol";
 import { setDraft } from "./draft";
+import { contextOf, prProblemModel, problemModel, sentenceOf, type PhoneContext, type ProblemModel } from "./problems";
 import { markListShown } from "./devTiming";
 import { applyIndexEvent } from "./indexProjection";
 import { ThreadCache } from "./threadCache";
@@ -265,7 +266,7 @@ export function isThreadOpen(id: string) {
 // ---- optimistic new chats (`packages/kybern-client/src/newChat.ts`) ----
 
 /** New chats started here whose threads the daemon may not have made yet. */
-export const newChats = createNewChats({ errorText: (e) => errorText(e) });
+export const newChats = createNewChats({ errorText: (e) => errorText(e, "start the chat") });
 /** Ids the daemon's last thread list held: a new chat it does not list yet is shown from its own record. */
 let listedThreadIds = new Set<string>();
 newChats.subscribe(() => {
@@ -384,7 +385,7 @@ export function useThreadValue<T>(
   const live = useThreadLive(id);
   useEffect(() => {
     if (id && live)
-      void ensureThread(id).catch((e) => publish({ error: errorText(e) }));
+      void ensureThread(id).catch((e) => publish({ error: errorText(e, "open this conversation") }));
   }, [id, live]);
   return snapshot;
 }
@@ -644,17 +645,34 @@ export function supportsOptimisticCreate() {
 export function supportsGroupProjects() {
   return versionAtLeast(client?.info?.version);
 }
-export function errorText(e: unknown) {
-  const message = e instanceof Error ? e.message : String(e);
-  if (e instanceof Error && e.name === "OfflineError")
-    return "That machine is offline. Open it again when it is back; threads you already loaded stay readable.";
-  if (
-    /network request failed|fetch failed|app transport security/i.test(message)
-  )
-    return "Unable to reach this computer. Check its address and that Kybern is running.";
-  if (/abort|timed? ?out/i.test(message))
-    return "The computer did not respond. Check your connection and try again.";
-  return message;
+/**
+ * An error as one or two plain sentences, for text that cannot hold buttons. Never the raw message: the shared
+ * `describeProblem` words it (`state/problems.ts`). `context` is what the person was doing ("send your message");
+ * screens that can show a fix and Show details use `problemFor` instead.
+ */
+export function errorText(e: unknown, context?: string | PhoneContext) {
+  const base = contextOf(context);
+  const machine = base.machine ?? machineNameFor();
+  return sentenceOf(e, machine ? { ...base, machine } : base);
+}
+/** The words, fix and details for `e`, for `ErrorBanner`, `ProblemState` and `showProblemToast`. */
+export function problemFor(e: unknown, context: string | PhoneContext, on?: { params?: unknown; machineId?: MachineId; pr?: boolean }): ProblemModel {
+  const base = contextOf(context);
+  const machine = base.machine ?? machineNameFor(on?.params, on?.machineId);
+  return (on?.pr ? prProblemModel : problemModel)(e, machine ? { ...base, machine } : base);
+}
+/** The error's own message, for code that decides what to do (never for showing). */
+export function rawErrorMessage(e: unknown) {
+  return e instanceof Error ? e.message : String(e);
+}
+/**
+ * The name of the computer a call with `params` (or `machineId`) runs on, for error copy. With neither, the paired computer, and
+ * only while it is the only one: with several machines an unrouted call could be any of them, so no name is better than a wrong one.
+ */
+export function machineNameFor(params?: unknown, machineId?: MachineId) {
+  if (!params && !machineId && hub && hub.view().machines.length > 1) return undefined;
+  const id = machineId ?? (params && hub ? hub.routeFor(params) : undefined) ?? hub?.primaryMachineId;
+  return (id && hub ? hub.view().machines.find((m) => m.machineId === id)?.name : undefined) ?? activeEnvironment()?.name;
 }
 export function clearError() {
   publish({ error: null });
@@ -888,7 +906,7 @@ export function connect(id: string | null) {
     activity: [],
     omitted: {},
   });
-  void saveActive(secureKv, id).catch((e) => publish({ error: errorText(e) }));
+  void saveActive(secureKv, id).catch((e) => publish({ error: errorText(e, "remember this computer") }));
   const env = state.environments.find((e) => e.id === id);
   if (!env) return;
   const thisGeneration = generation;
@@ -975,7 +993,7 @@ export function connect(id: string | null) {
       if (event.kind === "workspace_reverted") {
         snapshots.invalidate(event.thread_id);
         if (threadListeners.has(event.thread_id))
-          void loadThread(event.thread_id).catch((e) => publish({ error: errorText(e) }));
+          void loadThread(event.thread_id).catch((e) => publish({ error: errorText(e, "refresh this conversation") }));
       }
     },
     (_headSeq, replay) => {
@@ -1010,7 +1028,7 @@ export function connect(id: string | null) {
           .catch(() => {});
       }
       void refresh().catch((e) => {
-        if (generation === thisGeneration) publish({ error: errorText(e) });
+        if (generation === thisGeneration) publish({ error: errorText(e, "load your projects and threads") });
       });
       void loadNotes();
       void loadTasks();
@@ -1018,7 +1036,7 @@ export function connect(id: string | null) {
       for (const id of threadListeners.keys())
         if (id)
           void loadThread(id).catch((e) => {
-            if (generation === thisGeneration) publish({ error: errorText(e) });
+            if (generation === thisGeneration) publish({ error: errorText(e, "load your conversations") });
           });
     },
     (_headSeq, resumed) => {
@@ -1026,14 +1044,14 @@ export function connect(id: string | null) {
       snapshots.finishReplay();
       subscriptionReady = true;
       void refresh().catch((e) => {
-        if (generation === thisGeneration) publish({ error: errorText(e) });
+        if (generation === thisGeneration) publish({ error: errorText(e, "load your projects and threads") });
       });
       void loadNotes();
       void loadTasks();
       readyHooks.forEach((ready) => ready());
       for (const id of threadListeners.keys())
         if (id) void ensureThread(id).catch((e) => {
-          if (generation === thisGeneration) publish({ error: errorText(e) });
+          if (generation === thisGeneration) publish({ error: errorText(e, "open this conversation") });
         });
     },
   );
@@ -1105,7 +1123,7 @@ export async function refresh(machineId?: unknown) {
     providerRefreshPromise = rpc("providers.list", {}).then((result) => {
       if (epoch === generation) publish({ providers: result.providers });
     }).catch((e) => {
-      if (epoch === generation) publish({ error: errorText(e) });
+      if (epoch === generation) publish({ error: errorText(e, "load your agents") });
     }).finally(() => {
       if (epoch === generation) providerRefreshPromise = null;
     });
@@ -1312,7 +1330,7 @@ export async function loadThread(id: string, options: { prefetch?: boolean } = {
         // A reconnect may have acknowledged a new subscription while this old
         // request was pending. Catch up once more without clearing visible rows.
         if (superseded && subscriptionReady && threadListeners.has(id))
-          void ensureThread(id).catch((e) => publish({ error: errorText(e) }));
+          void ensureThread(id).catch((e) => publish({ error: errorText(e, "open this conversation") }));
       }
     });
   loads.set(id, request);

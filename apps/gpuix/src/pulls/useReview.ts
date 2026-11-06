@@ -1,3 +1,4 @@
+import { problemLine } from '../problems/describe.ts'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { asError } from '../../../../packages/kybern-client/src/problem.ts'
 import { afterReviewSubmission, assertReviewDraftHead, bindReviewDraft, readReviewDraft, repairReviewPrompt, type ReviewDraft } from '@/state/prReviewModel'
@@ -65,7 +66,7 @@ export function useReview(projectId: string, number: number, repo?: string) {
       if (review) save(afterReviewSubmission(draftRef.current, submitted))
       if (alive.current) refresh(n => n + 1)
       return true
-    } catch (e) { if (alive.current) setActionError(String(e)); return false }
+    } catch (e) { if (alive.current) setActionError(problemLine(e, { action: review ? 'send your review' : 'update the pull request' })); return false }
     finally { submitting.current = false; if (alive.current) setBusy(false) }
   }
   /** `prompt`: an agent button's own text (fix a check, address feedback, resolve conflicts): it ignores the review draft and leaves it as it was. */
@@ -99,7 +100,7 @@ export function useReview(projectId: string, number: number, repo?: string) {
       await refreshLists()
       openThread(target)
       return true
-    } catch (e) { if (alive.current) setActionError(String(e)); return false }
+    } catch (e) { if (alive.current) setActionError(problemLine(e, { action: 'start the repair' })); return false }
     finally { submitting.current = false; if (alive.current) setBusy(false) }
   }
   return { detail, loading, error, refresh: () => refresh(n => n + 1), revision, draft, updateDraft, saveDraft: save, busy, actionError, submit, repair }
@@ -107,13 +108,13 @@ export function useReview(projectId: string, number: number, repo?: string) {
 
 /** Page data is tagged by source and page so stale replies cannot replace a tab. */
 export function usePage(projectId: string, number: number, kind: PrPageKind, page: number, revision: number, head: string | undefined, enabled = true, repo?: string) {
-  const [state, setState] = useState<{ key: string; data?: PrPageResult; error?: string } | null>(null)
+  const [state, setState] = useState<{ key: string; data?: PrPageResult; error?: unknown } | null>(null)
   const connection = useApp(s => s.status)
   const key = `${projectId}${repo ? `/${repo}` : ''}:${number}:${kind}:${page}:${revision}:${head}:${connection}`
   useEffect(() => {
     if (!enabled || !head || connection !== 'open') return
     let canceled = false
-    void prCall(projectId, 'github.pr.page', { project_id: projectId, number, kind, page, ...(repo ? { repo } : {}) }).then(data => { if (!canceled) setState({ key, data }) }, e => { if (!canceled) setState({ key, error: String(e) }) })
+    void prCall(projectId, 'github.pr.page', { project_id: projectId, number, kind, page, ...(repo ? { repo } : {}) }).then(data => { if (!canceled) setState({ key, data }) }, e => { if (!canceled) setState({ key, error: e }) })
     return () => { canceled = true }
   }, [key, projectId, number, repo, kind, page, enabled, head, connection])
   return { data: state?.key === key ? state.data : undefined, error: state?.key === key ? state.error : undefined }

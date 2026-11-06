@@ -2,6 +2,7 @@ import type { GroupChoice } from '../groups/tray.ts'
 import {readAccounts} from '../requests/accounts.ts'
 import { load, save } from '../shell/persist.ts'
 import { addPending, pendingFor, removePending, updatePending, type PendingSend } from './pending.ts'
+import { asSendFailure, sendFailure } from './failure.ts'
 import { newChats } from './newChats.ts'
 import { queueSend, watchOutbox } from './outbox.ts'
 import type { NewChatCreate, QueuedCreate } from '../../../../packages/kybern-client/src/newChat.ts'
@@ -164,12 +165,6 @@ function need(client: ReturnType<typeof localClient>) {
 /** The client of the machine that owns the thread. Pass `machineId` when the thread is not listed (a child another machine runs), else the owner is guessed from the id. */
 function rpc(threadId?: ThreadId, machineId?: string) { return need(threadId ? threadClient(threadId, machineId) : localClient()) }
 
-/** `errorText` from `state/rpc.ts`: the daemon's message, or the thrown text. */
-export function errorText(e: unknown): string {
-  if (e && typeof e === 'object' && 'message' in e && typeof (e as { message: unknown }).message === 'string')
-    return (e as { message: string }).message
-  return String(e)
-}
 
 // ---- catalog, settings, accounts ----
 
@@ -403,7 +398,7 @@ async function deliverPending(send: PendingSend) {
       // edited first message with its own id). The daemon answers a repeat from the first call.
       const chat = newChats.get(send.threadId)!
       const done = await newChats.retry(send.threadId, chat.messageId === send.id ? undefined : { message: send.message, messageId: send.id })
-      if (done?.state === 'failed') throw new Error(done.error)
+      if (done?.state === 'failed') return updatePending(send.threadId, send.id, { state: 'failed', error: asSendFailure(done.error ?? '') })
       if (done?.adoptedId) return adoptNewChat(getFocusedPaneId(), send.threadId, done.adoptedId, send.id)
       if (done?.state === 'waiting') return updatePending(send.threadId, send.id, { state: 'waiting', ...(done.machineId ? { machineId: done.machineId } : {}) })
     } else if (send.delivery === 'send') await rpc(send.threadId).call('threads.send', { thread_id: send.threadId, message: send.message, message_id: send.id })
@@ -415,7 +410,7 @@ async function deliverPending(send: PendingSend) {
     if (machine) {
       try { return await queueSend(machine, { thread_id: send.threadId, message: send.message, message_id: send.id }) } catch (queueError) { e = queueError }
     }
-    updatePending(send.threadId, send.id, { state: 'failed', error: errorText(e) })
+    updatePending(send.threadId, send.id, { state: 'failed', error: sendFailure(e) })
   }
 }
 
@@ -523,7 +518,7 @@ export function launchNewChat(opts: {
   const started = newChats.start({ threadId: opts.threadId, messageId: send.id, message: opts.message, worktree: opts.worktree, thread: opts.thread, ...(opts.machine ? { machineId: opts.machine.id, machineName: opts.machine.name } : {}) }, opts.create)
   track(opts.threadId, started.then((chat) => {
     if (chat.adoptedId) return adoptNewChat(paneId, opts.threadId, chat.adoptedId, send.id)
-    if (chat.state === 'failed') updatePending(opts.threadId, send.id, { state: 'failed', error: chat.error })
+    if (chat.state === 'failed') updatePending(opts.threadId, send.id, { state: 'failed', error: asSendFailure(chat.error ?? '') })
     // Queued for a machine that is away: the bubble stays, with no timeout, until the machine takes it (`watchOutbox`).
     else if (chat.state === 'waiting') updatePending(opts.threadId, send.id, { state: 'waiting', ...(chat.machineId ? { machineId: chat.machineId } : {}) })
     else if (chat.messageId === send.id) updatePending(opts.threadId, send.id, { state: 'accepted' })

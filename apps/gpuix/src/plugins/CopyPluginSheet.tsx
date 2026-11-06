@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { problemSentence } from '../problems/sentence.ts'
 import type { MachinePlugin, PluginsNetworkView, PluginsMachineView, PluginCopyOutcome } from '../../../../packages/kybern-client/src/types.ts'
 import { contentsText, enabledText, pluginCopyRequest, pluginKey, providerName, jobText, type PluginRow } from '../../../../packages/kybern-client/src/pluginSync.ts'
 import { Dialog } from '../nav/overlay.tsx'
@@ -10,7 +11,6 @@ import { MachineBadge } from '../sidebar/MachineBadge.tsx'
 import { glyphOfMachine } from '../machines/index.ts'
 import { DialogBody, DialogFooter, DialogHeader, ErrorText, Field, Hint } from '../environments/kit.tsx'
 import { Label, useTheme } from '../ui.tsx'
-import { errorText } from '../nav/actions.ts'
 import { useControls } from '../kit/controls.ts'
 import { copyPlugin, pluginsClient } from './store.ts'
 import { isWindowVisible } from '../native/visibility.ts'
@@ -45,7 +45,7 @@ export function CopyPluginSheet({view, rows, targetId, close, inline = false}: {
     try {
       for (const plan of plans) {
         try { const result = await copyPlugin(pluginCopyRequest(plan.source, plan.plugin, selected.filter(m => m.id !== plan.source.id), view, replace)); done.push(...result.targets.map(t => ({...t, plugin: plan.plugin.name}))) }
-        catch (e) {done.push({machine: '', name: plan.source.name, plugin: plan.plugin.name, outbox_id: null, result: null, error: errorText(e)})}
+        catch (e) {done.push({machine: '', name: plan.source.name, plugin: plan.plugin.name, outbox_id: null, result: null, error: problemSentence(e, { action: `copy ${plan.plugin.name}` })})}
       }
       setResults(done)
     } finally {setBusy(false)}

@@ -1,4 +1,5 @@
 import { activeEnvironment } from '../shell/environment.ts'
+import { problemSentence } from '../problems/sentence.ts'
 import { AntigravitySetup } from './Antigravity.tsx'
 import { CursorAccountSection, useCursorSetup } from './Cursor.tsx'
 import { InstalledAgents } from './InstalledAgents.tsx'
@@ -136,7 +137,7 @@ function DaemonUpdateRow() {
  const [busy, setBusy] = useState(false)
  const [error, setError] = useState('')
  const status = update.data
- const act = async () => {setBusy(true);setError('');try {await getClient()!.call(status?.status === 'available' ? 'daemon_update.run' : 'daemon_update.check', {});update.refresh()} catch(e) {setError(`Unable to update the daemon. ${String(e)}`)} finally {setBusy(false)}}
+ const act = async () => {setBusy(true);setError('');try {await getClient()!.call(status?.status === 'available' ? 'daemon_update.run' : 'daemon_update.check', {});update.refresh()} catch(e) {setError(problemSentence(e, { action: 'update the daemon' }))} finally {setBusy(false)}}
  return <Row title="kybernd" description={activeEnvironment().local ? 'Bundled with the app and updated with it.' : info.data ? `${info.data.hostname} · ${info.data.os} ${info.data.arch}` : '…'}><div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:8}}><div style={{display:'flex',alignItems:'center',gap:12}}><Label color={t.textSecondary} size={14}>{info.data?.version??'…'}</Label>{!activeEnvironment().local && <Button disabled={busy} onClick={()=>void act()}>{busy?'Checking…':status?.status==='available'&&status.latest_version?`Update to ${status.latest_version}`:'Check for updates'}</Button>}</div>{error&&<Label color={t.red} size={12}>{error}</Label>}</div></Row>
 }
 

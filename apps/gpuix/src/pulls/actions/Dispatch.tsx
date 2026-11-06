@@ -1,6 +1,7 @@
 // Run workflow (ADE-97): start a `workflow_dispatch` workflow on a branch or tag with its inputs, read from the workflow file
 // on that branch (`github.actions.workflow`): a choice is a menu, a boolean a switch, anything else a text field. Once GitHub
 // lists the new run it counts as one the user started, so its finish is announced.
+import { problemSentence } from '../../problems/sentence.ts'
 import { useEffect, useState } from 'react'
 import { focusActions } from './store.ts'
 import { type ActionsRepo } from '../../../../../packages/kybern-client/src/actions.ts'
@@ -53,7 +54,7 @@ export function Dispatch({ target, workflows, defaultBranch, ownBranch, initial,
       if (canceled) return
       setInputs({ key: inputsKey, result })
       setValues(Object.fromEntries(result.inputs.map(i => [i.name, i.default ?? (i.kind === 'boolean' ? 'false' : i.kind === 'choice' ? i.options?.[0] ?? '' : '')])))
-    }, e => { if (!canceled) setInputs({ key: inputsKey, error: String(e) }) })
+    }, e => { if (!canceled) setInputs({ key: inputsKey, error: problemSentence(e, { action: 'read the workflow inputs' }) }) })
     return () => { canceled = true }
   }, [inputsKey])
   const shown = inputs?.key === inputsKey ? inputs : null
@@ -71,7 +72,7 @@ export function Dispatch({ target, workflows, defaultBranch, ownBranch, initial,
       void findDispatched(target, workflow, ref.trim(), started).then(id => {
         if (id !== null) { onStarted(); focusActions({ ...target, runId: id }) }
       })
-    }, e => { setError(String(e)); setBusy(false) })
+    }, e => { setError(problemSentence(e, { action: 'start the workflow' })); setBusy(false) })
   }
 
   return <div testId="actions-dispatch" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0 }}>

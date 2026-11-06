@@ -14,6 +14,7 @@ import {
   applyNoteChange,
   sortNotes,
 } from "./notesModel";
+import { problemModel, type ProblemModel } from "./problems";
 import { listCache } from "./listCache";
 import { keepAway, listParams, networkTarget, ownerOf, recordList, resetOwners, setOwner, writable, writeClient } from "./federated";
 
@@ -22,7 +23,8 @@ export interface NotesState {
   loaded: boolean;
   /** The computer's daemon predates notes. */
   unsupported: boolean;
-  error: string;
+  /** Why the list could not load: the model carries its fix and details; "" is no error. */
+  error: ProblemModel | "";
   /** The most recent soft delete, offered as an Undo for a few seconds. `ids` holds every note it removed. */
   undo: { id: string; title: string; ids: string[] } | null;
 }
@@ -120,10 +122,10 @@ export function attachNotes(next: KybernClient, current: () => boolean, machineI
 function failure(e: unknown) {
   const code = (e as { code?: number } | null)?.code;
   if (code === METHOD_NOT_FOUND)
-    return { unsupported: true, error: "" };
+    return { unsupported: true, error: "" as const };
   return {
     unsupported: false,
-    error: e instanceof Error ? e.message : String(e),
+    error: problemModel(e, { action: "load your notes" }),
   };
 }
 

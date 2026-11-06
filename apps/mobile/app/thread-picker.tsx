@@ -65,7 +65,7 @@ export default function ThreadPicker() {
         })
         .catch((cause) => {
           if (alive && generation === searchGeneration.current)
-            setError(errorText(cause));
+            setError(errorText(cause, "search your threads"));
         })
         .finally(() => {
           if (alive && generation === searchGeneration.current)
@@ -106,7 +106,7 @@ export default function ThreadPicker() {
       ]);
       setNextCursor(result.next_cursor ?? null);
     } catch (cause) {
-      if (generation === searchGeneration.current) setError(errorText(cause));
+      if (generation === searchGeneration.current) setError(errorText(cause, "search your threads"));
     } finally {
       if (generation === searchGeneration.current) setLoadingMore(false);
     }

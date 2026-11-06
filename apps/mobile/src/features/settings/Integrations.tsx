@@ -68,7 +68,7 @@ export function IntegrationsSettings({
     setCatalog({ items: [], warnings: [] });
     rpc("integrations.list", { project_id: projectId, provider })
       .then((value) => live && setCatalog(value))
-      .catch((e) => live && setError(errorText(e)))
+      .catch((e) => live && setError(errorText(e, "load the connections")))
       .finally(() => live && setLoading(false));
     return () => {
       live = false;
@@ -89,7 +89,7 @@ export function IntegrationsSettings({
         }));
       } else setReload((n) => n + 1);
     } catch (e) {
-      setError(errorText(e));
+      setError(errorText(e, "connect that service"));
     } finally {
       setBusy(false);
     }
@@ -101,12 +101,12 @@ export function IntegrationsSettings({
       const terminal = await rpc("integrations.login", { thread_id: thread.id, name: item.id });
       router.push({ pathname: "/workspace", params: { threadId: thread.id, tab: "Terminal", terminalId: terminal.id, login: "1" } });
     } catch (e) {
-      setError(errorText(e));
+      setError(errorText(e, "start the sign-in"));
     } finally {
       setBusy(false);
     }
   };
-  const open = (url: string) => void Linking.openURL(url).catch((e) => setError(errorText(e)));
+  const open = (url: string) => void Linking.openURL(url).catch((e) => setError(errorText(e, "open the link")));
   const canLogin = !!thread && thread.provider.kind === provider && thread.project_id === projectId;
   const actions = (item: Integration): MenuItem[] => [
     ...item.actions.map((action) => ({

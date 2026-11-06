@@ -1,4 +1,6 @@
 import { noteSession } from './session.ts'
+import { asError, errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
+import { toastProblem } from '../problems/toast.ts'
 import { saveTextFile } from '../platform/files.ts'
 import { useGpuix } from '@gpuix/react'
 import { useState } from 'react'
@@ -14,7 +16,7 @@ import { deleteNote, gallery, recordNote, refreshNotes, restoreNote, rpc, moveNo
 import { writeClipboardText } from '../platform/os.ts'
 
 export async function copyMarkdown(title: string, body: string) {
-  await writeClipboardText(noteMarkdown(title, body)).catch((error) => { throw new Error(error instanceof Error && error.name === 'MissingToolError' ? error.message : 'Clipboard unavailable') })
+  await writeClipboardText(noteMarkdown(title, body)).catch((error) => { throw new Error(error instanceof Error && error.name === 'MissingToolError' ? errorMessage(error) : 'Clipboard unavailable') })
 }
 export function NoteMenu({ note, readText, part, trigger }: { note: NoteSummary; readText?: () => { title: string; body: string }; part?: 'share' | 'more'; trigger?: () => React.ReactNode }) {
   const t = useTheme()
@@ -22,7 +24,7 @@ export function NoteMenu({ note, readText, part, trigger }: { note: NoteSummary;
   const { renderer } = useGpuix()
   const [moving, setMoving] = useState(false)
   const [purging, setPurging] = useState(false)
-  const run = (fn: () => Promise<unknown>) => { void fn().catch((e) => toast.error('Couldn’t update note', { description: String(e) })) }
+  const run = (fn: () => Promise<unknown>) => { void fn().catch((e) => toastProblem(e, { action: 'update the note' })) }
   const text = async () => readText?.() ?? (await rpc(note.id).call('notes.get', { id: note.id })).note ?? { title: note.title, body: '' }
   const move = (projectId?: string) => run(async () => { await noteSession(note.id).flush(); await moveNote(note.id, projectId); setMoving(false) })
   return <>
@@ -36,7 +38,7 @@ export function NoteMenu({ note, readText, part, trigger }: { note: NoteSummary;
           const current = await text()
           const fileName = exportFileName(current.title)
           if (await saveTextFile(renderer, fileName, noteMarkdown(current.title, current.body))) toast(`Exported to ${fileName}`)
-        } catch (e) { toast.error('Unable to export the note', { description: e instanceof Error ? e.message : String(e) }) }
+        } catch (e) { toastProblem(e, { action: 'export the note' }) }
       })()} />}
       {part === 'share' ? null : note.deleted_at ? <><MenuItem id="restore" label="Restore" onSelect={() => void restoreNote(note.id)} /><MenuItem id="purge" label="Delete forever…" destructive onSelect={() => setPurging(true)} /></> : <MenuItem id="delete" testId="note-delete" label="Delete" destructive onSelect={() => { markNoteLeaving(note); void deleteNote(note.id) }} />}
     </Menu>

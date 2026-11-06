@@ -3,7 +3,6 @@
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import { FlatList, RefreshControl, View } from "react-native";
-import { classifyPrError } from "../../../packages/kybern-client/src/prReview";
 import {
   PR_FILTERS,
   byUpdated,
@@ -11,11 +10,13 @@ import {
   matchesPrQuery,
   type PrFilter,
 } from "../../../packages/kybern-client/src/pullRequests";
-import { GhProblem, PrRow, isGhProblem } from "../src/features/PullRequests";
+import { PrRow, isSetupProblem } from "../src/features/PullRequests";
+import type { ProblemModel } from "../src/state/problems";
 import type { Project, PullRequest } from "../src/state/protocol";
-import { errorText, rpc, useApp } from "../src/state/runtime";
+import { problemFor, rpc, useApp } from "../src/state/runtime";
 import { HeaderActions } from "../src/ui/ActionMenu";
 import { SectionHeader } from "../src/ui/List";
+import { ProblemState } from "../src/ui/Problem";
 import { Button, Empty, ErrorBanner } from "../src/ui/primitives";
 import { SearchField } from "../src/ui/Search";
 import { Segmented } from "../src/ui/Segmented";
@@ -28,11 +29,16 @@ type ListRowItem =
   | { kind: "header"; key: string; title: string; count: number; first: boolean }
   | { kind: "pr"; key: string; item: Item; last: boolean };
 
-const cache = new Map<string, { until: number; rows: PullRequest[]; errors: string[] }>();
+const cache = new Map<string, { until: number; rows: PullRequest[]; errors: ProblemModel[] }>();
 /** A group project has pull requests in its member repositories, whatever its own folder is. */
 const hasPullRequests = (p: Project) => p.is_git || p.kind === "group";
 const memberName = (project: Project, repo?: string) =>
   repo ? (project.members?.find((m) => m.path === repo)?.name ?? repo) : undefined;
+
+/** A pull request list failure, worded for the project it came from. */
+function prProblem(error: unknown, label: string, projectId: string) {
+  return problemFor(error, { action: `load pull requests for ${label}`, goal: "load pull requests" }, { pr: true, params: { project_id: projectId } });
+}
 
 export default function PullRequestsScreen() {
   const { projectId: initialProject } = useLocalSearchParams<{ projectId?: string }>();
@@ -44,7 +50,7 @@ export default function PullRequestsScreen() {
   const [projectId, setProjectId] = useState<string | null>(initialProject ?? null);
   const [query, setQuery] = useState("");
   const [revision, setRevision] = useState(0);
-  const [loaded, setLoaded] = useState<{ scope: string; items: Item[]; errors: string[] } | null>(null);
+  const [loaded, setLoaded] = useState<{ scope: string; items: Item[]; errors: ProblemModel[] } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const githubProjects = useMemo(() => lists.projects.filter(hasPullRequests), [lists.projects]);
   const targets = useMemo(
@@ -60,24 +66,24 @@ export default function PullRequestsScreen() {
         const key = `${app.activeId}:${project.id}:${filter}`;
         const hit = cache.get(key);
         try {
-          let loaded: { rows: PullRequest[]; errors: string[] };
+          let loaded: { rows: PullRequest[]; errors: ProblemModel[] };
           if (!refreshing && hit && hit.until > Date.now()) loaded = hit;
           else {
             const result = await rpc("github.pr.list", { project_id: project.id, state: filter, limit: 30 });
             // A group project's members that couldn't be listed don't hide the others.
-            const errors = (result.repos ?? []).flatMap((m) =>
-              m.error && !m.skipped && classifyPrError(m.error) !== "no-remote"
-                ? [`${project.name} / ${m.name}: ${m.error}`]
-                : [],
-            );
+            const errors = (result.repos ?? []).flatMap((m) => {
+              if (!m.error || m.skipped) return [];
+              const problem = prProblem(m.error, `${project.name} / ${m.name}`, project.id);
+              return problem.subject === "github_remote" ? [] : [problem];
+            });
             loaded = { rows: result.pull_requests, errors };
           }
           cache.set(key, { until: Date.now() + 30_000, ...loaded });
           return { items: loaded.rows.map((pr) => ({ project, pr })), errors: loaded.errors };
         } catch (e) {
-          const text = errorText(e);
+          const problem = prProblem(e, project.name, project.id);
           // A project without a GitHub remote simply has no pull requests.
-          return { items: [] as Item[], errors: classifyPrError(text) === "no-remote" ? [] : [`${project.name}: ${text}`] };
+          return { items: [] as Item[], errors: problem.subject === "github_remote" ? [] : [problem] };
         }
       }),
     ).then((results) => {
@@ -107,17 +113,17 @@ export default function PullRequestsScreen() {
     }
     return out;
   }, [data, query, projectId, githubProjects.length]);
-  const failure = data?.errors.find(isGhProblem);
-  const otherErrors = data?.errors.filter((e) => !isGhProblem(e)) ?? [];
+  const failure = data?.errors.find(isSetupProblem);
+  const otherErrors = data?.errors.filter((e) => !isSetupProblem(e)) ?? [];
   const project = targets.length === 1 && projectId ? targets[0] : undefined;
 
   const header = (
     <View style={{ gap: space.md, paddingHorizontal: space.lg, paddingTop: space.sm, paddingBottom: space.sm }}>
       <SearchField value={query} onChangeText={setQuery} placeholder="Title, branch or number" />
       <Segmented compact label="Show pull requests" options={PR_FILTERS} value={filter} onChange={setFilter} />
-      {otherErrors.length > 0 && (
-        <ErrorBanner error={otherErrors.join("\n")} onRetry={() => setRevision((n) => n + 1)} />
-      )}
+      {otherErrors.slice(0, 3).map((problem, index) => (
+        <ErrorBanner key={index} error={problem} onRetry={() => setRevision((n) => n + 1)} />
+      ))}
     </View>
   );
   return (
@@ -159,7 +165,7 @@ export default function PullRequestsScreen() {
         }
         ListEmptyComponent={
           failure ? (
-            <GhProblem error={failure} onRetry={() => setRevision((n) => n + 1)} />
+            <ProblemState problem={failure} onRetry={() => setRevision((n) => n + 1)} />
           ) : !data ? (
             app.status === "open" ? <Working label="Loading pull requests" /> : null
           ) : !targets.length ? (

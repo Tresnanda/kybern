@@ -102,7 +102,7 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
     );
   }, [threadId]);
   useEffect(() => {
-    void reload().catch((e) => setError(errorText(e)));
+    void reload().catch((e) => setError(errorText(e, "open the terminal")));
   }, [reload, online]);
   useEffect(() => {
     if (!selected || !ready || !online) return;
@@ -122,13 +122,13 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
       }
     });
     const exit = client.onNotification("terminal.exited", () => {
-      if (alive) void reload().catch((e) => setError(errorText(e)));
+      if (alive) void reload().catch((e) => setError(errorText(e, "refresh the terminals")));
     });
     const subscribe = () =>
       client
         .call("terminals.subscribe", { terminal_id: selected, replay: true })
         .catch((e) => {
-          if (alive) setError(errorText(e));
+          if (alive) setError(errorText(e, "attach to the terminal"));
         });
     // The daemon dropped output this client could not keep up with: redraw from the replay.
     const lagged = client.onNotification("terminal.lagged", (raw) => {
@@ -172,7 +172,7 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
       await reload();
       setSelected(terminal.id);
     } catch (e) {
-      setError(errorText(e));
+      setError(errorText(e, "open a terminal"));
     } finally {
       setBusy(false);
     }
@@ -203,7 +203,7 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
       await write;
       return true;
     } catch (e) {
-      setError(errorText(e));
+      setError(errorText(e, "type in the terminal"));
       return false;
     }
   }
@@ -225,7 +225,7 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
           onPress: () => {
             void rpc("terminals.close", { terminal_id: selected }, threadMachine(threadId))
               .then(reload)
-              .catch((e) => setError(errorText(e)));
+              .catch((e) => setError(errorText(e, "close the terminal")));
           },
         },
       ],
@@ -235,11 +235,11 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
     <View style={{ flex: 1, gap: 4 }}>
       {!!error && (
         <View style={{ paddingHorizontal: space.lg }}>
-          <ErrorBanner error={error} onRetry={() => void reload().catch((e) => setError(errorText(e)))} />
+          <ErrorBanner error={error} onRetry={() => void reload().catch((e) => setError(errorText(e, "reload the terminals")))} />
         </View>
       )}
       {connectorLogin && selected === initialTerminalId && <View style={{ paddingHorizontal: 16, gap: 8 }}>
-        {loginUrl && <Button onPress={() => void Linking.openURL(loginUrl).catch(e => setError(errorText(e)))}>Sign in on {new URL(loginUrl).hostname}</Button>}
+        {loginUrl && <Button onPress={() => void Linking.openURL(loginUrl).catch(e => setError(errorText(e, "open the sign-in page")))}>Sign in on {new URL(loginUrl).hostname}</Button>}
         <T variant="footnote" tone="secondary">After signing in, paste the full redirect URL when Claude asks for it.</T>
         <Field label="Sign-in redirect URL" hideLabel secureTextEntry autoCapitalize="none" autoCorrect={false} value={redirect} onChangeText={setRedirect} placeholder="Paste the redirect URL" />
         <Button busy={busy} disabled={!ready || !redirect.trim() || !online} onPress={() => void completeLogin()}>Complete sign-in</Button>
@@ -384,7 +384,7 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
                       terminal_id: selectedRef.current,
                       cols: message.cols!,
                       rows: message.rows!,
-                    }, threadMachine(threadId)).catch((e) => setError(errorText(e)));
+                    }, threadMachine(threadId)).catch((e) => setError(errorText(e, "resize the terminal")));
                 } catch {
                   setError(
                     "Terminal display could not process an update. Reopen this workspace.",

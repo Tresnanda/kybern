@@ -42,7 +42,7 @@ export async function rewindTurn(threadId: string, turnId: string) {
     await loadThread(threadId);
     showToast("Rewound to before this turn");
   } catch (e) {
-    showToast(errorText(e) || "Unable to rewind. Try again.");
+    showToast(errorText(e, "rewind the thread"));
   }
 }
 

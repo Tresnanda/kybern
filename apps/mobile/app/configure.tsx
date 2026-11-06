@@ -223,7 +223,7 @@ export default function Configure() {
         router.back();
       }
     } catch (e) {
-      setError(errorText(e));
+      setError(errorText(e, "save your changes"));
     } finally {
       setBusy(false);
     }

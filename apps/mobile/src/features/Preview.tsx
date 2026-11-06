@@ -53,7 +53,7 @@ export function PreviewPane({ threadId, initialTarget }: { threadId: string; ini
       setServers(result.servers);
     } catch (e) {
       setServers([]);
-      setError(errorText(e));
+      setError(errorText(e, "look for running servers"));
     }
   }, [threadId]);
   useEffect(() => {

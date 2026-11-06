@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
+import { problemSentence } from '../problems/sentence.ts'
 import type { Note } from '../../../../packages/kybern-client/src/types.ts'
 import { getClient } from '../state.ts'
 import { load, save } from '../shell/persist.ts'
 import { Button } from '../kit/Button.tsx'
 import { TextArea } from '../kit/TextArea.tsx'
 import { Label, useTheme } from '../ui.tsx'
-import { errorText } from '../nav/actions.ts'
 
 /** Compact Markdown draft. Revision checks keep edits from overwriting another client. */
 export function ThreadNote({ threadId }: { threadId: string }) {
@@ -24,7 +24,7 @@ export function ThreadNote({ threadId }: { threadId: string }) {
       setNote(note ?? null)
       setBody(load<string | null>(key, null) ?? note?.body ?? '')
       setLoaded(true)
-    }, (e) => { if (live) setError(errorText(e)) })
+    }, (e) => { if (live) setError(problemSentence(e, { action: 'save the note' })) })
     return () => { live = false }
   }, [threadId, key, reload])
   const commit = async () => {
@@ -35,7 +35,7 @@ export function ThreadNote({ threadId }: { threadId: string }) {
       const next = await client.call('notes.update', { thread_id: threadId, expected_revision: note?.revision ?? 0, body })
       if (getClient() !== client) return
       setNote(next); save(key, undefined)
-    } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
+    } catch (e) { setError(problemSentence(e, { action: 'save the note' })) } finally { setBusy(false) }
   }
   const dirty = body !== (note?.body ?? '')
   return <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 8, paddingRight: 8, paddingBottom: 8 }}>

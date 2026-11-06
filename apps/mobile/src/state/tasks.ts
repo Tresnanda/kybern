@@ -23,6 +23,7 @@ import {
   withOverrides,
   type TaskOverride,
 } from "./tasksModel";
+import { problemModel, type ProblemModel } from "./problems";
 import { listCache } from "./listCache";
 import { keepAway, listParams, networkTarget, ownerOf, recordList, resetOwners, setOwner, writable, writeClient } from "./federated";
 
@@ -40,7 +41,8 @@ export interface TasksState {
   loaded: boolean;
   /** The computer's daemon predates tasks. */
   unsupported: boolean;
-  error: string;
+  /** Why the list could not load: the model carries its fix and details; "" is no error. */
+  error: ProblemModel | "";
   toast: TaskToast | null;
 }
 const initial: TasksState = {
@@ -144,10 +146,10 @@ function saveCopy() {
 
 function failure(e: unknown) {
   const code = (e as { code?: number } | null)?.code;
-  if (code === METHOD_NOT_FOUND) return { unsupported: true, error: "" };
+  if (code === METHOD_NOT_FOUND) return { unsupported: true, error: "" as const };
   return {
     unsupported: false,
-    error: e instanceof Error ? e.message : String(e),
+    error: problemModel(e, { action: "load your tasks" }),
   };
 }
 

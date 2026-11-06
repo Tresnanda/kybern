@@ -1,6 +1,7 @@
 // Pure rules for Settings › Agent providers › Installed agents (no React), so tests load them directly.
 import type { CursorSetupStatus, HarnessUpdate, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
 import { relativeTime } from '../shared/lib/format.ts'
+import { plainSentence } from '../../../../packages/kybern-client/src/problems.ts'
 
 /** "checked 3h ago", "checked just now", "checked on 2 Nov". */
 export function checkedPhrase(iso: string | null, now = Date.now()): string {
@@ -36,7 +37,7 @@ export function cursorSdkLine({ status, error }: { status: CursorSetupStatus | n
   if (!status || status.installed) return error || null
   if (status.installing) return `Installing SDK ${status.sdk_version}…`
   if (error) return error
-  if (status.problem) return status.problem
+  if (status.problem) return plainSentence(status.problem) ?? 'Cursor’s SDK needs setup. Check again, then try the install.'
   if (status.previous_version) return `SDK ${status.previous_version} is installed. This version of Kybern needs ${status.sdk_version}.`
   return 'Needs Cursor’s SDK, which installs separately from the Cursor app.'
 }

@@ -141,7 +141,7 @@ test('external URL never starts or shuts down a daemon, including incompatible v
       launch: async () => { throw Error('must never launch') },
     })
     if (remote?.protocol_version === 1) expect((await resolver()).url).toBe('ws://127.0.0.1:4312/ws')
-    else await expect(resolver()).rejects.toThrow(remote ? 'incompatible' : 'not reachable')
+    else await expect(resolver()).rejects.toThrow(remote ? 'different version of Kybern' : 'not reachable')
     expect(methods).toEqual(['daemon.info'])
   }
 }))

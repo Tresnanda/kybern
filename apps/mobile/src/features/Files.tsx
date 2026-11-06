@@ -37,7 +37,7 @@ export function Files({
       const result = await rpc("files.list", { project_id: project.id, path });
       setFolders((s) => ({ ...s, [path]: result.entries }));
     } catch (e) {
-      setError(errorText(e));
+      setError(errorText(e, "open that folder"));
     } finally {
       setLoading((s) => {
         const n = new Set(s);
@@ -70,7 +70,7 @@ export function Files({
             );
         })
         .catch((e) => {
-          if (alive) setError(errorText(e));
+          if (alive) setError(errorText(e, "load your files"));
         });
     }, 180);
     return () => {

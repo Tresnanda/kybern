@@ -1,4 +1,5 @@
 import type { PreviewServer, PreviewServersListResult } from '../../../../packages/kybern-client/src/types.ts'
+import { problemSentence } from '../problems/sentence.ts'
 import type { LogicalProject } from '../../../../packages/kybern-client/src/machineMerge.ts'
 
 export interface ServerMachine { machineId: string; name: string; isLocal: boolean; offline: boolean; roots?: string[]; threadId?: string }
@@ -53,7 +54,7 @@ export function startServerDiscovery(machines: readonly ServerMachine[], query: 
         result.servers = reply.servers; result.phase = 'ready'; result.error = undefined
       }, error => {
         // A failed refresh must not present a stale endpoint as a running server.
-        result.servers = []; result.phase = 'error'; result.error = error instanceof Error ? error.message : String(error)
+        result.servers = []; result.phase = 'error'; result.error = problemSentence(error, { action: 'look for servers', machine: result.machine.name })
       }).finally(() => {
         active--
         if (!live) return

@@ -281,13 +281,13 @@ impl Stream {
                 anchors: TurnAnchors { turn_id: self.run.clone(), previous_end: None },
             });
         } else {
-            out.push(DriverEvent::TurnFailed {
-                error: result
+            out.push(DriverEvent::turn_failed(
+                ProviderKind::Cursor,
+                result
                     .pointer("/error/message")
                     .and_then(Value::as_str)
-                    .unwrap_or("Cursor SDK run failed. Send again to resume the conversation.")
-                    .into(),
-            });
+                    .unwrap_or("Cursor SDK run failed. Send again to resume the conversation."),
+            ));
         }
         *self = Self::default();
     }
@@ -420,6 +420,19 @@ mod tests {
             end.iter()
                 .any(|event| matches!(event, DriverEvent::RuntimeTaskCompleted(task) if task.status == Some(RuntimeTaskStatus::Stopped)))
         );
+    }
+
+    #[test]
+    fn a_run_that_needs_a_sign_in_fails_with_a_signed_out_problem() {
+        let mut stream = started();
+        let events = stream.handle(&json!({"type":"run_failed","runId":"r1","error":"Authentication required"}));
+        let Some(DriverEvent::TurnFailed { error, problem }) = events.last() else { panic!("{events:?}") };
+        assert_eq!(error, "Authentication required");
+        let problem = problem.as_ref().expect("a signed-out problem");
+        assert_eq!((problem.kind, problem.subject.as_deref()), (kybern_protocol::rpc::ProblemKind::SignedOut, Some("cursor")));
+        // A crash with no words stays a plain failure.
+        let mut crashed = started();
+        assert!(matches!(crashed.exited().last(), Some(DriverEvent::TurnFailed { problem: None, .. })));
     }
 
     #[test]

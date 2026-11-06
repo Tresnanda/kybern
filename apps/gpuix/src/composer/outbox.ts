@@ -11,6 +11,7 @@ import { machineHub } from '../machines/index.ts'
 import { getState, localClient } from '../state.ts'
 import { newChats } from './newChats.ts'
 import { addPending, updatePending } from './pending.ts'
+import { asSendFailure } from './failure.ts'
 
 /** A machine's name as the composer says it ("Waiting for satyamas"). */
 export const machineName = (machineId: MachineId | undefined): string => (machineId && machineHub().set.connection(machineId) ? machineHub().set.displayName(machineId) : undefined) ?? 'that machine'
@@ -33,14 +34,14 @@ function applyItem(item: OutboxItem) {
   if (chat) {
     // The first message's bubble follows the chat: waiting, delivered (its own event replaces the bubble), or failed.
     if (chat.state === 'created') updatePending(chat.threadId, chat.messageId, { state: 'accepted' })
-    else if (chat.state === 'failed') updatePending(chat.threadId, chat.messageId, { state: 'failed', ...(chat.error ? { error: chat.error } : {}) })
+    else if (chat.state === 'failed') updatePending(chat.threadId, chat.messageId, { state: 'failed', ...(chat.error ? { error: asSendFailure(chat.error) } : {}) })
     else if (chat.state === 'waiting') updatePending(chat.threadId, chat.messageId, { state: 'waiting', ...(chat.machineId ? { machineId: chat.machineId } : {}) })
   }
   const follow = sends.get(item.id)
   if (!follow) return
   const phase = queuedPhase(item, machineName(follow.machineId))
   if (phase.phase === 'delivered') { sends.delete(item.id); updatePending(follow.threadId, follow.sendId, { state: 'accepted' }) }
-  else if (phase.phase === 'failed') { sends.delete(item.id); updatePending(follow.threadId, follow.sendId, { state: 'failed', error: phase.error }) }
+  else if (phase.phase === 'failed') { sends.delete(item.id); updatePending(follow.threadId, follow.sendId, { state: 'failed', error: asSendFailure(phase.error) }) }
 }
 
 /** Chats still waiting from before this window started: shown again, with their first message. */

@@ -7,7 +7,8 @@ import { useEffect, useState } from "react";
 import { Linking, View, useWindowDimensions } from "react-native";
 import { confirm } from "../ui/Alert";
 import type { Diff, FileChange, FileStatus, GitStatus } from "../state/protocol";
-import { errorText, rpc, useApp } from "../state/runtime";
+import { problemFor, rawErrorMessage, rpc, useApp } from "../state/runtime";
+import type { ProblemModel } from "../state/problems";
 import {
   changedReposLabel,
   commitDetail,
@@ -158,23 +159,25 @@ export function Changes({ threadId }: { threadId: string }) {
   const [message, setMessage] = useState("");
   const [composing, setComposing] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [failure, setFailure] = useState<{ problem: ProblemModel; retry: () => void } | null>(null);
+  const fail = (e: unknown, action: string | { action: string; goal?: string }, retry: () => void) =>
+    setFailure({ problem: problemFor(e, action, { params: { thread_id: threadId } }), retry });
   async function reload() {
     setBusy(true);
     try {
       const [d, s] = await Promise.all([
         // A thread with no finished turn has no checkpoint to diff against yet: nothing changed.
         rpc("threads.diff", { thread_id: threadId, include_patch: false }).catch((e) => {
-          if (/no checkpoints/i.test(errorText(e))) return { from: "", to: "", files: [], patch: "" } as Diff;
+          if (/no checkpoints/i.test(rawErrorMessage(e))) return { from: "", to: "", files: [], patch: "" } as Diff;
           throw e;
         }),
         rpc("git.status", { thread_id: threadId }),
       ]);
       setDiff(d);
       setStatus(s);
-      setError("");
+      setFailure(null);
     } catch (e) {
-      setError(errorText(e));
+      fail(e, "load the changes", () => void reload());
     } finally {
       setBusy(false);
     }
@@ -191,7 +194,7 @@ export function Changes({ threadId }: { threadId: string }) {
       setPatch(d.patch);
       setTruncated(!!d.patch_truncated);
     } catch (e) {
-      setError(errorText(e));
+      fail(e, "load that file's changes", () => void file(path));
     } finally {
       setBusy(false);
     }
@@ -205,7 +208,7 @@ export function Changes({ threadId }: { threadId: string }) {
       setMessage("");
       await reload();
     } catch (e) {
-      setError(errorText(e));
+      fail(e, "commit your changes", () => void commit());
     } finally {
       setBusy(false);
     }
@@ -223,7 +226,7 @@ export function Changes({ threadId }: { threadId: string }) {
       });
       await reload();
     } catch (e) {
-      setError(errorText(e));
+      fail(e, { action: "open the pull request", goal: "open a pull request" }, () => void createPr());
     } finally {
       setBusy(false);
     }
@@ -235,7 +238,7 @@ export function Changes({ threadId }: { threadId: string }) {
       showToast(prResultToast(r.pull_requests.length, r.skipped ?? []));
       await reload();
     } catch (e) {
-      setError(errorText(e));
+      fail(e, { action: "open the pull requests", goal: "open pull requests" }, () => void createGroupPrs());
     } finally {
       setBusy(false);
     }
@@ -266,7 +269,7 @@ export function Changes({ threadId }: { threadId: string }) {
             )}
           </View>
         </View>
-        <ErrorBanner error={error} />
+        <ErrorBanner error={failure?.problem} onRetry={failure?.retry} />
         <View style={{ gap: space.sm }}>
           {busy && !patch ? (
             <Working label="Loading diff" />
@@ -285,7 +288,7 @@ export function Changes({ threadId }: { threadId: string }) {
 
   return (
     <View style={{ paddingHorizontal: edge }}>
-      <ErrorBanner error={error} onRetry={() => void reload()} />
+      <ErrorBanner error={failure?.problem} onRetry={failure?.retry} />
       {status && (
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, marginEnd: -space.md }}>
           <Icon name="arrow.triangle.branch" size={16} color={colors.secondary} />

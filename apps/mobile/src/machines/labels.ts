@@ -41,7 +41,8 @@ export function machineStatusLine(machine: MachineLine, now = Date.now()): strin
       if (machine.connecting) return "Connecting…";
       const seen = lastSeenText(machine.lastSeenAt, now);
       const base = seen ? `Offline · last seen ${seen}` : "Offline";
-      return machine.error ? `${base} · ${machine.error}` : base;
+      // "Unable to connect to X: Network request failed" is the transport talking; Offline already says it.
+      return machine.error && !/^Unable to connect to /i.test(machine.error) ? `${base} · ${machine.error}` : base;
     }
   }
 }

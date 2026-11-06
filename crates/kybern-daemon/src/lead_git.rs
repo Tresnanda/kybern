@@ -359,7 +359,7 @@ pub(crate) struct Git {
 
 impl Git {
     pub(crate) async fn open(cwd: &Path, config: &LeadGitConfig) -> Result<Git> {
-        ensure!(Repo::is_repo(cwd).await, "This project is not a git repository. Ask the user to run `git init` in it, then try again.");
+        ensure!(Repo::check(cwd).await?, "This project is not a git repository. Ask the user to run `git init` in it, then try again.");
         let env = config.git_env.lock().unwrap_or_else(|error| error.into_inner()).clone();
         let gh = config.gh.lock().unwrap_or_else(|error| error.into_inner()).clone().unwrap_or_else(|| "gh".into());
         Ok(Git { repo: Repo::new(cwd).with_env(env), cwd: cwd.to_path_buf(), gh, exclude: Vec::new() })

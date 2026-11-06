@@ -58,6 +58,9 @@
 // Tests point the app at a local feed with KYBERN_UPDATE_FEED and
 // KYBERN_UPDATE_DEV_FEED (loopback only) and KYBERN_UPDATE_PUBKEY; nothing
 // else can change the key.
+import { plainSentence } from '../../../../packages/kybern-client/src/problems.ts'
+import { problemSentence } from '../problems/sentence.ts'
+import { errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
 import { spawn, execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { chmod, mkdtemp, open, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
@@ -739,10 +742,11 @@ export function startAppUpdateChecks() {
 }
 
 function describe(error: unknown): string {
-  const text = error instanceof Error ? error.message : String(error)
+  const text = errorMessage(error)
   // The feed is briefly absent while a release is being published, and unreachable offline.
   if (/release JSON|fetch|network|timed out|dns|connect|Unable to connect/i.test(text)) return 'The release feed is unavailable right now. Check your connection or try again in a few minutes.'
-  return text
+  // A sentence a person can read stays as it is ("The update signature does not match the download"); anything technical is reworded.
+  return plainSentence(text) ? text : problemSentence(error, { action: 'check for updates' })
 }
 const dismissedUpdateVersion = () => readPref<string | null>(DISMISSED_UPDATE_KEY, null) ?? dismissedInSession
 function storeDismissedUpdateVersion(version: string) {

@@ -4,6 +4,7 @@
 // last row, "Something else…", becomes the answer field in place. The focused option's preview sits beside the rows when the
 // card is at least 640 pt wide, else under the focused row. Attach adds an image, a window capture or a file to the answer (the
 // "Point for me" kinds, `attach.ts`), which the daemon passes to the agent as paths. Spec: `.kybern-artifacts/ade-69-71/qcard/`.
+import { problemSentence } from '../problems/sentence.ts'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { ChildProcess } from 'node:child_process'
 import { basename } from 'node:path'
@@ -11,7 +12,7 @@ import { useGpuixRequired } from '@gpuix/react'
 import { array, normalizedResponse, questionResponse, questionsFor, record, string, type QuestionOption } from '../../../../packages/kybern-client/src/userInput.ts'
 import type { ApprovalRequest, AsyncQuestionRequest, QuestionDeadline, ThreadId, UserInputAttachment } from '../../../../packages/kybern-client/src/types.ts'
 import { defaultOption, questionDeadline } from '../../../../packages/kybern-client/src/requestCards.ts'
-import { answerQuestions, errorText, respondApproval } from '../transcript/store.ts'
+import { answerQuestions, respondApproval } from '../transcript/store.ts'
 import { T } from '../transcript/glyphs.ts'
 import { Button } from '../kit/Button.tsx'
 import { Checkbox } from '../kit/Checkbox.tsx'
@@ -210,7 +211,7 @@ function AttachMenu({ disabled, full, onAdd, onError, onTouch }: { disabled: boo
     onTouch()
     setBusy(true)
     onError('')
-    void work().catch((e) => onError(`Unable to attach that. ${errorText(e).replace(/\.?$/, '.')}`)).finally(() => setBusy(false))
+    void work().catch((e) => onError(problemSentence(e, { action: 'attach that' }))).finally(() => setBusy(false))
   }
   const image = () => run(async () => {
     const path = (await renderer.promptForPaths?.({ files: true, multiple: false, prompt: 'Attach' }))?.[0]
@@ -256,7 +257,7 @@ function AttachMenu({ disabled, full, onAdd, onError, onTouch }: { disabled: boo
 }
 
 /** A failed answer: what went wrong, then what to do. */
-const sendFailed = (e: unknown) => `Unable to send your answer: ${errorText(e).replace(/\.$/, '')}. Check it and try again.`
+const sendFailed = (e: unknown) => problemSentence(e, { action: 'send your answer' })
 
 /** Rough widths of the footer's parts (GPUIX cannot measure before it paints): the hint drops "↑ ↓ to move" first, then goes
  *  entirely, before any action button would have to shrink. */

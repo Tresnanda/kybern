@@ -145,7 +145,7 @@ impl AgentSession for LentSession {
                     })
                     .await;
             } else {
-                let _ = tx.send(DriverEvent::TurnFailed { error: REVOKED.into() }).await;
+                let _ = tx.send(DriverEvent::TurnFailed { error: REVOKED.into(), problem: None }).await;
             }
         });
         Ok(())
@@ -609,7 +609,7 @@ async fn the_broker_being_offline_falls_back_with_the_right_message_and_a_held_l
     l.send(thread, "after the drop").await;
     eventually("the turn fails with the fallback sentence", WAIT, || l.turns(thread, "turn_failed") == 1).await;
     let failed = l.b.state.store.events_for_thread(thread).unwrap().into_iter().find_map(|event| match event.payload {
-        EventPayload::TurnFailed { error } => Some(error),
+        EventPayload::TurnFailed { error, .. } => Some(error),
         _ => None,
     });
     assert_eq!(failed.as_deref(), Some("Claude Code signs in through vps, which is offline · Sign in here instead"));

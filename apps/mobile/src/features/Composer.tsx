@@ -43,12 +43,13 @@ import { inlineTokenSources, isInlinePart } from "../state/inlineMessage";
 import { ComposerSuggestions } from "./ComposerSuggestions";
 import { ComposerControls } from "./ComposerControls";
 import {
-  errorText,
   loadThread,
+  problemFor,
   rpc,
   useProjects,
   useThreadValue,
 } from "../state/runtime";
+import type { ErrorValue } from "../ui/Problem";
 import { uploadAsset, type RequestOwner } from "../state/machineRequests";
 import { useMachineTarget } from "../state/machineTarget";
 import {
@@ -326,7 +327,7 @@ export const Composer = memo(function Composer({
   const [busy, setBusy] = useState(false);
   const [promptMode, setPromptMode] = useState<"queue" | "steer">("queue");
   const [uploading, setUploading] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<ErrorValue>("");
   const input = useRef<TextInput>(null);
   const lastPrompt = useRef("");
   useEffect(() => {
@@ -475,7 +476,7 @@ export const Composer = memo(function Composer({
         setAttachments(sentAttachments);
         moveCaret(sentText.length);
       }
-      setError(errorText(e));
+      setError(problemFor(e, { action: "send your message", note: "Your message is still here." }, { params: thread ? { thread_id: thread.id } : { project_id: draft.projectId } }));
     } finally {
       sendLock.current = false;
       setDeparted(false);
@@ -550,7 +551,7 @@ export const Composer = memo(function Composer({
         setAttachments((previous) => [...previous, part]);
       }
     } catch (e) {
-      setError(errorText(e));
+      setError(problemFor(e, "attach that file", { params: thread ? { thread_id: thread.id } : { project_id: draft.projectId } }));
     } finally {
       setUploading(false);
     }
@@ -636,7 +637,7 @@ export const Composer = memo(function Composer({
         thread_id: thread.id,
       })
         .then(() => loadThread(thread.id))
-        .catch((e) => setError(errorText(e)));
+        .catch((e) => setError(problemFor(e, name === "compact" ? "compact the conversation" : "release the session", { params: { thread_id: thread.id } })));
       return;
     }
     router.push({

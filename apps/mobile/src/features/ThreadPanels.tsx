@@ -83,7 +83,7 @@ function PermissionChange({ thread, target, onApplied }: { thread: Thread; targe
                 .then(() => rpc("threads.target.get", { thread_id: thread.id }))
                 .then(onApplied)
                 .then(() => loadThread(thread.id))
-                .catch((e) => setError(errorText(e)))
+                .catch((e) => setError(errorText(e, "change the target")))
                 .finally(() => setBusy(false));
             }}
           >
@@ -168,7 +168,7 @@ function LimitRecovery({ thread }: { thread: Thread }) {
               attempt.current ??= randomUUID();
               rpc("threads.switch_continue", { thread_id: thread.id, provider: choice.provider, message_id: attempt.current })
                 .then(() => loadThread(thread.id))
-                .catch((e) => setError(errorText(e)))
+                .catch((e) => setError(errorText(e, "switch the agent")))
                 .finally(() => setBusy(false));
             }}
           >

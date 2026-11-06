@@ -4,6 +4,7 @@
 // `needs` graph (`Graph.tsx`); and under it the selected job's steps beside its log. Narrow, the steps sit above the log.
 // The run is read again every 10 s while it is in progress and the window is visible, every 60 s otherwise; a read that
 // changes nothing keeps the previous result, so nothing re-renders.
+import { problemSentence } from '../../problems/sentence.ts'
 import { asError } from '../../../../../packages/kybern-client/src/problem.ts'
 import { useEffect, useMemo, useState } from 'react'
 import { relativeTime } from '@/lib/format'
@@ -123,7 +124,7 @@ export function RunDetail({ target, runId, initial, listed, reference, usual, wi
       if (action !== 'cancel') { markStarted(run.id); setAttempt(null) }
       setNotice(action === 'cancel' ? 'Cancel requested. GitHub stops the jobs in a few seconds.' : 'Rerun requested. New jobs appear here in a few seconds.')
       setBusy(null); refresh(n => n + 1); onChanged()
-    }, e => { setActionError(String(e)); setBusy(null) })
+    }, e => { setActionError(problemSentence(e, { action: action === 'cancel' ? 'cancel the run' : 'rerun the jobs' })); setBusy(null) })
   }
 
   const split = width >= SPLIT

@@ -6,7 +6,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { DoctorReport, FoundMachine, NetworkStatus, NetworkUpdateAllResult, OutboxItem } from '../../../../packages/kybern-client/src/types.ts'
 import { Dialog, Tip } from '../nav/overlay.tsx'
 import { N } from '../nav/glyphs.ts'
-import { errorText } from '../nav/actions.ts'
+import { toastProblem } from '../problems/toast.ts'
+import { problemLine } from '../problems/describe.ts'
 import { toast } from '../shell/toasts.tsx'
 import { footerText } from '../machines/format.ts'
 import { machineHub, useMachines } from '../machines/index.ts'
@@ -84,7 +85,7 @@ export function Machines() {
     {!net.unavailable && <Outbox items={net.outbox} machines={cards} />}
     {!net.unavailable && <Updates busy={net.busy === 'update'} following={status ? !!status.follow_updates : undefined} machines={cards} result={net.updated} />}
     {!net.unavailable && status && <Section title="Your network" accessory={<Button testId="machines-intro" size="sm" variant="ghost" onClick={() => openIntro(true)}>What is this?</Button>}>
-      <Row title="Let your machines find each other" description="Machines signed in to the same Tailscale account join without a code. Turn this off to leave the network and keep your machines separate."><Switch aria-label="Use your network" testId="machines-enabled" checked={status.enabled} disabled={net.busy === 'enabled'} onCheckedChange={(enabled) => void setNetworkEnabled(enabled).catch((e) => toast.error('Unable to change the network', { description: errorText(e) }))} /></Row>
+      <Row title="Let your machines find each other" description="Machines signed in to the same Tailscale account join without a code. Turn this off to leave the network and keep your machines separate."><Switch aria-label="Use your network" testId="machines-enabled" checked={status.enabled} disabled={net.busy === 'enabled'} onCheckedChange={(enabled) => void setNetworkEnabled(enabled).catch((e) => toastProblem(e, { action: 'change the network' }))} /></Row>
       <KeepReachable status={status.keep_reachable} busy={net.busy === 'reachable'} />
       <Row title="Check the network" description="Looks at Tailscale, the pairing and each machine, and says what to fix."><Button testId="machines-doctor" busy={net.busy === 'doctor'} onClick={() => void runDoctor()}>Run check</Button></Row>
       {net.doctor && <DoctorResults report={net.doctor} names={new Map(cards.map((card) => [card.machineId, card.name]))} />}
@@ -98,7 +99,7 @@ export function Machines() {
 function NetworkOff({ tailscale, busy }: { tailscale: { installed: boolean; running: boolean }; busy: boolean }) {
   const t = useTheme()
   const note = tailscaleNote(tailscale)
-  const turnOn = () => void setNetworkEnabled(true).then(() => openIntro(true, 'on'), (e) => toast.error('Unable to turn on the network', { description: errorText(e) }))
+  const turnOn = () => void setNetworkEnabled(true).then(() => openIntro(true, 'on'), (e) => toastProblem(e, { action: 'turn on the network' }))
   return <Section title="Your network">
     <div testId="machines-off" style={{ display: 'flex', alignItems: 'flex-start', gap: 16, paddingLeft: 18, paddingRight: 18, paddingTop: 18, paddingBottom: 18 }}>
       <BadgeStack />
@@ -137,7 +138,7 @@ function ClipboardAuto({ machineId }: { machineId: string | undefined }) {
   if (!machineId) return null
   const change = (next: boolean) => {
     setBusy(true)
-    void setClipboardAuto(machineId, next).then(() => setOn(next), (e) => toast.error('Unable to change the clipboard setting', { description: errorText(e) })).finally(() => setBusy(false))
+    void setClipboardAuto(machineId, next).then(() => setOn(next), (e) => toastProblem(e, { action: 'change the clipboard setting' })).finally(() => setBusy(false))
   }
   return <Section title="This machine">
     <Row title="Share clipboard automatically" description="Copies you make here appear on your other machines that also turned this on. Anything that looks like a password or a key is never shared."><Switch aria-label="Share clipboard automatically" testId="machines-clipboard-auto" checked={!!on} disabled={on === null || busy} onCheckedChange={change} /></Row>
@@ -146,7 +147,7 @@ function ClipboardAuto({ machineId }: { machineId: string | undefined }) {
 
 function runDoctor() {
   // The result stays on the page (`DoctorResults`); a toast only says when the check itself could not run.
-  return doctor().catch((e) => { toast.error('Unable to check the network', { description: errorText(e) }) })
+  return doctor().catch((e) => { toastProblem(e, { action: 'check the network' }) })
 }
 
 /** What "Run check" found: failures first, each with what to do next. It stays until the next check. */
@@ -177,7 +178,7 @@ function NameYourMachines({ cards }: { cards: MachineCardModel[] }) {
     const next = (names[card.machineId] ?? '').trim()
     if (!next) return
     setBusy(card.machineId)
-    void renameMachine(card.machineId, next).catch((e) => toast.error('Unable to rename', { description: errorText(e) })).finally(() => setBusy(null))
+    void renameMachine(card.machineId, next).catch((e) => toastProblem(e, { action: 'rename the machine' })).finally(() => setBusy(null))
   }
   const dismiss = () => { dismissNamesHint(configDir()); setDismissed(true) }
   return <Section title="Name your machines" accessory={<Button testId="machines-names-dismiss" size="sm" variant="secondary" onClick={dismiss}>Not now</Button>}>
@@ -199,14 +200,14 @@ export function MachineCardRow({ card, busy, onRemove }: { card: MachineCardMode
   const save = () => {
     setRenaming(false)
     const next = name.trim()
-    if (next && next !== card.name) void renameMachine(card.machineId, next).catch((e) => toast.error('Unable to rename', { description: errorText(e) }))
+    if (next && next !== card.name) void renameMachine(card.machineId, next).catch((e) => toastProblem(e, { action: 'rename the machine' }))
     else setName(card.name)
   }
   const { specs } = card
   const osGlyph = card.os === 'macos' ? S.osMacos : card.os === 'windows' ? S.osWindows : S.osLinux
   const nameLabel = <Label color={t.text} size={14} lineHeight={21} weight={500} truncate style={{ flexShrink: 1, minWidth: 0 }}>{card.name}</Label>
   const actions = <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-    {card.canPause && <Button testId={`machine-pause-${card.machineId}`} size="sm" busy={busy} onClick={() => void pauseMachine(card.machineId, !row.paused).catch((e) => toast.error('Unable to change the machine', { description: errorText(e) }))}>{row.paused ? 'Resume' : 'Pause'}</Button>}
+    {card.canPause && <Button testId={`machine-pause-${card.machineId}`} size="sm" busy={busy} onClick={() => void pauseMachine(card.machineId, !row.paused).catch((e) => toastProblem(e, { action: 'change the machine' }))}>{row.paused ? 'Resume' : 'Pause'}</Button>}
     {!row.isLocal && <Button testId={`machine-remove-${card.machineId}`} size="sm" variant="secondary" danger onClick={onRemove}>Remove</Button>}
   </div>
   return <div testId={`machine-${card.machineId}`} style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 18, paddingRight: 18, paddingTop: 16, paddingBottom: 16, opacity: row.offline && !row.paused ? 0.78 : 1 }}>
@@ -245,7 +246,7 @@ function TailnetSection({ found, tailscale, busy }: { found: FoundMachine[]; tai
     {found.map((item) => <Row key={item.found_id} title={item.name} description={[item.os, item.ts_name, item.version ? `Version ${item.version}` : null].filter(Boolean).join(' · ') || 'Running Kybern'}>
       {item.action === 'code'
         ? <Label color={ink(t, 0.6)} size={13} lineHeight={20}>Enter the code shown on {item.name} below</Label>
-        : <Button testId={`found-${item.found_id}`} variant="primary" size="sm" busy={busy === `found:${item.found_id}`} onClick={() => void (item.action === 'merge' ? mergeFound(item.found_id) : addFound(item.found_id).then((r) => { if (r.needs_code) toast.info(`Enter the code shown on ${item.name}`, { description: 'It could not be verified from here. Use Add by code.' }) })).catch((e) => toast.error(`Unable to add ${item.name}`, { description: errorText(e) }))}>{item.action === 'merge' ? 'Merge' : 'Add'}</Button>}
+        : <Button testId={`found-${item.found_id}`} variant="primary" size="sm" busy={busy === `found:${item.found_id}`} onClick={() => void (item.action === 'merge' ? mergeFound(item.found_id) : addFound(item.found_id).then((r) => { if (r.needs_code) toast.info(`Enter the code shown on ${item.name}`, { description: 'It could not be verified from here. Use Add by code.' }) })).catch((e) => toastProblem(e, { action: `add ${item.name}`, machine: item.name }))}>{item.action === 'merge' ? 'Merge' : 'Add'}</Button>}
     </Row>)}
     {away && <Row title="" description={<Hint>{!tailscale!.installed ? "Tailscale isn't installed on this computer, so other machines can't be found. Add one with a code instead." : tailscale!.detail || "Tailscale isn't running. Start it to find your other machines."}</Hint>} />}
   </Section>
@@ -260,11 +261,11 @@ function AddByCode({ busy }: { busy: boolean }) {
   const ready = /^\d{6}$/.test(code.trim()) && !!address.trim()
   const add = async () => {
     setError('')
-    try { const card = await joinByCode(code, address); toast.success(`Added ${card.name}`); setCode(''); setAddress('') } catch (e) { setError(errorText(e)) }
+    try { const card = await joinByCode(code, address); toast.success(`Added ${card.name}`); setCode(''); setAddress('') } catch (e) { setError(problemLine(e, { action: 'add that machine' })) }
   }
   const show = async () => {
     setError('')
-    try { const result = await showCode(); setShown({ code: result.code, endpoints: result.endpoints }) } catch (e) { setError(errorText(e)) }
+    try { const result = await showCode(); setShown({ code: result.code, endpoints: result.endpoints }) } catch (e) { setError(problemLine(e, { action: 'make a code' })) }
   }
   return <Section title="Add by code">
     <Row title="Add a machine" description="On the other machine, choose Show a code for this machine (or run kybern machines code), then enter the code and its address here." />
@@ -289,7 +290,7 @@ function Updates({ busy, following, machines, result }: { busy: boolean; followi
   const rows = result ? updateResultRows(result, names) : []
   const run = async () => {
     setError('')
-    try { await updateAllMachines() } catch (e) { setError(errorText(e)) }
+    try { await updateAllMachines() } catch (e) { setError(problemLine(e, { action: 'update your machines' })) }
   }
   return <Section title="Updates">
     <Row title="Update all machines" description={error || (result ? updateSummary(result) : behind ? `${behind} ${behind === 1 ? 'machine is' : 'machines are'} behind. Each one updates itself when it is idle.` : 'Starts an update on every machine that is behind.')}><Button testId="machines-update-all" busy={busy} onClick={() => void run()}>Update all machines</Button></Row>
@@ -300,7 +301,7 @@ function Updates({ busy, following, machines, result }: { busy: boolean; followi
         <Label color={t.textSecondary} size={13} lineHeight={20} truncate style={{ flexGrow: 1 }}>{row.text}</Label>
       </div>)}
     </div>}
-    <Row title="Keep all machines on the same version" description="A machine updates itself, once it is idle, when another one runs a newer version. A deb or rpm install shows the command to run instead."><Switch aria-label="Keep all machines on the same version" testId="machines-follow-updates" checked={!!following} disabled={following === undefined || net.busy === 'follow'} onCheckedChange={(enabled) => void setFollowUpdates(enabled).catch((e) => toast.error('Unable to change the setting', { description: errorText(e) }))} /></Row>
+    <Row title="Keep all machines on the same version" description="A machine updates itself, once it is idle, when another one runs a newer version. A deb or rpm install shows the command to run instead."><Switch aria-label="Keep all machines on the same version" testId="machines-follow-updates" checked={!!following} disabled={following === undefined || net.busy === 'follow'} onCheckedChange={(enabled) => void setFollowUpdates(enabled).catch((e) => toastProblem(e, { action: 'change the setting' }))} /></Row>
   </Section>
 }
 
@@ -309,7 +310,7 @@ function KeepReachable({ status, busy }: { status: NetworkStatus['keep_reachable
   const row = reachableRow(status)
   if (!status || !row) return null
   return <Row title="Keep this machine reachable when Kybern is closed" description={row.problem ? <ErrorText>{row.description}</ErrorText> : row.description}>
-    <Switch aria-label="Keep this machine reachable when Kybern is closed" testId="machines-keep-reachable" checked={status.enabled} disabled={busy || row.locked} onCheckedChange={(enabled) => void setKeepReachable(enabled).catch((e) => toast.error('Unable to change the setting', { description: errorText(e) }))} />
+    <Switch aria-label="Keep this machine reachable when Kybern is closed" testId="machines-keep-reachable" checked={status.enabled} disabled={busy || row.locked} onCheckedChange={(enabled) => void setKeepReachable(enabled).catch((e) => toastProblem(e, { action: 'change the setting' }))} />
   </Row>
 }
 
@@ -319,11 +320,11 @@ function Outbox({ items, machines }: { items: OutboxItem[]; machines: MachineCar
   const net = useNetwork()
   const rows = outboxRows(items, new Map(machines.map((card) => [card.machineId, card.name])))
   if (rows.length === 0) return null
-  const fail = (title: string) => (e: unknown) => toast.error(title, { description: errorText(e) })
+  const fail = (action: string) => (e: unknown) => { toastProblem(e, { action }) }
   return <Section title="Outbox" accessory={<Label color={t.textSecondary} size={13} lineHeight={19.5}>{`${rows.length} waiting`}</Label>}>
     {rows.map((row) => <Row key={row.id} title={row.title} description={row.detail}>
-      {row.canRetry && <Button testId={`outbox-retry-${row.id}`} size="sm" busy={net.busy === `outbox:${row.id}`} onClick={() => void retryOutbox(row.id).catch(fail('Unable to retry'))}>Retry</Button>}
-      {row.canCancel && <Button testId={`outbox-cancel-${row.id}`} size="sm" variant="secondary" disabled={net.busy === `outbox:${row.id}`} onClick={() => void cancelOutbox(row.id).catch(fail('Unable to cancel'))}>Cancel</Button>}
+      {row.canRetry && <Button testId={`outbox-retry-${row.id}`} size="sm" busy={net.busy === `outbox:${row.id}`} onClick={() => void retryOutbox(row.id).catch(fail('retry that work'))}>Retry</Button>}
+      {row.canCancel && <Button testId={`outbox-cancel-${row.id}`} size="sm" variant="secondary" disabled={net.busy === `outbox:${row.id}`} onClick={() => void cancelOutbox(row.id).catch(fail('cancel that work'))}>Cancel</Button>}
     </Row>)}
   </Section>
 }
@@ -344,7 +345,7 @@ function RemoveDialog({ card, others, onClose }: { card: MachineCardModel; other
         if (profile) stopSshTunnel(profile)
       }
       onClose()
-    } catch (e) { setError(errorText(e)); setBusy(false) }
+    } catch (e) { setError(problemLine(e, { action: 'remove the machine' })); setBusy(false) }
   }
   return <Dialog onClose={onClose} width={480} testId="machine-remove-dialog">
     <DialogHeader title={`Remove ${card.name}?`} description={card.member ? `${card.name} leaves your network on every machine. Its projects and threads stay on it.` : `${card.name} is forgotten on this device. Its projects and threads stay on it.`} onClose={onClose} />

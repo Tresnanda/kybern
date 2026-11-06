@@ -1531,7 +1531,21 @@ impl ClaudeSession {
         }
 
         let message_id = msg.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
-        if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
+        // An API error Kybern can name (signed out, rate limited, offline) ends the turn as a failure with a
+        // problem; the synthetic reply that quotes it ("Invalid API key · Please run /login") and its notice
+        // would only repeat the failure in the harness's words.
+        let named_error = v.get("error").and_then(|e| e.as_str()).is_some_and(|err| {
+            crate::failure::classify(ProviderKind::ClaudeCode, err).is_some()
+                || msg.get("content").and_then(|c| c.as_array()).is_some_and(|blocks| {
+                    blocks
+                        .iter()
+                        .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+                        .any(|t| crate::failure::classify(ProviderKind::ClaudeCode, t).is_some())
+                })
+        });
+        if let Some(err) = v.get("error").and_then(|e| e.as_str())
+            && !named_error
+        {
             self.emit(DriverEvent::Notice { level: NoticeLevel::Error, text: format!("API error: {err}"), data: Some(msg.clone()) }).await;
         }
         let Some(blocks) = msg.get("content").and_then(|c| c.as_array()) else { return };
@@ -1544,6 +1558,9 @@ impl ClaudeSession {
             match block.get("type").and_then(|t| t.as_str()).unwrap_or("") {
                 "text" => {
                     let text = block.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                    if named_error {
+                        continue;
+                    }
                     let mut st = self.state.lock().await;
                     let acc = st.text.entry(message_id.clone()).or_default();
                     acc.push_str(text);
@@ -1662,16 +1679,22 @@ impl ClaudeSession {
             && v.get("result")
                 .and_then(Value::as_str)
                 .is_some_and(|text| crate::login_lend::is_login_failure(ProviderKind::ClaudeCode, text));
+        // Claude also reports a key it refused, a usage limit and a lost connection as an error result
+        // (subtype "success"): the turn failed, and the text says why.
+        let named_failure = v.get("is_error").and_then(Value::as_bool) == Some(true)
+            && v.get("result")
+                .and_then(Value::as_str)
+                .is_some_and(|text| crate::failure::classify(ProviderKind::ClaudeCode, text).is_some());
         let ev = match subtype {
-            _ if rejected_login => {
-                DriverEvent::TurnFailed { error: v.get("result").and_then(Value::as_str).unwrap_or_default().to_string() }
+            _ if (named_failure || rejected_login) && !matches!(terminal, "aborted_streaming" | "aborted") => {
+                DriverEvent::turn_failed(ProviderKind::ClaudeCode, v.get("result").and_then(Value::as_str).unwrap_or_default())
             }
             "success" => DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, usage, cost_usd, duration_ms, anchors },
             "error_max_turns" => DriverEvent::TurnCompleted { stop_reason: StopReason::MaxTurns, usage, cost_usd, duration_ms, anchors },
             _ if terminal == "aborted_streaming" || terminal == "aborted" => {
                 DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, usage, cost_usd, duration_ms, anchors }
             }
-            _ => DriverEvent::TurnFailed { error: if errors.is_empty() { format!("claude: {subtype}") } else { errors } },
+            _ => DriverEvent::turn_failed(ProviderKind::ClaudeCode, if errors.is_empty() { format!("claude: {subtype}") } else { errors }),
         };
         self.emit(ev).await;
     }
@@ -2104,6 +2127,42 @@ mod tests {
         assert_eq!(catalog_default(&lone_default).as_deref(), Some("default"));
         let models = catalog_models(&lone_default, &ClaudeConfig::for_model("default"), &[]);
         assert_eq!((models[0].display_name.as_str(), models[0].is_default), ("Default (recommended)", true));
+    }
+
+    /// Claude reports a key it refused as a synthetic reply plus an error result of subtype "success".
+    #[tokio::test]
+    async fn a_refused_key_fails_the_turn_with_a_signed_out_problem_and_no_raw_reply() {
+        use super::*;
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
+        let (events, mut rx) = mpsc::channel(32);
+        let session = Arc::new(ClaudeSession {
+            child: child.clone(),
+            events,
+            pending_control: Mutex::new(HashMap::new()),
+            pending_permissions: Mutex::new(HashMap::new()),
+            state: Mutex::new(TurnState::default()),
+            child_inbox: Mutex::new(ChildInbox::default()),
+            session_id: Mutex::new("test".into()),
+            catalog: None,
+            _native_mcp_config: None,
+        });
+        let handle = SessionHandle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
+        handle.send_message("m1", &UserMessage::text("hello")).await.unwrap();
+        session
+            .handle_frame(json!({"type":"assistant", "error":"authentication_failed", "message":{"id":"msg","model":"<synthetic>",
+            "content":[{"type":"text","text":"Invalid API key · Please run /login"}]}}))
+            .await;
+        session
+            .handle_frame(json!({"type":"result", "subtype":"success", "is_error":true, "result":"Invalid API key · Please run /login",
+            "total_cost_usd":0, "duration_ms":1, "usage":{}}))
+            .await;
+        let Some(DriverEvent::TurnFailed { error, problem }) = rx.recv().await else { panic!("the turn must fail, not complete") };
+        assert_eq!(error, "Invalid API key · Please run /login");
+        let problem = problem.expect("a signed-out problem");
+        assert_eq!((problem.kind, problem.subject.as_deref()), (kybern_protocol::rpc::ProblemKind::SignedOut, Some("claude")));
+        assert_eq!(problem.action.unwrap().id, "sign_in");
+        // The synthetic reply and its notice would only repeat the failure in Claude's words.
+        assert!(rx.try_recv().is_err(), "no notice or message besides the failure");
     }
 
     #[tokio::test]

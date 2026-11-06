@@ -1,6 +1,8 @@
 // The strip that takes the composer's place on a thread that is moving to another machine or already moved (design
 // §7.2): "Moving to satyamas…" while the lease is held, "This thread continues on satyamas · Open" afterwards. A move
 // whose answer never came back offers "Keep here", which asks the other machine and gives the thread back.
+import { writeClipboardText } from '../platform/os.ts'
+import { describeProblem } from '../../../../packages/kybern-client/src/problems.ts'
 import { useState } from 'react'
 import { moveBanner } from '../../../../packages/kybern-client/src/continueOn.ts'
 import { parseThreadLink } from '../../../../packages/kybern-client/src/forkMachine.ts'
@@ -9,7 +11,6 @@ import { Button } from '../kit/Button.tsx'
 import { MatrixLoader } from '../MatrixLoader.tsx'
 import { Icon } from '../icons.tsx'
 import { openThread } from '../nav/history.ts'
-import { errorText } from '../nav/actions.ts'
 import { callThread } from '../state.ts'
 import { toast } from '../shell/toasts.tsx'
 import { T } from '../transcript/glyphs.ts'
@@ -28,7 +29,13 @@ export function MoveBar({ thread, machineId }: { thread: Thread; machineId?: str
       const result = await callThread(thread.id, 'threads.move_abandon', { thread_id: thread.id, force }, machineId)
       if (result.outcome === 'completed') toast.success(`${banner.machineName} already had the thread.`, { description: 'The move is done; this thread is read-only.' })
     } catch (e) {
-      toast.error(errorText(e), force ? undefined : { description: 'Try again when the machine is online, or keep this thread anyway.', action: { label: 'Keep here anyway', onClick: () => void keep(true) } })
+      const view = describeProblem(e, { action: 'finish the move', machine: banner.machineName })
+      toast.problem(view.title, {
+        tone: 'warning', icon: 'alert',
+        description: force ? view.body : 'Try again when the machine is online, or keep this thread anyway.',
+        ...(force ? {} : { action: { label: 'Keep here anyway', onClick: () => void keep(true) } }),
+        secondary: { label: 'Copy', onClick: () => { void writeClipboardText(view.detail).catch(() => {}) } },
+      })
     } finally { setBusy(false) }
   }
   return <div testId="move-bar" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, width: '100%', minHeight: 48, padding: 8, paddingLeft: 16, borderRadius: 19.2, borderWidth: 1, borderColor: t.border, backgroundColor: t.surface }}>

@@ -5,7 +5,8 @@ import { useEffect, useMemo, useState } from 'react'
 import type { MachineId, ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
 import { BROKER_KINDS, brokerBlocker, brokerLine, lendableLabel, loanLines, providerStatus, signInAllSummary, type SignInAllRow } from '../../../../packages/kybern-client/src/loginBroker.ts'
 import { PROVIDER_NAMES } from '../shared/lib/providerUsage.ts'
-import { errorText } from '../nav/actions.ts'
+import { toastProblem } from '../problems/toast.ts'
+import { problemLine } from '../problems/describe.ts'
 import { Dialog } from '../nav/overlay.tsx'
 import { toast } from '../shell/toasts.tsx'
 import { useMachines } from '../machines/index.ts'
@@ -34,7 +35,7 @@ export function LoginBrokerSection() {
   const brokerName = info?.broker?.name ?? machines.find((machine) => machine.machineId === info?.broker?.machine_id)?.name
   const candidates = useMemo(() => loginBrokerCandidates(machines, net.status), [machines, net.status])
   if (broker.unavailable || Math.max(machines.length, candidates.length) < 2) return null
-  const fail = (title: string) => (e: unknown) => toast.error(title, { description: errorText(e) })
+  const fail = (action: string) => (e: unknown) => { toastProblem(e, { action }) }
   const moved = broker.moved
   return <>
     <Section title="Login broker">
@@ -47,7 +48,7 @@ export function LoginBrokerSection() {
       {moved && <Row title="" description={<div testId="login-broker-moved"><Label color={t.textSecondary} size={13} lineHeight={19.5}>{movedText(moved.rebound.length, moved.offline.length, moved.old_signed_out.length, moved.note)}</Label></div>} />}
       {broker.error && <Row title="" description={<ErrorText testId="login-broker-error">{broker.error}</ErrorText>} />}
     </Section>
-    {confirming !== undefined && <MoveDialog target={confirming} candidates={candidates} brokerName={brokerName} onClose={() => setConfirming(undefined)} onMove={() => { const target = confirming; setConfirming(undefined); void moveBroker(target).catch(fail('Unable to move the login broker')) }} />}
+    {confirming !== undefined && <MoveDialog target={confirming} candidates={candidates} brokerName={brokerName} onClose={() => setConfirming(undefined)} onMove={() => { const target = confirming; setConfirming(undefined); void moveBroker(target).catch(fail('move the login broker')) }} />}
     {all.kind && <SignInAllDialog />}
   </>
 }
@@ -71,12 +72,12 @@ export function HarnessRow({ kind, names }: { kind: ProviderKind; names?: Record
   const brokerName = broker.status?.broker?.name ?? undefined
   const line = brokerLine(status, brokerName, harness)
   const busy = broker.busy === kind
-  const fail = (title: string) => (e: unknown) => toast.error(title, { description: errorText(e) })
+  const fail = (action: string) => (e: unknown) => { toastProblem(e, { action }) }
   const lendable = status.lendable[0]
   const loans = loanLines(broker.status, kind, (id) => names?.[id] ?? machines.find((machine) => machine.machineId === id)?.name, sinceTime)
   const act = () => {
-    if (line.action === 'use_broker' && lendable) void useBrokerSignIn(kind, harness, brokerName ?? 'broker', lendable.account).catch(fail(`Unable to use ${brokerName ?? 'the broker'}'s sign-in`))
-    else if (line.action === 'sign_in_here' && status.local_account) void signInHereInstead(kind, status.local_account).then(() => showDialog({ kind: 'account', provider: kind, instance: status.local_account })).catch(fail('Unable to sign in here'))
+    if (line.action === 'use_broker' && lendable) void useBrokerSignIn(kind, harness, brokerName ?? 'broker', lendable.account).catch(fail(`use ${brokerName ?? 'the broker'}'s sign-in`))
+    else if (line.action === 'sign_in_here' && status.local_account) void signInHereInstead(kind, status.local_account).then(() => showDialog({ kind: 'account', provider: kind, instance: status.local_account })).catch(fail('sign in here'))
     else if (line.action === 'sign_in_on_broker') void startSignInAll(kind, harness)
   }
   return <Row title={harness} description={<div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -142,7 +143,7 @@ function SignInAllMachineRow({ row }: { row: SignInAllRow }) {
   const submit = () => {
     if (!login || !code.trim()) return
     setWrong('')
-    void submitSignInCode(row.machineId, login.id, code.trim()).catch((e) => setWrong(errorText(e)))
+    void submitSignInCode(row.machineId, login.id, code.trim()).catch((e) => setWrong(problemLine(e, { action: 'check that code' })))
     setCode('')
   }
   const tone = row.state === 'signed_in' || row.state === 'already' ? 'good' : row.state === 'failed' ? 'bad' : 'idle'
@@ -150,7 +151,7 @@ function SignInAllMachineRow({ row }: { row: SignInAllRow }) {
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><StatusDot tone={tone} /><Label color={t.text} size={14} lineHeight={21} weight={500}>{row.name}</Label><Label color={t.textSecondary} size={13} lineHeight={20}>{STATE_WORDS[row.state]}</Label></div>
     {row.detail && <Label color={t.textSecondary} size={13} lineHeight={19.5}>{row.detail}</Label>}
     {row.state === 'signing_in' && login && <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 16 }}>
-      {login.url && <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Button size="sm" testId={`sign-in-all-open-${row.machineId}`} onClick={() => void openExternal(login.url!).catch((e) => toast.error('Unable to open the sign-in page', { description: errorText(e) }))}>Open sign-in page</Button></div>}
+      {login.url && <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Button size="sm" testId={`sign-in-all-open-${row.machineId}`} onClick={() => void openExternal(login.url!).catch((e) => toastProblem(e, { action: 'open the sign-in page' }))}>Open sign-in page</Button></div>}
       {login.user_code && <div testId={`sign-in-all-code-${row.machineId}`}><Label color={t.text} size={18} lineHeight={24} weight={600}>{login.user_code}</Label></div>}
       {login.mode === 'paste' && <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><TextField testId={`sign-in-all-paste-${row.machineId}`} label="Code" size="md" secure placeholder="Paste code" value={code} onChange={setCode} onSubmit={submit} width={240} invalid={!!wrong} /><Button size="sm" disabled={!code.trim()} onClick={submit}>Submit</Button></div>}
       {wrong && <ErrorText>{wrong}</ErrorText>}
