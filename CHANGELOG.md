@@ -17,6 +17,7 @@
 - Skills installed for one agent can be used from any other: they appear under **Other agents** in the `$` list.
 - On Windows and Linux, the `/` and `@` list no longer spills over the side panel, and chip icons no longer cover the first letters of their names.
 - The filter bars on Pull requests, Actions and Issues have controls of one height that line up.
+- A pull request's changes show syntax colours and wrap long lines, so nothing scrolls sideways. **Wrap lines** in the file header turns wrapping off, and Kybern remembers the choice.
 
 ## 0.21.8
 
