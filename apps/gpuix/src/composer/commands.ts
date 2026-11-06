@@ -24,7 +24,7 @@ const EMPTY: never[] = []
 export function useThreadCommands(thread: StateThread | null, attach: () => void): SlashCommand[] {
   const nativeCommands = useApp(s => (thread && s.open.thread?.id === thread.id ? s.open.providerCommands : undefined) ?? EMPTY)
   const freeChat = !!thread && isFreeChatProject(thread.project_id)
-  const canCompact = !!thread?.provider_session_id && (['codex', 'pi', 'omp', 'opencode'].includes(thread!.provider.kind) || nativeCommands.some(command => command.name === 'compact'))
+  const canCompact = !!thread?.provider_session_id && (['codex', 'pi', 'omp', 'opencode', 'cursor', 'claude-code'].includes(thread!.provider.kind))
   return useMemo<SlashCommand[]>(() => {
     if (!thread) return []
     const panel = (tab: DockTab) => () => { setDock(thread.id, { open: true }); chooseTab(thread.id, tab) }

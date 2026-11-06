@@ -1,3 +1,4 @@
+import { nativeCommandSpecs } from "../../../../packages/kybern-client/src/nativeCommands";
 // The composer's completion panel. `/` lists actions, commands and skills; `$` skills;
 // `@` threads, notes, tasks, files and plugins, with a filter at the top and typed
 // prefixes (`@note:login`, `@task:ADE-12`, `@thread:`) as on the desktop (parity P2-6).
@@ -180,14 +181,14 @@ export function ComposerSuggestions({
               .map((a): Row => ({ id: `action:${a.name}`, kind: "action", title: `/${a.name}`, detail: a.description, action: a.name }))
           : []),
         ...(trigger.marker === "/"
-          ? commands
+          ? nativeCommandSpecs(commands, provider)
               .filter((c) => matches(c.name + " " + c.description))
               .map((c): Row => ({
                 id: `command:${c.name}`,
                 kind: "command",
-                title: `/${actions.some((a) => a.name === c.name) ? "harness:" : ""}${c.name.replace(/^\//, "")}`,
+                title: `/${c.name}`,
                 detail: c.description,
-                part: { type: "text", text: commandText(c.name) },
+                part: { type: "text", text: commandText(c.invocation) },
               }))
           : []),
         ...skills

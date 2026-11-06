@@ -1911,7 +1911,11 @@ mod tests {
             events,
             state: Mutex::new(State {
                 compact_operation: None,
-                commands: vec![kybern_protocol::ProviderCommand { name: "review".into(), description: "Review".into() }],
+                commands: vec![kybern_protocol::ProviderCommand {
+                    name: "review".into(),
+                    description: "Review".into(),
+                    ..Default::default()
+                }],
                 context_windows: HashMap::new(),
                 session_id: Some("root".into()),
                 model: Some("test/model".into()),
