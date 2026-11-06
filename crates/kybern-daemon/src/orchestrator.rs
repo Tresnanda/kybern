@@ -2241,16 +2241,15 @@ impl Orchestrator {
         }
 
         if is_compact_message(&message) {
-            let events = self.inner.store.events_for_thread(thread_id)?;
-            let advertised = events
-                .iter()
-                .rev()
-                .find_map(|event| match &event.payload {
-                    EventPayload::ProviderCommandsUpdated { commands } => Some(commands.iter().any(|command| command.name == "compact")),
-                    _ => None,
-                })
-                .unwrap_or(false);
-            if !matches!(kind, ProviderKind::Codex | ProviderKind::Pi | ProviderKind::Omp | ProviderKind::Opencode) && !advertised {
+            if !matches!(
+                kind,
+                ProviderKind::Codex
+                    | ProviderKind::Pi
+                    | ProviderKind::Omp
+                    | ProviderKind::Opencode
+                    | ProviderKind::Cursor
+                    | ProviderKind::ClaudeCode
+            ) {
                 return Err(anyhow!("This harness does not expose manual compaction. Automatic compaction remains available."));
             }
             if thread.provider_session_id.is_none() {
@@ -5026,6 +5025,16 @@ impl Orchestrator {
                 t.status = ThreadStatus::Failed;
                 self.update_thread(t)?;
                 self.delegation_turn_finished(thread_id, turn_id, delegation::TurnOutcome::Failed(error));
+            }
+            DriverEvent::SessionMetadata { title, effort } => {
+                let mut thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?;
+                if let Some(title) = title {
+                    thread.title = title;
+                }
+                if let Some(effort) = effort {
+                    thread.effort = Some(effort);
+                }
+                self.update_thread(thread)?;
             }
             DriverEvent::CommandsUpdated(commands) => {
                 self.emit(thread_id, turn_id, EventPayload::ProviderCommandsUpdated { commands })?;
@@ -8207,6 +8216,8 @@ mod tests {
         let mut thread = fixture.thread(ThreadStatus::Running);
         assert!(fixture.orchestrator.send(thread.id, UserMessage::text("/compact")).await.unwrap_err().to_string().contains("busy"));
         thread.status = ThreadStatus::Idle;
+        thread.provider = ProviderInstance::default_for(ProviderKind::GrokBuild);
+        thread.permission_mode = PermissionMode::FullAccess;
         fixture.store.thread_upsert(&thread).unwrap();
         assert!(
             fixture.orchestrator.send(thread.id, UserMessage::text("/compact")).await.unwrap_err().to_string().contains("does not expose")

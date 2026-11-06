@@ -418,7 +418,9 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
     // MCP servers stay on the agent. A send-level override makes the SDK build
     // a fresh MCP lease for the run: it reconnects every project and user
     // server, and the run's tool listing waits for the slowest one.
-    const start = () => agent.send(request.message, { model: options.model, onDelta });
+    const start = () => request.message?.text?.trim() === "/compress" && !request.message?.images?.length
+      ? agent.summarize()
+      : agent.send(request.message, { model: options.model, onDelta });
     try {
       // An interrupt received while prewarming has not admitted a prompt.
       // Do not start a billable run merely to cancel it immediately afterwards.

@@ -167,6 +167,7 @@ impl AgentDriver for CursorDriver {
             .emit(DriverEvent::CommandsUpdated(vec![ProviderCommand {
                 name: "compress".into(),
                 description: "Compact the Cursor conversation".into(),
+                ..Default::default()
             }]))
             .await;
         // The SDK has no system channel, so a new conversation carries the guide

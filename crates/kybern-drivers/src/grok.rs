@@ -478,6 +478,9 @@ async fn run_connection(
                                 .await;
                         }
                     }
+                    SessionUpdate::AvailableCommandsUpdate(update) => {
+                        let _ = ev.send(command_update(update)).await;
+                    }
                     _ => {}
                 }
                 Ok(())
@@ -741,5 +744,28 @@ mod grok_meta_tests {
         let message = startup_exit_message(&tail);
         assert!(message.contains("error line 99") && !message.contains("error line 0\n"), "{message}");
         assert!(tail.lock().unwrap().len() <= STDERR_TAIL_BYTES);
+    }
+}
+
+fn command_update(update: agent_client_protocol::schema::v1::AvailableCommandsUpdate) -> DriverEvent {
+    DriverEvent::CommandsUpdated(
+        update
+            .available_commands
+            .into_iter()
+            .map(|c| ProviderCommand { name: c.name, description: c.description, ..Default::default() })
+            .collect(),
+    )
+}
+
+#[cfg(test)]
+mod command_tests {
+    use super::*;
+    #[test]
+    fn acp_command_update_reaches_the_composer() {
+        let update = serde_json::from_value(json!({"availableCommands":[{"name":"review","description":"Review changes"}]})).unwrap();
+        let DriverEvent::CommandsUpdated(commands) = command_update(update) else { panic!("wrong event") };
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].name, "review");
+        assert_eq!(commands[0].description, "Review changes");
     }
 }

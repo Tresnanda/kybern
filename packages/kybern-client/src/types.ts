@@ -5227,7 +5227,7 @@ export interface HarnessUpdate {
   checked_at: DateTime | null;
 }
 
-export interface ProviderCommand { name: string; description: string }
+export interface ProviderCommand { name: string; description: string; aliases?: string[]; source?: string; input_hint?: string; subcommands?: ProviderCommand[] }
 
 export interface ProviderUsage {
   context?: { used_tokens: number; window_tokens: number };

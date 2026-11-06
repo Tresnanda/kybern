@@ -286,7 +286,8 @@ async fn permissions_and_forms_reply_to_their_native_endpoints() {
 async fn skills_commands_mode_and_model_use_v2_endpoints() {
     let (base, server) = mock(4).await;
     let (session, _rx) = session(&base);
-    session.state.lock().await.commands = vec![ProviderCommand { name: "review".into(), description: "Review".into() }];
+    session.state.lock().await.commands =
+        vec![ProviderCommand { name: "review".into(), description: "Review".into(), ..Default::default() }];
     let handle = Handle(session.clone(), std::sync::Mutex::new(None), None);
     let skill = UserMessage {
         parts: vec![ContentPart::Skill { name: "demo".into(), path: "/x/SKILL.md".into() }, ContentPart::Text { text: " go".into() }],

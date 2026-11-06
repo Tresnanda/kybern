@@ -60,6 +60,7 @@ import { muted, PICKER_RADIUS, PopupLayer, popoverStyle, SectionLabel } from './
 
 export interface SlashCommand {
   name: string
+  label?: string
   hint: string
   icon: string
   run: () => void
@@ -610,7 +611,7 @@ function itemTitle(item: Item): string {
     case 'thread': return item.thread.title || 'Untitled thread'
     case 'attachment': return item.title
     case 'file': return basename(item.path)
-    case 'command': return titleCase(item.command.name)
+    case 'command': return item.command.label ?? titleCase(item.command.name)
     default: return item.skill.display_name ?? titleCase(item.skill.name)
   }
 }
