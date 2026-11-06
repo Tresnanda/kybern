@@ -161,6 +161,8 @@ export function materialPatch(option: MaterialOption, platform: string = process
     const d = defaultVariantMaterial(platform as NodeJS.Platform)
     return { material: 'translucent', sidebarOpacity: d.sidebarOpacity, contentOpacity: 100, lastContentOpacity: d.lastContentOpacity, surfaceOpacity: d.surfaceOpacity, blur: defaultBlur(platform as NodeJS.Platform) }
   }
+  const d = defaultVariantMaterial(platform as NodeJS.Platform)
+  if (platform === 'linux' && d.material === 'solid') return { material: 'translucent', sidebarOpacity: d.sidebarOpacity, contentOpacity: d.lastContentOpacity, surfaceOpacity: d.surfaceOpacity, blur: null }
   return { material: 'translucent', sidebarOpacity: 85, contentOpacity: 85, surfaceOpacity: 60, blur: BLUR_MAX }
 }
 
