@@ -1,4 +1,5 @@
 // PreviewChromeRow.tsx: segmented rest address, edit focus, adaptive actions.
+import { toastProblem } from '../problems/toast.ts'
 import { useEffect, useRef, useState } from 'react'
 import { useGpuix, motion, type PublicInstance } from '@gpuix/react'
 import { Alert02Icon, FlashIcon, LinkSquare02Icon, SmartPhone01Icon, PictureInPictureIcon } from '@hugeicons/core-free-icons'
@@ -9,8 +10,6 @@ import { Badge } from '../kit/Badge.tsx'
 import { portLabel } from '../../../../packages/kybern-client/src/machineUtilities.ts'
 import { usePorts } from './ports.ts'
 import { forwardOf, routeText } from './slow.ts'
-import { toast } from '../shell/toasts.tsx'
-import { errorText } from '../nav/actions.ts'
 import { IconButton } from '../kit/IconButton.tsx'
 import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { revealTransform, SwapOnChange } from '../motion/kit.tsx'
@@ -107,7 +106,7 @@ export function PreviewChrome({ threadId }: { threadId: string }) {
         {environment.local && forwardFrom.length > 0 && <MenuItem id="forward" testId="preview-forward-open" label="Forward a port from…" icon={N.globe} onSelect={() => setPreview(threadId, { forwardOpen: true, forwardMachine: entry.machine?.id })} />}
         {ports.forwards.length > 0 && <>
           <MenuLabel>Forwarded ports</MenuLabel>
-          {ports.forwards.map(f => <MenuItem key={f.id} id={`port-${f.id}`} testId={`preview-port-${f.local_port}`} label={portLabel(f)} icon={N.x} onSelect={() => void ports.stop(f.id).catch(e => toast.error('Could not stop the forward', { description: errorText(e) }))} />)}
+          {ports.forwards.map(f => <MenuItem key={f.id} id={`port-${f.id}`} testId={`preview-port-${f.local_port}`} label={portLabel(f)} icon={N.x} onSelect={() => void ports.stop(f.id).catch(e => toastProblem(e, { action: 'stop the forward' }))} />)}
           <MenuSeparator />
         </>}
         <MenuItem id="close" testId="preview-close" label="Close page" icon={N.x} onSelect={() => closePreview(threadId)} />

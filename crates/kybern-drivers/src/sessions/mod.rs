@@ -492,7 +492,7 @@ impl History {
     }
 
     fn notice_level(&mut self, at: DateTime<Utc>, level: NoticeLevel, text: String) {
-        self.push(at, EventPayload::ProviderNotice { level, text, data: None });
+        self.push(at, EventPayload::ProviderNotice { level, text, data: None, problem: None });
     }
 
     fn end(&mut self, stop: StopReason) {

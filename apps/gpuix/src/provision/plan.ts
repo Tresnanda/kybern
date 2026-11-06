@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
+import { problemSentence } from '../problems/sentence.ts'
 import type { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 import type { PathCheck, ProvisionPlan } from '../../../../packages/kybern-client/src/types.ts'
 import { expandPath } from '../../../../packages/kybern-client/src/provision.ts'
 
-const messageOf = (error: unknown) => error instanceof Error ? error.message : String(error)
+const messageOf = (error: unknown) => problemSentence(error, { action: 'check this machine' })
 
 /** A verdict belongs to an exact source, target and typed folder, including while effects have not run yet. */
 export function useProvisionPlan(source: KybernClient | null, projectId: string, machineId: string | null, path: string | null, initial?: ProvisionPlan, retry = 0) {

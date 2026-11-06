@@ -32,7 +32,9 @@ import { DURATION, EASE, Rise } from '../motion/kit.tsx'
 import { N } from '../nav/glyphs.ts'
 import { Dialog } from '../nav/overlay.tsx'
 import { setNav } from '../nav/store.ts'
-import { errorText } from '../nav/actions.ts'
+import { problemLine } from '../problems/describe.ts'
+import { toastProblem } from '../problems/toast.ts'
+import { plainSentence } from '../../../../packages/kybern-client/src/problems.ts'
 import { useNav } from '../nav/store.ts'
 import { Button } from '../kit/Button.tsx'
 import { IconButton } from '../kit/IconButton.tsx'
@@ -142,7 +144,7 @@ export function Account({ close, provider, instance }: { close: () => void; prov
       return true
     } catch (error) {
       // Daemon errors already say what to do next (the name check says "Enter a name…").
-      setFinishError(errorText(error))
+      setFinishError(problemLine(error, { action: 'save the account' }))
       return false
     } finally {
       setFinishing(false)
@@ -167,7 +169,7 @@ export function Account({ close, provider, instance }: { close: () => void; prov
       const label = current.shownName.trim()
       void client.call('providers.accounts.login.finish', { id: current.login.id, name: label, color: current.shownColor, make_default: current.defaultOn }).then(
         async (result) => { await refreshAccounts(); flashAccount(result.kind, result.instance); toast.success(`${label} added`) },
-        (error) => toast.error(`Unable to add ${label}`, { description: `${errorText(error)} Open Settings › Accounts to try again.` }),
+        (error) => toastProblem(error, { action: `add ${label}`, goal: `add ${label}` }),
       )
     } else {
       void apiRef.current.cancel()
@@ -210,7 +212,7 @@ export function Account({ close, provider, instance }: { close: () => void; prov
       {url && <Desc center>{`We opened ${url}. Come back here when you’re done.`}</Desc>}
       {verifying && <Checking />}
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, marginTop: 4 }}>
-        {login.url && <QuietLink testId="account-reopen" onClick={() => void openExternal(login.url!).catch((e) => toast.error('Unable to open the sign-in page', { description: `${errorText(e)} Copy its address and open it in your browser.` }))}>Open browser again</QuietLink>}
+        {login.url && <QuietLink testId="account-reopen" onClick={() => void openExternal(login.url!).catch((e) => toastProblem(e, { action: 'open the sign-in page' }))}>Open browser again</QuietLink>}
         {canCode && !reauth && <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Quiet>Browser on another device?</Quiet><QuietLink testId="account-code-instead" onClick={() => void api.restart({ mode: codeMode })}>{supportsDeviceCode(kind) ? 'Use a code instead' : 'Paste code instead'}</QuietLink></div>}
         {canCode && reauth && <QuietLink testId="account-code-instead" onClick={() => void api.restart({ mode: codeMode })}>{supportsDeviceCode(kind) ? 'Use a code instead' : 'Paste code instead'}</QuietLink>}
         <QuietLink testId="account-show-terminal" onClick={showTerminal}>Having trouble? Show terminal</QuietLink>
@@ -296,7 +298,7 @@ export function Account({ close, provider, instance }: { close: () => void; prov
       ? <Button size="lg" testId="account-done" variant="primary" onClick={dismiss}>Done</Button>
       : <><Button size="lg" testId="account-done" variant="ghost" onClick={dismiss}>Done</Button><Button size="lg" testId="account-reauth" variant="primary" onClick={() => void api.restart({ instance: login.duplicate_of, directory: undefined, upstream: undefined, mode: login.mode })}>{`Sign in again to ${existingName}`}</Button></>
   } else if (step === 'error') {
-    const message = failure ?? login?.error ?? 'Sign-in didn’t finish. Try again, or show the terminal.'
+    const message = failure ?? (login?.error && plainSentence(login.error)) ?? 'Sign-in didn’t finish. Try again, or show the terminal.'
     body = <Body align="center" top={16} gap={8}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, borderRadius: 20, backgroundColor: t.v('--destructive') + '1a' }}><Icon source={S.circleAlert} size={20} color={t.v('--destructive')} /></div>
       <Title>Unable to sign in</Title>

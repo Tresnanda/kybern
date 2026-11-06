@@ -8,6 +8,11 @@ import { canCheckForUpdates, checkForAppUpdate, installAppUpdate, manualUpdateTe
 import { CopyUpdateCommand } from '../platform/UpdateSurface.tsx'
 import { cliStatus, installCli, managedCliCopy, removeOtherCli, uninstallCli, type CliStatus } from '../platform/cli.ts'
 import { Row, Section } from './controls.tsx'
+import { errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
+import { writeClipboardText } from '../platform/os.ts'
+import { toastProblem } from '../problems/toast.ts'
+import { ProblemLine } from '../problems/Line.tsx'
+import { cliActionPhrase, cliRefusedCopy } from './cliProblem.ts'
 import { Button } from '../kit/Button.tsx'
 import { Segmented } from '../kit/Segmented.tsx'
 import { useResource } from './resource.ts'
@@ -79,10 +84,12 @@ export function About() {
     <Section title="About">
       <AppUpdateRow />
       <UpdateTrackRow />
-      <Row title="Daemon" description={info.data?.version ?? '…'} />
-      <Row title="Protocol" description={info.data ? String(info.data.protocol_version) : '…'} />
-      <Row title="Host" description={info.data ? `${info.data.hostname} · ${info.data.os} ${info.data.arch}` : '…'} />
-      <Row title="Data" description={info.data?.data_dir ?? '…'} />
+      {info.error ? <div style={{ padding: 16 }}><ProblemLine error={info.error} action="read this machine's details" retry={info.refresh} testId="about-problem" /></div> : <>
+        <Row title="Daemon" description={info.data?.version ?? '…'} />
+        <Row title="Protocol" description={info.data ? String(info.data.protocol_version) : '…'} />
+        <Row title="Host" description={info.data ? `${info.data.hostname} · ${info.data.os} ${info.data.arch}` : '…'} />
+        <Row title="Data" description={info.data?.data_dir ?? '…'} />
+      </>}
     </Section>
     <Section title="Command line"><CommandLineRow /></Section>
   </>
@@ -105,8 +112,11 @@ function CommandLineRow() {
       setStatus(next)
       setJustInstalled(action !== 'uninstall' && next.installed)
     } catch (error) {
-      const text = error instanceof Error ? error.message : String(error)
-      if (text !== 'canceled') toast.error({ install: 'Unable to install the command', uninstall: 'Unable to uninstall the command', remove: 'Unable to remove the older command' }[action], { description: text })
+      const text = errorMessage(error)
+      const refused = cliRefusedCopy(action, text)
+      if (text === 'canceled') return
+      if (refused) toast.problem(refused.title, { tone: 'warning', icon: 'lock', description: refused.body, secondary: { label: 'Copy', onClick: () => { void writeClipboardText(text).catch(() => {}) } } })
+      else toastProblem(error, { action: cliActionPhrase(action), retry: () => void run(action) })
     } finally { setBusy(null) }
   }
   if (!status) return <Row title="Terminal command" description="Checking…" />

@@ -48,7 +48,7 @@ function useBrowse() {
       if (id === request.current) setBrowse(result);
       return result;
     } catch (e) {
-      if (id === request.current) setError(errorText(e));
+      if (id === request.current) setError(errorText(e, "open that folder"));
     } finally {
       if (id === request.current) setBusy(false);
     }
@@ -146,7 +146,7 @@ function SingleForm({ header }: { header: React.ReactNode }) {
       setDraft({ projectId: project.id, baseBranch: "" });
       router.dismissTo("/");
     } catch (e) {
-      setError(errorText(e));
+      setError(errorText(e, "add the project"));
     } finally {
       setBusy(false);
     }
@@ -221,7 +221,7 @@ function GroupForm({ header, existing }: { header?: React.ReactNode; existing?: 
       const added = result.candidates.filter((c) => c.added && selectable.has(c.path)).map((c) => c.path);
       setSelected((current) => orderMemberPaths([...current.filter((p) => selectable.has(p)), ...added]));
     } catch (e) {
-      if (id === scanRequest.current) setError(errorText(e));
+      if (id === scanRequest.current) setError(errorText(e, "scan for repositories"));
     } finally {
       if (id === scanRequest.current) setScanning(false);
     }
@@ -272,7 +272,7 @@ function GroupForm({ header, existing }: { header?: React.ReactNode; existing?: 
         router.dismissTo("/");
       }
     } catch (e) {
-      setError(errorText(e));
+      setError(errorText(e, "add the project group"));
     } finally {
       setAdding(false);
     }

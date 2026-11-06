@@ -50,7 +50,7 @@ export default function ArtifactPreview() {
         }
       })
       .catch((e) => {
-        if (alive) setError(errorText(e));
+        if (alive) setError(errorText(e, "open the artifact"));
       });
     return () => {
       alive = false;

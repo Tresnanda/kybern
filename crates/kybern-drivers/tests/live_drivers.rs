@@ -335,7 +335,7 @@ async fn run_native_bridge_turn(kind: ProviderKind) {
             DriverEvent::MessageCompleted { text, .. } => completed_text.push_str(&text),
             DriverEvent::TextDelta { delta, .. } => completed_text.push_str(&delta),
             DriverEvent::TurnCompleted { .. } => break,
-            DriverEvent::TurnFailed { error } => panic!("{kind}: native bridge turn failed: {error}"),
+            DriverEvent::TurnFailed { error, .. } => panic!("{kind}: native bridge turn failed: {error}"),
             DriverEvent::Exited { error, .. } => panic!("{kind}: native bridge provider exited: {error:?}"),
             _ => {}
         }
@@ -379,7 +379,7 @@ async fn ask(
                 session.respond_permission(&request_id, &ApprovalDecision::AllowOnce).await.unwrap();
             }
             DriverEvent::TurnCompleted { .. } => return if text.is_empty() { deltas } else { text },
-            DriverEvent::TurnFailed { error } => panic!("{kind}: turn failed: {error}"),
+            DriverEvent::TurnFailed { error, .. } => panic!("{kind}: turn failed: {error}"),
             DriverEvent::Exited { error, .. } => panic!("{kind}: provider exited: {error:?}"),
             _ => {}
         }
@@ -487,7 +487,7 @@ async fn codex_keeps_the_guide_after_compaction_and_resume() {
         let event = tokio::time::timeout_at(deadline, events.recv()).await.expect("compaction timed out").expect("event stream closed");
         match event {
             DriverEvent::TurnCompleted { .. } => break,
-            DriverEvent::TurnFailed { error } => panic!("compaction failed: {error}"),
+            DriverEvent::TurnFailed { error, .. } => panic!("compaction failed: {error}"),
             _ => {}
         }
     }

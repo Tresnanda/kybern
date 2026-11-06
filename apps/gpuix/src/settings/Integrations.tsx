@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react'
 import type { Integration, IntegrationAction, IntegrationsCatalog, ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
-import { errorText } from '../nav/actions.ts'
+import { failure, ProblemLine, type Failure } from '../problems/Line.tsx'
 import { setNav } from '../nav/store.ts'
 import { chooseTab, setDock } from '../dock/store.ts'
 import { getClient, useApp } from '../state.ts'
@@ -38,7 +38,7 @@ export function Integrations() {
   const [catalog, setCatalog] = useState<IntegrationsCatalog>({ items: [], warnings: [] })
   const [loadedKey, setLoadedKey] = useState('')
   const [busy, setBusy] = useState('')
-  const [error, setError] = useState('')
+  const [error, setError] = useState<Failure | null>(null)
   const [notice, setNotice] = useState('')
   const [refresh, setRefresh] = useState(0)
   const [count, setCount] = useState(40)
@@ -49,8 +49,8 @@ export function Integrations() {
     if (!projectId || !connected || !client) return
     let alive = true
     void client.call('integrations.list', { project_id: projectId, provider })
-      .then((value) => { if (alive) { setCatalog(value); setError('') } })
-      .catch((e) => { if (alive) setError(errorText(e)) })
+      .then((value) => { if (alive) { setCatalog(value); setError(null) } })
+      .catch((e) => { if (alive) setError(failure(`load ${provider === 'codex' ? 'Codex' : 'Claude'} integrations`, e)) })
       .finally(() => { if (alive) setLoadedKey(requestKey) })
     return () => { alive = false }
   }, [projectId, provider, refresh, connected, requestKey])
@@ -58,7 +58,7 @@ export function Integrations() {
   const change = async (item: Integration, action: IntegrationAction) => {
     const client = getClient()
     if (!client) return
-    setBusy(item.id); setError(''); setNotice('')
+    setBusy(item.id); setError(null); setNotice('')
     try {
       const result = await client.call('integrations.change', { project_id: projectId, provider, id: item.id, kind: item.kind, scope: item.scope, action })
       setNotice(result.message)
@@ -68,7 +68,7 @@ export function Integrations() {
         setCatalog((value) => ({ ...value, items: [...result.connections, ...value.items.filter((existing) => !result.connections.some((app) => app.id === existing.id))] }))
       } else setRefresh((value) => value + 1)
     } catch (e) {
-      setError(errorText(e))
+      setError(failure(`${action} ${item.name}`, e))
     } finally {
       setBusy('')
     }
@@ -77,7 +77,7 @@ export function Integrations() {
   const login = async (item: Integration) => {
     const client = getClient()
     if (!thread || !onThisProject || !client) return
-    setBusy(item.id); setError('')
+    setBusy(item.id); setError(null)
     try {
       await client.call('integrations.login', { thread_id: thread.id, name: item.id })
       if (getClient() !== client) return
@@ -87,12 +87,12 @@ export function Integrations() {
       if (latest) openTab(thread.id, { kind: 'terminal', id: latest.id })
       setNav({ settingsOpen: false })
     } catch (e) {
-      setError(errorText(e))
+      setError(failure(`start sign-in for ${item.name}`, e))
     } finally {
       setBusy('')
     }
   }
-  const openConnectors = () => void openExternal(CONNECTORS_URL).catch((e) => setError(errorText(e)))
+  const openConnectors = () => void openExternal(CONNECTORS_URL).catch((e) => setError(failure('open the connector page', e)))
   const noun = category === 'plugin' ? 'plugin' : 'connector'
   const canSignIn = provider === 'claude-code' && category === 'connector'
   const emptyTitle = !projectId ? 'Select a project' : !connected ? 'Not connected' : query ? 'No matches' : `No ${noun}s yet`
@@ -111,7 +111,7 @@ export function Integrations() {
     </div>
     <Label color={t.textSecondary} size={12} lineHeight={19.5}>{provider === 'codex' ? 'Type @ in a conversation to choose an installed plugin or connected app.' : 'Type / in a conversation to choose a plugin skill, such as /plugin:skill.'}</Label>
     {notice && <Label color={t.textSecondary} size={12} lineHeight={19.5}>{notice}</Label>}
-    {error && <Label color={t.v('--destructive')} size={12} lineHeight={19.5}>{error}</Label>}
+    {error && <ProblemLine error={error.error} action={error.action} projectId={projectId} testId="integrations-problem" />}
     {catalog.warnings.map((message) => <Label key={message} color={t.textSecondary} size={12} lineHeight={19.5}>{message}</Label>)}
     {loading ? <Skeleton />
       : !matches.length ? <div testId="integrations-empty" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 10, paddingTop: 30, paddingBottom: 30 }}>
@@ -134,7 +134,7 @@ export function Integrations() {
               <Label color={t.textSecondary} size={11} lineHeight={16.5} style={{ marginTop: 6 }}>{`${item.status}${item.scope ? ` · ${item.scope}` : ''}`}</Label>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
                 {item.actions.map((action) => <Button key={action} testId={`integration-${item.id}-${action}`} size="sm" variant="secondary" disabled={!connected || !!busy} onClick={() => void change(item, action)}>{busy === item.id ? 'Working…' : LABELS[action]}</Button>)}
-                {item.connect_url && <Button size="sm" variant="secondary" onClick={() => void openExternal(item.connect_url!).catch((e) => setError(errorText(e)))}>{item.installed ? 'Manage connection' : 'Connect'}</Button>}
+                {item.connect_url && <Button size="sm" variant="secondary" onClick={() => void openExternal(item.connect_url!).catch((e) => setError(failure(`open ${item.name}`, e)))}>{item.installed ? 'Manage connection' : 'Connect'}</Button>}
                 {item.can_login && <Button testId={`integration-login-${item.id}`} size="sm" variant="secondary" disabled={!connected || !!busy || !onThisProject} onClick={() => void login(item)}>Sign in</Button>}
               </div>
               {canSignInHere && <Label color={t.textSecondary} size={12} lineHeight={19.5} style={{ marginTop: 8 }}>Open a Claude conversation in this project to sign in.</Label>}

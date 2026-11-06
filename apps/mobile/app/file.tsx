@@ -9,7 +9,7 @@ import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ChatFileContext } from "../src/state/chatFileContext";
 import type { FilesReadResult } from "../src/state/protocol";
-import { errorText, rpc } from "../src/state/runtime";
+import { errorText, rawErrorMessage, rpc } from "../src/state/runtime";
 import { addContext } from "../src/state/draft";
 import { HeaderActions, type HeaderButton } from "../src/ui/ActionMenu";
 import { Alert, confirm } from "../src/ui/Alert";
@@ -67,7 +67,7 @@ export default function FileScreen() {
         if (alive) setFile(data);
       })
       .catch((e) => {
-        if (alive) setError((e as { code?: number }).code === -32601 ? "Update Kybern on the connected computer to open chat file links." : errorText(e));
+        if (alive) setError((e as { code?: number }).code === -32601 ? "Update Kybern on the connected computer to open chat file links." : errorText(e, "open this file"));
       });
     return () => {
       alive = false;
@@ -88,8 +88,8 @@ export default function FileScreen() {
       haptics.success();
       showToast(`Saved ${name}`);
     } catch (e) {
-      if ((e as { code?: number }).code === CONFLICT || /changed on disk/.test(errorText(e))) conflict();
-      else setError(`Unable to save ${name}. ${errorText(e)}`);
+      if ((e as { code?: number }).code === CONFLICT || /changed on disk/.test(rawErrorMessage(e))) conflict();
+      else setError(errorText(e, `save ${name}`));
     } finally {
       setSaving(false);
     }
@@ -106,7 +106,7 @@ export default function FileScreen() {
               setText(data.content);
               setEditing(false);
             },
-            (e) => setError(errorText(e)),
+            (e) => setError(errorText(e, "open this file")),
           ),
       },
       { text: "Keep mine", style: "destructive", onPress: () => void save(true) },

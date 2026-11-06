@@ -89,7 +89,7 @@ function Cost() {
         setUsage(value);
         setError("");
       })
-      .catch((e) => live && setError(errorText(e)));
+      .catch((e) => live && setError(errorText(e, "load plan limits")));
     return () => {
       live = false;
     };

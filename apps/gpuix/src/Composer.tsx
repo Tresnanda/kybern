@@ -2,7 +2,7 @@ import { clipboardAttachments, type ClipboardImage } from './composer/clipboard.
 import { StatusGlyph } from './composer/StatusGlyph.tsx'
 import { FooterRow, useFooterFit } from './composer/footerWidth.tsx'
 import { TokenTextarea, type TokenTextareaHandle } from './composer/TokenTextarea.tsx'
-import type { TokenReference } from './composer/token-text.ts'
+import { CHIP_FONT_SIZE, type TokenReference } from './composer/token-text.ts'
 import { type InputSelection } from './native/api.ts'
 export { useComposerOverlayHeight, useMeasureComposerOverlay } from './composer/height.ts'
 import { useMeasureComposerOverlay } from './composer/height.ts'
@@ -51,7 +51,7 @@ import { Icon } from './icons.tsx'
 import { MatrixLoader } from './MatrixLoader.tsx'
 import { Spinner } from './kit/Spinner.tsx'
 import { upsert as upsertTask } from './tasks/store.ts'
-import { localClient, threadClient, ownProjectId, type StateThread, getState, refreshLists, setThreadOpen, usePaneCompact, focusPane, getFocusedPaneId, usePaneAccess, getPane, selectPaneThread, setPane, set, useApp } from './state.ts'
+import { localClient, requireThreadClient, ownProjectId, type StateThread, getState, refreshLists, setThreadOpen, usePaneCompact, focusPane, getFocusedPaneId, usePaneAccess, getPane, selectPaneThread, setPane, set, useApp } from './state.ts'
 import { useCurrentSpaceId } from './spaces/current.ts'
 import { FONT_UI } from './theme.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from './ui.tsx'
@@ -106,11 +106,11 @@ import { observeElementBounds, type LayoutRect } from './native/layout.ts'
 import type { PaintTransformProps } from '@gpuix/native/host'
 
 import { hoverPressTransform } from './motion/press.ts'
-import { describeProblem } from '../../../packages/kybern-client/src/problems.ts'
+import { describe, problemLine } from './problems/describe.ts'
+import { toastProblem } from './problems/toast.ts'
 import {
   launchNewChat,
   ensureLoaded,
-  errorText,
   onComposerRestore,
   onComposerInsertChip,
   rememberSentDraft,
@@ -189,7 +189,7 @@ function ThreadComposer({ thread, placeholderEnter }: { thread: StateThread; pla
   const handoffSelected =
     !!target && (targetChanged || (target.target.model ?? null) !== (thread.model ?? null) || (target.target.effort ?? null) !== (thread.effort ?? null))
   const chooseTarget = async (next: ProviderInstance, model?: string, effort?: string, inherit = !target?.account_override) => {
-    const state = await threadClient(threadId, thread.machineId)!.call('threads.target.set', { thread_id: threadId, target: { provider: next, model, effort }, inherit_account: inherit })
+    const state = await requireThreadClient(threadId, thread.machineId).call('threads.target.set', { thread_id: threadId, target: { provider: next, model, effort }, inherit_account: inherit })
     patch({ target: { threadId, state } })
   }
 
@@ -201,7 +201,7 @@ function ThreadComposer({ thread, placeholderEnter }: { thread: StateThread; pla
     const permission = modes.includes(thread.permission_mode) ? thread.permission_mode : modes.includes('supervised') ? 'supervised' : modes[0]
     if (!permission) throw new Error('This harness does not expose a supported permission mode.')
     const owner = activeEnvironment()
-    const switched = await threadClient(threadId, thread.machineId)!.call('coordinator.switch_harness', { project_id: thread.coordinator_project_id!, provider: next, model, effort, permission_mode: permission })
+    const switched = await requireThreadClient(threadId, thread.machineId).call('coordinator.switch_harness', { project_id: thread.coordinator_project_id!, provider: next, model, effort, permission_mode: permission })
     if (owner !== activeEnvironment()) return
     const state = pane.get()
     set({ threads: state.threads.map(t => t.id === switched.id ? switched : t) })
@@ -239,7 +239,7 @@ function ThreadComposer({ thread, placeholderEnter }: { thread: StateThread; pla
       sendDisabledReason={waitingChat ? `Waiting for ${machineName(thread.machineId)}. You can send again once it has the chat.` : undefined}
       canSteer={handoffSelected || canSteer(thread.provider)}
       mode={mode}
-      onModeChange={(m) => void setThreadMode(threadId, m, thread.machineId).catch((e) => console.error('Unable to change mode:', errorText(e)))}
+      onModeChange={(m) => void setThreadMode(threadId, m, thread.machineId).catch((e) => toastProblem(e, { action: 'change the permission mode', retry: () => void setThreadMode(threadId, m, thread.machineId).catch(() => {}) }))}
       provider={provider}
       providers={composerProviders}
       accounts={accounts}
@@ -671,7 +671,7 @@ export function ComposerView(input: ComposerViewProps) {
       readSelection()
       focusEditor()
       return true
-    } catch (e) { setError(errorText(e)); return false }
+    } catch (e) { setError(problemLine(e, { action: 'edit your message' })); return false }
   }
   const lastModelRefresh = useRef(0)
   const approvalDigit = useRef<string | null>(null)
@@ -858,7 +858,7 @@ export function ComposerView(input: ComposerViewProps) {
       setText((current) => current || draft.text)
       setAttachments((current) => (current.length ? current : draft.attachments))
       // Plain words for what went wrong and what to do; the draft is back in the box, so say so.
-      const problem = describeProblem(e, { action: 'send your message' })
+      const problem = describe(e, { action: 'send your message' })
       setError(`${problem.title}. ${problem.body} Your message is saved.`)
     } finally {
       setSending(false)
@@ -930,7 +930,7 @@ export function ComposerView(input: ComposerViewProps) {
       // Native images accept data URIs, so previews need no temporary file.
       const path = `data:${image.mediaType};base64,${Buffer.from(image.data).toString('base64')}`
       setAttachments((list) => list.some((a) => a.hash === hash) ? list : [...list, { ...info, path, hash, label: nextAttachmentLabel(info.media_type, list.map((a) => a.label)) }])
-    } catch (e) { setError(`Unable to attach image: ${errorText(e)}`) }
+    } catch (e) { setError(problemLine(e, { action: 'attach the image' })) }
     finally { pendingHashes.current.delete(hash); setUploading((n) => n - 1); focusEditor() }
   }
 
@@ -949,7 +949,7 @@ export function ComposerView(input: ComposerViewProps) {
         // Checked again as it lands: another add may have raced it between this upload and the next render.
         setAttachments((list) => newFiles(list, [path]).fresh.length ? [...list, { ...info, path, label: nextAttachmentLabel(info.media_type, list.map((a) => a.label)) }] : list)
       } catch (e) {
-        setError(`Unable to attach ${path.split('/').pop()}: ${errorText(e)}`)
+        setError(problemLine(e, { action: `attach ${path.split('/').pop()}` }))
       } finally {
         pendingPaths.current.delete(path)
         setUploading((n) => n - 1)
@@ -975,7 +975,7 @@ export function ComposerView(input: ComposerViewProps) {
       await work()
       return true
     } catch (e) {
-      setError(`Unable to change model: ${errorText(e)}`)
+      setError(problemLine(e, { action: 'change the model' }))
       return false
     } finally {
       setChangingModel(false)
@@ -1086,7 +1086,7 @@ export function ComposerView(input: ComposerViewProps) {
                       else void addClipboardImage(payload.image!)
                       return
                     }
-                  } catch (error) { setError(`Unable to paste: ${errorText(error)}`) }
+                  } catch (error) { setError(problemLine(error, { action: 'paste' })) }
                   pastePending.current = true
                 }
                 // Native navigation is applied after the key notification.
@@ -1126,7 +1126,7 @@ export function ComposerView(input: ComposerViewProps) {
               }}
               onSubmit={() => { void submit() }}
               theme={{ caret: t.text }}
-              style={{ width: '100%', fontSize: 14, lineHeight: LINE_HEIGHT, color: t.text, fontFamily: FONT_UI, opacity: connected ? 1 : 0.6 }}
+              style={{ width: '100%', fontSize: CHIP_FONT_SIZE, lineHeight: LINE_HEIGHT, color: t.text, fontFamily: FONT_UI, opacity: connected ? 1 : 0.6 }}
             />
           </div>
           {feedback && !error && <div testId="composer-feedback"><Label color={muted(t, 0.6)} size={12}>{feedback}</Label></div>}
@@ -1199,7 +1199,7 @@ export function ComposerView(input: ComposerViewProps) {
                 onProviderChange={(next, choice) => busyRun(() => props.onProviderChange!(next, choice))}
                 onReload={() => {
                   lastModelRefresh.current = Date.now()
-                  void props.onReloadModels(true).catch((e) => setError(`Unable to reload models: ${errorText(e)}`))
+                  void props.onReloadModels(true).catch((e) => setError(problemLine(e, { action: 'reload the models' })))
                 }}
                 lead={accountLead(provider.kind, triggerAccount)}
                 label={() => (

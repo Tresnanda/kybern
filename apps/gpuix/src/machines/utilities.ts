@@ -3,7 +3,7 @@
 import type { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 import { receivedNotice, sendFinished, sendStatus, sendToastShape, type SendTarget, type TerminalMachine } from '../../../../packages/kybern-client/src/machineUtilities.ts'
 import { FILES_PROGRESS_NOTIFICATION, FILES_RECEIVED_NOTIFICATION, OUTBOX_CHANGED_NOTIFICATION, type FilesProgress, type FilesReceived, type OutboxItem } from '../../../../packages/kybern-client/src/types.ts'
-import { errorText } from '../nav/actions.ts'
+import { toastProblem } from '../problems/toast.ts'
 import { revealQuietly } from '../platform/os.ts'
 import { toast } from '../shell/toasts.tsx'
 import { getState, ownProjectId } from '../state.ts'
@@ -33,7 +33,7 @@ export async function sendPath(client: KybernClient, projectId: string, path: st
     ]
     show(latest)
   } catch (error) {
-    toast.error(`Could not send ${name}`, { description: errorText(error) })
+    toastProblem(error, { action: `send ${name}` })
   }
 }
 

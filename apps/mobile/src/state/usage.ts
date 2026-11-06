@@ -57,7 +57,7 @@ export async function loadUsageLimits(refresh = false) {
       publish({ limits: mergeLimits(state.limits, limits), error: "" });
   } catch (e) {
     if (client === active && isCurrent())
-      publish({ error: `Unable to read plan limits. ${errorText(e)}` });
+      publish({ error: errorText(e, "load plan limits") });
   } finally {
     if (client === active) publish({ loading: false });
   }

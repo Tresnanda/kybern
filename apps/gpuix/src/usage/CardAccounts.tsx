@@ -1,6 +1,7 @@
 // The rail usage card's account half (`views/RailUsage.tsx` `AccountsUsageCard`): the default-account
 // radio list with each account's tightest limit, "Needs sign-in" rows with their Sign in action,
 // and the "Default changed" note. `NavRail.tsx` mounts it between the card header and the limits.
+import { toastProblem } from '../problems/toast.ts'
 import { useEffect, useRef, useState } from 'react'
 import { accountNeedsSignIn, accountsOfKind, limitsForAccount } from '../shared/lib/accountUi.ts'
 import { CLI_INSTANCE, isCliInstance } from '../shared/lib/accounts.ts'
@@ -8,10 +9,8 @@ import { bindingLimit, PROVIDER_NAMES } from '../shared/lib/providerUsage.ts'
 import type { AccountSummary, ProviderKind, ProviderLimits } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
 import { Button } from '../kit/Button.tsx'
-import { errorText } from '../nav/actions.ts'
 import { N } from '../nav/glyphs.ts'
 import { showDialog } from '../dialogs/store.ts'
-import { toast } from '../shell/toasts.tsx'
 import { Label, useTheme } from '../ui.tsx'
 import { AccountMarkStack, LimitMeter } from './AccountMark.tsx'
 import { askAccountLimits, refreshAccounts, updateProviderSettings, useAccountLimitEntries, useAccounts } from './accounts.ts'
@@ -52,7 +51,7 @@ export function CardAccounts({ kind, global }: { kind: ProviderKind; global: Pro
       clearTimeout(changedTimer.current)
       changedTimer.current = setTimeout(() => setChanged(false), 2000)
     } catch (error) {
-      toast.error('Unable to change the default account', { description: `${errorText(error)} Check your connection, then try again.` })
+      toastProblem(error, { action: 'change the default account' })
     }
   }
   return <>

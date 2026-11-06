@@ -46,7 +46,7 @@ import {
   SectionHeader,
   type SwipeAction,
 } from "../src/ui/List";
-import { Button, Empty, T } from "../src/ui/primitives";
+import { Button, Empty, ErrorBanner, T } from "../src/ui/primitives";
 import { PullRefresh } from "../src/ui/PullRefresh";
 import { ListSearch } from "../src/ui/Search";
 import { CONTENT_MAX_WIDTH, space, useTheme } from "../src/ui/theme";
@@ -524,11 +524,7 @@ export default function Notes() {
           }
           ListFooterComponent={
             <View>
-              {error ? (
-                <T variant="footnote" tone="negative" style={{ paddingVertical: space.md, paddingHorizontal: space.lg }}>
-                  {error}
-                </T>
-              ) : null}
+              <ErrorBanner error={error} onRetry={() => void loadNotes()} />
               {nothing && (
                 <Empty
                   icon="doc.text"

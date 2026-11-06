@@ -21,7 +21,7 @@ export function useHarnessUpdates() {
     let live = true;
     rpc("harness_updates.list", {})
       .then((result) => live && setUpdates(result.updates))
-      .catch((e) => live && setError(errorText(e)));
+      .catch((e) => live && setError(errorText(e, "load the agent updates")));
     return () => {
       live = false;
     };

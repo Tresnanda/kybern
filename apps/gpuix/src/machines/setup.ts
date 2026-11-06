@@ -1,4 +1,5 @@
 // Trusted setup is separate from tailnet discovery. A discovery hint never becomes SSH authority.
+import { describeProblem } from '../../../../packages/kybern-client/src/problems.ts'
 import type { NetworkStatus } from '../../../../packages/kybern-client/src/types.ts'
 
 export interface SetupClient {
@@ -88,7 +89,7 @@ export class MachineSetup {
         const old = new Map(this.state.rows.map(row => [row.target.id, row]))
         this.emit({ rows: targets.map(target => ({ target, phase: target.access === 'guidance' ? 'access' : old.get(target.id)?.phase ?? 'queued', detail: target.access === 'guidance' ? detail('access') : old.get(target.id)?.detail ?? detail('queued'), machineId: old.get(target.id)?.machineId })), discovering: false })
         await Promise.all(targets.filter(target => target.access !== 'guidance' && (checkAgain || !old.has(target.id))).map(target => this.enqueue(target.id, false)))
-      } catch (error) { this.emit({ error: error instanceof Error ? error.message : String(error) }) }
+      } catch (error) { this.emit({ error: failureLine(error) }) }
       finally { this.emit({ discovering: false }); this.discovery = undefined }
     }
     this.discovery = work()
@@ -136,8 +137,14 @@ export class MachineSetup {
       }, error => {
         if (job.controller.signal.aborted) return
         const phase = error instanceof Error && error.name === 'MissingDaemon' ? 'install' : 'error'
-        this.update(id, phase, error instanceof Error ? error.message : String(error))
+        this.update(id, phase, failureLine(error))
       }).finally(() => { clearTimeout(timeout); this.active--; this.jobs.delete(id); job.done(); this.pump() })
     }
   }
+}
+
+/** Why discovery failed, as a headline and one sentence (the pure model has no machine hub to name a machine from). */
+function failureLine(error: unknown): string {
+  const view = describeProblem(error, { action: 'look for machines' })
+  return `${view.title}. ${view.body}`
 }

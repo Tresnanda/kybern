@@ -1,11 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { WorktreeInspectResult } from '../../../../packages/kybern-client/src/types.ts'
 import { Dialog, DialogHeader } from '../nav/overlay.tsx'
 import { N } from '../nav/glyphs.ts'
 import { Button } from '../kit/Button.tsx'
 import { Checkbox } from '../kit/Checkbox.tsx'
 import { getClient, refreshLists, useApp } from '../state.ts'
-import { errorText } from '../nav/actions.ts'
+import { asError, errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
+import { ProblemRow } from '../kit/Problem.tsx'
+import { ProblemLine } from '../problems/Line.tsx'
+import { worktreeLock, worktreeLockCopy } from './worktreeProblem.ts'
 import { FONT_MONO } from '../theme.ts'
 import { Label, useTheme } from '../ui.tsx'
 
@@ -14,21 +17,22 @@ export function WorktreeCleanup({ threadId, close }: { threadId: string; close: 
   const thread = useApp((s) => s.threads.find((th) => th.id === threadId))
   const [client] = useState(() => getClient()!)
   const [inspection, setInspection] = useState<WorktreeInspectResult | null>(null)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<Error | null>(null)
+  const failed = useRef<'inspect' | 'remove'>('inspect')
   const [busy, setBusy] = useState(false)
   const [force, setForce] = useState(false)
   const [deleteBranch, setDeleteBranch] = useState(false)
   const [reload, setReload] = useState(0)
   useEffect(() => {
     let live = true
-    setError(''); setInspection(null); setForce(false); setDeleteBranch(false)
-    void client.call('threads.worktree.inspect', { thread_id: threadId }).then((next) => { if (live) setInspection(next) }, (e) => { if (live) setError(errorText(e)) })
+    failed.current = 'inspect'; setError(null); setInspection(null); setForce(false); setDeleteBranch(false)
+    void client.call('threads.worktree.inspect', { thread_id: threadId }).then((next) => { if (live) setInspection(next) }, (e) => { if (live) setError(asError(e)) })
     return () => { live = false }
   }, [client, threadId, reload])
   const remove = async () => {
-    setBusy(true); setError('')
+    setBusy(true); setError(null); failed.current = 'remove'
     try { const next = await client.call('threads.worktree.remove', { thread_id: threadId, force, delete_branch: deleteBranch }); setInspection(next); setForce(false); if (getClient() === client) void refreshLists() }
-    catch (e) { setError(errorText(e)) } finally { setBusy(false) }
+    catch (e) { setError(asError(e)) } finally { setBusy(false) }
   }
   const unsafe = inspection && (!inspection.clean || !inspection.merged)
   const dismiss = () => { if (!busy) close() }
@@ -37,7 +41,7 @@ export function WorktreeCleanup({ threadId, close }: { threadId: string; close: 
   const lead = /[.!?…]$/.test(title) ? title : `${title}.`
   return <Dialog onClose={dismiss} width={512} testId="worktree-cleanup"><DialogHeader title={inspection?.exists === false ? 'Worktree removed' : 'Remove this worktree?'} description={`${lead} Keep this conversation and saved source. Continuing recreates its worktree.`} onClose={dismiss} />
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingLeft:16, paddingRight:16, paddingTop:12, paddingBottom:12 }}>
-      {error && <Label color={t.red} size={14}>{`${error} Refresh after resolving this issue.`}</Label>}
+      {error && <WorktreeProblem error={error} retry={failed.current === 'remove' ? () => void remove() : () => setReload((n) => n + 1)} action={failed.current === 'remove' ? 'remove the worktree' : 'check the worktree'} />}
       {!inspection && !error && <Label color={t.textSecondary} size={14}>Checking worktree owners and source…</Label>}
       {inspection && <><Label color={t.text} size={14} lineHeight={22} font={FONT_MONO}>{inspection.path}</Label><Label color={t.text} size={14}>{`Branch: ${inspection.branch}`}</Label>
         {inspection.exists ? <>
@@ -51,6 +55,14 @@ export function WorktreeCleanup({ threadId, close }: { threadId: string; close: 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>{inspection?.exists === false ? <Button size="lg" variant="primary" disabled={busy} onClick={dismiss}>Done</Button> : <><Button size="lg" variant="ghost" icon={N.refresh} disabled={busy} onClick={() => setReload((n) => n + 1)}>Refresh</Button><div style={{ flexGrow: 1 }} /><Button size="lg" variant="secondary" disabled={busy} onClick={dismiss}>Keep worktree</Button><Button size="lg" variant="destructive" testId="worktree-remove" disabled={busy || !inspection || inspection.blockers.length > 0 || (!!unsafe && !force)} onClick={() => void remove()}>{busy ? 'Removing…' : force ? 'Remove worktree anyway' : 'Remove worktree'}</Button></>}</div>
     </div>
   </Dialog>
+}
+
+/** A failed check or removal: a file lock names the program and says the work is safe; anything else is worded by `describeProblem`. */
+export function WorktreeProblem({ error, retry, action }: { error: Error; retry?: () => void; action: string }) {
+  const lock = worktreeLock(errorMessage(error))
+  if (!lock) return <ProblemLine error={error} action={action} retry={retry} testId="worktree-problem" />
+  const copy = worktreeLockCopy(lock)
+  return <ProblemRow tone="warning" icon="lock" title={copy.title} body={copy.body} primary={retry ? { label: 'Try again', onClick: retry, testId: 'worktree-problem-retry' } : undefined} detail={errorMessage(error)} testId="worktree-problem" />
 }
 
 /** A kit checkbox and its sentence: the sentence is part of the hit area. */

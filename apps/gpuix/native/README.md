@@ -1381,6 +1381,11 @@ reference token adapter and a deliberately limited source-mode Markdown adapter
 links). It skips code/escaped delimiters; it is not a CommonMark or rich-document
 parser. Existing editors remain responsible for their storage/serialization.
 
+`native/token-icon-check.ts` (lab `token-icon-lab.tsx`) draws the composer's chips (three image attachments and a file)
+with the app's fonts and with the code face unregistered, and writes dark/light captures: the icon must sit left of the
+label in both. An icon's room is the first two characters of its chip drawn in `icon.font` at the input's size, so off
+macOS the pad is the UI face's own spaces (`chipPad` in `platform/fonts.ts`), not JetBrains Mono's.
+
 `native/decoration-check.ts` runs dark/light and verifies styled runs, the mounted
 React adapter, ID hit testing, invalid/stale requests, atomic caret jumps,
 deletion, partial transaction replacement, Unicode rebase, native undo/redo and

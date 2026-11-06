@@ -1354,6 +1354,7 @@ impl Orchestrator {
                     level: NoticeLevel::Warning,
                     text: "Kybern restarted while this turn was running. Send a message to continue.".into(),
                     data: None,
+                    problem: None,
                 },
             )?;
             t.status = ThreadStatus::Idle;
@@ -2528,12 +2529,14 @@ impl Orchestrator {
         let (live, session_reused) = match self.ensure_session(&thread).await {
             Ok(live) => live,
             Err(error) => {
-                self.emit(thread.id, Some(turn_id), EventPayload::TurnFailed { error: error.to_string() })?;
+                // The whole chain: "start claude: program not found", not just the outermost context.
+                let (text, problem) = (crate::problem::detail(&error), crate::problem::turn_problem(thread.provider.kind, &error));
+                self.emit(thread.id, Some(turn_id), EventPayload::TurnFailed { error: text.clone(), problem })?;
                 let thread_id = thread.id;
                 let mut failed = thread;
                 failed.status = ThreadStatus::Failed;
                 self.update_thread(failed)?;
-                self.delegation_turn_finished(thread_id, turn_id, delegation::TurnOutcome::Failed(error.to_string()));
+                self.delegation_turn_finished(thread_id, turn_id, delegation::TurnOutcome::Failed(text));
                 return Err(error);
             }
         };
@@ -2673,17 +2676,18 @@ impl Orchestrator {
                     }
                     sent
                 }
-                Err(error) => Err(kybern_drivers::DriverError::Unsupported(error.to_string())),
+                Err(error) => Err(kybern_drivers::DriverError::Other(error)),
             }
         };
         if let Err(e) = delivery {
-            self.emit(thread.id, Some(turn_id), EventPayload::TurnFailed { error: e.to_string() })?;
+            let (text, problem) = crate::problem::driver_failure(thread.provider.kind, &e);
+            self.emit(thread.id, Some(turn_id), EventPayload::TurnFailed { error: text.clone(), problem })?;
             let thread_id = thread.id;
             let mut t = thread;
             t.status = ThreadStatus::Failed;
             self.update_thread(t)?;
             *live.turn.lock().await = None;
-            self.delegation_turn_finished(thread_id, turn_id, delegation::TurnOutcome::Failed(e.to_string()));
+            self.delegation_turn_finished(thread_id, turn_id, delegation::TurnOutcome::Failed(text));
             return Err(e.into());
         }
         if !is_compact_message(&message) {
@@ -2803,6 +2807,7 @@ impl Orchestrator {
                     text: "The agent did not finish stopping, so Kybern closed its process. Send a message to resume the conversation."
                         .into(),
                     data: None,
+                    problem: None,
                 },
             )?;
             Ok::<_, anyhow::Error>(())
@@ -3502,7 +3507,7 @@ impl Orchestrator {
                 .await;
         }
         let repo = Repo::new(&thread.cwd);
-        if !Repo::is_repo(std::path::Path::new(&thread.cwd)).await {
+        if !Repo::check(std::path::Path::new(&thread.cwd)).await? {
             return Err(anyhow!("project is not a git repository"));
         }
         let (from, to) = match turn_id {
@@ -3931,6 +3936,7 @@ impl Orchestrator {
                         level: NoticeLevel::Warning,
                         text: format!("Antigravity is running without Kybern's tools. {error}"),
                         data: None,
+                        problem: None,
                     },
                 );
                 false
@@ -4211,7 +4217,12 @@ impl Orchestrator {
 
     /// Translate driver events into thread events until the provider exits.
     async fn pump(self, thread_id: ThreadId, live: Arc<LiveSession>, mut events: tokio::sync::mpsc::Receiver<DriverEvent>) {
+        // Why the provider ended, for a turn it ended in the middle of.
+        let mut exit_error: Option<String> = None;
         while let Some(ev) = events.recv().await {
+            if let DriverEvent::Exited { error: Some(error), .. } = &ev {
+                exit_error = Some(error.clone());
+            }
             // Exited is terminal even when the public driver handle retains a
             // sender. Waiting for channel EOF would keep that handle (and its
             // background tasks) alive forever, notably with Pi/OMP.
@@ -4255,7 +4266,7 @@ impl Orchestrator {
             if let Some(internal) = turn.internal.as_mut() {
                 internal.finish(Err("The session exited before it wrote a handoff.".into()));
             } else {
-                self.fail_exited_turn(thread_id, &live, turn.id).await;
+                self.fail_exited_turn(thread_id, &live, turn.id, exit_error.as_deref()).await;
             }
         }
         if cleanup_barrier.is_some() {
@@ -4265,18 +4276,31 @@ impl Orchestrator {
     }
 
     /// The provider exited in the middle of a user's turn.
-    async fn fail_exited_turn(&self, thread_id: ThreadId, live: &Arc<LiveSession>, turn_id: TurnId) {
+    /// What an error notice from the thread's harness means, when Kybern can name it.
+    fn notice_problem(&self, thread_id: ThreadId, level: NoticeLevel, text: &str) -> Option<kybern_protocol::rpc::Problem> {
+        if level != NoticeLevel::Error {
+            return None;
+        }
+        let kind = self.inner.store.thread_get(thread_id).ok().flatten()?.provider.kind;
+        kybern_drivers::failure::classify(kind, text)
+    }
+
+    async fn fail_exited_turn(&self, thread_id: ThreadId, live: &Arc<LiveSession>, turn_id: TurnId, cause: Option<&str>) {
         let _ = self.resolve_finished_requests(thread_id, turn_id, live).await;
-        let _ = self.emit(thread_id, Some(turn_id), EventPayload::TurnFailed { error: "provider exited before finishing the turn".into() });
+        let text = match cause {
+            Some(cause) => format!("provider exited before finishing the turn: {cause}"),
+            None => "provider exited before finishing the turn".to_string(),
+        };
+        let problem = cause.and_then(|cause| {
+            let kind = self.inner.store.thread_get(thread_id).ok().flatten()?.provider.kind;
+            kybern_drivers::failure::classify(kind, cause)
+        });
+        let _ = self.emit(thread_id, Some(turn_id), EventPayload::TurnFailed { error: text.clone(), problem });
         if let Ok(Some(mut t)) = self.inner.store.thread_get(thread_id) {
             t.status = ThreadStatus::Failed;
             let _ = self.update_thread(t);
         }
-        self.delegation_turn_finished(
-            thread_id,
-            turn_id,
-            delegation::TurnOutcome::Failed("provider exited before finishing the turn".into()),
-        );
+        self.delegation_turn_finished(thread_id, turn_id, delegation::TurnOutcome::Failed(text));
     }
 
     async fn owns_app_tool_turn(&self, thread_id: ThreadId, live: &Arc<LiveSession>, expected_turn: Option<TurnId>) -> Option<TurnId> {
@@ -4932,7 +4956,7 @@ impl Orchestrator {
                     self.rotate_if_over_budget(thread_id, live.clone());
                 }
             }
-            DriverEvent::TurnFailed { error } => {
+            DriverEvent::TurnFailed { error, problem } => {
                 let Some(turn) = turn_guard.as_mut() else { return Ok(()) };
                 // A login another machine lent was rejected (the broker rotated it): borrow again, resume and
                 // send the message once more instead of failing the turn.
@@ -4976,6 +5000,7 @@ impl Orchestrator {
                                 crate::rpc::hostname()
                             ),
                             data: None,
+                            problem: None,
                         },
                     )?;
                     t.status = ThreadStatus::Idle;
@@ -4987,7 +5012,10 @@ impl Orchestrator {
                     );
                     return Ok(());
                 }
-                self.emit(thread_id, Some(turn_id), EventPayload::TurnFailed { error: error.clone() })?;
+                // A driver that couldn't name the cause (or an event from a harness that doesn't try) gets a second reading
+                // by the thread's own harness.
+                let problem = problem.or_else(|| kybern_drivers::failure::classify(t.provider.kind, &error));
+                self.emit(thread_id, Some(turn_id), EventPayload::TurnFailed { error: error.clone(), problem })?;
                 // A failed turn may have hit a plan limit.
                 self.inner.usage.turn_finished(t.provider.kind);
                 t.status = ThreadStatus::Failed;
@@ -5034,7 +5062,8 @@ impl Orchestrator {
                 self.emit(thread_id, turn_id, EventPayload::ProviderUsageUpdated { usage })?;
             }
             DriverEvent::Notice { level, text, data } => {
-                self.emit(thread_id, turn_id, EventPayload::ProviderNotice { level, text, data })?;
+                let problem = self.notice_problem(thread_id, level, &text);
+                self.emit(thread_id, turn_id, EventPayload::ProviderNotice { level, text, data, problem })?;
             }
             DriverEvent::Exited { code, error } => {
                 if let Some(error) = error.filter(|_| !live.is_released()) {
@@ -5045,6 +5074,7 @@ impl Orchestrator {
                             level: NoticeLevel::Error,
                             text: format!("provider exited{}: {error}", code.map(|c| format!(" with code {c}")).unwrap_or_default()),
                             data: None,
+                            problem: self.notice_problem(thread_id, NoticeLevel::Error, &error),
                         },
                     )?;
                 }
@@ -5575,7 +5605,7 @@ mod tests {
         fixture.store.thread_upsert(&thread).unwrap();
         fixture
             .orchestrator
-            .emit(thread.id, None, EventPayload::TurnFailed { error: "original old model cursor-grok-4.5-high".into() })
+            .emit(thread.id, None, EventPayload::TurnFailed { error: "original old model cursor-grok-4.5-high".into(), problem: None })
             .unwrap();
         let before = fixture.store.events_for_thread(thread.id).unwrap();
         // No discovery or mutation if this daemon has no cached catalog.
@@ -8385,6 +8415,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_failed_turn_keeps_the_drivers_problem_and_names_one_the_driver_could_not() {
+        use kybern_protocol::rpc::ProblemKind;
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let (live, _) = fixture.park(&thread, Instant::now()).await;
+        fixture.orchestrator.send(thread.id, UserMessage::text("hello")).await.unwrap();
+        live.turn_ready.notified().await;
+        // A text the thread's own harness recognizes is classified even when the driver did not.
+        let raw = "Invalid API key · Please run /login".to_string();
+        fixture
+            .orchestrator
+            .handle_driver_event(thread.id, &live, DriverEvent::TurnFailed { error: raw.clone(), problem: None })
+            .await
+            .unwrap();
+        let events = fixture.store.events_for_thread(thread.id).unwrap();
+        let failed = events.iter().find_map(|event| match &event.payload {
+            EventPayload::TurnFailed { error, problem } => Some((error.clone(), problem.clone())),
+            _ => None,
+        });
+        let (error, problem) = failed.expect("the turn failed");
+        assert_eq!(error, raw);
+        let problem = problem.expect("a problem");
+        assert_eq!((problem.kind, problem.subject.as_deref()), (ProblemKind::SignedOut, Some("claude")));
+        assert_eq!(problem.detail.as_deref(), Some(raw.as_str()));
+    }
+
+    #[tokio::test]
+    async fn an_error_notice_from_the_harness_carries_a_problem_and_a_warning_does_not() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let (live, _) = fixture.park(&thread, Instant::now()).await;
+        let notice = |level, text: &str| DriverEvent::Notice { level, text: text.into(), data: None };
+        fixture
+            .orchestrator
+            .handle_driver_event(thread.id, &live, notice(NoticeLevel::Error, "API Error: 429 rate_limit_error"))
+            .await
+            .unwrap();
+        fixture
+            .orchestrator
+            .handle_driver_event(thread.id, &live, notice(NoticeLevel::Warning, "API Error: 429 rate_limit_error"))
+            .await
+            .unwrap();
+        let problems: Vec<_> = fixture
+            .store
+            .events_for_thread(thread.id)
+            .unwrap()
+            .into_iter()
+            .filter_map(|event| match event.payload {
+                EventPayload::ProviderNotice { level, problem, .. } => Some((level, problem.map(|problem| problem.subject))),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(problems, vec![(NoticeLevel::Error, Some(Some("rate_limit".to_string()))), (NoticeLevel::Warning, None)]);
+    }
+
+    #[tokio::test]
     async fn an_agent_that_fails_because_the_daemon_is_stopping_ends_its_turn_as_interrupted() {
         let fixture = Fixture::new();
         let thread = fixture.thread(ThreadStatus::Idle);
@@ -8393,7 +8479,7 @@ mod tests {
         live.turn_ready.notified().await;
         fixture.orchestrator.begin_shutdown();
         let raw = "[ede_diagnostic] result_type=user stop_reason=tool_use".to_string();
-        fixture.orchestrator.handle_driver_event(thread.id, &live, DriverEvent::TurnFailed { error: raw }).await.unwrap();
+        fixture.orchestrator.handle_driver_event(thread.id, &live, DriverEvent::TurnFailed { error: raw, problem: None }).await.unwrap();
         let events = fixture.store.events_for_thread(thread.id).unwrap();
         assert!(!events.iter().any(|event| matches!(event.payload, EventPayload::TurnFailed { .. })), "no raw failure");
         assert!(

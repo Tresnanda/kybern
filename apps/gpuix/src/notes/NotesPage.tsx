@@ -1,4 +1,5 @@
 import { useGpuix, useWindowSize, type PublicInstance } from '@gpuix/react'
+import { ProblemLine } from '../problems/Line.tsx'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { ageLabel, filterChoices, filterNotes, gallerySections, noteMatchesQuery, noteTitle, type NotesFilter } from '@/state/notesModel'
 import type { NoteSummary } from '../../../../packages/kybern-client/src/types.ts'
@@ -7,7 +8,6 @@ import { N } from '../nav/glyphs.ts'
 import { addWindowKeyHandler } from '../nav/keys.ts'
 import { Menu, MenuItem } from '../nav/overlay.tsx'
 import { getNav, setNav, useNav } from '../nav/store.ts'
-import { Button } from '../kit/Button.tsx'
 import { IconButton } from '../kit/IconButton.tsx'
 import { PickerChip } from '../kit/PickerChip.tsx'
 import { useApp } from '../state.ts'
@@ -38,7 +38,6 @@ export function NotesPage() {
 type Row = { key: string; kind: 'filters' | 'notice' | 'header' | 'cards'; label?: string; first?: boolean; notes?: NoteSummary[]; per?: number; big?: boolean; list?: boolean }
 
 export function NotesGallery() {
-  const t = useTheme()
   const k = useNotesTokens()
   const { renderer } = useGpuix()
   const size = useWindowSize({ intervalMs: 300 })
@@ -140,7 +139,7 @@ export function NotesGallery() {
     {choices.deleted > 0 && filter.kind !== 'deleted' && <Chip testId="notes-filter-deleted" label="Recently deleted" onClick={(byKey) => pickFilter({ kind: 'deleted' }, byKey)} />}
   </div>
   return <div testId="page-notes" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
-    {error && <div style={{ display: 'flex', gap: 10, padding: 24 }}><Label color={t.red}>{error}</Label><Button onClick={() => void refreshNotes()}>Try again</Button></div>}
+    {error && <div style={{ padding: 24 }}><ProblemLine error={error.error} action={error.action} retry={() => void refreshNotes()} testId="notes-problem" /></div>}
     {!loaded ? <Empty title="Loading notes…" /> : <div ref={listFocus} tabIndex={0} onKeyDown={(e) => keys(e.key ?? '')} style={{ display: 'flex', flexGrow: 1, minHeight: 0 }}><virtual-list ref={list} testId="notes-gallery" style={{ flexGrow: 1, minHeight: 0 }}>
       {rows.map((row, index) => <div key={row.key} style={{ paddingLeft: gutter, paddingRight: gutter }}>
         {row.kind === 'filters' ? filters

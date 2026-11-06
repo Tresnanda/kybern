@@ -436,7 +436,7 @@ impl Orchestrator {
         let duration_ms = task.stats.duration_ms.unwrap_or_else(|| child.started.elapsed().as_millis() as u64);
         if task.status == RuntimeTaskStatus::Failed {
             let error = task.detail.clone().filter(|detail| !detail.trim().is_empty()).unwrap_or_else(|| "The subagent failed.".into());
-            self.emit(child_id, Some(child.turn_id), EventPayload::TurnFailed { error })?;
+            self.emit(child_id, Some(child.turn_id), EventPayload::TurnFailed { error, problem: None })?;
         } else {
             self.emit(
                 child_id,

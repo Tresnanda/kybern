@@ -2,7 +2,10 @@
 // run), when its update was last checked, and the one action that applies. Nothing here claims a state it hasn't read.
 import { useEffect, useState } from 'react'
 import type { HarnessUpdate, ProviderKind, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
-import { getClient } from '../state.ts'
+import { requireClient } from '../state.ts'
+import { problemLine } from '../problems/describe.ts'
+import { plainSentence } from '../../../../packages/kybern-client/src/problems.ts'
+import { AGENT_NAMES } from '../onboarding/model.ts'
 import { loadProviders } from '../nav/live.ts'
 import { canCheckForUpdates, cursorSdkLine, updateLine } from './installedAgentsModel.ts'
 import { Label, useTheme } from '../ui.tsx'
@@ -32,7 +35,7 @@ export function InstalledAgents({ providers, customBinary, cursor }: { providers
   useEffect(() => { if (wasBusy && !busy) void loadProviders(true); setWasBusy(busy) }, [busy])
   const check = async (kind: ProviderKind) => {
     setStarting(kind); setFailure(null)
-    try { await getClient()!.call('harness_updates.run', { kind }); updates.refresh() } catch (e) { setFailure({ kind, text: `Unable to check for updates. ${String(e)}` }) } finally { setStarting(null) }
+    try { await requireClient().call('harness_updates.run', { kind }); updates.refresh() } catch (e) { setFailure({ kind, text: problemLine(e, { action: `check ${AGENT_NAMES[kind] ?? kind} for updates` }) }) } finally { setStarting(null) }
   }
   return (
     <Section title="Installed agents">
@@ -57,7 +60,7 @@ function AgentRow({ provider, record, cursor, failure, checkable, starting, anyS
   // The first line: where it runs from, or why it can't run.
   const state = provider.available
     ? provider.binary_path ? <Label color={t.textSecondary} size={12} lineHeight={18} font={FONT_MONO} truncate style={{ maxWidth: 451 }}>{startTruncate(provider.binary_path)}</Label> : null
-    : <Label color={t.textSecondary} size={14} lineHeight={21.7} style={{ maxWidth: 451 }}>{sdkLine ?? provider.unavailable_reason ?? 'Not found on this machine.'}</Label>
+    : <Label color={t.textSecondary} size={14} lineHeight={21.7} style={{ maxWidth: 451 }}>{sdkLine ?? (provider.unavailable_reason && plainSentence(provider.unavailable_reason)) ?? 'Not found on this machine.'}</Label>
   const update = failure ? { text: failure, tone: 'warning' as const } : provider.available && !isCursor ? updateLine(record) : null
   const running = record?.status === 'waiting' || record?.status === 'updating'
   // Trailing: the version it reports; "Not installed" only when no binary was found at all.

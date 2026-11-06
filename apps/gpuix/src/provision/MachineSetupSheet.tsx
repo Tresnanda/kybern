@@ -1,12 +1,12 @@
 // Scoped composer setup. Each target keeps its own folder, explicit env consent and operation;
 // retrying one machine never resubmits a successful or queued operation on another.
+import { problemSentence } from '../problems/sentence.ts'
 import { useWindowSize } from '@gpuix/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 import { PROVISION_CHANGED_NOTIFICATION, type ProvisionStatus, type ProvisionPlan, type ProjectsProvisionParams } from '../../../../packages/kybern-client/src/types.ts'
 import { defaultPath, expandPath, pathAccepted, partialGroupDetail, provisionFraction, provisionSettled, provisionStatusText, type ProvisionTarget } from '../../../../packages/kybern-client/src/provision.ts'
 import { Dialog } from '../nav/overlay.tsx'
-import { errorText } from '../nav/actions.ts'
 import { Button } from '../kit/Button.tsx'
 import { Checkbox } from '../kit/Checkbox.tsx'
 import { PickerChip } from '../kit/PickerChip.tsx'
@@ -73,7 +73,7 @@ export function MachineSetupSheet({ projectId, targetId, close, onReady, onProvi
   const useTarget = async () => {
     if (selecting.current || submitting.current) return
     selecting.current = true; setChoosing(true); setError('')
-    try { await onReady(plans.current.get(targetId)); if (mounted.current) setSelected(true) } catch (e) { if (mounted.current) setError(`${errorText(e)} Retry selecting the machine.`) } finally { selecting.current = false; if (mounted.current) setChoosing(false) }
+    try { await onReady(plans.current.get(targetId)); if (mounted.current) setSelected(true) } catch (e) { if (mounted.current) setError(problemSentence(e, { action: 'select that machine' })) } finally { selecting.current = false; if (mounted.current) setChoosing(false) }
   }
   const name = context?.name ?? 'this project'
   const done = statuses[targetId]?.phase === 'done'
@@ -167,7 +167,7 @@ function SetupTarget({ client, sourceId, projectId, target, started, register, r
       const next = await client.call('projects.provision', request)
       updateStatus(attemptRecord.current?.status ?? next)
     } catch (e) {
-      const message = `${errorText(e)} Reconnect and retry to confirm this setup. Its folder and env choices are kept.`
+      const message = `${problemSentence(e, { action: 'confirm this setup' })} Its folder and env choices are kept.`
       if (attemptRecord.current) attemptRecord.current.error = message
       setError(message)
     } finally { inFlight.current = false; setBusy(false) }

@@ -1,4 +1,5 @@
 import { dlopen, FFIType, JSCallback, ptr } from 'bun:ffi'
+import { problemSentence } from '../problems/sentence.ts'
 import path from 'node:path'
 import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -176,7 +177,7 @@ export function createHostBackend({ host, platform, identity = currentNotificati
     } catch (error) {
       debug('status failed', error)
       value = 'unsupported'
-      failure = `Notifications are unavailable: ${error instanceof Error ? error.message : String(error)}`
+      failure = problemSentence(error, { action: 'use system notifications' })
     }
     reason = failure ?? hostReason(platform, value)
     cached = { status: value, at: now() }
@@ -259,7 +260,7 @@ function initialize() {
     }
     bridge = loaded
     return true
-  } catch (error) { reason = String(error); return false }
+  } catch (error) { reason = problemSentence(error, { action: 'use system notifications' }); return false }
 }
 function command(op: string, fields = {}): Promise<unknown> {
   return new Promise((resolve, reject) => {

@@ -794,7 +794,7 @@ pub(super) fn quota_limited_turn(status: ThreadStatus, events: &[ThreadEvent], n
         .iter()
         .rev()
         .find_map(|event| match &event.payload {
-            EventPayload::TurnFailed { error } => Some(reported || quota_failure(error)),
+            EventPayload::TurnFailed { error, .. } => Some(reported || quota_failure(error)),
             EventPayload::TurnCompleted { stop_reason, .. } => Some(*stop_reason == StopReason::Interrupted && reported),
             EventPayload::TurnResumed => Some(false),
             _ => None,

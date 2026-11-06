@@ -50,7 +50,7 @@ function bubbleMenu(text: string, threadId: string): MenuItem[] {
         const projectId = getState().threads.find((thread) => thread.id === threadId)?.project_id ?? null;
         void createNote({ projectId, body: text })
           .then((note) => showToast("Saved to a new note", { title: "Open", onPress: () => router.push({ pathname: "/note", params: { id: note.id } }) }))
-          .catch((e) => showToast(errorText(e) || "Unable to save the note. Try again."));
+          .catch((e) => showToast(errorText(e, "save the note")));
       },
     },
   ];
@@ -253,7 +253,7 @@ export function UserMessageBubble({
         {failed?.state === "failed" && (
           <View style={{ alignItems: "flex-end", gap: space.xs }} accessibilityLiveRegion="polite">
             <T variant="footnote" tone="negative" style={{ textAlign: "right" }}>
-              {`Not sent. ${failed.error ?? "Check the connection and try again."}`}
+              {failed.error ?? "Couldn't send your message. Check the connection and try again."}
             </T>
             <View style={{ flexDirection: "row", gap: space.sm }}>
               <Button size="medium" role="plain" onPress={() => editPending(failed)}>

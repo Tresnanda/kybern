@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Instant;
 
-use kybern_protocol::{EventOrigin, StopReason, ToolCall, Usage};
+use kybern_protocol::{EventOrigin, ProviderKind, StopReason, ToolCall, Usage};
 use serde_json::Value;
 
 use super::SIGN_IN;
@@ -244,19 +244,20 @@ impl TurnMapper {
             }
             Some(Outcome::Interrupted) => vec![completed(StopReason::Interrupted)],
             Some(Outcome::Failed(_)) if interrupted => vec![completed(StopReason::Interrupted)],
-            Some(Outcome::Failed(error)) => vec![DriverEvent::TurnFailed { error: friendly_error(&error) }],
+            Some(Outcome::Failed(error)) => vec![failed(&error)],
             // No result at all: killed (an interrupt that had to escalate), or it crashed.
             None if interrupted => vec![completed(StopReason::Interrupted)],
             None => {
                 let raw = stderr.map(str::to_string).or_else(|| self.error_event.take());
-                vec![DriverEvent::TurnFailed {
-                    error: match (raw, code) {
-                        (Some(raw), _) => friendly_error(&raw),
-                        (None, Some(0)) | (None, None) => "Antigravity ended without an answer. Send your message again.".to_string(),
-                        (None, Some(code)) => {
-                            format!("Antigravity exited with code {code}. Send your message again, or pick another agent.")
-                        }
-                    },
+                vec![match (raw, code) {
+                    (Some(raw), _) => failed(&raw),
+                    (None, Some(0)) | (None, None) => {
+                        DriverEvent::turn_failed(ProviderKind::Antigravity, "Antigravity ended without an answer. Send your message again.")
+                    }
+                    (None, Some(code)) => DriverEvent::turn_failed(
+                        ProviderKind::Antigravity,
+                        format!("Antigravity exited with code {code}. Send your message again, or pick another agent."),
+                    ),
                 }]
             }
         }
@@ -295,6 +296,11 @@ fn error_text(value: Option<&Value>) -> Option<&str> {
 }
 
 /// A sentence that says what to do next, whatever `agy` printed.
+/// A failed run, in Antigravity's friendly words, with the cause the raw text names.
+fn failed(raw: &str) -> DriverEvent {
+    DriverEvent::TurnFailed { error: friendly_error(raw), problem: crate::failure::classify(ProviderKind::Antigravity, raw) }
+}
+
 pub(crate) fn friendly_error(raw: &str) -> String {
     let lower = raw.to_ascii_lowercase();
     if ["authenticat", "oauth", "unauthorized", "sign in", "sign-in", "login", "log in", "credential", "401"]

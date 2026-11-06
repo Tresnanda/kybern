@@ -38,6 +38,21 @@ pub enum RepoState {
     NotRepo,
     /// Git refuses the folder because another user owns it; the message tells the person what to run.
     Unsafe(String),
+    /// Git could not be started (not installed, not on PATH, not allowed to run), so nothing is known about the folder.
+    /// `Repo::git_unavailable` makes the typed error the daemon turns into "Install Git".
+    GitUnavailable(std::io::ErrorKind),
+}
+
+/// What `git rev-parse --is-inside-work-tree` said, as a state. A git that did not start is its own state, not "not a repo".
+fn probe_state(out: std::io::Result<std::process::Output>, path: &Path) -> RepoState {
+    match out {
+        Ok(out) if out.status.success() => RepoState::Repo,
+        Ok(out) => match dubious_ownership(&String::from_utf8_lossy(&out.stderr), path) {
+            Some(message) => RepoState::Unsafe(message),
+            None => RepoState::NotRepo,
+        },
+        Err(error) => RepoState::GitUnavailable(error.kind()),
+    }
 }
 
 /// The message for git's "dubious ownership" refusal, or `None` for any other stderr. Kybern never
@@ -238,16 +253,26 @@ impl Repo {
     /// running as another user (a scheduled task on Windows) meets git's ownership check.
     pub async fn probe(path: &Path) -> RepoState {
         let out = Command::new("git").no_window().arg("-C").arg(path).args(["rev-parse", "--is-inside-work-tree"]).output().await;
-        match out {
-            Ok(out) if out.status.success() => RepoState::Repo,
-            Ok(out) => match dubious_ownership(&String::from_utf8_lossy(&out.stderr), path) {
-                Some(message) => RepoState::Unsafe(message),
-                None => RepoState::NotRepo,
-            },
-            Err(_) => RepoState::NotRepo,
+        probe_state(out, path)
+    }
+
+    /// The typed error for a git that could not start (`RepoState::GitUnavailable`): a [`SpawnError`] for `git`, which the daemon
+    /// turns into a `tool_missing` problem rather than "not a repo".
+    pub fn git_unavailable(kind: std::io::ErrorKind) -> SpawnError {
+        let reason = if kind == std::io::ErrorKind::NotFound { "program not found" } else { "program could not start" };
+        spawn_error(std::io::Error::new(kind, reason))
+    }
+
+    /// Whether `path` is inside a work tree, with a git that cannot start reported as that typed error instead of as "no".
+    /// Use it where the answer reaches a person ("Install Git" beats "not a repository"); [`Repo::is_repo`] is the quiet form.
+    pub async fn check(path: &Path) -> std::result::Result<bool, SpawnError> {
+        match Self::probe(path).await {
+            RepoState::GitUnavailable(kind) => Err(Self::git_unavailable(kind)),
+            state => Ok(state == RepoState::Repo),
         }
     }
 
+    /// Whether `path` is inside a work tree. A git that cannot start answers `false`; [`Repo::check`] tells the two apart.
     pub async fn is_repo(path: &Path) -> bool {
         Command::new("git")
             .no_window()
@@ -1332,6 +1357,24 @@ mod tests {
         repo.git(&["config", "user.email", "t@t"]).await.unwrap();
         repo.git(&["config", "user.name", "t"]).await.unwrap();
         (dir, repo)
+    }
+
+    #[test]
+    fn a_git_that_cannot_start_is_not_a_missing_repository() {
+        let missing = probe_state(Err(std::io::Error::new(std::io::ErrorKind::NotFound, "program not found")), Path::new("."));
+        assert_eq!(missing, RepoState::GitUnavailable(std::io::ErrorKind::NotFound));
+        let denied = probe_state(Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied)), Path::new("."));
+        assert_eq!(denied, RepoState::GitUnavailable(std::io::ErrorKind::PermissionDenied));
+        // The typed error names git and keeps the cause, as the daemon's `tool_missing` problem reads it.
+        let error = Repo::git_unavailable(std::io::ErrorKind::NotFound);
+        assert_eq!((error.tool().as_str(), error.kind()), ("git", std::io::ErrorKind::NotFound));
+        assert_eq!(error.to_string(), "run git: program not found");
+    }
+
+    #[tokio::test]
+    async fn a_repository_checks_out_without_an_error() {
+        let (repo_dir, _repo) = init_repo().await;
+        assert!(Repo::check(repo_dir.path()).await.unwrap());
     }
 
     #[tokio::test]

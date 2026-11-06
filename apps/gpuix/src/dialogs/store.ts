@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import type { ProblemReport } from '../../../../packages/kybern-client/src/report.ts'
 import type { ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
 type Dialog =
   /** `group`: the folder picker titled "Choose the group folder", which leads to the group sheet. */
@@ -15,6 +16,8 @@ type Dialog =
   /** Add a project to another machine (`provision/ProvisionSheet.tsx`); `machineId` is the machine of the row it was opened on. */
   | { kind: 'provision'; projectId: string; machineId?: string }
   | { kind: 'account'; provider?: ProviderKind; instance?: string }
+  /** Review the redacted GitHub issue for a failure before it opens in the browser (`problems/report.ts`). */
+  | { kind: 'report'; draft: ProblemReport }
   /** The one-time Antigravity sign-in notice; `proceed` starts the sign-in once it is accepted. */
   | { kind: 'antigravity-notice'; proceed: () => void }
 let dialog: Dialog | null = null

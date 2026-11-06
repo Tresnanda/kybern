@@ -57,7 +57,7 @@ export default function ProjectPage() {
     setCoordinator(undefined);
     void rpc("coordinator.get", { project_id: id })
       .then((result) => alive && setCoordinator(result ?? null))
-      .catch((cause) => alive && setError(errorText(cause)));
+      .catch((cause) => alive && setError(errorText(cause, "load the coordinator")));
     return () => {
       alive = false;
     };
@@ -105,7 +105,7 @@ export default function ProjectPage() {
       await ensureThread(result.thread.id).catch(() => {});
       router.push({ pathname: "/thread/[id]", params: { id: result.thread.id } });
     } catch (cause) {
-      setError(errorText(cause));
+      setError(errorText(cause, "set up the coordinator"));
     } finally {
       setOpening(false);
     }
@@ -119,7 +119,7 @@ export default function ProjectPage() {
       const result = await rpc("github.pr.list", { project_id: project.id, state: "open", limit: 30 });
       setPrs(result.pull_requests);
     } catch (e) {
-      setError(errorText(e));
+      setError(errorText(e, "load pull requests"));
     } finally {
       setLoadingPrs(false);
     }
@@ -147,7 +147,7 @@ export default function ProjectPage() {
             await refresh();
             router.back();
           })
-          .catch((e) => setError(errorText(e)));
+          .catch((e) => setError(errorText(e, "remove the project")));
       },
     });
 

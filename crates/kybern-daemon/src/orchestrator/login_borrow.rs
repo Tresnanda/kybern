@@ -156,7 +156,11 @@ impl Orchestrator {
                 let already =
                     this.inner.store.thread_get(thread_id).ok().flatten().is_some_and(|thread| thread.status == ThreadStatus::Failed);
                 if !already {
-                    let _ = this.emit(thread_id, Some(turn_id), EventPayload::TurnFailed { error: text.clone() });
+                    let _ = this.emit(
+                        thread_id,
+                        Some(turn_id),
+                        EventPayload::TurnFailed { error: text.clone(), problem: kybern_drivers::failure::classify(kind, &text) },
+                    );
                     if let Ok(Some(mut thread)) = this.inner.store.thread_get(thread_id) {
                         thread.status = ThreadStatus::Failed;
                         let _ = this.update_thread(thread);

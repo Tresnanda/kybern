@@ -2335,7 +2335,9 @@ mod tests {
         let big = "x".repeat(40 * 1024);
         for i in 0..700 {
             let text = if i % 50 == 0 { big.clone() } else { format!("event {i}") };
-            store.event_append(thread.id, None, EventPayload::ProviderNotice { level: NoticeLevel::Info, text, data: None }).unwrap();
+            store
+                .event_append(thread.id, None, EventPayload::ProviderNotice { level: NoticeLevel::Info, text, data: None, problem: None })
+                .unwrap();
         }
         let events = store.events_for_thread(thread.id).unwrap();
         assert_eq!(events.len(), 700);
@@ -2379,7 +2381,7 @@ mod tests {
             .event_append(
                 thread.id,
                 None,
-                EventPayload::ProviderNotice { level: NoticeLevel::Info, text: "/tmp/notice.png".into(), data: None },
+                EventPayload::ProviderNotice { level: NoticeLevel::Info, text: "/tmp/notice.png".into(), data: None, problem: None },
             )
             .unwrap();
         store
@@ -2458,7 +2460,11 @@ mod tests {
 
     fn note(store: &Store, thread_id: ThreadId, text: &str) -> EventSeq {
         store
-            .event_append(thread_id, None, EventPayload::ProviderNotice { data: None, level: NoticeLevel::Info, text: text.into() })
+            .event_append(
+                thread_id,
+                None,
+                EventPayload::ProviderNotice { data: None, level: NoticeLevel::Info, text: text.into(), problem: None },
+            )
             .unwrap()
             .seq
     }
@@ -3198,7 +3204,7 @@ mod tool_output_allocation_tests {
             },
         );
         append(3, EventPayload::ToolCallOutputDelta { tool_call_id: "interrupted".into(), delta: "partial output".into() });
-        append(4, EventPayload::TurnFailed { error: "interrupted".into() });
+        append(4, EventPayload::TurnFailed { error: "interrupted".into(), problem: None });
 
         let events = store.events_for_thread_through(thread, 4).unwrap();
         let stream: String = events
@@ -3348,7 +3354,7 @@ mod transcript_scan_allocation_tests {
         let start =
             serde_json::to_string(&EventPayload::TurnStarted { message_id: MessageId::new_v4(), message: UserMessage::text("latest") })
                 .unwrap();
-        let failed = serde_json::to_string(&EventPayload::TurnFailed { error: "weekly quota".into() }).unwrap();
+        let failed = serde_json::to_string(&EventPayload::TurnFailed { error: "weekly quota".into(), problem: None }).unwrap();
         let switched = serde_json::to_string(&EventPayload::SessionTransitioned {
             from: ProviderInstance::default_for(ProviderKind::Codex),
             to: ProviderInstance::default_for(ProviderKind::ClaudeCode),
@@ -3402,6 +3408,7 @@ mod transcript_scan_allocation_tests {
                 level: NoticeLevel::Info,
                 text: "A single retained event may exceed the batch byte budget. ".repeat(6000),
                 data: None,
+                problem: None,
             },
         );
         for i in 0..260 {
@@ -3504,13 +3511,13 @@ mod transcript_scan_allocation_tests {
         let thread = ThreadId::nil();
         let turn = TurnId::nil();
         let payloads = vec![
-            EventPayload::ProviderNotice { level: NoticeLevel::Info, text: "start".into(), data: None },
+            EventPayload::ProviderNotice { level: NoticeLevel::Info, text: "start".into(), data: None, problem: None },
             EventPayload::ToolCallOutputDelta { tool_call_id: "large".into(), delta: "x".repeat(256 * 1024) },
             EventPayload::ProviderUsageUpdated { usage: Default::default() },
             EventPayload::MessageRemoved { message_id: MessageId::nil() },
             EventPayload::ProviderCommandsUpdated { commands: Vec::new() },
             EventPayload::ThreadArchived,
-            EventPayload::ProviderNotice { level: NoticeLevel::Info, text: "end".into(), data: None },
+            EventPayload::ProviderNotice { level: NoticeLevel::Info, text: "end".into(), data: None, problem: None },
         ];
         let events: Vec<ThreadEvent> = payloads
             .into_iter()

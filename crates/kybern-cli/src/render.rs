@@ -471,7 +471,7 @@ pub async fn follow_turn(client: &Client, subscription_id: SubscriptionId, threa
                 }
                 return Ok(());
             }
-            EventPayload::TurnFailed { error } => {
+            EventPayload::TurnFailed { error, .. } => {
                 if !json {
                     if line_open {
                         println!();
@@ -542,7 +542,7 @@ pub async fn watch(client: &Client, subscription_id: SubscriptionId, json: bool)
                 EventPayload::AssistantTextDelta { delta, .. } => delta.replace('\n', "⏎"),
                 EventPayload::ToolCallStarted { call, .. } => call.name.clone(),
                 EventPayload::ApprovalRequested { approval } | EventPayload::UserInputRequested { approval } => approval.summary.clone(),
-                EventPayload::TurnFailed { error } => error.clone(),
+                EventPayload::TurnFailed { error, .. } => error.clone(),
                 EventPayload::ThreadUpdated { thread } => {
                     let delegation = thread.delegation.as_ref().map(|d| format!(" [delegated {}]", d.status)).unwrap_or_default();
                     format!("{:?} {}{}", thread.status, thread.title, delegation)

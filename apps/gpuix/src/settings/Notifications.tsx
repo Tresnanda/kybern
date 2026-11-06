@@ -1,6 +1,7 @@
 // Settings › Notifications (desktop `SettingsScreen.tsx` `Notifications` and
 // `NotificationSettings`): the daemon's agent-notification switch, and access
 // to system notifications: macOS for the packaged app, the toast and freedesktop services elsewhere (`native/notifications.ts`).
+import { toastProblem } from '../problems/toast.ts'
 import { useEffect, useState } from 'react'
 import { notifications, type NotificationStatus } from '../native/notifications.ts'
 import { toast } from '../shell/toasts.tsx'
@@ -20,7 +21,7 @@ export function Notifications() {
       const state = await notifications.requestPermission()
       setPermission(state)
       if (state === 'granted' && !await notifications.post({ id: `settings-test-${Date.now()}`, title: 'Kybern', body: "Notifications are ready. You'll hear when an agent needs you." })) throw Error('Check notification access in system settings and try again.')
-    } catch (e) { toast.error('Unable to send notification', { description: e instanceof Error ? e.message : String(e) }) }
+    } catch (e) { toastProblem(e, { action: 'send the notification' }) }
     finally { setBusy(false) }
   }
   const description = permission === 'granted' ? 'System alerts appear when Kybern is in the background.' : permission === 'denied' ? 'Allow Kybern notifications in system settings, then try again.' : permission === 'unsupported' ? "System notifications aren't available in this environment. In-app alerts still work." : 'Enable access to receive alerts outside Kybern.'

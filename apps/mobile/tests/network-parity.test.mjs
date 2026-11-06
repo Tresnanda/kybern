@@ -288,3 +288,9 @@ test("saved computers that share a name are told apart by their address; others 
   assert.equal(addresses.has("d"), false, "a unique name needs no address");
   assert.equal(machineAddress([{ kind: "relay", url: "http://m/relay/x" }]), "", "a relay is not the machine's address");
 });
+
+test("an offline machine never shows the transport's own words", async () => {
+  const { machineStatusLine } = await import("../src/machines/labels.ts");
+  assert.equal(machineStatusLine({ status: "offline", error: "Unable to connect to SatyaMas: Network request failed" }), "Offline");
+  assert.equal(machineStatusLine({ status: "offline", error: "SatyaMas is not answering" }), "Offline · SatyaMas is not answering");
+});

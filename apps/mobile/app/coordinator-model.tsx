@@ -42,7 +42,7 @@ export default function CoordinatorModelScreen() {
       await saveProjectCoordinator(projectId, withRoleOverride(project?.coordinator ?? null, known.role as CoordinatorRole, value));
       if (close) router.back();
     } catch (e) {
-      setError(`${COORDINATOR_SETTINGS_COPY.saveFailed} ${errorText(e)}`);
+      setError(errorText(e, "save the coordinator settings"));
     } finally {
       setBusy(false);
     }

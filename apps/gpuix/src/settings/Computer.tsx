@@ -2,11 +2,14 @@
 // Access (switch, cursor mode, agent cursor, allowed apps), Setup (CuaDriver,
 // permissions) and per-app notes. Status is read on open and re-read every 4 s
 // only while setup is unfinished, like the desktop; nothing polls once it is ready.
+import { asError, errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
+import { writeClipboardText } from '../platform/os.ts'
+import { toastProblem } from '../problems/toast.ts'
+import { ProblemLine } from '../problems/Line.tsx'
 import { useEffect, useState } from 'react'
 import type { ComputerCheck, ComputerDriver, ComputerNote, ComputerPermission, ComputerStatus } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
-import { errorText } from '../nav/actions.ts'
 import { toast } from '../shell/toasts.tsx'
 import { getClient, useApp } from '../state.ts'
 import { Label, ink, useTheme } from '../ui.tsx'
@@ -28,7 +31,7 @@ export function ComputerUse() {
   const connected = useApp((s) => s.status === 'open')
   const { settings } = useSettings()
   const [status, setStatus] = useState<ComputerStatus | null>(null)
-  const [loadError, setLoadError] = useState('')
+  const [loadError, setLoadError] = useState<Error | null>(null)
   const [busy, setBusy] = useState<'install' | 'grant' | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
   const computer = settings?.computer_use
@@ -46,11 +49,11 @@ export function ComputerUse() {
         const next = await client.call('computer.status', {})
         if (canceled) return
         setStatus(next)
-        setLoadError('')
+        setLoadError(null)
         // Keep checking while the user works through setup in System Settings.
         if (next.enabled && next.installed && !next.ready) timer = setTimeout(() => void poll(), 4000)
       } catch (error) {
-        if (!canceled) setLoadError(errorText(error))
+        if (!canceled) setLoadError(asError(error))
       }
     }
     void poll()
@@ -70,13 +73,13 @@ export function ComputerUse() {
       if (action === 'grant_permissions') toast(`Follow ${holder}’s prompts`, { description: `Allow Accessibility and Screen Recording for ${holder} in System Settings. This page updates when they are on.` })
       setRefreshKey((key) => key + 1)
     } catch (error) {
-      toast.error(action === 'install' ? `Unable to ${driver === 'agent_desktop' ? 'set up' : 'install'} ${DRIVER_NAME[driver]}` : 'Unable to open permission setup', { description: errorText(error) })
+      toastProblem(error, { action: action === 'install' ? `${driver === 'agent_desktop' ? 'set up' : 'install'} ${DRIVER_NAME[driver]}` : 'open permission setup', retry: () => void run(action) })
     } finally {
       setBusy(null)
     }
   }
   if (!settings) return null
-  if (loadError && !status) return <Section title="Computer use"><Row title="Unavailable on this machine" description={`${loadError}. Update Kybern on the connected machine to use computer use.`} /></Section>
+  if (loadError && !status) return <Section title="Computer use"><div style={{ padding: 16 }}><ProblemLine error={loadError} action="check computer use" retry={() => setRefreshKey((key) => key + 1)} testId="computer-problem" /></div></Section>
   if (status && !status.supported) return <Section title="Computer use"><Row title="Not available here" description="Computer use is not supported on this operating system yet." /></Section>
   const needsInstall = !!status && (!status.installed || status.checks.some((check) => INSTALL_CHECKS.includes(check.name) && check.name !== 'installed' && !check.ok))
   // Only macOS has permissions to grant; Windows and Linux show the doctor's checks instead.
@@ -85,7 +88,7 @@ export function ComputerUse() {
   const problems = status?.checks.filter((check) => !check.ok && !OWN_ROW_CHECKS.includes(check.name)) ?? []
   const readiness = !enabled ? undefined : status?.ready ? readyHint(os) : status ? 'Finish setup below to start.' : undefined
   const onChooseDriver = (value: string) => update({ driver: driverSetting(value as ComputerDriver, offered) })
-  const openPane = (address: string, pane: string) => void openSystemSettings(address).catch((error) => toast.error('Unable to open System Settings', { description: `${systemSettingsFailure(pane, '')} ${errorText(error)}` }))
+  const openPane = (address: string, pane: string) => void openSystemSettings(address).catch((error) => toast.problem('Couldn’t open System Settings', { tone: 'warning', icon: 'lock', description: systemSettingsFailure(pane, '').replace(/^Couldn’t open System Settings\. /, ''), secondary: { label: 'Copy', onClick: () => { void writeClipboardText(errorMessage(error)).catch(() => {}) } } }))
   const update = (patch: Partial<NonNullable<typeof computer>>) => void updateSettings({ computer_use: { enabled, foreground: 'ask', ...latestSettings()?.computer_use, ...patch } })
   const needsInstallMessage = status?.checks.find((check) => !check.ok && INSTALL_CHECKS.includes(check.name))?.message
   return <>
@@ -176,7 +179,7 @@ function AppNotes() {
       setEditing(null)
       if (!text.trim()) toast(`Deleted the notes on ${note.app}`, { action: { label: 'Undo', onClick: () => void save(note, note.text) } })
     } catch (error) {
-      toast.error(`Unable to save the notes on ${note.app}`, { description: errorText(error) })
+      toastProblem(error, { action: `save the notes on ${note.app}`, retry: () => void save(note, text) })
     } finally {
       setBusy(false)
     }

@@ -17,7 +17,7 @@ import { surfaceShadow } from '../composer/Menu.tsx'
 import { Spinner } from '../shell/Connection.tsx'
 import { Button } from '../kit/Button.tsx'
 import { toast } from '../shell/toasts.tsx'
-import { errorText } from '../nav/actions.ts'
+import { toastProblem } from '../problems/toast.ts'
 import { openUrl } from '../pulls/PrStates.tsx'
 import { ink, Label, useTheme } from '../ui.tsx'
 import { riseTransform } from '../onboarding/motion.tsx'
@@ -181,7 +181,7 @@ function IntroStepView({ onDismiss }: { onDismiss: () => void }) {
   const turnOn = () => void setNetworkEnabled(true).then(() => {
     if (!intro.get().fromSettings) recordIntroChoice(configDir(), 'on')
     intro.set({ step: 'on' })
-  }, (e) => toast.error('Unable to turn on the network', { description: errorText(e) }))
+  }, (e) => toastProblem(e, { action: 'turn on the network' }))
   return <>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, paddingLeft: 24, paddingRight: 24, paddingTop: 20, paddingBottom: 4, minHeight: 0, flexShrink: 1, overflowY: 'scroll' }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

@@ -1,4 +1,5 @@
 import { AccountsHeaderAction } from './Accounts.tsx'
+import { ProblemLine } from '../problems/Line.tsx'
 import { useEnvironment } from '../shell/environment.ts'
 import { useGpuix } from '@gpuix/react'
 import { useEffect, useMemo, useState } from 'react'
@@ -14,7 +15,7 @@ import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { SectionEnter, settingsOverlayOwnsEscape } from './controls.tsx'
 import { SearchField } from '../kit/SearchField.tsx'
 import { Button } from '../kit/Button.tsx'
-import { useSettings, useSettingsConnection } from './store.ts'
+import { refreshSettings, useSettings, useSettingsConnection } from './store.ts'
 import { General, Agents } from './primary.tsx'
 import { Accounts, Integrations, Computer, Background } from './secondary.tsx'
 import { Appearance } from './Appearance.tsx'
@@ -103,7 +104,7 @@ export function SettingsScreen() {
       <div style={{ flexGrow: 1 }} /><div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 8, paddingRight: 8, paddingTop: 8 }}><div style={{ width: 6, height: 6, borderRadius: 3, flexShrink: 0, backgroundColor: ink(t, 0.58 * 0.5) }} /><Label color={t.textSecondary} size={14} lineHeight={21}>{environment.name}</Label></div>
     </div>
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, minHeight: 0 }}>
-      {error && <div style={{ padding: 16 }}><Label color={t.red} size={13}>{error}</Label></div>}
+      {error && <div style={{ padding: 16 }}><ProblemLine error={error.error} action={error.action} retry={error.action === 'read the settings' ? () => void refreshSettings() : undefined} testId="settings-problem" /></div>}
       <SectionEnter.Provider value={sectionEnter}><virtual-list key={tab} testId="settings-content" style={{ flexGrow: 1, minHeight: 0 }}>
         <div key="heading" paintTransform={pointerSwitch ? enterTransform('section') : undefined} style={{ display: 'flex', justifyContent: 'center', width: '100%', paddingTop: 26, paddingBottom: 34, paddingLeft: 40, paddingRight: 40 }}><div style={{ display: 'flex', flexDirection: 'column', width: '100%', maxWidth: 680, gap: 9, position: 'relative' }}><div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:16}}><Label color={t.text} size={28} lineHeight={33.6} weight={600}>{current[1]}</Label>{tab === 'accounts' && <AccountsHeaderAction/>}</div><Label color={t.textSecondary} size={14} lineHeight={22.4} style={{maxWidth:tab === 'accounts' ? 520 : undefined}}>{current[2]}</Label></div></div>
         {!settings && <div key="loading" style={{ padding: 40 }}><Label color={t.textSecondary}>Reading settings…</Label></div>}

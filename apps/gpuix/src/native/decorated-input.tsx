@@ -1,4 +1,5 @@
 import { useGpuixRequired, type PublicInstance, type TextareaProps } from '@gpuix/react'
+import { errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { decoratedInputCapabilities, type InputDecoration } from './api.ts'
 import { observeElementBounds } from './layout.ts'
@@ -17,7 +18,7 @@ export function DecoratedTextarea({ decorations, ...props }: TextareaProps & { t
     } catch (error) {
       // Native typing can outrun React; composition owns the buffer until commit.
       // onChange/effect and key-up retry with the current value, without polling.
-      if (!/Input changed before decorations|Input is secure or composing|Input is not mounted/.test(String(error))) throw error
+      if (!/Input changed before decorations|Input is secure or composing|Input is not mounted/.test(errorMessage(error))) throw error
     }
   }
   const currentApply = useRef(apply)

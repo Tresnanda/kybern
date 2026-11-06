@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { toastProblem } from '../problems/toast.ts'
 import { appendFileSync } from 'node:fs'
 import nodePath from 'node:path'
 import { openTarget, pickFolderDialog, revealPath } from '../platform/os.ts'
@@ -24,7 +25,7 @@ export function pickFolder(): Promise<string | null> {
   return pickFolderDialog().catch(async (error) => {
     // A missing picker tool is the one failure worth a sentence; a canceled dialog is just null.
     const { toast } = await import('../shell/toasts.tsx')
-    toast.error('Unable to choose a folder', { description: error instanceof Error ? error.message : String(error) })
+    toastProblem(error, { action: 'choose a folder' })
     return null
   })
 }
@@ -47,7 +48,7 @@ export function openSystemSettings(address: string): Promise<void> {
 /** The sentence for a System Settings pane that did not open. Off macOS the pane is on the Mac running the agent, not here. */
 export function systemSettingsFailure(pane: string, then: string): string {
   return process.platform === 'darwin'
-    ? `Unable to open System Settings. Open ${pane} yourself${then}.`
+    ? `Couldn’t open System Settings. Open ${pane} yourself${then}.`
     : `System Settings is on the Mac that runs this agent, not on this computer. Open ${pane} there${then}.`
 }
 

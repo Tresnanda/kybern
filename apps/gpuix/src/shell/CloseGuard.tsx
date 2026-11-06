@@ -1,4 +1,5 @@
 import { setWindowCloseHandler } from '@gpuix/native/host'
+import { problemSentence } from '../problems/sentence.ts'
 import { useGpuixRequired } from '@gpuix/react'
 import { useEffect, useRef, useState } from 'react'
 import type { Thread } from '../../../../packages/kybern-client/src/types.ts'
@@ -99,7 +100,7 @@ export function CloseGuard() {
     const results = await Promise.allSettled(pending.map((thread) => client.call('threads.interrupt', { thread_id: thread.id })))
     if (getClient() !== client || !resolve.current) return
     const failed = results.find((result) => result.status === 'rejected')
-    if (failed?.status === 'rejected') { setStopping(false); setError(`Unable to stop every thread. ${errorText(failed.reason)}`) }
+    if (failed?.status === 'rejected') { setStopping(false); setError(problemSentence(failed.reason, { action: 'stop every thread' })) }
     else finish(true)
   }
   const waiting = pending.filter((thread) => thread.status === 'awaiting-approval').length

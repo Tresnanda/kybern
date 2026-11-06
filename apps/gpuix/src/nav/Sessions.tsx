@@ -3,6 +3,7 @@
 // (server-side, 180ms after typing stops). ↑/↓ browse, Enter resumes. Resuming
 // imports the session as a Kybern thread and opens it; one already in Kybern
 // opens its thread.
+import { problemSentence } from '../problems/sentence.ts'
 import { useGpuix, type PublicInstance } from '@gpuix/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { relativeTime } from '@/lib/format'
@@ -14,7 +15,7 @@ import { inSpace } from '../../../../packages/kybern-client/src/spaces.ts'
 import { useCurrentSpaceId } from '../spaces/current.ts'
 import { Label, ProviderMark, useTheme } from '../ui.tsx'
 import { providerLabel } from '../sidebar/model.ts'
-import { errorText, resumeSession } from './actions.ts'
+import { resumeSession } from './actions.ts'
 import { N } from './glyphs.ts'
 import { Dialog, DialogHeader, Menu, MenuItem, muted } from './overlay.tsx'
 import { Kbd } from '../kit/Kbd.tsx'
@@ -77,7 +78,7 @@ function SessionPicker({ projectId: initialProject }: { projectId: string | null
         })
       } catch (error) {
         if (generation.current !== current) return
-        setPages((prev) => ({ ...prev, [kind]: { sessions: prev[kind]?.sessions ?? [], next_cursor: cursor, loading: false, error: errorText(error) } }))
+        setPages((prev) => ({ ...prev, [kind]: { sessions: prev[kind]?.sessions ?? [], next_cursor: cursor, loading: false, error: problemSentence(error, { action: 'list the sessions' }) } }))
       }
     },
     [projectId, query],
@@ -131,7 +132,7 @@ function SessionPicker({ projectId: initialProject }: { projectId: string | null
     try {
       await resumeSession(session, projectId)
     } catch (error) {
-      setResumeError(errorText(error))
+      setResumeError(problemSentence(error, { action: 'resume that session' }))
     } finally {
       setOpening(null)
     }

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { problemSentence } from '../problems/sentence.ts'
 import type { SubagentMessage, Thread, UserMessage } from '../../../../packages/kybern-client/src/types.ts'
 import { subagentThreadPhase } from '../../../../packages/kybern-client/src/subagents.ts'
 import { ComposerView } from '../Composer.tsx'
@@ -7,7 +8,7 @@ import { activeEnvironment } from '../shell/environment.ts'
 import { threadClient, useApp, usePaneAccess } from '../state.ts'
 import { Para, muted } from '../transcript/kit.tsx'
 import { Button } from '../kit/Button.tsx'
-import { errorText, reportError } from '../transcript/store.ts'
+import { reportError } from '../transcript/store.ts'
 import { useTheme } from '../ui.tsx'
 import { StackedPanel } from '../transcript/Requests.tsx'
 import { SubagentBar } from './Page.tsx'
@@ -29,7 +30,7 @@ export function NativeSubagentComposer({ thread }: { thread: Thread }) {
     let client: ReturnType<typeof threadClient> = null
     try { client = threadClient(thread.id) } catch { /* that machine is offline */ }
     if (!client) return
-    void client.call('subagents.messages', { thread_id: thread.id }).then(messages => { if (alive && owner === activeEnvironment()) { setSaved(messages); setError('') } }).catch(e => { if (alive && owner === activeEnvironment()) setError(errorText(e)) })
+    void client.call('subagents.messages', { thread_id: thread.id }).then(messages => { if (alive && owner === activeEnvironment()) { setSaved(messages); setError('') } }).catch(e => { if (alive && owner === activeEnvironment()) setError(problemSentence(e, { action: 'load the messages' })) })
     return () => { alive = false }
   }, [thread.id, thread.status, pane.frozen])
   const messages = useMemo(() => {

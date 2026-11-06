@@ -614,7 +614,7 @@ async fn run_connection(
                                 };
                                 DriverEvent::TurnCompleted { stop_reason: stop, usage, cost_usd: None, duration_ms, anchors: crate::TurnAnchors::default() }
                             }
-                            Err(e) => DriverEvent::TurnFailed { error: e.to_string() },
+                            Err(e) => DriverEvent::turn_failed(ProviderKind::Cursor, e.to_string()),
                         };
                         let _ = shared.events.send(ev).await;
                     }

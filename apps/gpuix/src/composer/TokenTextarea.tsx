@@ -3,10 +3,10 @@ import { useImperativeHandle, useRef, useEffect, type Ref } from 'react'
 import { DecoratedTextarea } from '../native/decorated-input.tsx'
 import { nativeCapabilities, type InputSelection } from '../native/api.ts'
 import { useTheme } from '../ui.tsx'
-import { FONT_MONO } from '../theme.ts'
+import { FONT_MONO, FONT_UI } from '../theme.ts'
 import { alpha, tinted } from '../transcript/kit.tsx'
 import { RichHistory, textEdit } from '../notes/rich-text.ts'
-import { editTokenText, snapToChips, tokenDisplayOffset, tokenSourceOffset, tokenText, type TokenReference, type TokenText } from './token-text.ts'
+import { CHIP_ICON_SIZE, CHIP_PAD, editTokenText, snapToChips, tokenDisplayOffset, tokenSourceOffset, tokenText, type TokenReference, type TokenText } from './token-text.ts'
 import { writeClipboardText, writeClipboardTextSync } from '../platform/os.ts'
 
 export interface TokenTextareaHandle {
@@ -150,7 +150,7 @@ export function TokenTextarea({ references, editorRef, nativeRef, onEditorError,
     ref={element => { node.current = element; if (typeof nativeRef === 'function') nativeRef(element); else if (nativeRef) nativeRef.current = element }}
     decorations={[...projection.spans.map((span, index) => {
       const icon = references.find(r => r.token === span.token)?.icon
-      return { start: span.start, end: span.end, atomic: true, id: `token:${index}:${span.token}`, style: { color: accent, fontWeight: 500 }, ...(icon ? { icon: { svg: tinted(icon, accent), color: '', font: FONT_MONO, size: 13.3 } } : {}) }
+      return { start: span.start, end: span.end, atomic: true, id: `token:${index}:${span.token}`, style: { color: accent, fontWeight: 500 }, ...(icon ? { icon: { svg: tinted(icon, accent), color: '', font: CHIP_PAD.ui ? FONT_UI : FONT_MONO, size: CHIP_ICON_SIZE } } : {}) }
     }), ...washDecoration(projection, wash, accent)]}
     interceptKeys={[...new Set([...(props.interceptKeys ?? []), 'c', 'x', 'z', 'y', 'backspace', 'delete'])]}
     onChange={event => {

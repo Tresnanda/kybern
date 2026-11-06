@@ -1,6 +1,7 @@
 // One issue, shaped like the pull request page: the header with its repository, number and state and the one primary action,
 // "Start a thread"; the title, the description in Markdown and the comments as the pull request Timeline draws them; and the
 // sidebar with assignees, labels, milestone and the pull requests that close it. Below 832 px the sidebar leads the list.
+import { toastProblem } from '../../problems/toast.ts'
 import { CancelCircleIcon, CheckmarkCircle02Icon, GitMergeIcon, LinkSquare02Icon, SparklesIcon, Target01Icon } from '@hugeicons/core-free-icons'
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { agoPhrase } from '@/views/pullRequests/prFormat'
@@ -17,7 +18,6 @@ import { SpinIcon } from '../../kit/Spin.tsx'
 import { N } from '../../nav/glyphs.ts'
 import { DocumentMarkdown } from '../../native/markdownDocument.tsx'
 import { Menu, MenuItem } from '../../nav/overlay.tsx'
-import { toast } from '../../shell/toasts.tsx'
 import { cachedMarkdownTheme as markdownTheme, alpha } from '../../transcript/kit.tsx'
 import { ink, Label, useTheme } from '../../ui.tsx'
 import { column, row } from '../../usage/controls.tsx'
@@ -135,7 +135,7 @@ export function IssueDetail({ project, number, repo, onBack, showBack = true, wi
     if (!detail || starting) return
     setStarting(true)
     void startIssueThread(project.id, detail, repo ? `${project.name} / ${repoName}` : undefined)
-      .catch(e => toast.error("Couldn't start a thread", { description: e instanceof Error ? e.message : String(e) }))
+      .catch(e => toastProblem(e, { action: 'start a thread' }))
       .finally(() => setStarting(false))
   }, [detail, starting, project, repo, repoName])
   const side: ReactNode = detail && <Sidebar detail={detail} project={project} compact={compact} {...(repo ? { repo } : {})} />

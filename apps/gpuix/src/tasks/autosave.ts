@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { asError, errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
 import type { TaskItem } from '../../../../packages/kybern-client/src/types.ts'
 import { getClient } from '../state.ts'
 import { activeEnvironment } from '../shell/environment.ts'
@@ -76,7 +77,7 @@ export function useTaskAutosave(task: TaskItem) {
         if (patch.title !== undefined) s.titleDirty = true
         if (patch.body !== undefined) s.bodyDirty = true
         persist()
-        if ((e as { code?: number }).code === -32004 || /conflict|revision/i.test(String(e))) {
+        if ((e as { code?: number }).code === -32004 || /conflict|revision/i.test(errorMessage(e))) {
           const latest = await client?.call('tasks.items.get', { id: task.id }).catch(() => null)
           if (latest?.task && owner === activeEnvironment()) {
             conflictRef.current = latest.task

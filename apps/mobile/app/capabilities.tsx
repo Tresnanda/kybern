@@ -43,7 +43,7 @@ export default function Capabilities() {
         if (alive) setSkills(r.skills.filter((s) => s.enabled));
       })
       .catch((e) => {
-        if (alive) setError(errorText(e));
+        if (alive) setError(errorText(e, "load your skills"));
       })
       .finally(() => {
         if (alive) setLoading(false);
