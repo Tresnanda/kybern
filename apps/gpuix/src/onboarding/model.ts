@@ -4,7 +4,7 @@
 import { ANTIGRAVITY_LOGIN_COMMAND, antigravityInstallCommand } from '../../../../packages/kybern-client/src/antigravity.ts'
 import { hasSignIn } from '../../../../packages/kybern-client/src/machineAgents.ts'
 import type { AccountSummary, ProviderKind, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
-import { BLUR_MAX, DEFAULT_VARIANT_MATERIAL, defaultBlur, type VariantMaterial } from '../platform/translucency.ts'
+import { BLUR_MAX, DEFAULT_VARIANT_MATERIAL, defaultVariantMaterial, defaultBlur, type VariantMaterial } from '../platform/translucency.ts'
 
 // ─── The gate ─────────────────────────────────────────────────────────────
 
@@ -158,7 +158,7 @@ export const MATERIAL_CAPTION: Record<MaterialOption, string> = {
 export function materialPatch(option: MaterialOption, platform: string = process.platform): Partial<VariantMaterial> {
   if (option === 'solid') return { material: 'solid' }
   if (option === 'sidebar') {
-    const d = DEFAULT_VARIANT_MATERIAL
+    const d = defaultVariantMaterial(platform as NodeJS.Platform)
     return { material: 'translucent', sidebarOpacity: d.sidebarOpacity, contentOpacity: 100, lastContentOpacity: d.lastContentOpacity, surfaceOpacity: d.surfaceOpacity, blur: defaultBlur(platform as NodeJS.Platform) }
   }
   return { material: 'translucent', sidebarOpacity: 85, contentOpacity: 85, surfaceOpacity: 60, blur: BLUR_MAX }
@@ -185,6 +185,6 @@ export function materialSummary(m: Pick<VariantMaterial, 'sidebarOpacity' | 'con
   return parts.join(' · ')
 }
 /** Whether the Window section can do anything here: Linux and Windows 10 draw Kybern’s window opaque (`DESKTOP_MATERIAL === 'none'`). */
-export const windowMaterialAvailable = (desktopMaterial: 'vibrancy' | 'dwm' | 'none') => desktopMaterial !== 'none'
+export const windowMaterialAvailable = (desktopMaterial: import('../platform/desktopMaterial.ts').DesktopMaterial) => desktopMaterial !== 'none'
 export const blurPercent = (blur: number | null) => (blur === null ? 100 : Math.round((blur / BLUR_MAX) * 100))
 export const blurFromPercent = (percent: number) => Math.max(1, Math.round((percent / 100) * BLUR_MAX))
