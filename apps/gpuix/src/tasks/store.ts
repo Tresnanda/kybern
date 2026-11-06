@@ -1,3 +1,5 @@
+import { itemClient } from '../machines/federated.ts'
+const getClient = () => itemClient(rawClient)
 import { useEffect, useSyncExternalStore } from 'react'
 import { failure, type Failure } from '../problems/Line.tsx'
 import { toastProblem } from '../problems/toast.ts'
@@ -10,7 +12,7 @@ import type {
   TaskPriority,
 } from '../../../../packages/kybern-client/src/types.ts'
 import { readTaskPrefs, type TaskViewPrefs } from '@/state/tasksModel'
-import { getClient, getState, useApp } from '../state.ts'
+import { getClient as rawClient, getState, useApp } from '../state.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { load, save } from '../shell/persist.ts'
 import { toast } from '../shell/toasts.tsx'
@@ -153,7 +155,7 @@ export function useTasksFeed() {
   const status = useApp((s) => s.status)
   useEffect(() => {
     const client = getClient()
-    if (status !== 'open' || !client) return
+    if (!client) return
     const off = client.onNotification('tasks.items.changed', (value) => {
       const event = value as TaskItemsChangedNotification
       if (pending) pending.push(event)

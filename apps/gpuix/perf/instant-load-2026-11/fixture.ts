@@ -79,6 +79,12 @@ try {
     // Projects belong to the daemon's default space, or the sidebar lists none of them.
     db.exec(`UPDATE projects SET space_id = (SELECT id FROM spaces ORDER BY position LIMIT 1) WHERE space_id IS NULL`)
     db.exec(`UPDATE threads SET updated_at = COALESCE((SELECT MAX(at) FROM events WHERE events.thread_id = threads.id), updated_at)`)
+    // New-schema fixtures have list-cursor triggers; the offline timestamp edit
+    // above otherwise marks every row beyond the event head forever. Match a
+    // fixture migrated from the old schema, whose cursor starts at last_seq.
+    if (db.query<{ name: string }, []>('PRAGMA table_info(threads)').all().some(column => column.name === 'change_seq')) {
+      db.exec('UPDATE threads SET change_seq = last_seq WHERE change_seq > (SELECT COALESCE(MAX(seq), 0) FROM events)')
+    }
   })()
   db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
 } finally { db.close() }

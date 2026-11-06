@@ -286,7 +286,8 @@ async fn permissions_and_forms_reply_to_their_native_endpoints() {
 async fn skills_commands_mode_and_model_use_v2_endpoints() {
     let (base, server) = mock(4).await;
     let (session, _rx) = session(&base);
-    session.state.lock().await.commands = vec![ProviderCommand { name: "review".into(), description: "Review".into() }];
+    session.state.lock().await.commands =
+        vec![ProviderCommand { name: "review".into(), description: "Review".into(), ..Default::default() }];
     let handle = Handle(session.clone(), std::sync::Mutex::new(None), None);
     let skill = UserMessage {
         parts: vec![ContentPart::Skill { name: "demo".into(), path: "/x/SKILL.md".into() }, ContentPart::Text { text: " go".into() }],
@@ -320,10 +321,14 @@ fn a_coordinator_keeps_only_kybern_tools_after_any_mode() {
             denied_tools: vec![],
             require_enforcement: true,
             allow_read_only_builtins: false,
+            allowed_mcp_servers: Default::default(),
         },
     };
     let rules = restriction_rules(Some(&bridge));
     assert_eq!(rules, [json!({"action":"*","resource":"*","effect":"deny"}), json!({"action":"kybern_*","resource":"*","effect":"allow"})]);
+    bridge.restrictions.allowed_mcp_servers.insert("memory".into(), json!({}));
+    assert!(restriction_rules(Some(&bridge)).contains(&json!({"action":"memory_*","resource":"*","effect":"allow"})));
+    assert!(!restriction_rules(Some(&bridge)).iter().any(|rule| rule["action"] == "other_*"));
     bridge.restrictions.allow_read_only_builtins = true;
     let rules = restriction_rules(Some(&bridge));
     assert!(rules.contains(&json!({"action":"read","resource":"*","effect":"allow"})));

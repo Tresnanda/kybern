@@ -571,7 +571,12 @@ fn opencode_config_content(base: Option<&String>, bridge: &NativeToolBridge) -> 
         // OpenCode registers remote MCP tools with the server name as a prefix.
         // The gateway's tools/list response applies the exact bridge allow/deny
         // set, so this wildcard only admits that already-filtered server.
+        // Discard inherited per-tool exceptions: only this policy may widen the catalog.
+        tool_permissions.clear();
         tool_permissions.insert("*".into(), json!(false));
+        for server in bridge.restrictions.allowed_mcp_servers.keys() {
+            tool_permissions.insert(format!("{server}_*"), json!(true));
+        }
         tool_permissions.insert(format!("{}_*", bridge.server_name), json!(true));
         if bridge.restrictions.allow_read_only_builtins {
             for tool in OPENCODE_READ_ONLY_TOOLS {
@@ -1911,7 +1916,11 @@ mod tests {
             events,
             state: Mutex::new(State {
                 compact_operation: None,
-                commands: vec![kybern_protocol::ProviderCommand { name: "review".into(), description: "Review".into() }],
+                commands: vec![kybern_protocol::ProviderCommand {
+                    name: "review".into(),
+                    description: "Review".into(),
+                    ..Default::default()
+                }],
                 context_windows: HashMap::new(),
                 session_id: Some("root".into()),
                 model: Some("test/model".into()),
@@ -2391,5 +2400,30 @@ mod orchestration_part_tests {
         assert_eq!(models[0].efforts, ["high"]);
         assert!(models[1].efforts.is_empty());
         assert!(models[2].efforts.is_empty());
+    }
+
+    #[test]
+    fn coordinator_allows_chosen_mcp_and_discards_other_tool_exceptions() {
+        let mut bridge = NativeToolBridge {
+            server_name: "kybern".into(),
+            endpoint: Some("http://localhost/mcp".into()),
+            authorization: Some("secret".into()),
+            guide: None,
+            coordinator_instructions: None,
+            tools: vec![],
+            restrictions: Default::default(),
+        };
+        bridge.restrictions.allowed_mcp_servers.insert("memory".into(), json!({"command":"memory"}));
+        let base = json!({"tools":{"other_*":true,"bash":true}}).to_string();
+        bridge.restrictions.require_enforcement = true;
+        let value: Value = serde_json::from_str(&opencode_config_content(Some(&base), &bridge).unwrap()).unwrap();
+        assert_eq!(value["tools"]["memory_*"], true);
+        assert_eq!(value["tools"]["*"], false);
+        assert!(value["tools"].get("other_*").is_none());
+        assert!(value["tools"].get("bash").is_none());
+        bridge.restrictions.require_enforcement = false;
+        let value: Value = serde_json::from_str(&opencode_config_content(Some(&base), &bridge).unwrap()).unwrap();
+        assert_eq!(value["tools"]["other_*"], true);
+        assert!(value["tools"].get("memory_*").is_none());
     }
 }

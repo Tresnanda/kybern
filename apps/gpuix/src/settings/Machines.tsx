@@ -1,3 +1,5 @@
+import { writeClipboardText } from '../platform/os.ts'
+import { useSettings, updateSettings } from './store.ts'
 // Settings › Machines (design §5.2): your network. It replaces the environment switcher. One card per machine: its
 // status and version, then icon chips for the OS, processor, memory, graphics and installed harnesses (the Tailscale name is a tooltip); Pause and Remove; machines found on the tailnet; Add by
 // code; Update all machines. Everything goes through the `network.*` RPCs of the machine the user is at, which any member
@@ -40,6 +42,7 @@ import { MachineSetupSection } from '../machines/MachineSetup.tsx'
 export function Machines() {
   const t = useTheme()
   const net = useNetwork()
+  const settingsState = useSettings()
   const machines = useMachines()
   const [removing, setRemoving] = useState<MachineCardModel | null>(null)
   const status = net.status
@@ -87,6 +90,10 @@ export function Machines() {
     {!net.unavailable && status && <Section title="Your network" accessory={<Button testId="machines-intro" size="sm" variant="ghost" onClick={() => openIntro(true)}>What is this?</Button>}>
       <Row title="Let your machines find each other" description="Machines signed in to the same Tailscale account join without a code. Turn this off to leave the network and keep your machines separate."><Switch aria-label="Use your network" testId="machines-enabled" checked={status.enabled} disabled={net.busy === 'enabled'} onCheckedChange={(enabled) => void setNetworkEnabled(enabled).catch((e) => toastProblem(e, { action: 'change the network' }))} /></Row>
       <KeepReachable status={status.keep_reachable} busy={net.busy === 'reachable'} />
+      {settingsState.settings?.network && <Row title="Keep network data" description="Keep cached project and thread lists from your other machines on this computer.">
+        <Switch aria-label="Keep network data" testId="machines-keep-network-data" checked={settingsState.settings.network.keep_network_data !== false} disabled={settingsState.saving}
+          onCheckedChange={(enabled) => void updateSettings({ network: { ...settingsState.settings!.network!, keep_network_data: enabled } })} />
+      </Row>}
       <Row title="Check the network" description="Looks at Tailscale, the pairing and each machine, and says what to fix."><Button testId="machines-doctor" busy={net.busy === 'doctor'} onClick={() => void runDoctor()}>Run check</Button></Row>
       {net.doctor && <DoctorResults report={net.doctor} names={new Map(cards.map((card) => [card.machineId, card.name]))} />}
     </Section>}
@@ -323,6 +330,7 @@ function Outbox({ items, machines }: { items: OutboxItem[]; machines: MachineCar
   const fail = (action: string) => (e: unknown) => { toastProblem(e, { action }) }
   return <Section title="Outbox" accessory={<Label color={t.textSecondary} size={13} lineHeight={19.5}>{`${rows.length} waiting`}</Label>}>
     {rows.map((row) => <Row key={row.id} title={row.title} description={row.detail}>
+      {row.editText !== undefined && <Button testId={`outbox-copy-${row.id}`} size="sm" variant="secondary" onClick={() => void writeClipboardText(row.editText!).then(() => toast('Edit copied'), fail('copy your edit'))}>Copy edit</Button>}
       {row.canRetry && <Button testId={`outbox-retry-${row.id}`} size="sm" busy={net.busy === `outbox:${row.id}`} onClick={() => void retryOutbox(row.id).catch(fail('retry that work'))}>Retry</Button>}
       {row.canCancel && <Button testId={`outbox-cancel-${row.id}`} size="sm" variant="secondary" disabled={net.busy === `outbox:${row.id}`} onClick={() => void cancelOutbox(row.id).catch(fail('cancel that work'))}>Cancel</Button>}
     </Row>)}

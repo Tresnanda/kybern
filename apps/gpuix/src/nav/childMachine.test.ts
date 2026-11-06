@@ -2,7 +2,8 @@
 import { afterAll, expect, mock, test } from 'bun:test'
 import type { Thread } from '../../../../packages/kybern-client/src/types.ts'
 
-const real = await import('../machines/index.ts')
+// Copy the exports: the module namespace has live bindings that mock.module replaces.
+const real = { ...await import('../machines/index.ts') }
 const hub = { localMachineId: 'mac', machineCount: 2, machineOfThread: () => 'mac' }
 mock.module('../machines/index.ts', () => ({ ...real, machineHub: () => hub }))
 const { machineOfThreadId } = await import('../state.ts')

@@ -1640,6 +1640,7 @@ export interface DaemonActivity {
 }
 
 export interface ProvidersListResult {
+  coordinator_mcp_servers?: Partial<Record<ProviderKind, string[]>>;
   providers: ProviderStatus[];
 }
 
@@ -2669,6 +2670,8 @@ export interface AccessSettings {
 export type UpdateTrack = "stable" | "dev";
 
 export interface Settings {
+  /** Machine-local Coordinator MCP allowlist. All servers default to off. */
+  coordinator_mcp_servers?: Partial<Record<ProviderKind, string[]>>;
   default_provider: ProviderKind;
   default_permission_mode: PermissionMode;
   worktrees_default: boolean;
@@ -3748,6 +3751,7 @@ export interface NetworkSettings {
   port: number;
   /** "Keep this machine reachable when Kybern is closed": start the daemon at login while in a network. Per machine. Absent on older daemons. */
   keep_reachable?: boolean;
+  keep_network_data?: boolean;
 }
 
 /** A machine's id: the daemon's `environment_id`. */
@@ -4425,6 +4429,7 @@ export type OutboxKind =
   | "thread_send"
   | "delegate"
   | "files_push"
+  | "item_edit"
   | "settings_patch"
   | "secrets_put"
   | "fork"
@@ -4883,6 +4888,9 @@ export interface Methods {
   "spaces.list": [Empty, SpacesListResult];
   "spaces.place": [SpacesPlaceParams, SpacesListResult];
   "peer.spaces.sync": [PeerSpacesSyncParams, PeerSpacesSyncResult];
+  "peer.preferences.sync": [PeerSpacesSyncParams, PeerSpacesSyncResult];
+  "peer.lists.snapshot": [Empty, NetworkListSnapshot];
+  "peer.items.edit": [{ operation_id: string; method: string; params: unknown; expected_updated_at: string }, unknown];
   "peer.spaces.logo": [PeerSpaceLogoParams, PeerSpaceLogoResult];
   "spaces.create": [SpacesCreateParams, Space];
   "spaces.update": [SpacesUpdateParams, Space];
@@ -4970,6 +4978,7 @@ export interface Methods {
   "github.star": [GithubStarParams, Empty];
   "threads.worktree.inspect": [WorktreeInspectParams, WorktreeInspectResult];
   "threads.worktree.remove": [WorktreeRemoveParams, WorktreeInspectResult];
+  "network.cached_lists": [{ machine_id: string }, { snapshot: NetworkListSnapshot | null }];
   "network.status": [Empty, NetworkStatus];
   "network.set_enabled": [{ enabled: boolean; only_if_unconfigured?: boolean }, NetworkStatus];
   "network.add": [{ found_id: string }, NetworkAddResult];
@@ -5221,7 +5230,7 @@ export interface HarnessUpdate {
   checked_at: DateTime | null;
 }
 
-export interface ProviderCommand { name: string; description: string }
+export interface ProviderCommand { name: string; description: string; aliases?: string[]; source?: string; input_hint?: string; subcommands?: ProviderCommand[] }
 
 export interface ProviderUsage {
   context?: { used_tokens: number; window_tokens: number };
@@ -5288,3 +5297,5 @@ export interface PeerSpacesSyncParams { digest: string; ids?: string[]; fields?:
 export interface PeerSpacesSyncResult { digest: string; ids: string[]; fields: OpEnvelope[] }
 export interface PeerSpaceLogoParams { hash: string }
 export interface PeerSpaceLogoResult { data: string }
+
+export interface NetworkListSnapshot { machine_id: string; fetched_at: string; stale: boolean; projects: Project[]; threads: Thread[]; }

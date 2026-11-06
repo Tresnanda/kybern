@@ -286,6 +286,7 @@ async fn run_native_bridge_turn(kind: ProviderKind) {
             denied_tools: vec!["write".into(), "edit".into(), "bash".into()],
             require_enforcement: strict,
             allow_read_only_builtins: false,
+            allowed_mcp_servers: Default::default(),
         },
     };
     let driver = DriverRegistry::with_defaults().get(kind).expect("driver registered");
@@ -615,7 +616,7 @@ async fn pi_completes_a_turn() {
 
 // ---- Antigravity ----
 
-const AGY_MODEL: &str = "gemini-3.8-flash-low";
+const AGY_MODEL: &str = "gemini-3.8-flash-high";
 
 /// `Some(driver)` when `agy` is installed and signed in; otherwise skip (or fail under KYBERN_LIVE_TESTS).
 async fn antigravity_ready() -> Option<Arc<dyn kybern_drivers::AgentDriver>> {
@@ -640,7 +641,7 @@ fn antigravity_config(dir: &std::path::Path, resume: Option<String>) -> SessionC
     SessionConfig {
         cwd: dir.to_path_buf(),
         model: Some(AGY_MODEL.into()),
-        effort: None,
+        effort: Some("low".into()),
         permission_mode: PermissionMode::FullAccess,
         native_tool_bridge: None,
         resume_session_id: resume,

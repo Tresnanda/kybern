@@ -52,6 +52,7 @@ export interface MachineHubOptions {
   store: MachineStore;
   credentials: CredentialStore;
   /** The offline cache; omit to keep none. */
+  itemCache?: import("../../../../packages/kybern-client/src/itemCache").ItemCache
   cache?: MachineCache;
   /** This device's id for `network.client_grant`. */
   deviceId: string;
@@ -60,6 +61,7 @@ export interface MachineHubOptions {
    * check's nonce cannot be made and no machine but the paired one ever connects.
    */
   randomFill?: RandomFill;
+  operationId?: () => string;
   /** The socket other machines open (the native one on a phone). */
   socket?: SocketFactory;
   /** Replaces the sockets of non-primary machines (tests). */
@@ -183,6 +185,8 @@ export class MachineHub {
       deviceId: options.deviceId,
       verifyProof: verifyMachineProof,
       cache: options.cache ?? new MachineCache(),
+      itemCache: options.itemCache,
+      operationId: options.operationId,
       ...(options.socket ? { socket: options.socket } : {}),
       transport: {
         ...options.transport,

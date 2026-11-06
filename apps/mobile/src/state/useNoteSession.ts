@@ -59,7 +59,7 @@ export function useNoteSession(target: NoteTarget) {
     };
   }, [session]);
   useEffect(() => {
-    if (connected) void session.sync();
+    void session.sync();
   }, [session, connected]);
   return { session, ...snapshot, connected };
 }

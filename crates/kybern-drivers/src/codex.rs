@@ -1245,6 +1245,13 @@ impl CodexSession {
             std::mem::take(&mut state.deferred_notifications)
         };
         self.emit(DriverEvent::SessionBound { session_id: thread_id, model }).await;
+        self.emit(DriverEvent::CommandsUpdated(crate::provider_commands(&json!([
+            {"name":"review", "description":"Review changes; optionally base <branch> or commit <sha>"},
+            {"name":"goal", "description":"Set the thread goal"},
+            {"name":"rename", "description":"Rename this conversation"},
+            {"name":"init", "description":"Write project instructions in AGENTS.md"}
+        ]))))
+        .await;
         for (method, params) in deferred {
             self.handle_bound_notification(&method, &params).await;
         }
@@ -1488,6 +1495,20 @@ impl CodexSession {
                     let text = item.get("text").and_then(|t| t.as_str()).unwrap_or("").to_string();
                     self.emit_for(owner, DriverEvent::MessageCompleted { message_id: id, origin: EventOrigin::Root, text, thinking: None })
                         .await;
+                }
+            }
+            "enteredReviewMode" | "exitedReviewMode" => {
+                if completed {
+                    let text = item.get("review").and_then(Value::as_str).unwrap_or(if item["type"] == "enteredReviewMode" {
+                        "Review started"
+                    } else {
+                        "Review completed"
+                    });
+                    self.emit_for(
+                        owner,
+                        DriverEvent::MessageCompleted { message_id: id, origin: EventOrigin::Root, text: text.into(), thinking: None },
+                    )
+                    .await;
                 }
             }
             "reasoning" => {
@@ -1902,6 +1923,60 @@ impl AgentSession for Handle {
                 st.cwd.clone(),
             )
         };
+        let text = message
+            .parts
+            .iter()
+            .filter_map(|part| match part {
+                ContentPart::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        let mut words = text.trim().splitn(2, char::is_whitespace);
+        let command = words.next().unwrap_or("");
+        let arguments = words.next().unwrap_or("").trim();
+        if command == "/review" {
+            let target = if arguments.is_empty() {
+                json!({"type":"uncommittedChanges"})
+            } else if let Some(branch) = arguments.strip_prefix("base ").map(str::trim).filter(|s| !s.is_empty()) {
+                json!({"type":"baseBranch", "branch":branch})
+            } else if let Some(sha) = arguments.strip_prefix("commit ").map(str::trim).filter(|s| !s.is_empty()) {
+                json!({"type":"commit", "sha":sha})
+            } else {
+                return Err(DriverError::Protocol("Use /review, /review base <branch>, or /review commit <sha>.".into()));
+            };
+            s.call("review/start", json!({"threadId":thread_id, "target":target, "delivery":"inline"})).await?;
+            return Ok(());
+        }
+        if matches!(command, "/goal" | "/rename") {
+            if arguments.is_empty() {
+                return Err(DriverError::Protocol(format!("Add text after {command} and send again.")));
+            }
+            let (method, params) = if command == "/goal" {
+                ("thread/goal/set", json!({"threadId":thread_id, "objective":arguments}))
+            } else {
+                ("thread/name/set", json!({"threadId":thread_id, "name":arguments}))
+            };
+            s.call(method, params).await?;
+            if command == "/rename" {
+                s.emit(DriverEvent::SessionMetadata { title: Some(arguments.into()), effort: None }).await;
+            }
+            s.emit(DriverEvent::MessageCompleted {
+                message_id: message_id.into(),
+                origin: EventOrigin::Root,
+                text: if command == "/goal" { format!("Goal set: {arguments}") } else { format!("Renamed to {arguments}") },
+                thinking: None,
+            })
+            .await;
+            s.emit(DriverEvent::TurnCompleted {
+                stop_reason: StopReason::Completed,
+                usage: Usage::default(),
+                cost_usd: None,
+                duration_ms: 0,
+                anchors: crate::TurnAnchors::default(),
+            })
+            .await;
+            return Ok(());
+        }
         let (approval, _) = policy_for(mode);
         let mut params = json!({
             "threadId": thread_id,
@@ -1915,6 +1990,9 @@ impl AgentSession for Handle {
         }
         if let Some(effort) = effort {
             params["effort"] = Value::String(effort);
+        }
+        if command == "/init" {
+            params["input"] = json!([{"type":"text", "text":"Inspect this repository and write or update AGENTS.md with concise, accurate instructions for coding agents: architecture, setup, build and test commands, conventions, and important pitfalls. Preserve existing project guidance. Verify commands against the repository.", "text_elements":[]}]);
         }
         let resp = s.call("turn/start", params).await?;
         if let Some(id) = resp.pointer("/turn/id").and_then(|i| i.as_str()) {
@@ -2816,6 +2894,81 @@ wait
             .collect();
         assert_eq!(shape, ["prompt", "tool", "output", "done", "thinking", "text", "message"]);
         child.kill().await;
+    }
+
+    #[tokio::test]
+    async fn native_commands_use_typed_requests() {
+        for (text, method, expected) in [
+            ("/review", "review/start", json!({"threadId":"test", "target":{"type":"uncommittedChanges"}, "delivery":"inline"})),
+            (
+                "/review base main",
+                "review/start",
+                json!({"threadId":"test", "target":{"type":"baseBranch", "branch":"main"}, "delivery":"inline"}),
+            ),
+            (
+                "/review commit abc",
+                "review/start",
+                json!({"threadId":"test", "target":{"type":"commit", "sha":"abc"}, "delivery":"inline"}),
+            ),
+            ("/goal Ship it", "thread/goal/set", json!({"threadId":"test", "objective":"Ship it"})),
+            ("/rename Work", "thread/name/set", json!({"threadId":"test", "name":"Work"})),
+        ] {
+            let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
+            let (events, mut rx) = mpsc::channel(8);
+            let session = Arc::new(CodexSession {
+                child: child.clone(),
+                events,
+                next_id: AtomicI64::new(1),
+                pending: Mutex::new(HashMap::new()),
+                pending_approvals: Mutex::new(HashMap::new()),
+                pending_app_tools: Mutex::new(HashMap::new()),
+                notification_gate: Mutex::new(()),
+                state: Mutex::new(State {
+                    manual_compaction: false,
+                    deferred_notifications: Vec::new(),
+                    thread_id: Some("test".into()),
+                    turn_id: None,
+                    mode: PermissionMode::Supervised,
+                    model: None,
+                    effort: None,
+                    cwd: PathBuf::from("/tmp"),
+                    last_total_tokens: None,
+                    message_ids: HashMap::new(),
+                    file_changes: HashMap::new(),
+                    subagents: HashMap::new(),
+                    background_processes: HashMap::new(),
+                    stopping_processes: HashSet::new(),
+                }),
+                turn_usage: Mutex::new(None),
+                bridge: None,
+                closed: AtomicBool::new(false),
+            });
+
+            let handle = Handle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
+            let sending = tokio::spawn(async move {
+                let result = handle.send_message("input", &UserMessage::text(text)).await;
+                (handle, result)
+            });
+            let request =
+                tokio::time::timeout(Duration::from_secs(2), async { child.lines.lock().await.recv().await.unwrap() }).await.unwrap();
+            assert_eq!(request["method"], method);
+            assert_eq!(request["params"], expected);
+            session.pending.lock().await.remove(&request["id"].as_i64().unwrap()).unwrap().send(Ok(json!({}))).unwrap();
+            let (handle, result) = sending.await.unwrap();
+            result.unwrap();
+            if method == "review/start" {
+                assert!(rx.try_recv().is_err());
+                session.handle_item(&json!({"type":"exitedReviewMode","id":"review-output","review":"**No issues found**"}), true).await;
+                assert!(matches!(rx.recv().await, Some(DriverEvent::MessageCompleted { text, .. }) if text == "**No issues found**"));
+            } else {
+                let mut completed = false;
+                while let Ok(event) = rx.try_recv() {
+                    completed |= matches!(event, DriverEvent::TurnCompleted { .. });
+                }
+                assert!(completed);
+            }
+            handle.close().await.unwrap();
+        }
     }
 
     #[tokio::test]

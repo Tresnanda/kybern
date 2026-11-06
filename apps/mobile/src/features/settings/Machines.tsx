@@ -2,6 +2,7 @@
 // status, Pause and Remove; the machines Kybern found on your tailnet to add;
 // and adding one with a code. The phone is a client of the network, never a
 // member: it changes the network through the computer it is at.
+import { setStringAsync } from "expo-clipboard";
 import { router } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import { View } from "react-native";
@@ -239,6 +240,7 @@ export function MachinesSettings() {
                   <MenuButton
                     label={`${entry.title}. Actions`}
                     items={[
+                      ...(entry.editText !== undefined ? [{ title: "Copy edit", icon: "doc.on.doc" as const, onPress: () => run(async () => { await setStringAsync(entry.editText!); }) }] : []),
                       ...(entry.canRetry ? [{ title: MACHINES_COPY.retry, icon: "arrow.clockwise" as const, onPress: () => run(async () => { await retryOutboxItem(entry.holder, entry.id); await reloadOutbox(); }) }] : []),
                       ...(entry.canCancel ? [{ title: MACHINES_COPY.cancel, icon: "xmark.circle" as const, destructive: true, onPress: () => cancelItem(entry) }] : []),
                     ]}
@@ -246,6 +248,7 @@ export function MachinesSettings() {
                 ) : undefined
               }
               menu={[
+                ...(entry.editText !== undefined ? [{ title: "Copy edit", icon: "doc.on.doc" as const, onPress: () => run(async () => { await setStringAsync(entry.editText!); }) }] : []),
                 ...(entry.canRetry ? [{ title: MACHINES_COPY.retry, icon: "arrow.clockwise" as const, onPress: () => run(async () => { await retryOutboxItem(entry.holder, entry.id); await reloadOutbox(); }) }] : []),
                 ...(entry.canCancel ? [{ title: MACHINES_COPY.cancel, icon: "xmark.circle" as const, destructive: true, onPress: () => cancelItem(entry) }] : []),
               ]}

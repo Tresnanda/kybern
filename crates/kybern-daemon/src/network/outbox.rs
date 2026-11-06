@@ -322,6 +322,7 @@ async fn deliver(state: &AppState, item: &OutboxItem) -> Delivery {
         OutboxKind::Fork => state.orchestrator.remote_deliver_fork(item).await,
         OutboxKind::Move => state.orchestrator.remote_deliver_move(item).await,
         OutboxKind::SettingsPatch => crate::settings_share::deliver(state, item).await,
+        OutboxKind::ItemEdit => super::item_edits::deliver(state, item).await,
         OutboxKind::SecretsPut => super::broker::deliver_secrets_put(state, item).await,
         OutboxKind::FilesPush => super::files_push::deliver(state, item).await,
         OutboxKind::Provision => super::provision::deliver(state, item).await,
@@ -450,6 +451,12 @@ pub fn enqueue(state: &AppState, params: OutboxEnqueueParams) -> Result<OutboxIt
             let mut send: ThreadsSendParams = serde_json::from_value(payload).map_err(RpcError::invalid_params)?;
             send.message_id.get_or_insert_with(|| derive(operation_id, 0x23));
             payload = serde_json::to_value(send).map_err(RpcError::internal)?;
+        }
+        OutboxKind::ItemEdit => {
+            let mut edit: PeerItemEditParams = serde_json::from_value(payload).map_err(RpcError::invalid_params)?;
+            edit.operation_id = operation_id;
+            super::item_edits::validate(&edit)?;
+            payload = serde_json::to_value(edit).map_err(RpcError::internal)?;
         }
         OutboxKind::SettingsPatch => {
             let patch: SettingsPatch = serde_json::from_value(payload.clone()).map_err(RpcError::invalid_params)?;

@@ -385,6 +385,7 @@ struct State {
     settling: bool,
     prompt_pending: bool,
     native_started: bool,
+    native_command: Option<String>,
     manual_compacting: bool,
     closed: bool,
     model: Value,
@@ -484,7 +485,13 @@ impl PiSession {
                 extension.verify(&value)?;
                 session.emit_commands(value).await;
             }
-        } else if let Ok(value) = session.call("get_commands", json!({})).await {
+        } else if session.flavor == Flavor::Pi
+            && let Ok(value) = session.call("get_commands", json!({})).await
+        {
+            session.emit_commands(value).await;
+        }
+        if session.flavor == Flavor::Omp {
+            let value = session.call("get_available_commands", json!({})).await?;
             session.emit_commands(value).await;
         }
         Ok(())
@@ -526,7 +533,7 @@ impl PiSession {
     }
 
     async fn call(&self, ty: &str, mut params: Value) -> Result<Value> {
-        let timeout = std::time::Duration::from_secs(if matches!(ty, "compact" | "prompt") { 600 } else { 60 });
+        let timeout = std::time::Duration::from_secs(if matches!(ty, "compact" | "prompt" | "handoff") { 600 } else { 60 });
         self.call_with_timeout(ty, &mut params, timeout).await
     }
 
@@ -551,7 +558,7 @@ impl PiSession {
                 }
                 Err(_) => {
                     self.pending.lock().await.remove(&id);
-                    if matches!(ty, "compact" | "prompt") {
+                    if matches!(ty, "compact" | "prompt" | "handoff") {
                         self.child.kill().await;
                     }
                     return Err(DriverError::Protocol(format!("{ty}: timed out; send again to resume the saved conversation")));
@@ -647,6 +654,47 @@ impl PiSession {
                         Err(v.get("error").and_then(|e| e.as_str()).unwrap_or("error").to_string())
                     };
                     let _ = tx.send(out);
+                }
+            }
+            "available_commands_update" => self.emit_commands(v).await,
+            "session_info_update" => {
+                self.emit(DriverEvent::SessionMetadata { title: v.get("title").and_then(Value::as_str).map(str::to_owned), effort: None })
+                    .await;
+                if let Some(id) = v.get("sessionId").and_then(Value::as_str) {
+                    self.state.lock().await.session_id = Some(id.to_owned());
+                    self.emit(DriverEvent::SessionBound { session_id: id.to_owned(), model: None }).await;
+                }
+            }
+            "config_update" => {
+                if v.get("model").is_some() {
+                    self.update_model_state(&v).await;
+                }
+                if let Some(effort) = v.get("thinkingLevel").and_then(Value::as_str) {
+                    self.state.lock().await.default_effort = Some(effort.into());
+                }
+                let session_id = self.state.lock().await.session_id.clone();
+                if let Some(session_id) = session_id {
+                    let model = v.pointer("/model/id").and_then(Value::as_str).map(|id| {
+                        let provider = v.pointer("/model/provider").and_then(Value::as_str).unwrap_or("");
+                        if provider.is_empty() { id.to_owned() } else { format!("{provider}/{id}") }
+                    });
+                    self.emit(DriverEvent::SessionBound { session_id, model }).await;
+                }
+                self.emit(DriverEvent::SessionMetadata {
+                    title: None,
+                    effort: v.get("thinkingLevel").and_then(Value::as_str).map(str::to_owned),
+                })
+                .await;
+            }
+            "command_output" => {
+                if let Some(text) = v.get("text").and_then(Value::as_str) {
+                    let mut st = self.state.lock().await;
+                    st.message_seq += 1;
+                    let id = format!("command-{}", st.message_seq);
+                    let command = st.native_command.as_deref().unwrap_or("command");
+                    let text = format!("### omp · /{command}\n\n{}", crate::account_auth::strip_ansi(text));
+                    drop(st);
+                    self.emit(DriverEvent::MessageCompleted { message_id: id, origin: EventOrigin::Root, text, thinking: None }).await;
                 }
             }
             "agent_start" => {
@@ -1774,12 +1822,19 @@ impl AgentSession for Handle {
         let _gate = s.command_gate.lock().await;
         let Some(generation) = s.begin_turn(false, admitted_at).await? else { return Ok(()) };
         let text = prompt_text(message);
-        let mut params = json!({ "message": text });
+        s.state.lock().await.native_command = text.strip_prefix('/').and_then(|text| text.split_whitespace().next()).map(str::to_owned);
+        let handoff = s.flavor == Flavor::Omp && text.split_whitespace().next() == Some("/handoff");
+        let mut params = if handoff {
+            let instructions = text.trim_start_matches("/handoff").trim();
+            if instructions.is_empty() { json!({}) } else { json!({ "customInstructions": instructions }) }
+        } else {
+            json!({ "message": text })
+        };
         let imgs = images(message);
         if !imgs.is_empty() {
             params["images"] = Value::Array(imgs);
         }
-        let result = s.call("prompt", params).await;
+        let result = s.call(if handoff { "handoff" } else { "prompt" }, params).await;
         let (no_run, interrupted, open) = {
             let mut st = s.state.lock().await;
             if st.generation != generation {
@@ -1798,7 +1853,11 @@ impl AgentSession for Handle {
             }
             return Ok(());
         }
-        result?;
+        let response = result?;
+        // An agent-backed command acknowledges before agent_start; that ack is not completion.
+        if response.get("agentInvoked").and_then(Value::as_bool) == Some(true) {
+            return Ok(());
+        }
         // Extension commands and input hooks may consume ordinary text too.
         // Confirm a runless acknowledgement against native state before completion.
         if no_run {
@@ -2014,10 +2073,76 @@ mod tests {
                 denied_tools: vec!["kybern_thread_send".into()],
                 require_enforcement: false,
                 allow_read_only_builtins: false,
+                allowed_mcp_servers: Default::default(),
             },
         };
         assert_eq!(configured_app_tool_names(Some(&bridge)), HashSet::from(["kybern_thread_read".into()]));
         assert_eq!(configured_app_tool_names(None), extension::DEFAULT_APP_TOOL_NAMES.iter().map(|name| (*name).to_string()).collect());
+    }
+
+    #[tokio::test]
+    async fn omp_agent_ack_waits_for_agent_start() {
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
+        let (events, mut rx) = mpsc::channel(8);
+        let session = Arc::new(PiSession {
+            flavor: Flavor::Omp,
+            child: child.clone(),
+            events,
+            pending: Mutex::new(HashMap::new()),
+            pending_approvals: Mutex::new(HashMap::new()),
+            state: Mutex::new(State { native_command: Some("usage".into()), ..Default::default() }),
+            ready: Mutex::new(None),
+            initialized: tokio::sync::watch::channel(Some(Ok(()))).1,
+            command_gate: Mutex::new(()),
+            extension: None,
+            pending_app_tools: Mutex::new(HashMap::new()),
+            app_tool_names: HashSet::new(),
+        });
+        let handle = Handle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
+        let sending = tokio::spawn(async move {
+            let result = handle.send_message("input", &UserMessage::text("/handoff next step")).await;
+            (handle, result)
+        });
+        let request = tokio::time::timeout(Duration::from_secs(2), async { child.lines.lock().await.recv().await.unwrap() }).await.unwrap();
+        assert_eq!(request["type"], "handoff");
+        assert_eq!(request["customInstructions"], "next step");
+        session.handle_frame(json!({"type":"response","id":request["id"],"success":true,"data":{"agentInvoked":true}})).await;
+        let (_handle, result) = tokio::time::timeout(Duration::from_secs(2), sending).await.unwrap().unwrap();
+        result.unwrap();
+        assert!(session.state.lock().await.active);
+        assert!(rx.try_recv().is_err());
+        session.handle_frame(json!({"type":"agent_start"})).await;
+        assert!(session.state.lock().await.native_started);
+        child.kill().await;
+    }
+
+    #[tokio::test]
+    async fn omp_commands_and_local_output_are_preserved() {
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
+        let (events, mut rx) = mpsc::channel(8);
+        let session = Arc::new(PiSession {
+            flavor: Flavor::Omp,
+            child: child.clone(),
+            events,
+            pending: Mutex::new(HashMap::new()),
+            pending_approvals: Mutex::new(HashMap::new()),
+            state: Mutex::new(State { native_command: Some("usage".into()), ..Default::default() }),
+            ready: Mutex::new(None),
+            initialized: tokio::sync::watch::channel(Some(Ok(()))).1,
+            command_gate: Mutex::new(()),
+            extension: None,
+            pending_app_tools: Mutex::new(HashMap::new()),
+            app_tool_names: HashSet::new(),
+        });
+        session.handle_frame(json!({"type":"available_commands_update","commands":[{"name":"usage","aliases":["limits"],"source":"builtin","input":{"hint":"account"},"subcommands":[{"name":"all"}]}]})).await;
+        let Some(DriverEvent::CommandsUpdated(commands)) = rx.recv().await else { panic!("commands missing") };
+        assert_eq!(commands[0].aliases, ["limits"]);
+        assert_eq!(commands[0].input_hint.as_deref(), Some("account"));
+        assert_eq!(commands[0].subcommands[0].name, "all");
+        session.handle_frame(json!({"type":"command_output","text":"**Available:** \u{1b}[32m90%\u{1b}[0m"})).await;
+        let Some(DriverEvent::MessageCompleted { text, .. }) = rx.recv().await else { panic!("output missing") };
+        assert_eq!(text, "### omp · /usage\n\n**Available:** 90%");
+        child.kill().await;
     }
 
     #[tokio::test]

@@ -140,6 +140,61 @@ expression: schema_for!(Settings)
         "rotation_budget_tokens": 200000
       }
     },
+    "coordinator_mcp_servers": {
+      "description": "MCP servers the Coordinator may use, by harness. Local to this machine; off by default.",
+      "type": "object",
+      "properties": {
+        "antigravity": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "claude-code": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "codex": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cursor": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "grok-build": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "omp": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "opencode": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pi": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "tell_agents_about_kybern": {
       "description": "Give new agent sessions a short guide to Kybern: images, notes and\ntasks, other threads, helpers. Applies to sessions started after the change.",
       "type": "boolean",
@@ -167,7 +222,8 @@ expression: schema_for!(Settings)
         "configured": false,
         "enabled": false,
         "port": 4173,
-        "keep_reachable": true
+        "keep_reachable": true,
+        "keep_network_data": true
       }
     }
   },
@@ -632,6 +688,11 @@ expression: schema_for!(Settings)
         },
         "keep_reachable": {
           "description": "\"Keep this machine reachable when Kybern is closed\" (ADE-119): while this machine is in a\nnetwork with the network on, its daemon is started at login by a per-user login item, so the\nother members reach it with no app window open. Per machine like the rest of this section: it\nregisters an item with this computer's own login, and a laptop may opt out where a desktop\nopts in.",
+          "type": "boolean",
+          "default": true
+        },
+        "keep_network_data": {
+          "description": "Keep bounded, read-only copies of peer lists on this machine.",
           "type": "boolean",
           "default": true
         }

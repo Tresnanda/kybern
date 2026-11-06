@@ -111,6 +111,7 @@ export function Agents() {
       <Row title={COPY.models} description="When the Coordinator delegates without choosing a model. Each project can override these in its Project tab." />
       {COORDINATOR_ROLES.map(({ role, label }) => <RoleRow key={role} label={label} value={current.role_defaults?.[role]} onChange={(value) => void updateSettings({ orchestration: withGlobalRoleDefault(latestSettings()!.orchestration, role, value) })} />)}
     </Section>
+    <CoordinatorMcpTools />
     <InstalledAgents providers={providers} customBinary={(kind) => !!s.providers[kind]?.binary} cursor={cursor} />
     <CursorAccountSection setup={cursor} />
     <AntigravitySetup />
@@ -175,3 +176,27 @@ function OmpProfiles() {
 }
 
 export { About } from './About.tsx'
+
+/** Server names come from native configuration; toggles persist a machine-local allowlist. */
+export function CoordinatorMcpTools() {
+  const { settings: s, saving } = useSettings()
+  const projectId = useApp((s) => s.open.thread?.project_id ?? s.draft.projectId)
+  const catalog = useResource('providers.list', projectId ? { project_id: projectId } : {})
+  const servers = catalog.data?.coordinator_mcp_servers ?? {}
+  if (!s || !Object.values(servers).some((names) => names?.length)) return null
+  return <CoordinatorMcpToolsView servers={servers} allowed={s.coordinator_mcp_servers ?? {}} saving={saving} onChange={(provider, name, checked) => {
+    const current = latestSettings()!.coordinator_mcp_servers ?? {}
+    const allowed = current[provider] ?? []
+    void updateSettings({ coordinator_mcp_servers: { ...current, [provider]: checked ? [...new Set([...allowed, name])] : allowed.filter((server) => server !== name) } })
+  }} />
+}
+
+export function CoordinatorMcpToolsView({ servers, allowed, saving, onChange }: { servers: Partial<Record<ProviderKind, string[]>>; allowed: Partial<Record<ProviderKind, string[]>>; saving: boolean; onChange: (provider: ProviderKind, name: string, checked: boolean) => void }) {
+  if (!Object.values(servers).some((names) => names?.length)) return null
+  return <Section title="Tools the Coordinator may use">
+    {Object.entries(servers).map(([provider, names]) => <div key={provider}>
+      <Row title={providerLabel(provider as ProviderKind)} />
+      {(names ?? []).map((name) => <Row key={name} title={name}><Switch aria-label={name} testId={"settings-coordinator-mcp-" + provider + "-" + name} disabled={saving} checked={allowed[provider as ProviderKind]?.includes(name) ?? false} onCheckedChange={(checked) => onChange(provider as ProviderKind, name, checked)} /></Row>)}
+    </div>)}
+  </Section>
+}

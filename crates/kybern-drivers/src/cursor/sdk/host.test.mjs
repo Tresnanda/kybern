@@ -12,7 +12,7 @@ function fixture({ duringStart, failStart, warmGate, fetch } = {}) {
   const run = { id: "r1", wait: () => terminal.promise, cancel: async () => {
     calls.push(["cancel"]); terminal.resolve({ id: "r1", status: "cancelled" });
   } };
-  const agent = { agentId: "a1", close: () => calls.push(["close"]), send: async (message, options) => {
+  const agent = { summarize: async () => { calls.push(["summarize"]); return run; }, agentId: "a1", close: () => calls.push(["close"]), send: async (message, options) => {
     callback = options.onDelta;
     calls.push(["send", message, options]);
     sends++;
@@ -418,4 +418,17 @@ test("close during pending prewarm returns immediately and never sends the queue
   await tick();
   assert.ok(!f.calls.some(call=>call[0]==="send"));
   assert.ok(f.calls.some(call=>call[0]==="close"));
+});
+
+
+test("compress uses the SDK summarize run", async () => {
+  const f = fixture();
+  await open(f.host);
+  await f.host.request({type:"send", message:{text:"/compress"}});
+  assert.ok(f.calls.some(c=>c[0]==="summarize"));
+  assert.ok(!f.calls.some(c=>c[0]==="send"));
+  f.terminal.resolve({id:"r1",status:"finished"});
+  await tick();
+  assert.deepEqual(f.events.map(e=>e.type), ["run_started","run_completed"]);
+  await f.host.close();
 });

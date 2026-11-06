@@ -1,3 +1,4 @@
+import { nativeCommandSpecs, LOCAL_COMMAND_NAMES } from "../../../../../packages/kybern-client/src/nativeCommands.ts"
 // The slash commands of an open thread, minus what each client does when one runs (icons and handlers): the
 // order, names, hints and which ones exist. The desktop thread view and the GPUIX composer both build their
 // list from this, so the two cannot drift.
@@ -8,14 +9,14 @@ export type ThreadCommandId =
   | "resume" | "sessions" | "compact" | "new" | "reconnect" | "stop" | "activity" | "agents" | "attach"
   | "terminal" | "changes" | "files" | "environment" | "pr" | "archive" | "settings" | "usage"
 
-/** Names a harness may also define; its own command gets a `harness:` prefix so both stay reachable. */
-export const LOCAL_COMMAND_NAMES = ["resume", "sessions", "new", "stop", "activity", "attach", "changes", "terminal", "files", "environment", "pr", "archive", "settings", "usage"] as const
+/** Names a harness may also define; its own short name prefixes collisions so both stay reachable. */
+export { LOCAL_COMMAND_NAMES }
 
 export interface NativeThreadCommand { name: string; description: string }
 
 export type ThreadCommandSpec =
   | { kind: "local"; id: ThreadCommandId; name: ThreadCommandId; hint: string }
-  | { kind: "native"; name: string; invocation: string; hint: string }
+  | { kind: "native"; name: string; label: string; invocation: string; hint: string }
 
 export function threadCommandSpecs(options: { freeChat: boolean; canCompact: boolean; providerKind?: ProviderKind; nativeCommands: readonly NativeThreadCommand[] }): ThreadCommandSpec[] {
   const { freeChat, canCompact, providerKind, nativeCommands } = options
@@ -24,10 +25,11 @@ export function threadCommandSpecs(options: { freeChat: boolean; canCompact: boo
     local("resume", "Continue a saved session"),
     local("sessions", "Browse saved sessions"),
     ...(canCompact ? [local("compact", "Compact context and keep conversation history")] : []),
-    ...nativeCommands.filter((command) => command.name !== "compact").map((command): ThreadCommandSpec => ({
+    ...nativeCommandSpecs(nativeCommands, providerKind).map((command): ThreadCommandSpec => ({
       kind: "native",
-      name: (LOCAL_COMMAND_NAMES as readonly string[]).includes(command.name) ? `harness:${command.name}` : command.name,
-      invocation: command.name,
+      name: command.name,
+      label: command.label,
+      invocation: command.invocation,
       hint: `${PROVIDER_LABEL[providerKind ?? "codex"]} · ${command.description}`,
     })),
     local("new", freeChat ? "Start a new free chat" : "Start a new thread in this project"),

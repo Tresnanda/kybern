@@ -25,6 +25,8 @@ pub const WELL_KNOWN_PROOF_DOMAIN: &str = "kybern-wk-v1\0";
 
 /// Feature names a daemon lists in `DaemonInfo.features` and `peer.presence`.
 pub mod features {
+    pub const PREFERENCES_SYNC_V1: &str = "preferences.sync.v1";
+    pub const OFFLINE_LISTS_V1: &str = "network.offline_lists.v1";
     pub const SPACES_SYNC_V1: &str = "spaces.sync.v1";
     pub const NETWORK_V1: &str = "network.v1";
     pub const RELAY_V1: &str = "relay.v1";
@@ -82,7 +84,7 @@ pub mod features {
     pub const REMOVAL_PROOF_V1: &str = "removal.proof.v1";
 
     /// Every feature the network design names, in design order.
-    pub const ALL: [&str; 27] = [
+    pub const ALL: [&str; 29] = [
         NETWORK_V1,
         SPACES_SYNC_V1,
         RELAY_V1,
@@ -100,6 +102,8 @@ pub mod features {
         RELAY_FRAMES_V2,
         SETTINGS_FANOUT_V1,
         NOTES_FEDERATED_V1,
+        OFFLINE_LISTS_V1,
+        PREFERENCES_SYNC_V1,
         SECRETS_STORE_V1,
         LOGIN_BROKER_V1,
         UPDATE_V1,
@@ -1001,11 +1005,13 @@ pub struct NetworkSettings {
     /// registers an item with this computer's own login, and a laptop may opt out where a desktop
     /// opts in.
     pub keep_reachable: bool,
+    /// Keep bounded, read-only copies of peer lists on this machine.
+    pub keep_network_data: bool,
 }
 
 impl Default for NetworkSettings {
     fn default() -> Self {
-        Self { configured: false, enabled: false, port: crate::DEFAULT_PORT, keep_reachable: true }
+        Self { configured: false, enabled: false, port: crate::DEFAULT_PORT, keep_reachable: true, keep_network_data: true }
     }
 }
 
@@ -1019,6 +1025,7 @@ impl<'de> Deserialize<'de> for NetworkSettings {
             configured: Option<bool>,
             port: Option<u16>,
             keep_reachable: Option<bool>,
+            keep_network_data: Option<bool>,
         }
         let saved = Saved::deserialize(deserializer)?;
         Ok(Self {
@@ -1026,6 +1033,7 @@ impl<'de> Deserialize<'de> for NetworkSettings {
             enabled: saved.enabled.unwrap_or(false),
             port: saved.port.unwrap_or(crate::DEFAULT_PORT),
             keep_reachable: saved.keep_reachable.unwrap_or(true),
+            keep_network_data: saved.keep_network_data.unwrap_or(true),
         })
     }
 }
@@ -1036,3 +1044,21 @@ impl<'de> Deserialize<'de> for NetworkSettings {
 pub const NETWORK_CHANGED_NOTIFICATION: &str = "network.changed";
 /// Notification: one machine changed. Params: [`MachineCard`].
 pub const NETWORK_MACHINE_CHANGED_NOTIFICATION: &str = "network.machine.changed";
+
+/// Bounded list fallback. These are observations, never replicated owner state.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NetworkListSnapshot {
+    pub machine_id: String,
+    pub fetched_at: DateTime<Utc>,
+    pub stale: bool,
+    pub projects: Vec<crate::Project>,
+    pub threads: Vec<crate::Thread>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NetworkCachedListsParams {
+    pub machine_id: String,
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct NetworkCachedListsResult {
+    pub snapshot: Option<NetworkListSnapshot>,
+}

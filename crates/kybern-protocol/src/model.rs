@@ -216,10 +216,18 @@ pub struct ModelVariant {
 }
 
 /// A command advertised by a live harness's native protocol.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ProviderCommand {
     pub name: String,
     pub description: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subcommands: Vec<ProviderCommand>,
 }
 
 /// Availability and selectable capabilities of a provider binary on the daemon host.
@@ -2688,6 +2696,9 @@ pub struct Settings {
     pub antigravity: AntigravitySettings,
     /// Limits on agents delegating work to other agents.
     pub orchestration: OrchestrationSettings,
+    /// MCP servers the Coordinator may use, by harness. Local to this machine; off by default.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub coordinator_mcp_servers: BTreeMap<ProviderKind, Vec<String>>,
     /// Give new agent sessions a short guide to Kybern: images, notes and
     /// tasks, other threads, helpers. Applies to sessions started after the change.
     pub tell_agents_about_kybern: bool,
@@ -3018,6 +3029,7 @@ impl Default for Settings {
             computer_use: ComputerUseSettings::default(),
             antigravity: AntigravitySettings::default(),
             orchestration: OrchestrationSettings::default(),
+            coordinator_mcp_servers: BTreeMap::new(),
             tell_agents_about_kybern: true,
             ask_deadlines: AskDeadlineSettings::default(),
             preview_allowed_folders: Vec::new(),

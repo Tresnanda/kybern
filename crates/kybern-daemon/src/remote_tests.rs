@@ -1821,7 +1821,7 @@ async fn whole_turn_history_pages_add_whole_turns_and_leave_thread_state_out() {
             thread.id,
             Some(turns[2]),
             EventPayload::ProviderCommandsUpdated {
-                commands: vec![ProviderCommand { name: "review".into(), description: "Review the change".into() }],
+                commands: vec![ProviderCommand { name: "review".into(), description: "Review the change".into(), ..Default::default() }],
             },
         )
         .unwrap();

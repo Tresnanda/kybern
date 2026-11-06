@@ -58,17 +58,38 @@ impl SettingsStore {
         // A credential a client just typed goes into the secret store; settings keep the reference.
         crate::secret_store::externalize(&mut settings)?;
         validate_orchestration(&settings.orchestration)?;
+        for (kind, servers) in &settings.coordinator_mcp_servers {
+            anyhow::ensure!(
+                matches!(
+                    kind,
+                    kybern_protocol::ProviderKind::ClaudeCode
+                        | kybern_protocol::ProviderKind::Opencode
+                        | kybern_protocol::ProviderKind::Pi
+                        | kybern_protocol::ProviderKind::Omp
+                ),
+                "This harness cannot restrict Coordinator tools. Choose Claude Code, OpenCode, Pi or OMP."
+            );
+            anyhow::ensure!(
+                servers.len() <= 128
+                    && servers.iter().all(|name| kybern_drivers::coordinator_mcp::valid_server_name(name) && name != "kybern"),
+                "Choose valid MCP server names without wildcards and save again."
+            );
+        }
         if let Some(omp) = settings.providers.get(&kybern_protocol::ProviderKind::Omp) {
             for profile in omp.env.get("OMP_PROFILE").into_iter().chain(omp.project_profiles.values()) {
                 kybern_drivers::omp_profile::normalize(profile)?;
             }
         }
         crate::provider_accounts::validate(&settings)?;
+        let _cache_guard = crate::network::list_cache::CACHE_LOCK.lock().unwrap();
         let before = self.current.read().unwrap().clone();
         write_atomic(&self.path, &settings)?;
         *self.current.write().unwrap() = settings.clone();
         if let Some(store) = self.stamps.get() {
             crate::settings_share::note_local_change(store, &before, &settings);
+            if !settings.network.keep_network_data {
+                store.meta_delete_prefix("network.list_cache.")?;
+            }
         }
         crate::secret_store::collect_garbage(&settings);
         let _ = self.changed.send(settings.clone());
@@ -174,5 +195,21 @@ mod profile_tests {
         assert_eq!(provider_settings(&settings, ProviderKind::Omp, Some("/projects/else")).env["OMP_PROFILE"], "global");
         assert_eq!(provider_settings(&settings, ProviderKind::Omp, None).env["OMP_PROFILE"], "global");
         assert!(provider_settings(&settings, ProviderKind::Pi, Some("/projects/work")).env.is_empty());
+    }
+
+    #[test]
+    fn coordinator_mcp_defaults_off_round_trips_and_rejects_globs() {
+        let dir = std::env::temp_dir().join(format!("kybern-mcp-settings-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let store = SettingsStore::load(&path).unwrap();
+        let mut settings = store.get();
+        assert!(settings.coordinator_mcp_servers.is_empty());
+        settings.coordinator_mcp_servers.insert(kybern_protocol::ProviderKind::Omp, vec!["memory".into()]);
+        store.set(settings.clone()).unwrap();
+        assert_eq!(SettingsStore::load(&path).unwrap().get().coordinator_mcp_servers, settings.coordinator_mcp_servers);
+        settings.coordinator_mcp_servers.insert(kybern_protocol::ProviderKind::Omp, vec!["*".into()]);
+        assert!(store.set(settings).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
