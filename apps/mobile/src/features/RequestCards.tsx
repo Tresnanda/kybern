@@ -38,7 +38,7 @@ import type {
   PickRequestInput,
   PromptRequestInput,
 } from "../state/protocol";
-import { errorText, getState, loadThread, refresh, rpc } from "../state/runtime";
+import { errorText, getState, respondApproval as answerApproval, rpc } from "../state/runtime";
 import { actOnRequest, refreshRequestProgress, useRequestProgress } from "../state/requestProgress";
 import { Button, ErrorBanner, Icon, T, Tap, type IconName } from "../ui/primitives";
 import { haptics } from "../ui/haptics";
@@ -51,9 +51,9 @@ export function agentFor(threadId: string) {
   return AGENT_NAMES[provider ?? ""] ?? "The agent";
 }
 
+/** Answered on the machine whose thread raised it (`runtime.respondApproval`). */
 export async function respondApproval(approval: Pick<ApprovalRequest, "id" | "thread_id">, decision: ApprovalDecision) {
-  await rpc("approvals.respond", { approval_id: approval.id, ...decision });
-  await Promise.all([refresh(), loadThread(approval.thread_id)]);
+  await answerApproval(approval, decision);
 }
 
 /** A sentence for an action that failed: the daemon's own when it gave one. */

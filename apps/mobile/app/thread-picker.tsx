@@ -17,6 +17,7 @@ import { SearchField } from "../src/ui/Search";
 import { Segmented } from "../src/ui/Segmented";
 import { gutter, space, useTheme } from "../src/ui/theme";
 import { Working } from "../src/ui/Working";
+import { useLists } from "../src/state/useLists";
 
 export default function ThreadPicker() {
   const { threadId, projectId } = useLocalSearchParams<{
@@ -24,6 +25,8 @@ export default function ThreadPicker() {
     projectId?: string;
   }>();
   const app = useApp();
+  // Every machine's projects: the computer the phone is at may be away (#245).
+  const lists = useLists(null);
   const { colors } = useTheme();
   const { width } = useWindowDimensions();
   const current = app.threads.find((thread) => thread.id === threadId);
@@ -112,7 +115,7 @@ export default function ThreadPicker() {
   const scopeName = initialProjectId
     ? isFreeChatProject(initialProjectId)
       ? "Free chat"
-      : app.projects.find((project) => project.id === initialProjectId)?.name ?? "This project"
+      : lists.projects.find((project) => project.id === initialProjectId)?.name ?? "This project"
     : "This project";
   const grouped = useMemo(() => {
     const groups = new Map<string, ThreadSearchHit[]>();
@@ -169,7 +172,7 @@ export default function ThreadPicker() {
               title={
                 isFreeChatProject(groupProjectId)
                   ? "Free chat"
-                  : app.projects.find((project) => project.id === groupProjectId)?.name ?? "Project"
+                  : lists.projects.find((project) => project.id === groupProjectId)?.name ?? "Project"
               }
             />
             <InsetGroup>

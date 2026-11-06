@@ -27,8 +27,10 @@ import {
   currentClient,
   machineHub,
   mutate,
+  networkClient,
   onClientAttach,
   onEnvironmentReset,
+  onNetworkClient,
   onSubscriptionReady,
   rpc,
 } from "./runtime";
@@ -84,6 +86,8 @@ onClientAttach((client, isCurrent) => {
       .catch(() => {});
 });
 onSubscriptionReady(() => { networkSpacesFrom = null; void loadSpaces(); });
+// The computer the phone is at is away and a member answers: spaces come from it (every member keeps the same ones).
+onNetworkClient(() => loadSpacesThroughNetwork());
 onEnvironmentReset(() => { spacesLoadVersion++; networkSpacesFrom = null; setSpacePlacements([]); publish({ supported: null, spaces: [], savedId: null }); });
 
 /** The member the spaces were last read from while the computer the phone is at was away. */
@@ -95,7 +99,7 @@ let networkSpacesFrom: unknown = null;
  */
 export function loadSpacesThroughNetwork() {
   if (currentClient()?.status === "open") return;
-  const client = machineHub().memberClient();
+  const client = networkClient();
   if (!client || networkSpacesFrom === client) return;
   networkSpacesFrom = client;
   const version = ++spacesLoadVersion;

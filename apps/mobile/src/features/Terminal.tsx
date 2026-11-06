@@ -11,7 +11,9 @@ import {
   type TerminalInfo,
   type TerminalOutputNotification,
 } from "../state/protocol";
-import { currentClient, errorText, rpc, useApp } from "../state/runtime";
+import { errorText, rpc, threadMachine, useThreadConnection } from "../state/runtime";
+import { useProviders } from "../state/machineProviders";
+import { ownerClient } from "../state/machineRequests";
 import {
   Button,
   ErrorBanner,
@@ -34,7 +36,10 @@ function base64(text: string) {
   return btoa(raw);
 }
 export function Terminal({ threadId, initialTerminalId, connectorLogin = false, embedded = false }: { threadId: string; initialTerminalId?: string; connectorLogin?: boolean; embedded?: boolean }) {
-  const app = useApp();
+  // The thread's own machine runs its terminals: list, subscribe, keystrokes and resizes all go there (#245).
+  const connection = useThreadConnection(threadId);
+  const online = connection.open;
+  const providers = useProviders(connection.remote && connection.machineId ? { machineId: connection.machineId, reachable: online } : undefined);
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
   const [selected, setSelected] = useState(initialTerminalId ?? "");
   const [loginUrl, setLoginUrl] = useState<string | null>(null);
@@ -64,7 +69,7 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
   const [query, setQuery] = useState("");
   const [hit, setHit] = useState({ index: 0, total: 0 });
   // Agent CLIs installed on the computer open as their own terminal tab (desktop parity).
-  const clis = app.providers.filter((p) => p.available && p.binary_path);
+  const clis = providers.filter((p) => p.available && p.binary_path);
   const launchItems: MenuItem[] = [
     { title: "Shell", icon: "terminal", onPress: () => void create() },
     ...clis.map((p) => ({
@@ -98,10 +103,10 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
   }, [threadId]);
   useEffect(() => {
     void reload().catch((e) => setError(errorText(e, "open the terminal")));
-  }, [reload, app.status]);
+  }, [reload, online]);
   useEffect(() => {
-    if (!selected || !ready || app.status !== "open") return;
-    const client = currentClient();
+    if (!selected || !ready || !online) return;
+    const client = ownerClient({ threadId });
     if (!client) return;
     let alive = true;
     web.current?.injectJavaScript("window.resetTerminal(); true;");
@@ -141,7 +146,7 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
         .call("terminals.unsubscribe", { terminal_id: selected })
         .catch(() => {});
     };
-  }, [selected, ready, app.status, reload, connectorLogin, initialTerminalId]);
+  }, [selected, ready, online, threadId, reload, connectorLogin, initialTerminalId]);
   useEffect(() => {
     if (ready)
       web.current?.injectJavaScript(
@@ -182,7 +187,7 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
       controlRef.current = false;
       setControl(false);
     }
-    const client = currentClient();
+    const client = ownerClient({ threadId });
     if (!client) return;
     const terminalId = selected;
     // The daemon dispatches RPCs concurrently. Keep keystrokes in their original
@@ -218,7 +223,7 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
           text: "Close terminal",
           style: "destructive",
           onPress: () => {
-            void rpc("terminals.close", { terminal_id: selected })
+            void rpc("terminals.close", { terminal_id: selected }, threadMachine(threadId))
               .then(reload)
               .catch((e) => setError(errorText(e, "close the terminal")));
           },
@@ -237,7 +242,7 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
         {loginUrl && <Button onPress={() => void Linking.openURL(loginUrl).catch(e => setError(errorText(e, "open the sign-in page")))}>Sign in on {new URL(loginUrl).hostname}</Button>}
         <T variant="footnote" tone="secondary">After signing in, paste the full redirect URL when Claude asks for it.</T>
         <Field label="Sign-in redirect URL" hideLabel secureTextEntry autoCapitalize="none" autoCorrect={false} value={redirect} onChangeText={setRedirect} placeholder="Paste the redirect URL" />
-        <Button busy={busy} disabled={!ready || !redirect.trim() || app.status !== "open"} onPress={() => void completeLogin()}>Complete sign-in</Button>
+        <Button busy={busy} disabled={!ready || !redirect.trim() || !online} onPress={() => void completeLogin()}>Complete sign-in</Button>
       </View>}
       {terminals.length > 0 && (
         <View style={[styles.spread, { gap: space.xs, paddingStart: space.lg, paddingEnd: space.xs }]}>
@@ -274,7 +279,7 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
               onPress={() => (searching ? endSearch() : setSearching(true))}
             />
           )}
-          <MenuButton icon="plus" label="New terminal" title="Open in a new tab" items={launchItems} disabled={busy || app.status !== "open"} />
+          <MenuButton icon="plus" label="New terminal" title="Open in a new tab" items={launchItems} disabled={busy || !online} />
           {!!selected && <IconButton name="xmark" label="Close terminal" onPress={close} />}
         </View>
       )}
@@ -312,11 +317,11 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
               Run commands or an agent CLI in this thread’s workspace.
             </T>
             <View style={{ marginTop: space.md, flexDirection: "row", gap: space.sm }}>
-              <Button busy={busy} disabled={app.status !== "open"} size="medium" onPress={() => void create()}>
+              <Button busy={busy} disabled={!online} size="medium" onPress={() => void create()}>
                 Open terminal
               </Button>
               {clis.length > 0 && (
-                <MenuButton items={launchItems.slice(1)} title="Agent CLIs on your computer" label="Open an agent CLI" radius={radius.full} disabled={app.status !== "open"}>
+                <MenuButton items={launchItems.slice(1)} title="Agent CLIs on your computer" label="Open an agent CLI" radius={radius.full} disabled={!online}>
                   <View style={{ minHeight: 36, paddingHorizontal: space.md, flexDirection: "row", alignItems: "center", gap: space.xs }}>
                     <T variant="label" tone="accent">Agent CLI</T>
                     <Icon name="chevron.down" size={13} color={colors.accent} />
@@ -379,7 +384,7 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
                       terminal_id: selectedRef.current,
                       cols: message.cols!,
                       rows: message.rows!,
-                    }).catch((e) => setError(errorText(e, "resize the terminal")));
+                    }, threadMachine(threadId)).catch((e) => setError(errorText(e, "resize the terminal")));
                 } catch {
                   setError(
                     "Terminal display could not process an update. Reopen this workspace.",

@@ -199,7 +199,6 @@ function SessionPicker({ projectId: initialProject }: { projectId: string | null
           testId="sessions-refresh"
           icon={N.refresh}
           label="Refresh sessions"
-          size="lg"
           disabled={loading}
           onClick={() => {
             if (loading || opening) return

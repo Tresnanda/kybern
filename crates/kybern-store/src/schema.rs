@@ -736,6 +736,42 @@ const MIGRATIONS: &[&str] = &[
     "
     ALTER TABLE remote_children ADD COLUMN completed_at_from_target INTEGER NOT NULL DEFAULT 0;
     ",
+    // List cursors (`threads.list since_seq`). `threads.change_seq` is the event sequence after which a row or its
+    // activity last changed: an appended event stamps its own seq; any other write (a row edit without an event, a
+    // move record, an approval, a remote child) stamps the head plus one, so a list that read the head before the
+    // write returns the row on its next `since_seq`. Triggers stamp every write path, including future ones.
+    "
+    BEGIN;
+    ALTER TABLE threads ADD COLUMN change_seq INTEGER NOT NULL DEFAULT 0;
+    UPDATE threads SET change_seq = last_seq;
+    CREATE INDEX threads_change ON threads(change_seq);
+    CREATE TRIGGER threads_change_insert AFTER INSERT ON threads
+    BEGIN
+      UPDATE threads SET change_seq = MAX(NEW.last_seq, (SELECT COALESCE(MAX(seq), 0) FROM events) + 1) WHERE id = NEW.id;
+    END;
+    CREATE TRIGGER threads_change_update AFTER UPDATE ON threads WHEN NEW.change_seq IS OLD.change_seq
+    BEGIN
+      UPDATE threads SET change_seq = CASE WHEN NEW.last_seq > OLD.last_seq THEN NEW.last_seq
+        ELSE (SELECT COALESCE(MAX(seq), 0) FROM events) + 1 END WHERE id = NEW.id;
+    END;
+    CREATE TRIGGER approvals_change_insert AFTER INSERT ON approvals
+    BEGIN
+      UPDATE threads SET change_seq = (SELECT COALESCE(MAX(seq), 0) FROM events) + 1 WHERE id = NEW.thread_id;
+    END;
+    CREATE TRIGGER approvals_change_update AFTER UPDATE ON approvals
+    BEGIN
+      UPDATE threads SET change_seq = (SELECT COALESCE(MAX(seq), 0) FROM events) + 1 WHERE id = NEW.thread_id;
+    END;
+    CREATE TRIGGER remote_children_change_insert AFTER INSERT ON remote_children
+    BEGIN
+      UPDATE threads SET change_seq = (SELECT COALESCE(MAX(seq), 0) FROM events) + 1 WHERE id = NEW.parent_thread_id;
+    END;
+    CREATE TRIGGER remote_children_change_update AFTER UPDATE ON remote_children
+    BEGIN
+      UPDATE threads SET change_seq = (SELECT COALESCE(MAX(seq), 0) FROM events) + 1 WHERE id = NEW.parent_thread_id;
+    END;
+    COMMIT;
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

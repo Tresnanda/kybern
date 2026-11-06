@@ -6,6 +6,7 @@
 // Every change of the main view is a step, recorded by one subscription rather
 // than at each place that selects a view. Back/forward restore a step without
 // adding one.
+import { traceThreadClick } from '../perf/startup.ts'
 import { useSyncExternalStore } from 'react'
 import { getState, selectDraft, selectThread, subscribe } from '../state.ts'
 import { patchDraft } from '../composer/store.ts'
@@ -254,6 +255,7 @@ export function useNavigationAvailability(): { canBack: boolean; canForward: boo
 
 /** Open a thread on Home (a history step like any other). */
 export function openThread(id: string, machineId?: string) {
+  traceThreadClick(id)
   setNav({ page: 'home', settingsOpen: false })
   if (getState().selectedId !== id) void selectThread(id, machineId)
 }

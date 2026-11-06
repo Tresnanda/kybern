@@ -17,9 +17,11 @@ mod cursor_setup;
 mod discovery;
 mod exposure;
 mod files;
+mod files_outside;
 mod gh_locate;
 mod github;
 mod github_actions;
+mod github_issues;
 mod github_review;
 mod harness_updates;
 mod http;
@@ -44,6 +46,8 @@ mod remote_tests;
 mod requests;
 mod rpc;
 #[cfg(test)]
+mod sync_tests;
+#[cfg(test)]
 mod test_support;
 // S3: the encrypted secret store. Its RPC, push transport and outbox hooks arrive with N3/R1.
 mod plugins;
@@ -54,6 +58,7 @@ mod self_update;
 mod session_import;
 mod settings;
 mod settings_share;
+mod skill_frame;
 mod skills;
 mod state;
 mod terminal;

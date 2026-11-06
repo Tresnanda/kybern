@@ -20,6 +20,7 @@ import { InsetGroup, ListRow, SectionFooter, SectionHeader } from "../src/ui/Lis
 import { Button, Empty, ErrorBanner, Field, Icon, Page, T, Tap, styles } from "../src/ui/primitives";
 import { Segmented } from "../src/ui/Segmented";
 import { MONO, radius, space, useTheme, useType } from "../src/ui/theme";
+import { useLists } from "../src/state/useLists";
 
 type Kind = "single" | "group";
 
@@ -88,7 +89,9 @@ function FolderList({
 export default function AddProject() {
   const { projectId } = useLocalSearchParams<{ projectId?: string }>();
   const app = useApp();
-  const group = projectId ? app.projects.find((p) => p.id === projectId) : undefined;
+  // Every machine's projects: the computer the phone is at may be away (#245).
+  const lists = useLists(null);
+  const group = projectId ? lists.projects.find((p) => p.id === projectId) : undefined;
   const [kind, setKind] = useState<Kind>(projectId ? "group" : "single");
   const groups = supportsGroupProjects();
   if (projectId)

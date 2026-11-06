@@ -318,11 +318,11 @@ pub async fn list_dir(root: &Path, rel: &str) -> Result<Vec<kybern_protocol::met
 }
 
 /// What a chat link or file reference names in a thread's workspace.
-enum Reference {
+pub(crate) enum Reference {
     /// An openable file, relative to the workspace root.
     Found(String),
-    /// A file that exists but lies outside the workspace.
-    Outside,
+    /// A file that exists but lies outside the workspace, by its canonical path.
+    Outside(std::path::PathBuf),
     /// A file inside the workspace that Kybern keeps closed, and why.
     Refused(String),
     /// A relative path that more than one workspace file ends with.
@@ -369,7 +369,7 @@ pub fn split_location(path: &str) -> (&str, Option<u32>) {
 /// conversation, and the folder the agent's shell happened to be in (`cd apps/gpuix/src` in a turn) is not recorded
 /// anywhere the daemon can see. A path that does not exist from the root still opens when exactly one workspace file ends
 /// with it, which is how an agent's `sidebar/rows.tsx` (written from its shell folder) finds `apps/gpuix/src/sidebar/rows.tsx`.
-async fn resolve_reference(
+pub(crate) async fn resolve_reference(
     indexes: &FileIndexCache,
     cwd: &Path,
     root: &Path,
@@ -395,7 +395,7 @@ async fn resolve_reference(
             && canon.is_file()
             && !canon.starts_with(root)
         {
-            return Ok(Reference::Outside);
+            return Ok(Reference::Outside(canon));
         }
     }
     if clean.is_empty() || clean.starts_with(['/', '\\']) || Path::new(clean).is_absolute() {
@@ -424,16 +424,28 @@ pub async fn read_thread_file(
     source: &str,
     max_bytes: u64,
     if_version: Option<&str>,
+    outside: &crate::files_outside::OutsideAccess,
 ) -> Result<kybern_protocol::methods::FilesReadResult> {
     let root = tokio::fs::canonicalize(cwd).await?;
     match resolve_reference(indexes, cwd, &root, &mut None, source).await? {
         Reference::Found(relative) => read_file(&root, &relative, max_bytes.clamp(1, MAX_WRITE_BYTES as u64), if_version).await,
-        Reference::Outside => {
-            Err(anyhow::anyhow!("This file is outside the conversation's workspace. Ask the agent to copy it into the workspace."))
+        // A file the user allowed opens read-only; nothing else outside the workspace does.
+        Reference::Outside(file) if outside.allows(&file) => {
+            crate::files_outside::read_outside(&file, max_bytes.clamp(1, MAX_WRITE_BYTES as u64), if_version).await
         }
-        Reference::Refused(reason) => Err(anyhow::anyhow!(reason)),
-        Reference::Ambiguous => Err(anyhow::anyhow!("Several files match this path. Ask the agent for the path from the workspace root.")),
-        Reference::Missing => Err(anyhow::anyhow!("File not found. Check the path or ask the agent to recreate it.")),
+        other => Err(reference_error(other)),
+    }
+}
+
+/// Why a reference does not open.
+pub(crate) fn reference_error(reference: Reference) -> anyhow::Error {
+    match reference {
+        Reference::Found(_) | Reference::Missing => anyhow::anyhow!("File not found. Check the path or ask the agent to recreate it."),
+        Reference::Outside(_) => {
+            anyhow::anyhow!("This file is outside the conversation's workspace. Ask the agent to copy it into the workspace.")
+        }
+        Reference::Refused(reason) => anyhow::anyhow!(reason),
+        Reference::Ambiguous => anyhow::anyhow!("Several files match this path. Ask the agent for the path from the workspace root."),
     }
 }
 
@@ -537,6 +549,7 @@ pub async fn read_file(
                 size,
                 version: Some(version),
                 unchanged: true,
+                read_only: false,
             });
         }
         let mut file = std::fs::File::open(&path)?;
@@ -551,6 +564,7 @@ pub async fn read_file(
             size,
             version: Some(version),
             unchanged: false,
+            read_only: false,
         })
     })
     .await?
@@ -692,6 +706,8 @@ pub async fn browse_directories(path: Option<String>) -> anyhow::Result<kybern_p
 mod tests {
     use std::sync::Arc;
 
+    use crate::files_outside::OutsideAccess;
+
     use super::{
         CachedIndex, FileIndexCache, MAX_INDEX_SLOTS, WriteConflict, list_dir, rank, read_file, read_thread_file, resolve_thread_files,
         split_location, write_file, write_thread_file,
@@ -763,12 +779,14 @@ mod tests {
         // Thread files resolve against the cwd, absolute paths inside it included.
         let absolute = std::fs::canonicalize(root.join("src/app.ts")).unwrap();
         let indexes = FileIndexCache::default();
-        let thread = read_thread_file(&indexes, &root, &absolute.to_string_lossy(), 1024, None).await.unwrap();
+        let thread = read_thread_file(&indexes, &root, &absolute.to_string_lossy(), 1024, None, &OutsideAccess::none()).await.unwrap();
         let saved = write_thread_file(&root, &absolute.to_string_lossy(), "thread".into(), thread.version.as_deref()).await.unwrap();
         assert_eq!(std::fs::read_to_string(&absolute).unwrap(), "thread");
         assert!(write_thread_file(&root, "../outside.ts", "x".into(), None).await.is_err());
         assert!(write_thread_file(&root, "src/app.ts", "x".into(), thread.version.as_deref()).await.unwrap_err().is::<WriteConflict>());
-        assert!(read_thread_file(&indexes, &root, "src/app.ts", 1024, Some(&saved.version)).await.unwrap().unchanged);
+        assert!(
+            read_thread_file(&indexes, &root, "src/app.ts", 1024, Some(&saved.version), &OutsideAccess::none()).await.unwrap().unchanged
+        );
         std::fs::remove_dir_all(base).unwrap();
     }
 
@@ -854,7 +872,12 @@ mod tests {
         let indexes = FileIndexCache::default();
         let read = |source: &str| {
             let (indexes, source) = (indexes.clone(), source.to_string());
-            async move { read_thread_file(&indexes, dir, &source, 1024, None).await.map(|file| file.content).map_err(|e| e.to_string()) }
+            async move {
+                read_thread_file(&indexes, dir, &source, 1024, None, &OutsideAccess::none())
+                    .await
+                    .map(|file| file.content)
+                    .map_err(|e| e.to_string())
+            }
         };
 
         // Chat links, project reads and saves all open agent dot-folders, and generated output opens to read.
@@ -967,7 +990,12 @@ mod tests {
         let indexes = FileIndexCache::default();
         let read = |source: String| {
             let indexes = indexes.clone();
-            async move { read_thread_file(&indexes, dir, &source, 1024, None).await.map(|file| file.content).map_err(|e| e.to_string()) }
+            async move {
+                read_thread_file(&indexes, dir, &source, 1024, None, &OutsideAccess::none())
+                    .await
+                    .map(|file| file.content)
+                    .map_err(|e| e.to_string())
+            }
         };
         let rows = "// apps/gpuix/src/sidebar/rows.tsx";
         // From the root, with and without a location.

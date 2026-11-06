@@ -145,7 +145,7 @@ impl AgentSession for LentSession {
                     })
                     .await;
             } else {
-                let _ = tx.send(DriverEvent::TurnFailed { error: REVOKED.into() }).await;
+                let _ = tx.send(DriverEvent::TurnFailed { error: REVOKED.into(), problem: None }).await;
             }
         });
         Ok(())

@@ -27,6 +27,7 @@ import { radius, space, useTheme } from "../ui/theme";
 import { showToast } from "../ui/Toast";
 import { NoteView } from "./NoteView";
 import { ProjectCoordinatorSection } from "./ProjectCoordinator";
+import { useLists } from "../state/useLists";
 
 /** Rows shown before "Show all in Notes", like the desktop dock. */
 const MEMORY_LIMIT = 50;
@@ -141,7 +142,9 @@ const NoteRow = memo(function NoteRow({ note, threads }: { note: NoteSummary; th
 /** "Give every thread in this project the brief": `projects.update brief_in_all_threads`. */
 function BriefSwitch({ projectId }: { projectId: string }) {
   const app = useApp();
-  const saved = app.projects.find((project) => project.id === projectId)?.brief_in_all_threads ?? false;
+  // Every machine's projects: the computer the phone is at may be away (#245).
+  const lists = useLists(null);
+  const saved = lists.projects.find((project) => project.id === projectId)?.brief_in_all_threads ?? false;
   // Shown at once; `projects.changed` confirms it, a failure puts it back.
   const [pending, setPending] = useState<boolean | null>(null);
   const [error, setError] = useState("");
@@ -172,8 +175,10 @@ function BriefSwitch({ projectId }: { projectId: string }) {
 /** Which space the project is in; move it from the value menu. Hidden on computers without spaces. */
 function SpaceRow({ projectId }: { projectId: string }) {
   const app = useApp();
+  // Every machine's projects: the computer the phone is at may be away (#245).
+  const lists = useLists(null);
   const spaces = useSpaces();
-  const project = app.projects.find((item) => item.id === projectId);
+  const project = lists.projects.find((item) => item.id === projectId);
   const current = spaces.spaces.find((item) => item.id === project?.space_id);
   const [error, setError] = useState("");
   if (!project || !spaces.supported || !current) return null;

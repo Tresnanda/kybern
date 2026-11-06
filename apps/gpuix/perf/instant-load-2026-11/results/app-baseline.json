@@ -1,0 +1,1963 @@
+{
+  "label": "baseline",
+  "daemon": "kybernd.exe",
+  "rounds": 5,
+  "launches": 2,
+  "at": "2026-11-05T17:11:54.903Z",
+  "summary": {
+    "launch1-lists-ready": {
+      "n": 1,
+      "medianMs": 5055,
+      "p95Ms": 5055,
+      "from": ""
+    },
+    "launch1-restore-long-content": {
+      "n": 1,
+      "medianMs": 3877,
+      "p95Ms": 3877,
+      "from": "daemon"
+    },
+    "launch1-restore-long-frame": {
+      "n": 1,
+      "medianMs": 3891,
+      "p95Ms": 3891,
+      "from": ""
+    },
+    "launch1-click-short": {
+      "n": 5,
+      "medianMs": 92,
+      "p95Ms": 130,
+      "frameMedianMs": 103,
+      "paintedMedianMs": 318,
+      "paintedP95Ms": 544,
+      "from": "daemon"
+    },
+    "launch1-click-medium": {
+      "n": 5,
+      "medianMs": 69,
+      "p95Ms": 112,
+      "frameMedianMs": 90,
+      "paintedMedianMs": 361,
+      "paintedP95Ms": 767,
+      "from": "daemon"
+    },
+    "launch1-click-long": {
+      "n": 5,
+      "medianMs": 58,
+      "p95Ms": 208,
+      "frameMedianMs": 88,
+      "paintedMedianMs": 335,
+      "paintedP95Ms": 605,
+      "from": "daemon"
+    },
+    "launch2-lists-ready": {
+      "n": 1,
+      "medianMs": 4578,
+      "p95Ms": 4578,
+      "from": ""
+    },
+    "launch2-restore-long-content": {
+      "n": 1,
+      "medianMs": 4147,
+      "p95Ms": 4147,
+      "from": "daemon"
+    },
+    "launch2-restore-long-frame": {
+      "n": 1,
+      "medianMs": 4166,
+      "p95Ms": 4166,
+      "from": ""
+    },
+    "launch2-click-short": {
+      "n": 5,
+      "medianMs": 76,
+      "p95Ms": 82,
+      "frameMedianMs": 91,
+      "paintedMedianMs": 258,
+      "paintedP95Ms": 331,
+      "from": "daemon"
+    },
+    "launch2-click-medium": {
+      "n": 5,
+      "medianMs": 62,
+      "p95Ms": 72,
+      "frameMedianMs": 82,
+      "paintedMedianMs": 326,
+      "paintedP95Ms": 346,
+      "from": "daemon"
+    },
+    "launch2-click-long": {
+      "n": 5,
+      "medianMs": 59,
+      "p95Ms": 82,
+      "frameMedianMs": 82,
+      "paintedMedianMs": 310,
+      "paintedP95Ms": 418,
+      "from": "daemon"
+    }
+  },
+  "results": [
+    {
+      "case": "launch1-lists-ready",
+      "ms": 5055
+    },
+    {
+      "case": "launch1-restore-long-content",
+      "ms": 3877,
+      "from": "daemon"
+    },
+    {
+      "case": "launch1-restore-long-frame",
+      "ms": 3891
+    },
+    {
+      "case": "launch1-click-short",
+      "ms": 100,
+      "frameMs": 119,
+      "paintedMs": 339,
+      "from": "daemon",
+      "blocks": 17,
+      "round": 0
+    },
+    {
+      "case": "launch1-click-medium",
+      "ms": 83,
+      "frameMs": 97,
+      "paintedMs": 399,
+      "from": "daemon",
+      "blocks": 120,
+      "round": 0
+    },
+    {
+      "case": "launch1-click-long",
+      "ms": 83,
+      "frameMs": 103,
+      "paintedMs": 400,
+      "from": "daemon",
+      "blocks": 120,
+      "round": 0
+    },
+    {
+      "case": "launch1-click-short",
+      "ms": 55,
+      "frameMs": 77,
+      "paintedMs": 287,
+      "from": "daemon",
+      "blocks": 17,
+      "round": 1
+    },
+    {
+      "case": "launch1-click-medium",
+      "ms": 56,
+      "frameMs": 80,
+      "paintedMs": 306,
+      "from": "daemon",
+      "blocks": 120,
+      "round": 1
+    },
+    {
+      "case": "launch1-click-long",
+      "ms": 58,
+      "frameMs": 88,
+      "paintedMs": 335,
+      "from": "daemon",
+      "blocks": 120,
+      "round": 1
+    },
+    {
+      "case": "launch1-click-short",
+      "ms": 52,
+      "frameMs": 79,
+      "paintedMs": 255,
+      "from": "daemon",
+      "blocks": 17,
+      "round": 2
+    },
+    {
+      "case": "launch1-click-medium",
+      "ms": 58,
+      "frameMs": 69,
+      "paintedMs": 314,
+      "from": "daemon",
+      "blocks": 120,
+      "round": 2
+    },
+    {
+      "case": "launch1-click-long",
+      "ms": 53,
+      "frameMs": 70,
+      "paintedMs": 297,
+      "from": "daemon",
+      "blocks": 120,
+      "round": 2
+    },
+    {
+      "case": "launch1-click-short",
+      "ms": 92,
+      "frameMs": 103,
+      "paintedMs": 318,
+      "from": "daemon",
+      "blocks": 17,
+      "round": 3
+    },
+    {
+      "case": "launch1-click-medium",
+      "ms": 112,
+      "frameMs": 124,
+      "paintedMs": 767,
+      "from": "daemon",
+      "blocks": 120,
+      "round": 3
+    },
+    {
+      "case": "launch1-click-long",
+      "ms": 208,
+      "frameMs": 245,
+      "paintedMs": 605,
+      "from": "daemon",
+      "blocks": 120,
+      "round": 3
+    },
+    {
+      "case": "launch1-click-short",
+      "ms": 130,
+      "frameMs": 140,
+      "paintedMs": 544,
+      "from": "daemon",
+      "blocks": 17,
+      "round": 4
+    },
+    {
+      "case": "launch1-click-medium",
+      "ms": 69,
+      "frameMs": 90,
+      "paintedMs": 361,
+      "from": "daemon",
+      "blocks": 120,
+      "round": 4
+    },
+    {
+      "case": "launch1-click-long",
+      "ms": 52,
+      "frameMs": 78,
+      "paintedMs": 287,
+      "from": "daemon",
+      "blocks": 120,
+      "round": 4
+    },
+    {
+      "case": "launch2-lists-ready",
+      "ms": 4578
+    },
+    {
+      "case": "launch2-restore-long-content",
+      "ms": 4147,
+      "from": "daemon"
+    },
+    {
+      "case": "launch2-restore-long-frame",
+      "ms": 4166
+    },
+    {
+      "case": "launch2-click-short",
+      "ms": 82,
+      "frameMs": 172,
+      "paintedMs": 331,
+      "from": "daemon",
+      "blocks": 17,
+      "round": 0
+    },
+    {
+      "case": "launch2-click-medium",
+      "ms": 72,
+      "frameMs": 82,
+      "paintedMs": 346,
+      "from": "daemon",
+      "blocks": 120,
+      "round": 0
+    },
+    {
+      "case": "launch2-click-long",
+      "ms": 59,
+      "frameMs": 80,
+      "paintedMs": 305,
+      "from": "daemon",
+      "blocks": 120,
+      "round": 0
+    },
+    {
+      "case": "launch2-click-short",
+      "ms": 73,
+      "frameMs": 90,
+      "paintedMs": 258,
+      "from": "daemon",
+      "blocks": 17,
+      "round": 1
+    },
+    {
+      "case": "launch2-click-medium",
+      "ms": 50,
+      "frameMs": 64,
+      "paintedMs": 316,
+      "from": "daemon",
+      "blocks": 120,
+      "round": 1
+    },
+    {
+      "case": "launch2-click-long",
+      "ms": 82,
+      "frameMs": 96,
+      "paintedMs": 346,
+      "from": "daemon",
+      "blocks": 120,
+      "round": 1
+    },
+    {
+      "case": "launch2-click-short",
+      "ms": 76,
+      "frameMs": 91,
+      "paintedMs": 257,
+      "from": "daemon",
+      "blocks": 17,
+      "round": 2
+    },
+    {
+      "case": "launch2-click-medium",
+      "ms": 67,
+      "frameMs": 88,
+      "paintedMs": 338,
+      "from": "daemon",
+      "blocks": 120,
+      "round": 2
+    },
+    {
+      "case": "launch2-click-long",
+      "ms": 54,
+      "frameMs": 81,
+      "paintedMs": 310,
+      "from": "daemon",
+      "blocks": 120,
+      "round": 2
+    },
+    {
+      "case": "launch2-click-short",
+      "ms": 81,
+      "frameMs": 99,
+      "paintedMs": 273,
+      "from": "daemon",
+      "blocks": 17,
+      "round": 3
+    },
+    {
+      "case": "launch2-click-medium",
+      "ms": 62,
+      "frameMs": 88,
+      "paintedMs": 326,
+      "from": "daemon",
+      "blocks": 120,
+      "round": 3
+    },
+    {
+      "case": "launch2-click-long",
+      "ms": 56,
+      "frameMs": 90,
+      "paintedMs": 292,
+      "from": "daemon",
+      "blocks": 120,
+      "round": 3
+    },
+    {
+      "case": "launch2-click-short",
+      "ms": 52,
+      "frameMs": 79,
+      "paintedMs": 237,
+      "from": "daemon",
+      "blocks": 17,
+      "round": 4
+    },
+    {
+      "case": "launch2-click-medium",
+      "ms": 46,
+      "frameMs": 65,
+      "paintedMs": 296,
+      "from": "daemon",
+      "blocks": 120,
+      "round": 4
+    },
+    {
+      "case": "launch2-click-long",
+      "ms": 64,
+      "frameMs": 82,
+      "paintedMs": 418,
+      "from": "daemon",
+      "blocks": 120,
+      "round": 4
+    }
+  ],
+  "timelines": [
+    {
+      "spawnedAt": 1793898678619,
+      "marks": [
+        {
+          "phase": "first-module",
+          "at": 1793898680946
+        },
+        {
+          "phase": "modules-ready",
+          "at": 1793898681049
+        },
+        {
+          "phase": "endpoint-start",
+          "at": 1793898681052
+        },
+        {
+          "phase": "workspace-module-ready",
+          "at": 1793898681159
+        },
+        {
+          "phase": "render-start",
+          "at": 1793898681160
+        },
+        {
+          "phase": "fonts-start",
+          "at": 1793898681959
+        },
+        {
+          "phase": "fonts-ready",
+          "at": 1793898681973
+        },
+        {
+          "phase": "render-returned",
+          "at": 1793898681982
+        },
+        {
+          "phase": "endpoint-ready",
+          "at": 1793898682301
+        },
+        {
+          "phase": "connection",
+          "at": 1793898682303,
+          "status": "connecting"
+        },
+        {
+          "phase": "connection",
+          "at": 1793898682411,
+          "status": "open"
+        },
+        {
+          "phase": "lists-start",
+          "at": 1793898682412
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898682414,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "source": "select"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898682415,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898682494,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "entries": 120
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898682495,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "blocks": 120
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898682496,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "from": "daemon",
+          "ms": 82,
+          "blocks": 120
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898682496,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "entries": 120
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898682510,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "from": "daemon",
+          "ms": 96
+        },
+        {
+          "phase": "lists-ready",
+          "at": 1793898683674,
+          "projects": 20,
+          "threads": 1000
+        },
+        {
+          "phase": "lists-start",
+          "at": 1793898683700
+        },
+        {
+          "phase": "sidebar-bodies-committed",
+          "at": 1793898683932,
+          "slots": 222,
+          "retainedSlots": 45,
+          "bodies": 45
+        },
+        {
+          "phase": "lists-ready",
+          "at": 1793898684894,
+          "projects": 20,
+          "threads": 1000
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898685342,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898685346,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898685441,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "entries": 17
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898685441,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "blocks": 17
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898685442,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "from": "daemon",
+          "ms": 100,
+          "blocks": 17
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898685442,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "entries": 17
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898685461,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "from": "daemon",
+          "ms": 119
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898686096,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898686100,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898686176,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "entries": 120
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898686177,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "blocks": 120
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898686179,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "from": "daemon",
+          "ms": 83,
+          "blocks": 120
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898686180,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "entries": 120
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898686193,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "from": "daemon",
+          "ms": 97
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898686952,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898686954,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898687031,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "entries": 120
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898687031,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "blocks": 120
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898687035,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "from": "daemon",
+          "ms": 83,
+          "blocks": 120
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898687035,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "entries": 120
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898687055,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "from": "daemon",
+          "ms": 103
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898687746,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898687750,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898687800,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "entries": 17
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898687800,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "blocks": 17
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898687801,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "from": "daemon",
+          "ms": 55,
+          "blocks": 17
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898687801,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "entries": 17
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898687823,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "from": "daemon",
+          "ms": 77
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898688441,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898688445,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898688496,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "entries": 120
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898688497,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "blocks": 120
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898688497,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "from": "daemon",
+          "ms": 56,
+          "blocks": 120
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898688497,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "entries": 120
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898688521,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "from": "daemon",
+          "ms": 80
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898689200,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898689204,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898689257,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "entries": 120
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898689257,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "blocks": 120
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898689258,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "from": "daemon",
+          "ms": 58,
+          "blocks": 120
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898689258,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "entries": 120
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898689289,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "from": "daemon",
+          "ms": 88
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898689960,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898689963,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898690011,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "entries": 17
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898690011,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "blocks": 17
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898690012,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "from": "daemon",
+          "ms": 52,
+          "blocks": 17
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898690012,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "entries": 17
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898690039,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "from": "daemon",
+          "ms": 79
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898690639,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898690642,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898690696,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "entries": 120
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898690696,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "blocks": 120
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898690697,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "from": "daemon",
+          "ms": 58,
+          "blocks": 120
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898690697,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "entries": 120
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898690708,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "from": "daemon",
+          "ms": 69
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898691368,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898691370,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898691419,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "entries": 120
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898691419,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "blocks": 120
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898691420,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "from": "daemon",
+          "ms": 53,
+          "blocks": 120
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898691420,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "entries": 120
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898691437,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "from": "daemon",
+          "ms": 70
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898692110,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898692140,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898692201,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "entries": 17
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898692201,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "blocks": 17
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898692202,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "from": "daemon",
+          "ms": 92,
+          "blocks": 17
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898692202,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "entries": 17
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898692213,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "from": "daemon",
+          "ms": 103
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898692918,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898692921,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898693029,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "entries": 120
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898693029,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "blocks": 120
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898693030,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "from": "daemon",
+          "ms": 112,
+          "blocks": 120
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898693030,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "entries": 120
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898693042,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "from": "daemon",
+          "ms": 124
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898694104,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898694205,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898694311,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "entries": 120
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898694312,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "blocks": 120
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898694312,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "from": "daemon",
+          "ms": 208,
+          "blocks": 120
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898694312,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "entries": 120
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898694349,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "from": "daemon",
+          "ms": 245
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898695172,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898695177,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898695302,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "entries": 17
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898695302,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "blocks": 17
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898695302,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "from": "daemon",
+          "ms": 130,
+          "blocks": 17
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898695303,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "entries": 17
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898695312,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "from": "daemon",
+          "ms": 140
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898696166,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898696169,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898696234,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "entries": 120
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898696234,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "blocks": 120
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898696235,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "from": "daemon",
+          "ms": 69,
+          "blocks": 120
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898696235,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "entries": 120
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898696256,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "from": "daemon",
+          "ms": 90
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898696904,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898696907,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898696955,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "entries": 120
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898696955,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "blocks": 120
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898696956,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "from": "daemon",
+          "ms": 52,
+          "blocks": 120
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898696956,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "entries": 120
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898696982,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "from": "daemon",
+          "ms": 78
+        }
+      ]
+    },
+    {
+      "spawnedAt": 1793898697597,
+      "marks": [
+        {
+          "phase": "first-module",
+          "at": 1793898699620
+        },
+        {
+          "phase": "modules-ready",
+          "at": 1793898699858
+        },
+        {
+          "phase": "endpoint-start",
+          "at": 1793898699864
+        },
+        {
+          "phase": "workspace-module-ready",
+          "at": 1793898700012
+        },
+        {
+          "phase": "render-start",
+          "at": 1793898700013
+        },
+        {
+          "phase": "fonts-start",
+          "at": 1793898701110
+        },
+        {
+          "phase": "fonts-ready",
+          "at": 1793898701134
+        },
+        {
+          "phase": "render-returned",
+          "at": 1793898701174
+        },
+        {
+          "phase": "endpoint-ready",
+          "at": 1793898701562
+        },
+        {
+          "phase": "connection",
+          "at": 1793898701564,
+          "status": "connecting"
+        },
+        {
+          "phase": "connection",
+          "at": 1793898701657,
+          "status": "open"
+        },
+        {
+          "phase": "lists-start",
+          "at": 1793898701658
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898701660,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "source": "select"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898701661,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898701740,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "entries": 120
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898701742,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "blocks": 120
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898701744,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "from": "daemon",
+          "ms": 84,
+          "blocks": 120
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898701744,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "entries": 120
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898701763,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "from": "daemon",
+          "ms": 103
+        },
+        {
+          "phase": "lists-ready",
+          "at": 1793898702175,
+          "projects": 20,
+          "threads": 1000
+        },
+        {
+          "phase": "lists-start",
+          "at": 1793898702187
+        },
+        {
+          "phase": "sidebar-bodies-committed",
+          "at": 1793898702572,
+          "slots": 222,
+          "retainedSlots": 45,
+          "bodies": 45
+        },
+        {
+          "phase": "lists-ready",
+          "at": 1793898703002,
+          "projects": 20,
+          "threads": 1000
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898703792,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898703795,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898703873,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "entries": 17
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898703873,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "blocks": 17
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898703874,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "from": "daemon",
+          "ms": 82,
+          "blocks": 17
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898703875,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "entries": 17
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898703964,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "from": "daemon",
+          "ms": 172
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898704556,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898704560,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898704627,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "entries": 120
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898704627,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "blocks": 120
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898704628,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "from": "daemon",
+          "ms": 72,
+          "blocks": 120
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898704628,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "entries": 120
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898704638,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "from": "daemon",
+          "ms": 82
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898705321,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898705324,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898705379,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "entries": 120
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898705379,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "blocks": 120
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898705380,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "from": "daemon",
+          "ms": 59,
+          "blocks": 120
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898705380,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "entries": 120
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898705401,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "from": "daemon",
+          "ms": 80
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898706043,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898706068,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898706116,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "entries": 17
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898706116,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "blocks": 17
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898706116,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "from": "daemon",
+          "ms": 73,
+          "blocks": 17
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898706116,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "entries": 17
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898706133,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "from": "daemon",
+          "ms": 90
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898706719,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898706722,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898706768,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "entries": 120
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898706768,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "blocks": 120
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898706769,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "from": "daemon",
+          "ms": 50,
+          "blocks": 120
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898706769,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "entries": 120
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898706783,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "from": "daemon",
+          "ms": 64
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898707465,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898707493,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898707546,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "entries": 120
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898707546,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "blocks": 120
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898707547,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "from": "daemon",
+          "ms": 82,
+          "blocks": 120
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898707547,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "entries": 120
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898707561,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "from": "daemon",
+          "ms": 96
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898708230,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898708255,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898708306,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "entries": 17
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898708306,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "blocks": 17
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898708306,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "from": "daemon",
+          "ms": 76,
+          "blocks": 17
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898708306,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "entries": 17
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898708321,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "from": "daemon",
+          "ms": 91
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898708936,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898708938,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898709002,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "entries": 120
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898709003,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "blocks": 120
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898709003,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "from": "daemon",
+          "ms": 67,
+          "blocks": 120
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898709003,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "entries": 120
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898709024,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "from": "daemon",
+          "ms": 88
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898709680,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898709683,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898709733,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "entries": 120
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898709733,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "blocks": 120
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898709734,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "from": "daemon",
+          "ms": 54,
+          "blocks": 120
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898709734,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "entries": 120
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898709761,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "from": "daemon",
+          "ms": 81
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898710424,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898710452,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898710503,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "entries": 17
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898710504,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "blocks": 17
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898710505,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "from": "daemon",
+          "ms": 81,
+          "blocks": 17
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898710505,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "entries": 17
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898710523,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "from": "daemon",
+          "ms": 99
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898711120,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898711124,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898711182,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "entries": 120
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898711182,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "blocks": 120
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898711182,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "from": "daemon",
+          "ms": 62,
+          "blocks": 120
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898711183,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "entries": 120
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898711208,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "from": "daemon",
+          "ms": 88
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898711874,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898711878,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898711929,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "entries": 120
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898711930,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "blocks": 120
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898711930,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "from": "daemon",
+          "ms": 56,
+          "blocks": 120
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898711930,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "entries": 120
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898711964,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "from": "daemon",
+          "ms": 90
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898712585,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898712588,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898712636,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "entries": 17
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898712636,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "blocks": 17
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898712637,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "from": "daemon",
+          "ms": 52,
+          "blocks": 17
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898712637,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "entries": 17
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898712664,
+          "id": "549e58b8-b8ea-4963-9e04-a19654e02dfa",
+          "from": "daemon",
+          "ms": 79
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898713242,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898713245,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898713287,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "entries": 120
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898713288,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "blocks": 120
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898713288,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "from": "daemon",
+          "ms": 46,
+          "blocks": 120
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898713288,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "entries": 120
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898713307,
+          "id": "1c6c4655-3e02-45a3-80a0-332b971040f2",
+          "from": "daemon",
+          "ms": 65
+        },
+        {
+          "phase": "thread-click",
+          "at": 1793898714098,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "source": "click"
+        },
+        {
+          "phase": "thread-start",
+          "at": 1793898714101,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb"
+        },
+        {
+          "phase": "thread-page-ready",
+          "at": 1793898714161,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "entries": 120
+        },
+        {
+          "phase": "thread-projected",
+          "at": 1793898714161,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "blocks": 120
+        },
+        {
+          "phase": "thread-first-content",
+          "at": 1793898714162,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "from": "daemon",
+          "ms": 64,
+          "blocks": 120
+        },
+        {
+          "phase": "thread-ready",
+          "at": 1793898714162,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "entries": 120
+        },
+        {
+          "phase": "thread-content-frame",
+          "at": 1793898714180,
+          "id": "b11dd0b9-b61f-4388-82d5-9e6ebcc3bffb",
+          "from": "daemon",
+          "ms": 82
+        }
+      ]
+    }
+  ]
+}

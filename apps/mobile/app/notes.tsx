@@ -36,7 +36,7 @@ import { useProjectScope } from "../src/state/projectScope";
 import { scopeLabel } from "../src/state/scopeModel";
 import { count } from "../src/state/format";
 import { isFreeChatProject, type NoteSummary } from "../src/state/protocol";
-import { activeEnvironment, useApp } from "../src/state/runtime";
+import { activeEnvironment, useApp, useNetworkLive } from "../src/state/runtime";
 import { useInSpace } from "../src/state/spaces";
 import { relativeTime } from "../src/state/threadList";
 import {
@@ -51,6 +51,7 @@ import { PullRefresh } from "../src/ui/PullRefresh";
 import { ListSearch } from "../src/ui/Search";
 import { CONTENT_MAX_WIDTH, space, useTheme } from "../src/ui/theme";
 import { Toast } from "../src/ui/Toast";
+import { useLists } from "../src/state/useLists";
 
 type Row =
   | {
@@ -211,10 +212,13 @@ function UndoBar({ bottom }: { bottom: number }) {
 export default function Notes() {
   const { projectId } = useLocalSearchParams<{ projectId?: string }>();
   const app = useApp();
+  // Every machine's projects: the computer the phone is at may be away (#245).
+  const lists = useLists(null);
   const { notes, loaded, unsupported, error, undo } = useNotes();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
-  const connected = app.status === "open";
+  // Notes read and write through the network: another member answers while this computer is away.
+  const connected = useNetworkLive();
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -274,7 +278,7 @@ export default function Notes() {
     if (!hasNotes) return [];
     const scopedNotes = scopeNotes(notes, scope, inSpace);
     const { notes: visible, snippets } = filterNotes(scopedNotes, query, hits);
-    const groups = groupNotes(visible, app.projects, isFreeChatProject);
+    const groups = groupNotes(visible, lists.projects, isFreeChatProject);
     const out: Row[] = [];
     const header = (row: Omit<Extract<Row, { kind: "header" }>, "kind" | "first">) =>
       out.push({ ...row, kind: "header", first: out.length === 0 });
@@ -297,7 +301,7 @@ export default function Notes() {
     const placeOf = (n: NoteSummary) =>
       n.scope === "global"
         ? "Global"
-        : (app.projects.find((p) => p.id === n.project_id)?.name ??
+        : (lists.projects.find((p) => p.id === n.project_id)?.name ??
           (n.project_id && isFreeChatProject(n.project_id) ? "Chats" : "Project"));
     const add = (title: string, project?: string) =>
       connected
@@ -345,7 +349,7 @@ export default function Notes() {
       out.push({
         key: "e:scope",
         kind: "scopeEmpty",
-        text: `No notes in ${scopeLabel(scope, app.projects)} yet.`,
+        text: `No notes in ${scopeLabel(scope, lists.projects)} yet.`,
         project: scopeProject,
       });
     if (groups.empty.length && !searching)
@@ -380,7 +384,7 @@ export default function Notes() {
       }
     }
     return out;
-  }, [notes, hits, query, open, app.projects, scope, scopeProject, hasNotes, connected, searching, newNote, inSpace]);
+  }, [notes, hits, query, open, lists.projects, scope, scopeProject, hasNotes, connected, searching, newNote, inSpace]);
 
   const nothing = loaded && !unsupported && !hasNotes;
   const noMatch = searching && !rows.some((r) => r.kind === "note");

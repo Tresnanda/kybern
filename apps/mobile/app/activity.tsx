@@ -8,12 +8,15 @@ import { ListRow, SectionHeader } from "../src/ui/List";
 import { Empty } from "../src/ui/primitives";
 import { StatusGlyph } from "../src/ui/TaskGlyphs";
 import { CONTENT_MAX_WIDTH, gutter, space, useTheme } from "../src/ui/theme";
+import { useLists } from "../src/state/useLists";
 
 const openThread = (id: string) => router.push({ pathname: "/thread/[id]", params: { id } });
 
 /** What needs a decision, then what is running. One empty state when there is neither. */
 export default function Activity() {
   const app = useApp();
+  // Every machine's projects: the computer the phone is at may be away (#245).
+  const lists = useLists(null);
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -77,7 +80,7 @@ export default function Activity() {
           {running.map((t, index) => {
             const a = app.activity.find((x) => x.thread_id === t.id);
             const detail = [
-              app.projects.find((p) => p.id === t.project_id)?.name,
+              lists.projects.find((p) => p.id === t.project_id)?.name,
               a?.active_agents ? count(a.active_agents, "agent") : "",
               a?.active_processes ? count(a.active_processes, "process", "processes") : "",
               a?.active_monitors ? count(a.active_monitors, "monitor") : "",

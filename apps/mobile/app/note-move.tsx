@@ -9,11 +9,14 @@ import { InsetGroup, ListRow } from "../src/ui/List";
 import { Empty, Page, T } from "../src/ui/primitives";
 import { ProjectDot } from "../src/ui/TaskGlyphs";
 import { space, useTheme } from "../src/ui/theme";
+import { useLists } from "../src/state/useLists";
 
 /** Choose where a note lives: Global, or one of the computer's projects. */
 export default function MoveNote() {
   const { id } = useLocalSearchParams<{ id?: string }>();
   const app = useApp();
+  // Every machine's projects: the computer the phone is at may be away (#245).
+  const lists = useLists(null);
   const { colors } = useTheme();
   const { notes } = useNotes();
   const note = notes.find((n) => n.id === id);
@@ -39,7 +42,7 @@ export default function MoveNote() {
       </Page>
     );
   const current = note.scope === "project" ? note.project_id : null;
-  const projects = app.projects.filter((p) => !isFreeChatProject(p.id));
+  const projects = lists.projects.filter((p) => !isFreeChatProject(p.id));
   return (
     <Page grouped>
       <Stack.Screen options={{ headerStyle: { backgroundColor: colors.grouped } }} />

@@ -43,6 +43,8 @@ export type PickerTab =
       multi: boolean
       /** The selected tab of a multi-account agent shows this text beside its mark. */
       label: string | null
+      /** The row's name in the picker's rail: the agent, or for a multi-account agent its account ("Claude CLI", "Work"). */
+      rail: string
       tooltip: string
       ariaLabel: string
       /** The account can't send until it is signed in again: selecting it opens the sign-in sheet. */
@@ -122,6 +124,7 @@ export function pickerTabs({
         selected,
         multi,
         label: multi && selected ? (cli ? "CLI" : name) : null,
+        rail: !multi ? agent.display_name : cli ? `${agent.display_name.replace(/ Code$/, "")} CLI` : name,
         tooltip,
         ariaLabel: !agent.available ? `${agent.display_name}, not set up` : signedOutThere ? `${base}, signed out on ${machineName}` : needsSignIn ? `${base}, needs sign-in` : base,
         needsSignIn,

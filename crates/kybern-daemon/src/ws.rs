@@ -217,9 +217,81 @@ struct Subscription {
     include_tool_output: bool,
 }
 
+/// A subscription whose thread has more than this many events after its `after_seq` answers a `gap_snapshot`
+/// request with a snapshot instead of replaying them.
+pub const GAP_SNAPSHOT_EVENTS: u32 = 128;
+/// Likewise for more than this many bytes of event payload after `after_seq`.
+pub const GAP_SNAPSHOT_BYTES: usize = 1024 * 1024;
+
+/// Keeps `threads.get` after `events.subscribe` on one connection. Requests run as concurrent tasks, so a get
+/// sent right after a subscribe could read the event head before the subscribe fixed its own. The read loop
+/// hands each subscribe a ticket (released once its head is read under `delivery`) and each get the number of
+/// tickets issued before it; the get waits until those are released, so its `as_of_seq` is at or after the
+/// head of every subscribe sent earlier on the socket.
+#[derive(Default)]
+struct SubscribeHeads {
+    issued: std::sync::atomic::AtomicU64,
+    pending: tokio::sync::watch::Sender<std::collections::BTreeSet<u64>>,
+}
+
+/// A subscribe's place in the read order; dropping it (on every path) releases waiting gets.
+struct HeadTicket {
+    ticket: u64,
+    heads: Arc<SubscribeHeads>,
+}
+
+impl Drop for HeadTicket {
+    fn drop(&mut self) {
+        self.heads.pending.send_modify(|pending| {
+            pending.remove(&self.ticket);
+        });
+    }
+}
+
+/// Where a request sits in the read order of its connection.
+enum RequestOrder {
+    Unordered,
+    Subscribe(HeadTicket),
+    /// A `threads.get`: wait for the subscribe tickets issued before it.
+    AfterSubscribes(u64),
+}
+
+impl SubscribeHeads {
+    /// Classify a frame in the read loop, before its task is spawned. Cheap substring tests first; the parse
+    /// only runs for candidates.
+    fn order(self: &Arc<Self>, text: &str) -> RequestOrder {
+        use std::sync::atomic::Ordering;
+        if !text.contains("\"events.subscribe\"") && !text.contains("\"threads.get\"") {
+            return RequestOrder::Unordered;
+        }
+        #[derive(serde::Deserialize)]
+        struct Peek<'a> {
+            #[serde(borrow, default)]
+            method: Option<std::borrow::Cow<'a, str>>,
+        }
+        match serde_json::from_str::<Peek>(text).ok().and_then(|peek| peek.method).as_deref() {
+            Some("events.subscribe") => {
+                let ticket = self.issued.fetch_add(1, Ordering::SeqCst);
+                self.pending.send_modify(|pending| {
+                    pending.insert(ticket);
+                });
+                RequestOrder::Subscribe(HeadTicket { ticket, heads: self.clone() })
+            }
+            Some("threads.get") => RequestOrder::AfterSubscribes(self.issued.load(Ordering::SeqCst)),
+            _ => RequestOrder::Unordered,
+        }
+    }
+
+    async fn wait_for_heads_before(&self, issued: u64) {
+        let mut pending = self.pending.subscribe();
+        let _ = pending.wait_for(|pending| pending.first().is_none_or(|oldest| *oldest >= issued)).await;
+    }
+}
+
 pub struct ConnectionCtx {
     pub id: Uuid,
     pub principal: Principal,
+    heads: Arc<SubscribeHeads>,
     /// A replay is a single ordered delivery operation. Live events stay in
     /// the broadcast receiver until acknowledgment and replay are enqueued.
     delivery: Mutex<()>,
@@ -239,7 +311,7 @@ impl ConnectionCtx {
         self.subs.lock().await.remove(&id);
     }
 
-    async fn establish_subscription(&self, state: &AppState, request_id: RpcId, params: Value) {
+    async fn establish_subscription(&self, state: &AppState, request_id: RpcId, params: Value, ticket: Option<HeadTicket>) {
         use kybern_protocol::methods::{EventsSubscribeParams, EventsSubscribeResult};
         let params: EventsSubscribeParams = match serde_json::from_value(if params.is_null() { serde_json::json!({}) } else { params }) {
             Ok(params) => params,
@@ -266,13 +338,20 @@ impl ConnectionCtx {
                 .await;
             return;
         }
+        // The head is fixed: a `threads.get` sent after this subscribe may read now.
+        drop(ticket);
         let include_tool_output = params.include_tool_output.unwrap_or(true);
         let subscription_id = self.subscribe(params.thread_id, head_seq, include_tool_output).await;
-        let result = serde_json::to_value(EventsSubscribeResult { subscription_id, head_seq, replay_ready: true }).unwrap();
+        let snapshot = match (params.thread_id, params.after_seq, params.gap_snapshot) {
+            (Some(thread_id), Some(after), Some(get)) => gap_snapshot(state, thread_id, after, head_seq, get).await,
+            _ => None,
+        };
+        let replay_after = if snapshot.is_some() { None } else { params.after_seq };
+        let result = serde_json::to_value(EventsSubscribeResult { subscription_id, head_seq, replay_ready: true, snapshot }).unwrap();
         if self.out.send(ServerFrame::Response(RpcResponse::ok(request_id, result))).await.is_err() {
             return;
         }
-        if let Some(after) = params.after_seq
+        if let Some(after) = replay_after
             && self.replay(state, subscription_id, params.thread_id, after, head_seq, include_tool_output).await.is_err()
         {
             let _ =
@@ -410,6 +489,39 @@ impl ConnectionCtx {
     }
 }
 
+/// The `gap_snapshot` answer: `None` (replay as before) unless the thread's events after `after` exceed
+/// [`GAP_SNAPSHOT_EVENTS`] or [`GAP_SNAPSHOT_BYTES`]. The snapshot is projected exactly through `head`, so the
+/// subscription's live events (all after `head`) continue it with no gap and no duplicate. A snapshot that
+/// fails to build falls back to the replay.
+async fn gap_snapshot(
+    state: &AppState,
+    thread_id: ThreadId,
+    after: EventSeq,
+    head: EventSeq,
+    mut get: kybern_protocol::methods::ThreadsGetParams,
+) -> Option<Box<kybern_protocol::methods::ThreadsGetResult>> {
+    let store = state.store.clone();
+    let exceeds = tokio::task::spawn_blocking(move || {
+        store.thread_event_gap_exceeds(thread_id, after, head, GAP_SNAPSHOT_EVENTS, GAP_SNAPSHOT_BYTES)
+    })
+    .await;
+    if !matches!(exceeds, Ok(Ok(true))) {
+        return None;
+    }
+    get.thread_id = thread_id;
+    get.through_seq = Some(head);
+    match crate::rpc::thread_snapshot(state, get).await {
+        Ok(mut snapshot) => {
+            snapshot.as_of_seq = Some(head);
+            Some(Box::new(snapshot))
+        }
+        Err(error) => {
+            tracing::debug!(%thread_id, error = %error.message, "gap snapshot failed; replaying instead");
+            None
+        }
+    }
+}
+
 /// Counts one open connection for the idle-exit decision; released on drop so
 /// every exit path, including panics, is covered.
 struct ConnectionSlot(AppState);
@@ -441,6 +553,7 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     let ctx = Arc::new(ConnectionCtx {
         id: Uuid::now_v7(),
         principal,
+        heads: Arc::new(SubscribeHeads::default()),
         delivery: Mutex::new(()),
         subs: Mutex::new(HashMap::new()),
         terminal_subs: Mutex::new(HashMap::new()),
@@ -480,7 +593,7 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     let input_ctx = ctx.clone();
     let input_lane = tokio::spawn(async move {
         while let Some(text) = input_rx.recv().await {
-            handle_text(&input_state, &input_ctx, &text).await;
+            handle_text(&input_state, &input_ctx, &text, RequestOrder::Unordered).await;
         }
     });
 
@@ -514,12 +627,14 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
                         }
                         let state = state.clone();
                         let ctx = ctx.clone();
+                        // Taken here, in arrival order, before the request runs as its own task.
+                        let order = ctx.heads.order(text.as_str());
                         // Bound producers as well as queued bytes. Do not make a
                         // saturated RPC lane block event/approval delivery.
                         if let Ok(permit) = requests.clone().try_acquire_owned() {
                             tokio::spawn(async move {
                                 let _permit = permit;
-                                handle_text(&state, &ctx, text.as_str()).await;
+                                handle_text(&state, &ctx, text.as_str(), order).await;
                             });
                         } else if let Ok(ClientFrame::Request(request)) = serde_json::from_str(text.as_str()) {
                             let _ = ctx.out.send(ServerFrame::Response(RpcResponse::err(request.id,
@@ -924,7 +1039,7 @@ fn is_terminal_input(text: &str) -> bool {
         && serde_json::from_str::<Value>(text).is_ok_and(|v| v.get("method").and_then(Value::as_str) == Some("terminals.input"))
 }
 
-async fn handle_text(state: &AppState, ctx: &Arc<ConnectionCtx>, text: &str) {
+async fn handle_text(state: &AppState, ctx: &Arc<ConnectionCtx>, text: &str, order: RequestOrder) {
     let frame: ClientFrame = match serde_json::from_str(text) {
         Ok(f) => f,
         Err(e) => {
@@ -947,10 +1062,19 @@ async fn handle_text(state: &AppState, ctx: &Arc<ConnectionCtx>, text: &str) {
             .await;
         return;
     }
+    let ticket = match order {
+        RequestOrder::Subscribe(ticket) => Some(ticket),
+        RequestOrder::AfterSubscribes(issued) => {
+            ctx.heads.wait_for_heads_before(issued).await;
+            None
+        }
+        RequestOrder::Unordered => None,
+    };
     if req.method == "events.subscribe" && ctx.principal.has(Scope::OrchestrationRead) {
-        ctx.establish_subscription(state, req.id, req.params).await;
+        ctx.establish_subscription(state, req.id, req.params, ticket).await;
         return;
     }
+    drop(ticket);
     let result = match scope_for(&req.method) {
         None => Err(RpcError::method_not_found(&req.method)),
         Some(Some(scope)) if !ctx.principal.has(scope) || !effective_scopes(state, &ctx.principal).contains(&scope) => {

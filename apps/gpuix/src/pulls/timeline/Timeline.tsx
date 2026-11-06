@@ -64,7 +64,7 @@ export function Timeline({ projectId, number, repo, review, onSend, viewKey }: {
     <div style={{ ...row, gap: 8, paddingLeft: 24, paddingRight: 24, paddingTop: 16, paddingBottom: 10, flexShrink: 0 }}>
       <Segmented size="sm" aria-label="Timeline filter" value={filter} options={TIMELINE_FILTERS.map(f => ({ value: f.value, label: f.label, ...(review.detail?.timeline_counts || loaded.length ? { count: counts[f.value] } : {}) }))} onChange={v => { setFilter(v as TimelineFilter); if (viewKey) saveView(viewKey, { filter: v }) }} tone="neutral" testId="pr-timeline-filter" />
       <div style={{ flexGrow: 1 }} />
-      <PickerChip size="sm" quiet chevron={false} selected={inline} neutral testId="pr-timeline-inline" onClick={() => { setInline(!inline); if (viewKey) saveView(viewKey, { inline: !inline }) }}>Inline comments</PickerChip>
+      <PickerChip size="sm" square quiet chevron={false} selected={inline} neutral testId="pr-timeline-inline" onClick={() => { setInline(!inline); if (viewKey) saveView(viewKey, { inline: !inline }) }}>Inline comments</PickerChip>
     </div>
     {error && !loaded.length ? <div style={{ padding: 24 }}><Problem error={error} projectId={projectId} noun="this pull request" refresh={review.refresh} /></div> : <virtual-list ref={scroll} {...PR_SCROLL_LAYOUT} testId="pr-timeline-entries" estimatedItemHeight={96} style={{ flexGrow: 1, minHeight: 0 }}>
       {!pr || (loading && !loaded.length) ? <div key="loading" style={{ padding: 24 }}><PrLoading label="Loading timeline…" rows={5} /></div> : items.length === 0 ? <div key="empty" style={{ padding: 24 }}><Label color={t.textSecondary} size={13}>{filter === 'all' ? 'Nothing has happened on this pull request yet.' : `No ${filter} ${hasMore ? 'in what has loaded so far.' : 'on this pull request.'}`}</Label></div> : items.map((item, i) => <TimelineRow key={item.id} item={item} last={i === items.length - 1 && !hasMore && !full} inline={inline} selectable={selectable} selected={selected} onToggle={toggle} onAddress={selectable ? select : undefined} />)}
@@ -112,7 +112,7 @@ function describe(event: PrTimelineEvent): string {
   }
 }
 
-const TimelineRow = memo(function TimelineRow({ item, last, inline, selectable, selected, onToggle, onAddress }: { item: TimelineItem; last: boolean; inline: boolean; selectable: boolean; selected: string[]; onToggle: (finding: Finding) => void; onAddress?: (findings: Finding[]) => void }) {
+export const TimelineRow = memo(function TimelineRow({ item, last, inline, selectable, selected, onToggle, onAddress }: { item: TimelineItem; last: boolean; inline: boolean; selectable: boolean; selected: string[]; onToggle: (finding: Finding) => void; onAddress?: (findings: Finding[]) => void }) {
   const t = useTheme()
   const push = item.type === 'push' ? item : null
   const event = item.type === 'event' ? item.event : null

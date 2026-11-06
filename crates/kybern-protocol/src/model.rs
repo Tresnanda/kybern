@@ -1334,6 +1334,10 @@ pub struct SkillInfo {
     pub scope: SkillScope,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Set on a skill listed from another agent's folder (`skills.list` with `include_other_agents`): the home it
+    /// lives in. Absent on the selected agent's own skills.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<crate::SkillHome>,
 }
 
 fn default_true() -> bool {
@@ -2691,7 +2695,8 @@ pub struct Settings {
     /// longest wait it can set (`kybern_ask_user`).
     pub ask_deadlines: AskDeadlineSettings,
     /// Folders outside a project the user allowed the Preview panel to serve
-    /// files from. Canonical absolute paths; a grant covers descendants.
+    /// files from, and chat links to open read-only (`threads.files.outside`).
+    /// Canonical absolute paths; a grant covers descendants.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub preview_allowed_folders: Vec<String>,
     /// Joining and staying joined to the machine network.

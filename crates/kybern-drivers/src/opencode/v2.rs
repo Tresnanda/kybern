@@ -191,6 +191,7 @@ fn parse_skills(entries: &[Value], cwd: &Path) -> Vec<SkillInfo> {
                 path: path.to_string(),
                 scope,
                 enabled: true,
+                home: None,
             })
         })
         .collect();

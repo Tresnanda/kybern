@@ -41,13 +41,18 @@ import {
   newChats,
   refresh,
   rpc,
+  threadMachine,
   useApp,
   useMachineView,
   useNewChat,
   useThread,
+  useThreadConnection,
 } from "../../src/state/runtime";
 import type { ProblemModel } from "../../src/state/problems";
 import { ProblemState } from "../../src/ui/Problem";
+import { useLists } from "../../src/state/useLists";
+import { markThreadContent } from "../../src/state/devTiming";
+import { useSyncIndicator } from "../../src/state/useSyncIndicator";
 import { NEW_CHAT_FAILED, type NewChat } from "../../../../packages/kybern-client/src/newChat";
 import { partToken } from "../../../../packages/kybern-client/src/composerTokens";
 import { newThreadId } from "../../src/state/ids";
@@ -120,11 +125,12 @@ function mainConversation(thread: Thread, threads: readonly Thread[]): { id: str
  * main conversation), with a chevron that says the title opens the thread's details.
  */
 function ThreadHeader({ thread, threadId }: { thread?: Thread | null; threadId: string }) {
-  const app = useApp();
+  // Every machine's projects and threads: the computer the phone is at may be away (#245).
+  const lists = useLists(null);
   const { colors } = useTheme();
   const { regular, sidebarOpen, toggleSidebar, inspectorOpen, inspectorTab, toggleInspector } = useLayout();
-  const project = app.projects.find((p) => p.id === thread?.project_id);
-  const main = thread?.parent_thread_id ? mainConversation(thread, app.threads) : null;
+  const project = lists.projects.find((p) => p.id === thread?.project_id);
+  const main = thread?.parent_thread_id ? mainConversation(thread, lists.threads) : null;
   const subtitle = [project?.name ?? "Workspace", thread?.worktree?.branch].filter(Boolean).join(" · ");
   // With two or more machines the subtitle also says where the thread runs, the machine the phone is at included (ADE-99 §2.2).
   const view = useMachineView();
@@ -316,7 +322,16 @@ function ThreadScreenBody() {
       return next;
     });
   }, []);
-  const thread = app.threads.find((t) => t.id === id) ?? snapshot.thread;
+  const lists = useLists(null);
+  const thread = app.threads.find((t) => t.id === id) ?? snapshot.thread ?? lists.ownerOf(id)?.thread;
+  // The thread's own machine: its connection drives loading, paging, the banner and the composer (#245).
+  const connection = useThreadConnection(id);
+  // Only a thread with no copy on the phone waits on screen, and only a load slower than 400 ms shows it (#248).
+  const syncing = useSyncIndicator(!snapshot.loaded && connection.open);
+  // Development builds time a tap on a thread row to the first transcript content (`state/devTiming.ts`).
+  useEffect(() => {
+    if (snapshot.loaded && snapshot.blocks.length) markThreadContent(id, snapshot.blocks.length);
+  }, [id, snapshot.loaded, snapshot.blocks.length]);
   const chat = useNewChat(id);
   const [editPrompt, setEditPrompt] = useState("");
   const [editAttachments, setEditAttachments] = useState<ContentPart[] | undefined>(undefined);
@@ -337,10 +352,10 @@ function ThreadScreenBody() {
   useFocusEffect(
     useCallback(() => {
       setFocused(true);
-      if (app.status === "open")
+      if (connection.open)
         void ensureThread(id).catch((e) => setError(problemFor(e, "open this conversation", { params: { thread_id: id } })));
       return () => setFocused(false);
-    }, [id, app.status]),
+    }, [id, connection.open]),
   );
   const stop = useCallback(() => {
     void rpc("threads.interrupt", { thread_id: id }).catch((e) =>
@@ -445,7 +460,7 @@ function ThreadScreenBody() {
         thread?.status === "awaiting-approval"
       ) {
         await rpc("queue.add", { thread_id: id, id: randomUUID(), message });
-        await refresh();
+        await refresh(threadMachine(id));
       } else {
         // A failed send stays in the transcript as a bubble with Retry and Edit.
         const receipt = await sendWithPending(id, message);
@@ -471,7 +486,7 @@ function ThreadScreenBody() {
   const prefetchEarlier = () => {
     const geometry = scrollGeometry.current;
     if (historyGate.claim(snapshot.nextBeforeSeq, geometry.distance, geometry.height,
-      focused && userScrolled.current && !snapshot.loadingEarlier && !historyError && app.status === "open")) earlier();
+      focused && userScrolled.current && !snapshot.loadingEarlier && !historyError && connection.open)) earlier();
   };
   const side = gutter(width);
   // Stable identities so a re-render from a sidebar/inspector toggle does not
@@ -511,7 +526,7 @@ function ThreadScreenBody() {
                 }}
               />
             ) : (
-              <Working label="Loading conversation" active={focused} />
+              syncing && <Working label="Loading conversation" active={focused} />
             )}
           </View>
         ) : (
@@ -647,12 +662,18 @@ function ThreadScreenBody() {
         )}
         <ChromeBar edge="top" scrollY={scrollY}>
           <ThreadHeader thread={thread} threadId={id} />
-          {app.status !== "open" && (
+          {!connection.open && (
             <View style={{ paddingHorizontal: side, paddingBottom: space.sm }}>
-              {app.status === "connecting" || app.status === "reconnecting" ? (
-                <ErrorBanner error="Reconnecting to your computer…" />
+              {connection.status === "connecting" || connection.status === "reconnecting" ? (
+                <ErrorBanner error={`Reconnecting to ${connection.name}…`} />
               ) : (
-                <ErrorBanner error={disconnected} onRetry={() => connect(app.activeId)} />
+                <ErrorBanner
+                  error={connection.remote ? `${connection.name} is offline. This conversation is read-only until it is back.` : disconnected}
+                  onRetry={() => {
+                    if (connection.remote && connection.machineId) void machineHub().retry(connection.machineId).catch(() => {});
+                    else connect(app.activeId);
+                  }}
+                />
               )}
             </View>
           )}
@@ -689,7 +710,7 @@ function ThreadScreenBody() {
               thread={thread}
               onSteer={thread && !subagent && canSteer(thread.provider) ? steer : undefined}
               disabled={
-                app.status !== "open" ||
+                !connection.open ||
                 !snapshot.loaded ||
                 thread?.status === "archived" ||
                 !!thread?.moved ||

@@ -25,6 +25,7 @@ import { Segmented } from "../ui/Segmented";
 import type { IconName } from "../ui/icons";
 import { IconButton, T } from "../ui/primitives";
 import { radius, space, useTheme } from "../ui/theme";
+import { useLists } from "../state/useLists";
 
 type MentionFilter = "all" | "thread" | "note" | "task" | "file";
 const PREFIXES: Record<string, Exclude<MentionFilter, "all"> | "plugin"> = {
@@ -96,6 +97,8 @@ export function ComposerSuggestions({
 }) {
   const { colors } = useTheme();
   const app = useApp();
+  // Every machine's projects: the computer the phone is at may be away (#245).
+  const lists = useLists(null);
   const notes = useNotes();
   const tasks = useTasks();
   const [filter, setFilter] = useState<MentionFilter>("all");
@@ -197,7 +200,7 @@ export function ComposerSuggestions({
         id: `thread:${t.id}`,
         kind: "thread",
         title: t.title || "Untitled thread",
-        detail: app.projects.find((p) => p.id === t.project_id)?.name ?? "Thread",
+        detail: lists.projects.find((p) => p.id === t.project_id)?.name ?? "Thread",
         part: threadReferencePart(t),
       }));
     const noteRows: Row[] = notes.notes
@@ -228,7 +231,7 @@ export function ComposerSuggestions({
       ...take(fileRows, "file"),
       ...(kind === null || kind === ("plugin" as string) ? plugins.slice(0, kind === null ? PER_KIND : LIMIT) : []),
     ];
-  }, [mention, trigger.marker, actions, commands, skills, files, app.threads, app.projects, notes.notes, tasks.tasks, kind, term, threadId, projectId]);
+  }, [mention, trigger.marker, actions, commands, skills, files, app.threads, lists.projects, notes.notes, tasks.tasks, kind, term, threadId, projectId]);
   return (
     <View
       style={{

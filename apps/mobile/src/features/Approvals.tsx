@@ -16,7 +16,7 @@ import {
   type ApprovalRequest,
   type AsyncQuestionRequest,
 } from "../state/protocol";
-import { errorText, loadThread, refresh, rpc } from "../state/runtime";
+import { errorText, loadThread, rpc } from "../state/runtime";
 import { ApprovalCard, QuestionChoices } from "../components/beui/ApprovalCard";
 import { secretRequestInput } from "../../../../packages/kybern-client/src/secretRequest";
 import { SecretRequestCard } from "./SecretRequest";
@@ -274,8 +274,7 @@ function DecisionPanel({ approval }: { approval: ApprovalRequest }) {
     setBusy(true);
     setError("");
     try {
-      await rpc("approvals.respond", { approval_id: approval.id, ...decision });
-      await Promise.all([refresh(), loadThread(approval.thread_id)]);
+      await respondApproval(approval, decision);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (e) {
       setError(errorText(e, "respond to the request"));

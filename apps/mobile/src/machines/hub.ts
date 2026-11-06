@@ -78,9 +78,17 @@ interface Primary {
   profile: PrimaryProfile;
   machineId: MachineId;
   lists?: () => PrimaryLists;
+  /**
+   * The lists hold a real read. Until the primary's first refresh finished they are the empty
+   * placeholders of a fresh connection, and handing those over would replace the machine's
+   * cached lists with nothing (every space "0 projects" while the computer is away, #245).
+   */
+  ready?: boolean;
 }
 
 const LIVE = new Set(["online", "relaying", "needs-update"]);
+/** With one machine nobody reads the merged lists while it answers: only the offline cache is fed, at most this often. */
+const SINGLE_MACHINE_DELAY_MS = 2000;
 
 /** A page of another machine: what the WebView loads, the prefix that stays in it, and how to give it back. */
 export type MachinePage = DaemonPage & {
@@ -257,12 +265,29 @@ export class MachineHub {
     this.cancelFlush();
   }
 
-  /** Where the primary's current lists come from. Called again whenever they change. */
-  setPrimaryLists(client: KybernClient, lists: () => PrimaryLists) {
+  /**
+   * Where the primary's current lists come from. Called again whenever they change. `ready: false`
+   * says they are not a read yet (a fresh connection): nothing reaches the set until `primaryListsReady`.
+   */
+  setPrimaryLists(client: KybernClient, lists: () => PrimaryLists, options: { ready?: boolean } = {}) {
     if (this.primary?.client !== client) return;
     this.primary.lists = lists;
+    this.primary.ready = options.ready ?? true;
     this.dirty = true;
     this.scheduleFlush();
+  }
+
+  /** The primary's first refresh finished: its lists are a real read and may replace the cached ones. */
+  primaryListsReady(client: KybernClient) {
+    if (this.primary?.client !== client || this.primary.ready) return;
+    this.primary.ready = true;
+    this.dirty = true;
+    this.scheduleFlush();
+  }
+
+  /** The primary's lists of this connection are a real read (`primaryListsReady`). */
+  get primaryListed(): boolean {
+    return !!this.primary?.ready;
   }
 
   /** The lists changed on the primary (a refresh, an event). */
@@ -506,9 +531,10 @@ export class MachineHub {
   }
 
   // The set caches and merges whatever it is given. With one machine the screens read the
-  // computer's own lists (`listsOf`), so that work has no reader: the primary's lists wait, by
-  // reference, until a second machine is listed.
-  private wanted(): boolean {
+  // computer's own lists (`listsOf`) once it answered, so only the offline cache needs them: they
+  // are handed over less often then (`SINGLE_MACHINE_DELAY_MS`), and shown from the cache at the
+  // next cold start before the computer answers (#248).
+  private multiple(): boolean {
     return this.set.connections().length > 1;
   }
 
@@ -520,15 +546,16 @@ export class MachineHub {
   }
 
   private scheduleFlush() {
-    if (this.flushTimer !== undefined || this.disposed || !this.dirty || !this.primary?.lists || !this.wanted()) return;
+    if (this.flushTimer !== undefined || this.disposed || !this.dirty || !this.primary?.lists || !this.primary.ready) return;
     const setTimer = this.options.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
+    const delay = this.options.ingestDelayMs ?? 300;
     this.flushTimer = setTimer(() => {
       this.flushTimer = undefined;
       const primary = this.primary;
-      if (!this.dirty || !primary?.lists) return;
+      if (!this.dirty || !primary?.lists || !primary.ready) return;
       this.dirty = false;
       const lists = primary.lists();
       this.set.ingest(primary.machineId, { projects: lists.projects, threads: lists.threads, activity: lists.activity });
-    }, this.options.ingestDelayMs ?? 300);
+    }, this.multiple() ? delay : Math.max(delay, SINGLE_MACHINE_DELAY_MS));
   }
 }

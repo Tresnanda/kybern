@@ -46,8 +46,10 @@ function firstJob(jobs: readonly WorkflowJob[]): WorkflowJob | undefined {
 /** Jobs' usual times per finished passing run, read once per run (a finished run never changes). */
 const usualJobs = new Map<string, Map<string, number>>()
 
-export function RunDetail({ target, runId, listed, reference, usual, width, height, showBack, visible, onBack, onActive, onChanged }: {
+export function RunDetail({ target, runId, initial, listed, reference, usual, width, height, showBack, visible, onBack, onActive, onChanged }: {
   target: ActionsRepo; runId: number; listed?: WorkflowRun
+  /** The job whose log, and the attempt, the run opens on (a link to a job). */
+  initial?: { jobId?: number; attempt?: number }
   /** A recent passing run of the same workflow: its job times are what a running job's progress measures against. */
   reference?: WorkflowRun
   /** The workflow's usual run time, in seconds. */
@@ -61,8 +63,8 @@ export function RunDetail({ target, runId, listed, reference, usual, width, heig
   const [detail, setDetail] = useState<ActionsRunResult | null>(null)
   const [error, setError] = useState<Error | null>(null)
   const [revision, refresh] = useState(0)
-  const [jobId, setJobId] = useState<number | null>(null)
-  const [attempt, setAttempt] = useState<number | null>(null)
+  const [jobId, setJobId] = useState<number | null>(initial?.jobId ?? null)
+  const [attempt, setAttempt] = useState<number | null>(initial?.attempt ?? null)
   const [busy, setBusy] = useState<ActionsActionKind | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)

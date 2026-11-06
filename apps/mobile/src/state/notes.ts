@@ -15,6 +15,8 @@ import {
   sortNotes,
 } from "./notesModel";
 import { problemModel, type ProblemModel } from "./problems";
+import { listCache } from "./listCache";
+import { keepAway, listParams, networkTarget, ownerOf, recordList, resetOwners, setOwner, writable, writeClient } from "./federated";
 
 export interface NotesState {
   notes: NoteSummary[];
@@ -37,6 +39,8 @@ let state = initial;
 const listeners = new Set<() => void>();
 const changeListeners = new Set<(change: NotesChangedNotification) => void>();
 let client: KybernClient | null = null;
+/** The machine the notes belong to, for the offline copy (`listCache.ts`). */
+let machine: string | undefined;
 let isCurrent: () => boolean = () => false;
 let undoTimer: ReturnType<typeof setTimeout> | undefined;
 let loading: Promise<void> | null = null;
@@ -87,20 +91,30 @@ export function resetNotes() {
   clearTimeout(undoTimer);
   undoTimer = undefined;
   client = null;
+  machine = undefined;
   isCurrent = () => false;
   loading = null;
+  resetOwners("notes");
   state = { ...initial };
   listeners.forEach((fn) => fn());
 }
 
-export function attachNotes(next: KybernClient, current: () => boolean) {
+/**
+ * `machineId` names the computer for the offline copy: until its list answers, the notes it
+ * last had show read-only (the screens disable writes while it is away).
+ */
+export function attachNotes(next: KybernClient, current: () => boolean, machineId?: string) {
   client = next;
+  machine = machineId;
   isCurrent = current;
+  const cached = state.loaded ? undefined : listCache().get<NoteSummary & { __owner?: string }>(machineId, "notes");
+  if (cached) publish({ notes: sortNotes(restoreOwners(cached)), loaded: true });
   next.onNotification(NOTES_CHANGED_NOTIFICATION, (params) => {
     if (!current() || client !== next || !params || typeof params !== "object")
       return;
     const change = params as NotesChangedNotification;
     publish({ notes: applyNoteChange(state.notes, change) });
+    saveCopy();
     changeListeners.forEach((fn) => fn(change));
   });
 }
@@ -115,21 +129,39 @@ function failure(e: unknown) {
   };
 }
 
-/** Loads the full list. Safe to call repeatedly; overlapping calls share one request. */
+/** The offline copy keeps who holds each note, so an away machine's notes stay read-only after a restart. */
+function saveCopy() {
+  listCache().put(machine, "notes", state.notes.map((note) => ({ ...note, __owner: ownerOf("notes", note.id) })));
+}
+function restoreOwners(items: (NoteSummary & { __owner?: string })[]): NoteSummary[] {
+  return items.map(({ __owner, ...note }) => {
+    setOwner("notes", note.id, __owner);
+    return note;
+  });
+}
+
+/**
+ * Loads the full list through the network (`federated.ts`): every machine's notes once there are
+ * several. Safe to call repeatedly; overlapping calls share one request.
+ */
 export function loadNotes() {
   const active = client;
-  if (!active) return Promise.resolve();
+  const target = networkTarget(client, machine);
+  if (!active || !target) return Promise.resolve();
   if (loading) return loading;
-  const request = active
-    .call("notes.list", {})
+  const request = target.client
+    .call("notes.list", listParams())
     .then((result) => {
       if (client !== active || !isCurrent()) return;
+      const fresh = result.notes ?? [];
+      recordList("notes", fresh.map((note) => note.id), result.federation, target.machineId);
       publish({
-        notes: sortNotes(result.notes ?? []),
+        notes: sortNotes(keepAway("notes", fresh, state.notes, target.machineId)),
         loaded: true,
         unsupported: false,
         error: "",
       });
+      saveCopy();
     })
     .catch((e) => {
       if (client !== active || !isCurrent()) return;
@@ -142,9 +174,22 @@ export function loadNotes() {
   return request;
 }
 
-function need() {
-  if (!client) throw new Error("Connect to your computer to continue.");
-  return client;
+/** The client to write a note with: the machine that holds it, else the network's (`federated.ts`). */
+function need(id?: string | null) {
+  return writeClient("notes", id, client, machine);
+}
+/** The client for a note session's calls (`useNoteSession`). Throws when the note's machine is away. */
+export function noteClient(id?: string | null) {
+  return need(id);
+}
+/** A note can be changed now: its machine answers. */
+export function noteWritable(id: string | null | undefined) {
+  return writable("notes", id, client);
+}
+/** A note made here lives on the machine that answered. */
+function made(note: NoteSummary) {
+  setOwner("notes", note.id, networkTarget(client, machine)?.machineId);
+  return note;
 }
 function fold(note: NoteSummary) {
   publish({ notes: applyNoteChange(state.notes, { note }) });
@@ -156,21 +201,21 @@ export async function createNote(input: {
   title?: string;
   body?: string;
 }) {
-  const note = await need().call("notes.create", {
+  const note = await need(null).call("notes.create", {
     scope: input.projectId ? "project" : "global",
     project_id: input.projectId ?? null,
     title: input.title,
     body: input.body,
   });
-  fold(note);
+  fold(made(note));
   return note;
 }
 export async function pinNote(id: string, pinned: boolean) {
-  return fold(await need().call("notes.pin", { id, pinned }));
+  return fold(await need(id).call("notes.pin", { id, pinned }));
 }
 export async function moveNote(id: string, projectId: string | null) {
   return fold(
-    await need().call("notes.move", {
+    await need(id).call("notes.move", {
       id,
       scope: projectId ? "project" : "global",
       project_id: projectId,
@@ -183,17 +228,16 @@ function offerUndo(ids: string[], title: string) {
   undoTimer = setTimeout(dismissUndo, UNDO_MS);
 }
 export async function deleteNote(id: string) {
-  const note = fold(await need().call("notes.delete", { id }));
+  const note = fold(await need(id).call("notes.delete", { id }));
   offerUndo([id], note.title);
   return note;
 }
 /** Moves several notes to Recently deleted with one Undo ("Delete empty notes"). */
 export async function deleteNotes(ids: string[]) {
-  const c = need();
   const done: string[] = [];
   try {
     for (const id of ids) {
-      fold(await c.call("notes.delete", { id }));
+      fold(await need(id).call("notes.delete", { id }));
       done.push(id);
     }
   } finally {
@@ -203,8 +247,7 @@ export async function deleteNotes(ids: string[]) {
 /** Undoes the last delete, however many notes it removed. */
 export async function restoreNotes(ids: string[]) {
   dismissUndo();
-  const c = need();
-  for (const id of ids) fold(await c.call("notes.restore", { id }));
+  for (const id of ids) fold(await need(id).call("notes.restore", { id }));
 }
 export function dismissUndo() {
   clearTimeout(undoTimer);
@@ -213,12 +256,12 @@ export function dismissUndo() {
 }
 export async function restoreNote(id: string) {
   if (state.undo?.id === id) dismissUndo();
-  return fold(await need().call("notes.restore", { id }));
+  return fold(await need(id).call("notes.restore", { id }));
 }
 export async function purgeNote(id: string) {
-  await need().call("notes.purge", { id });
+  await need(id).call("notes.purge", { id });
   publish({ notes: applyNoteChange(state.notes, { purged_id: id }) });
 }
 export async function searchNotes(query: string) {
-  return (await need().call("notes.search", { query, limit: 50 })).results ?? [];
+  return (await need(null).call("notes.search", { query, limit: 50, ...listParams() })).results ?? [];
 }

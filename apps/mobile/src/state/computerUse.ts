@@ -4,6 +4,7 @@
 import { useSyncExternalStore } from "react";
 import type { ComputerFrame, ComputerNote, ComputerStatus, KybernClient } from "./protocol";
 import { errorText, onClientAttach, onEnvironmentReset } from "./runtime";
+import { ownerClient } from "./machineRequests";
 import { attachLate } from "./lateAttach";
 
 type State = { status: ComputerStatus | null; notes: ComputerNote[] | null; error: string };
@@ -57,11 +58,12 @@ export function pollFrames(threadId: string, accept: (frame: ComputerFrame) => v
   let timer: ReturnType<typeof setTimeout> | undefined;
   const started = Date.now();
   const tick = async () => {
-    const active = client;
+    // The thread's own machine captures its frames (#245).
+    const active = ownerClient({ threadId });
     if (stopped || !active) return;
     try {
       const { frame } = await active.call("computer.frame", { thread_id: threadId, after });
-      if (frame && !stopped && client === active) {
+      if (frame && !stopped) {
         after = frame.seq;
         if (Date.parse(frame.captured_at) >= started - 5 * 60_000) accept(frame);
       }

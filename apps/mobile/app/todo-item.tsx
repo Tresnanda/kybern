@@ -17,7 +17,7 @@ import { TaskToast } from "../src/features/TaskToast";
 import { useNotes } from "../src/state/notes";
 import { checklistBadge, noteTitle } from "../src/state/notesModel";
 import type { TaskItem, TaskRun } from "../src/state/protocol";
-import { activeEnvironment, problemFor, useApp } from "../src/state/runtime";
+import { activeEnvironment, errorText, problemFor, useApp, useNetworkLive } from "../src/state/runtime";
 import {
   clearPendingFollowup,
   fetchTask,
@@ -26,6 +26,7 @@ import {
   showToast,
   toggleTaskCriterion,
   useTask,
+  taskWritable,
   useTasks,
 } from "../src/state/tasks";
 import {
@@ -61,6 +62,7 @@ import {
   useType,
   useTheme,
 } from "../src/ui/theme";
+import { useLists } from "../src/state/useLists";
 
 const AGENT_NAMES: Record<string, string> = {
   "claude-code": "Claude Code",
@@ -222,6 +224,8 @@ function ActionBar({ task, connected }: { task: TaskItem; connected: boolean }) 
 function TaskPage() {
   const { id = "" } = useLocalSearchParams<{ id: string }>();
   const app = useApp();
+  // Every machine's projects: the computer the phone is at may be away (#245).
+  const lists = useLists(null);
   const { loaded } = useTasks();
   const task = useTask(id);
   const { notes } = useNotes();
@@ -232,7 +236,9 @@ function TaskPage() {
   const insets = useSafeAreaInsets();
   const agentName = useAgentName();
   const now = useMinuteClock();
-  const connected = app.status === "open";
+  // An away machine's task is read-only (`federated.ts`).
+  const networkLive = useNetworkLive();
+  const connected = networkLive && taskWritable(id);
   const [missing, setMissing] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState({ title: "", body: "", revision: 0 });
@@ -279,7 +285,7 @@ function TaskPage() {
 
   const parts = useMemo(() => splitTaskBody(task?.body ?? ""), [task?.body]);
   const project = task?.project_id
-    ? app.projects.find((p) => p.id === task.project_id)
+    ? lists.projects.find((p) => p.id === task.project_id)
     : undefined;
   const page = {
     paddingHorizontal: gutter(width),

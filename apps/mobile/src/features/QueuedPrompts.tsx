@@ -7,7 +7,7 @@ import { View } from "react-native";
 import { promptText, replacePromptText } from "../../../../packages/kybern-client/src/prompts";
 import type { QueuedMessage } from "../state/protocol";
 import { orchestrationLabel } from "../state/orchestration";
-import { errorText, rpc, useApp } from "../state/runtime";
+import { errorText, rpc, useThreadLive } from "../state/runtime";
 import { showToast } from "../ui/Toast";
 import { InsetGroup, ListRow } from "../ui/List";
 import { Button, Field, Icon, T, Tap } from "../ui/primitives";
@@ -83,7 +83,7 @@ async function remove(item: QueuedMessage) {
 }
 
 function QueuedEditor({ item, onDone }: { item: QueuedMessage; onDone: () => void }) {
-  const app = useApp();
+  const live = useThreadLive(item.thread_id);
   const [text, setText] = useState(promptText(item.message));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -111,7 +111,7 @@ function QueuedEditor({ item, onDone }: { item: QueuedMessage; onDone: () => voi
           role="tinted"
           size="medium"
           busy={busy}
-          disabled={app.status !== "open" || (!text.trim() && !attached)}
+          disabled={!live || (!text.trim() && !attached)}
           onPress={() => void save()}
         >
           Save

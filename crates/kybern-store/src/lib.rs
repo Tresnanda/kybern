@@ -32,7 +32,10 @@ pub use tasks::{
     TaskRunUpdate, TaskStatusChange, derive_task_prefix, task_link_lines, task_link_source_line, task_set_line_checked,
 };
 pub use thread_history::{ThreadHistoryMessage, ThreadHistoryReadPage, ThreadHistorySearchPage};
-pub use transcript_page::{WHOLE_TURN_EXTRA_ENTRIES, transcript_page, transcript_page_ref, transcript_page_ref_with};
+pub use transcript_page::{
+    WHOLE_TURN_EXTRA_ENTRIES, transcript_entry_bytes, transcript_page, transcript_page_budget_ref, transcript_page_ref,
+    transcript_page_ref_with,
+};
 
 pub use projection::{
     LARGE_TOOL_OUTPUT_BYTES, TranscriptFold, json_payload_bytes, project_pending_questions, project_provider_usage, project_runtime_tasks,
@@ -102,7 +105,11 @@ fn append_event_in_transaction(
     if stamp_runtime_task_sequence(&mut payload, seq) {
         c.execute("UPDATE events SET payload = ?2 WHERE seq = ?1", params![seq, serde_json::to_string(&payload)?])?;
     }
-    c.execute("UPDATE threads SET last_seq = ?2, updated_at = ?3 WHERE id = ?1", params![thread_id.to_string(), seq, at.to_rfc3339()])?;
+    // Stamping `change_seq` here (the list cursor) keeps the change trigger from rewriting the row on every event.
+    c.execute(
+        "UPDATE threads SET last_seq = ?2, change_seq = ?2, updated_at = ?3 WHERE id = ?1",
+        params![thread_id.to_string(), seq, at.to_rfc3339()],
+    )?;
     match &payload {
         EventPayload::ThreadNotesUpdated { notes } => {
             c.execute(
@@ -656,6 +663,45 @@ impl Store {
         })
     }
 
+    /// Threads whose row or activity changed after `since` (`threads.change_seq`, see the list-cursor migration),
+    /// archived ones included, plus every delegating ancestor of a changed delegated child: its
+    /// `active_children` and `pending_child_request` may have changed with it. Uses the `threads_change` index.
+    pub fn threads_changed_since(&self, since: EventSeq, project_id: Option<ProjectId>) -> Result<Vec<Thread>> {
+        self.with(|c| {
+            let mut sql = format!(
+                "WITH RECURSIVE changed(id) AS (
+                    SELECT id FROM threads WHERE change_seq > ?1
+                    UNION
+                    SELECT t.parent_thread_id FROM threads t JOIN changed ON t.id = changed.id
+                    WHERE t.delegation IS NOT NULL AND t.parent_thread_id IS NOT NULL
+                 )
+                 {THREAD_SELECT} WHERE id IN (SELECT id FROM changed)"
+            );
+            if project_id.is_some() {
+                sql.push_str(" AND project_id = ?2");
+            }
+            sql.push_str(" ORDER BY pinned DESC, updated_at DESC");
+            let mut st = c.prepare(&sql)?;
+            let rows = match project_id {
+                Some(p) => st.query_map(params![since, p.to_string()], row_to_thread)?.collect::<Result<Vec<_>, _>>()?,
+                None => st.query_map(params![since], row_to_thread)?.collect::<Result<Vec<_>, _>>()?,
+            };
+            Ok(rows)
+        })
+    }
+
+    /// How many delegated children of each parent are running and not archived (`ThreadActivitySummary::active_children`).
+    pub fn delegations_running_by_parent(&self) -> Result<std::collections::HashMap<ThreadId, u32>> {
+        self.with(|c| {
+            let mut st = c.prepare(
+                "SELECT parent_thread_id, COUNT(*) FROM threads WHERE delegation IS NOT NULL AND parent_thread_id IS NOT NULL
+                 AND status != 'archived' AND json_extract(delegation, '$.status') = 'running' GROUP BY parent_thread_id",
+            )?;
+            let rows = st.query_map([], |r| Ok((parse_uuid(r.get::<_, String>(0)?)?, r.get::<_, u32>(1)?)))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+    }
+
     /// The child thread mirroring `task_id` of the session owned by `root_thread_id`.
     pub fn subagent_thread_find(&self, root_thread_id: ThreadId, task_id: &str) -> Result<Option<Thread>> {
         self.with(|c| {
@@ -1054,6 +1100,40 @@ impl Store {
 
     pub fn events_head_seq(&self) -> Result<EventSeq> {
         self.with(|c| Ok(c.query_row("SELECT COALESCE(MAX(seq), 0) FROM events", [], |r| r.get(0))?))
+    }
+
+    /// The newest event sequence of one thread (0 when it has none), read from the `events_thread` index. Unlike
+    /// `Thread::last_seq` it cannot lag behind a write made from a stale thread copy.
+    pub fn thread_head_seq(&self, thread_id: ThreadId) -> Result<EventSeq> {
+        self.with(|c| {
+            Ok(c.query_row("SELECT COALESCE(MAX(seq), 0) FROM events WHERE thread_id = ?1", [thread_id.to_string()], |r| r.get(0))?)
+        })
+    }
+
+    /// Whether the thread has more than `max_events` events, or more than `max_bytes` of event payload, in
+    /// `(after, through]`. Reads at most `max_events + 1` rows, so a huge gap costs no more than a small one.
+    pub fn thread_event_gap_exceeds(
+        &self,
+        thread_id: ThreadId,
+        after: EventSeq,
+        through: EventSeq,
+        max_events: u32,
+        max_bytes: usize,
+    ) -> Result<bool> {
+        self.with(|c| {
+            let mut st =
+                c.prepare_cached("SELECT payload FROM events WHERE thread_id = ?1 AND seq > ?2 AND seq <= ?3 ORDER BY seq LIMIT ?4")?;
+            let mut rows = st.query(params![thread_id.to_string(), after, through, i64::from(max_events) + 1])?;
+            let (mut count, mut bytes) = (0u32, 0usize);
+            while let Some(row) = rows.next()? {
+                count += 1;
+                bytes = bytes.saturating_add(row.get_ref(0)?.as_str()?.len());
+                if count > max_events || bytes > max_bytes {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        })
     }
 
     /// When the most recent event was appended, if any. Every turn writes
@@ -2370,6 +2450,75 @@ mod tests {
         assert!(store.thread_set_moved(thread.id, None).unwrap().unwrap().moved.is_none());
         assert!(store.threads_with_move().unwrap().is_empty());
         assert!(store.thread_set_moved(Uuid::now_v7(), None).unwrap().is_none(), "no such thread");
+    }
+
+    fn changed_ids(store: &Store, since: EventSeq) -> Vec<ThreadId> {
+        let mut ids: Vec<ThreadId> = store.threads_changed_since(since, None).unwrap().into_iter().map(|thread| thread.id).collect();
+        ids.sort();
+        ids
+    }
+
+    fn note(store: &Store, thread_id: ThreadId, text: &str) -> EventSeq {
+        store
+            .event_append(
+                thread_id,
+                None,
+                EventPayload::ProviderNotice { data: None, level: NoticeLevel::Info, text: text.into(), problem: None },
+            )
+            .unwrap()
+            .seq
+    }
+
+    #[test]
+    fn every_thread_write_moves_its_change_cursor_past_the_head_a_list_read() {
+        let (store, thread) = thread_fixture();
+        let head = store.events_head_seq().unwrap();
+        assert_eq!(changed_ids(&store, head), vec![thread.id], "a new row is newer than the head before it");
+        let event = note(&store, thread.id, "hi");
+        // An event stamps its own sequence: the head after it no longer returns the row.
+        assert_eq!(changed_ids(&store, event - 1), vec![thread.id]);
+        assert!(changed_ids(&store, event).is_empty());
+        // A row edit without an event is stamped past the head, so a list that read the head first sees it next time.
+        let current = store.thread_get(thread.id).unwrap().unwrap();
+        store.thread_upsert(&Thread { pinned: true, ..current }).unwrap();
+        assert_eq!(changed_ids(&store, event), vec![thread.id]);
+        let next = note(&store, thread.id, "again");
+        assert!(changed_ids(&store, next).is_empty());
+        store.thread_set_moved(thread.id, None).unwrap();
+        assert_eq!(changed_ids(&store, next), vec![thread.id], "the move column has its own writer");
+    }
+
+    #[test]
+    fn a_delegated_childs_change_returns_its_ancestors_and_the_gap_check_counts_events_and_bytes() {
+        let (store, root) = thread_fixture();
+        let delegation = |parent: ThreadId| {
+            Some(
+                serde_json::from_value::<DelegationInfo>(serde_json::json!({
+                    "task_id": Uuid::now_v7(), "operation_id": Uuid::now_v7(), "parent_thread_id": parent, "depth": 1,
+                    "status": "running", "started_at": Utc::now(), "parent_notified": true
+                }))
+                .unwrap(),
+            )
+        };
+        let parent = Thread { id: Uuid::now_v7(), parent_thread_id: Some(root.id), delegation: delegation(root.id), ..root.clone() };
+        store.thread_upsert(&parent).unwrap();
+        let child = Thread { id: Uuid::now_v7(), parent_thread_id: Some(parent.id), delegation: delegation(parent.id), ..root.clone() };
+        store.thread_upsert(&child).unwrap();
+        assert_eq!(store.delegations_running_by_parent().unwrap().get(&root.id), Some(&1));
+        let head = note(&store, root.id, "x");
+        note(&store, child.id, "y");
+        let mut expected = vec![root.id, parent.id, child.id];
+        expected.sort();
+        assert_eq!(changed_ids(&store, head), expected, "a grandchild's change reaches both delegating ancestors");
+
+        for _ in 0..3 {
+            note(&store, root.id, &"z".repeat(100));
+        }
+        let now = store.events_head_seq().unwrap();
+        assert!(!store.thread_event_gap_exceeds(root.id, head, now, 3, 1 << 20).unwrap());
+        assert!(store.thread_event_gap_exceeds(root.id, head, now, 2, 1 << 20).unwrap(), "count");
+        assert!(store.thread_event_gap_exceeds(root.id, head, now, 3, 200).unwrap(), "bytes");
+        assert!(!store.thread_event_gap_exceeds(root.id, now, now, 0, 0).unwrap(), "no gap");
     }
 
     fn thread_fixture() -> (Store, Thread) {

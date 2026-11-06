@@ -1,3 +1,4 @@
+use kybern_protocol::methods::TranscriptPageBudget;
 use kybern_protocol::{EventSeq, TranscriptEntry, TurnId};
 use std::borrow::Borrow;
 
@@ -67,6 +68,93 @@ pub fn transcript_page_ref_with(
         return page_sorted(&sorted, limit, before, whole_turns);
     }
     page_sorted(entries, limit, before, whole_turns)
+}
+
+/// The serialized size of a row, counted without allocating the JSON.
+pub fn transcript_entry_bytes(entry: &TranscriptEntry) -> usize {
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    // Writing to a counter cannot fail; a row that cannot serialize would fail the whole response anyway.
+    let _ = serde_json::to_writer(&mut count, entry);
+    count.0
+}
+
+/// A page sized by a [`TranscriptPageBudget`] instead of a row count: the newest rows before `before` that
+/// cover at most `turns` turns (the page starts where its oldest turn starts), `max_rows` rows and `max_bytes`
+/// serialized bytes. Equal-sequence rows stay together and the newest group is always included, so a cursor
+/// always makes progress. Rows of the nil turn (notices outside a turn) do not count as a turn. The initial page
+/// adds unfinished older rows exactly as [`transcript_page_ref_with`] does; they are not counted.
+pub fn transcript_page_budget_ref(
+    entries: &[TranscriptEntry],
+    budget: TranscriptPageBudget,
+    before: Option<EventSeq>,
+) -> (Vec<TranscriptEntry>, Option<EventSeq>) {
+    if !entries.windows(2).all(|pair| seq(&pair[0]) <= seq(&pair[1])) {
+        let mut sorted: Vec<&TranscriptEntry> = entries.iter().collect();
+        sorted.sort_by_key(|entry| seq(entry));
+        return page_budget_sorted(&sorted, budget, before);
+    }
+    page_budget_sorted(entries, budget, before)
+}
+
+fn page_budget_sorted<T: Borrow<TranscriptEntry>>(
+    entries: &[T],
+    budget: TranscriptPageBudget,
+    before: Option<EventSeq>,
+) -> (Vec<TranscriptEntry>, Option<EventSeq>) {
+    let at = |index: usize| entries[index].borrow();
+    let end = before.map_or(entries.len(), |before| entries.partition_point(|entry| seq(entry.borrow()) < before));
+    let (max_turns, max_rows, max_bytes) = (budget.turns.max(1) as usize, budget.max_rows.max(1) as usize, budget.max_bytes as usize);
+    let mut start = end;
+    let (mut rows, mut bytes) = (0usize, 0usize);
+    let mut turns: Vec<TurnId> = Vec::new();
+    while start > 0 {
+        let mut group = start - 1;
+        while group > 0 && seq(at(group - 1)) == seq(at(group)) {
+            group -= 1;
+        }
+        let mut new_turns: Vec<TurnId> = Vec::new();
+        for index in group..start {
+            let turn = turn(at(index));
+            if !turn.is_nil() && !turns.contains(&turn) && !new_turns.contains(&turn) {
+                new_turns.push(turn);
+            }
+        }
+        let group_rows = start - group;
+        let first = start == end;
+        if !first && (turns.len() + new_turns.len() > max_turns || rows + group_rows > max_rows) {
+            break;
+        }
+        let group_bytes: usize = (group..start).map(|index| transcript_entry_bytes(at(index))).sum();
+        if !first && bytes.saturating_add(group_bytes) > max_bytes {
+            break;
+        }
+        rows += group_rows;
+        bytes = bytes.saturating_add(group_bytes);
+        turns.extend(new_turns);
+        start = group;
+    }
+    let cursor = (start > 0).then(|| seq(at(start)));
+    let live_prefix = if before.is_none() { &entries[..start] } else { &[] };
+    let page = live_prefix
+        .iter()
+        .map(Borrow::borrow)
+        .filter(|entry| {
+            matches!(entry, TranscriptEntry::Assistant { complete: false, .. } | TranscriptEntry::ToolCall { complete: false, .. })
+        })
+        .chain(entries[start..end].iter().map(Borrow::borrow))
+        .cloned()
+        .collect();
+    (page, cursor)
 }
 
 fn turn(entry: &TranscriptEntry) -> TurnId {
@@ -303,6 +391,65 @@ mod tests {
             cursor = next;
         }
         pages
+    }
+
+    fn budget(turns: u32, max_rows: u32, max_bytes: u32) -> TranscriptPageBudget {
+        TranscriptPageBudget { turns, max_rows, max_bytes }
+    }
+
+    #[test]
+    fn budget_pages_stop_at_turns_rows_or_bytes_and_cover_every_row() {
+        // Four turns of three rows, then nil-turn notices that never count as a turn.
+        let rows: Vec<(u128, EventSeq)> = (0..12).map(|index| ((index / 3 + 1) as u128, index as EventSeq + 1)).collect();
+        let mut all = turn_entries(&rows);
+        all.extend(entries(&[13, 13]));
+        let seqs = |page: &[TranscriptEntry]| page.iter().map(seq).collect::<Vec<_>>();
+        let (page, cursor) = transcript_page_budget_ref(&all, budget(2, 500, u32::MAX), None);
+        assert_eq!(seqs(&page), [7, 8, 9, 10, 11, 12, 13, 13]);
+        assert_eq!(cursor, Some(7));
+        let (page, cursor) = transcript_page_budget_ref(&all, budget(10, 4, u32::MAX), None);
+        assert_eq!(seqs(&page), [11, 12, 13, 13], "the equal-sequence pair stays together");
+        assert_eq!(cursor, Some(11));
+        // Exactly the newest two rows: timestamps make row sizes differ by a few bytes.
+        let two: usize = all[10..12].iter().map(transcript_entry_bytes).sum();
+        let (page, _) = transcript_page_budget_ref(&all[..12], budget(10, 500, two as u32), None);
+        assert_eq!(seqs(&page), [11, 12]);
+        let (page, _) = transcript_page_budget_ref(&all, budget(1, 1, 1), None);
+        assert_eq!(seqs(&page), [13, 13], "the newest group always fits");
+        // Older pages walk back to the start without losing or repeating a row.
+        let mut cursor = None;
+        let mut collected = Vec::new();
+        loop {
+            let (page, next) = transcript_page_budget_ref(&all, budget(1, 500, u32::MAX), cursor);
+            collected.splice(0..0, seqs(&page));
+            match next {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+        assert_eq!(collected, seqs(&all));
+    }
+
+    #[test]
+    fn a_first_budget_page_keeps_unfinished_older_rows() {
+        let mut all = turn_entries(&[(1, 1), (2, 2), (2, 3)]);
+        all[0] = TranscriptEntry::Assistant {
+            id: kybern_protocol::MessageId::nil(),
+            turn_id: TurnId::from_u128(1),
+            seq: 1,
+            origin: Default::default(),
+            segment: 0,
+            text: "Beginning of the live response".into(),
+            thinking: None,
+            thinking_complete: false,
+            at: Utc::now(),
+            complete: false,
+        };
+        let (page, cursor) = transcript_page_budget_ref(&all, budget(1, 500, u32::MAX), None);
+        assert_eq!(page.iter().map(seq).collect::<Vec<_>>(), [1, 2, 3]);
+        assert_eq!(cursor, Some(2));
+        let (older, _) = transcript_page_budget_ref(&all, budget(1, 500, u32::MAX), Some(2));
+        assert_eq!(older.iter().map(seq).collect::<Vec<_>>(), [1]);
     }
 
     #[test]

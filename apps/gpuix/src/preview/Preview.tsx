@@ -131,7 +131,7 @@ export function PreviewPane({ threadId }: { threadId: string }) {
 function ServersBar({ threadId, chosenId }: { threadId: string; chosenId?: string }) {
   const machines = useMachines(), chosen = machines.find(m => m.machineId === chosenId)
   return <div testId="preview-servers-bar" style={{ display: 'flex', alignItems: 'center', gap: 6, height: 36, flexShrink: 0, paddingLeft: 8, paddingRight: 8 }}>
-    <Menu testId="preview-servers-machine" trigger={open => <PickerChip size="sm" open={open}>{chosen ? (chosen.isLocal ? `${shortMachineName(chosen.name)} (this machine)` : shortMachineName(chosen.name)) : 'All machines'}</PickerChip>}>
+    <Menu testId="preview-servers-machine" trigger={open => <PickerChip size="sm" square open={open}>{chosen ? (chosen.isLocal ? `${shortMachineName(chosen.name)} (this machine)` : shortMachineName(chosen.name)) : 'All machines'}</PickerChip>}>
       <MenuItem id="all" testId="preview-servers-all" label="All machines" checked={!chosenId} onSelect={() => setPreview(threadId, { serversOn: undefined })} />
       {machines.map(m => <MenuItem key={m.machineId} id={m.machineId} testId={`preview-servers-${m.machineId}`} label={`${shortMachineName(m.name)}${m.offline ? ' · Offline' : m.isLocal ? ' (this machine)' : ''}`} checked={m.machineId === chosenId} onSelect={() => setPreview(threadId, { serversOn: m.machineId })} />)}
     </Menu>

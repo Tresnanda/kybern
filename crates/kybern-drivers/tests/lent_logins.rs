@@ -182,8 +182,14 @@ async fn a_session_that_is_not_lent_keeps_the_ordinary_behaviour() {
     let spawned = kybern_drivers::claude::ClaudeDriver::default().spawn(config(&binary, dir.path(), env)).await.unwrap();
     let (session, mut events) = (spawned.session, spawned.events);
     session.send_message("m1", &UserMessage::text("hello")).await.unwrap();
-    // The same words on a session that borrowed nothing are an ordinary result, as before this change.
-    assert!(matches!(next_turn_end(&mut events).await, DriverEvent::TurnCompleted { .. }));
+    // On a session that borrowed nothing, a refused login still fails the turn, now with a signed-out problem
+    // (actionable errors, #234), but nothing about lending is triggered.
+    match next_turn_end(&mut events).await {
+        DriverEvent::TurnFailed { problem, .. } => {
+            assert_eq!(problem.map(|p| p.kind), Some(kybern_protocol::rpc::ProblemKind::SignedOut));
+        }
+        other => panic!("expected a failed turn, got {other:?}"),
+    }
     assert_eq!(read(&out, "token"), "mine");
     session.close().await.unwrap();
 }

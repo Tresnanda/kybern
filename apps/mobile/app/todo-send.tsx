@@ -41,11 +41,14 @@ import {
 } from "../src/ui/theme";
 import { findModel } from "../../../packages/kybern-client/src/models";
 import { supportsWorktree } from "../src/state/groups";
+import { useLists } from "../src/state/useLists";
 
 /** One task (`id`) or several (`ids`, comma separated) from the Tasks selection. */
 export default function SendTask() {
   const params = useLocalSearchParams<{ id?: string; ids?: string }>();
   const app = useApp();
+  // Every machine's projects: the computer the phone is at may be away (#245).
+  const lists = useLists(null);
   const { tasks: all, loaded } = useTasks();
   const { notes } = useNotes();
   const { colors } = useTheme();
@@ -72,11 +75,11 @@ export default function SendTask() {
   const projectIds = [...new Set(tasks.map((t) => t.project_id).filter(Boolean))] as string[];
   const anyGlobal = tasks.some((t) => !t.project_id);
   const [chosenProject, setChosenProject] = useState<string | null>(() =>
-    app.projects.length === 1 ? app.projects[0]!.id : null,
+    lists.projects.length === 1 ? lists.projects[0]!.id : null,
   );
   // Global tasks run where you choose; a project's tasks run in their own project.
   const projectId = anyGlobal ? chosenProject : (projectIds[0] ?? null);
-  const project = app.projects.find((p) => p.id === projectId);
+  const project = lists.projects.find((p) => p.id === projectId);
   // Group projects run in their member repositories even when the group folder is not one.
   const isGit = supportsWorktree(project);
   const mixedProjects =
@@ -277,7 +280,7 @@ export default function SendTask() {
       onPress: () => setConfig((c) => ({ ...c, worktree: false })),
     },
   ];
-  const projectItems: MenuItem[] = app.projects.map((p) => ({
+  const projectItems: MenuItem[] = lists.projects.map((p) => ({
     title: p.name,
     checked: p.id === projectId,
     onPress: () => {

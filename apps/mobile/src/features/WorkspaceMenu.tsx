@@ -17,7 +17,7 @@ import { showToast } from "../ui/Toast";
 import { IconButton } from "../ui/primitives";
 import { radius, useTheme } from "../ui/theme";
 import type { Diff, GitStatus, Thread } from "../state/protocol";
-import { activeEnvironment, refresh, rpc, useApp } from "../state/runtime";
+import { activeEnvironment, errorText, refresh, rpc, threadMachine, useApp, useThreadConnection } from "../state/runtime";
 import type { PhoneContext } from "../state/problems";
 import { failedToast } from "../ui/failedToast";
 import { type InspectorTab, useLayout } from "../state/layout";
@@ -43,7 +43,8 @@ export function diffLabel(adds: number, dels: number) {
 
 /** Git state behind the menu. Reloads when the thread settles, so the menu opens instantly. */
 function useWorkspaceState(thread?: Thread | null) {
-  const app = useApp();
+  // Git state comes from the thread's own machine, and reloads when that machine answers (#245).
+  const live = useThreadConnection(thread?.id).open;
   const [git, setGit] = useState<GitStatus>();
   const [diff, setDiff] = useState<Diff>();
   const threadId = thread?.id;
@@ -62,8 +63,8 @@ function useWorkspaceState(thread?: Thread | null) {
     setDiff(undefined);
   }, [threadId]);
   useEffect(() => {
-    if (app.status === "open" && settled) void reload().catch(() => {});
-  }, [reload, settled, app.status]);
+    if (live && settled) void reload().catch(() => {});
+  }, [reload, settled, live]);
   return { git, diff, reload };
 }
 
@@ -75,6 +76,7 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
   const anchor = useRef<View>(null);
   const threadId = thread?.id;
   const machineMoves = useThreadMachineItems(thread);
+  const connection = useThreadConnection(threadId);
 
   function navigate(tab: string) {
     const inspectorTab = INSPECTOR_TAB[tab];
@@ -86,7 +88,7 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
     try {
       await action();
       showToast(done);
-      await Promise.all([reload(), refresh()]);
+      await Promise.all([reload(), refresh(threadMachine(threadId))]);
     } catch (e) {
       failedToast(e, failed, { params: { thread_id: threadId }, retry: () => void run(action, done, failed) });
     }
@@ -105,7 +107,8 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
   const pulls = repoPullRows(repos);
   const plan = prPlan(repos, changed);
   const remote = git?.remote_url?.replace(/^git@([^:]+):/, "https://$1/").replace(/\.git$/, "");
-  const computer = thread?.worktree ? "Worktree" : activeEnvironment()?.name || "Local";
+  // The summary names the machine the thread runs on, not the computer the phone is at (#245).
+  const computer = thread?.worktree ? "Worktree" : connection.name || "Local";
   const branch = group ? null : (git?.branch ?? thread?.worktree?.branch ?? null);
   const dirty = group ? repos.some((repo) => repo.dirty_files > 0) : !!git?.dirty_files;
 
@@ -129,7 +132,7 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
           try {
             const pr = await rpc("github.pr.create", { thread_id: threadId!, commit_first: true });
             showToast(`Opened pull request #${pr.number}`, { title: "View", onPress: () => void Linking.openURL(pr.url) });
-            await Promise.all([reload(), refresh()]);
+            await Promise.all([reload(), refresh(threadMachine(threadId))]);
           } catch (e) {
             failedToast(e, { action: "open the pull request", goal: "open a pull request" }, { params: { thread_id: threadId } });
           }

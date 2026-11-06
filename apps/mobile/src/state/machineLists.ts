@@ -65,6 +65,43 @@ export function singleMachineLists(lists: SingleLists): ListsView {
 }
 
 /**
+ * One machine that has not answered yet in this connection: its last lists from the offline cache,
+ * so Home and Threads show rows at once on a cold start (#248). While the machine is away its rows
+ * read as offline (greyed, read-only), as another machine's do. Undefined when nothing is cached.
+ */
+export function cachedSingleLists(view: MergedView): ListsView | undefined {
+  const machine = view.machines[0];
+  if (!machine || view.machines.length > 1 || (!view.threads.all.length && !view.projects.length)) return undefined;
+  const projects = view.projects.map((logical) => logical.primary.project);
+  const byThread = new Map<string, MergedThread>();
+  for (const entry of view.threads.all) if (!byThread.has(entry.thread.id)) byThread.set(entry.thread.id, entry);
+  const threads = [...byThread.values()].map((entry) => entry.thread);
+  return {
+    projects,
+    threads,
+    activity: [],
+    machines: [],
+    showGlyphs: false,
+    machineOfThread(threadId) {
+      const entry = byThread.get(threadId);
+      if (!entry || !machine.offline) return undefined;
+      return {
+        machineId: machine.machineId,
+        name: machine.name,
+        glyph: machine.glyph,
+        showGlyph: false,
+        offline: true,
+        ...(machine.lastSeenAt !== undefined ? { lastSeenAt: machine.lastSeenAt } : {}),
+      };
+    },
+    ownerOf(threadId) {
+      const entry = byThread.get(threadId);
+      return entry && { machineId: entry.machineId, thread: entry.thread };
+    },
+  };
+}
+
+/**
  * `filter` is a machine id to show only that machine, or null for all of them.
  * With one known machine, or none, `local` is returned untouched.
  */

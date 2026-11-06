@@ -1910,6 +1910,16 @@ export interface ThreadsListParams {
   parent_thread_id?: ThreadId;
   /** Also return the hidden threads that record tool calls other machines made here; left out by default. */
   include_inbound?: boolean;
+  /**
+   * Only threads whose row or activity changed after this cursor (`head_seq` of an earlier result), archived ones
+   * included so a client can drop them. Every returned thread's activity is replaced by its entry in `activity`, or
+   * cleared when it has none. Daemons without cursors ignore it and return the full list without `head_seq`.
+   */
+  since_seq?: EventSeq;
+  /** Every active or pinned thread plus at most this many newest settled threads per project; `omitted` counts the rest. */
+  settled_limit?: number;
+  /** With `settled_limit` and `project_id`: skip this many newest settled threads, to page older rows. */
+  settled_offset?: number;
 }
 
 export interface ThreadMessagesListParams {
@@ -1955,6 +1965,15 @@ export const DELEGATIONS_REMOTE_RESYNC_NOTIFICATION = "delegations.remote_resync
 export interface ThreadsListResult {
   threads: Thread[];
   activity?: ThreadActivitySummary[];
+  /** The event head this list reflects; the next `since_seq`. Absent from daemons without list cursors. */
+  head_seq?: EventSeq;
+  /** With `settled_limit`: settled threads per project that this result left out. */
+  omitted?: ProjectThreadCount[];
+}
+
+export interface ProjectThreadCount {
+  project_id: ProjectId;
+  count: number;
 }
 
 export interface ThreadsSearchParams {
@@ -2038,6 +2057,15 @@ export interface ThreadsGetParams {
   whole_turns?: boolean;
   /** With before_seq: only the transcript page; thread-wide state comes back empty. */
   transcript_only?: boolean;
+  /** Size the page by turns, rows and bytes instead of `transcript_limit`. Older daemons ignore it and use `transcript_limit`. */
+  page_budget?: TranscriptPageBudget;
+}
+
+/** A transcript page of about `turns` user turns, at most `max_rows` rows and `max_bytes` serialized bytes. */
+export interface TranscriptPageBudget {
+  turns: number;
+  max_rows: number;
+  max_bytes: number;
 }
 
 export interface ThreadsRecoverOmpAnswerParams { thread_id: ThreadId; turn_id: TurnId }
@@ -2073,6 +2101,11 @@ export interface ThreadsGetResult {
   next_before_seq?: EventSeq | null;
   pending_approvals: ApprovalRequest[];
   runtime_tasks?: RuntimeTask[];
+  /**
+   * The event head read before this snapshot was projected: every event at or below it is reflected. Absent from
+   * older daemons.
+   */
+  as_of_seq?: EventSeq;
 }
 
 export interface ThreadNotes {
@@ -2568,6 +2601,11 @@ export interface EventsSubscribeParams {
   after_seq?: EventSeq;
   /** Include large completed tool outputs; omitted keeps legacy full events. */
   include_tool_output?: boolean;
+  /**
+   * With `thread_id` and `after_seq`: when the thread has more than 128 events or 1 MiB of events after `after_seq`,
+   * skip the replay and return `snapshot`, this `threads.get` page as of `head_seq`. Older daemons ignore it and replay.
+   */
+  gap_snapshot?: ThreadsGetParams;
 }
 
 export interface EventsSubscribeResult {
@@ -2575,6 +2613,8 @@ export interface EventsSubscribeResult {
   head_seq: EventSeq;
   /** Available on daemons that send events.ready after replay. */
   replay_ready?: boolean;
+  /** Sent instead of a replay when `gap_snapshot` was asked for and the gap was too large. Live events follow `head_seq`. */
+  snapshot?: ThreadsGetResult;
 }
 
 export interface EventsReadyNotification {
@@ -3169,6 +3209,80 @@ export interface PrListRepo {
   problem?: Problem;
 }
 
+/** One issue (`github.issue.list`, `github.issue.detail`). */
+export interface Issue {
+  number: number
+  title: string
+  url: string
+  /** OPEN | CLOSED */
+  state: string
+  /** COMPLETED | NOT_PLANNED | REOPENED, when GitHub says why the issue was closed. */
+  state_reason?: string
+  author: string
+  author_avatar_url?: string
+  author_is_bot?: boolean
+  created_at: string
+  updated_at: string
+  labels?: PrLabel[]
+  assignees?: PrPerson[]
+  milestone?: string
+  /** Numbers of the pull requests that will close this issue when they merge. */
+  linked_pull_requests?: number[]
+  /** Group projects: the member repository the issue is in. */
+  repo?: string
+}
+export interface IssueListParams {
+  project_id: ProjectId
+  /** open (default) | closed | all */
+  state?: string
+  search?: string
+  /** Only issues with every one of these labels. */
+  labels?: string[]
+  /** A login, or `@me`. */
+  assignee?: string
+  /** 1-100, default 30. */
+  limit?: number
+  /** Issues to skip, newest first. */
+  offset?: number
+  /** Group projects: only this member repository (omit to merge every member). */
+  repo?: string
+}
+export interface IssueListResult {
+  /** Group projects: every member's issues, each tagged with `repo`. */
+  issues: Issue[]
+  has_more?: boolean
+  /** The repository's labels for the Labels filter (first page only). */
+  labels?: PrLabel[]
+  /** Group projects only: one row per member, with why its list is missing. */
+  repos?: PrListRepo[]
+}
+export interface IssueDetailParams { project_id: ProjectId; number: number; repo?: string }
+export interface IssueComment {
+  id: string
+  author: string
+  author_avatar_url?: string
+  author_is_bot?: boolean
+  body: string
+  created_at: string
+  url: string
+}
+export interface IssueLinkedPull {
+  number: number
+  title: string
+  url: string
+  /** OPEN | MERGED | CLOSED */
+  state: string
+}
+export interface IssueDetailResult {
+  issue: Issue
+  body: string
+  /** The first comments, oldest first (at most 100). */
+  comments: IssueComment[]
+  /** All comments; more than `comments` holds when the thread is long. */
+  comment_count: number
+  pull_requests?: IssueLinkedPull[]
+}
+
 /** `repo`: the member of a group project (a `PullRequest.repo`); a group project requires it. */
 export interface PrDetailParams { project_id: ProjectId; number: number; repo?: string }
 export interface PrCheck {
@@ -3339,7 +3453,7 @@ export interface BranchPull { branch: string; number: number; state: string }
 export interface WorkflowStep { number: number; name: string; status: string; conclusion?: string; started_at?: DateTime; completed_at?: DateTime }
 export interface WorkflowJob { id: number; name: string; status: string; conclusion?: string; started_at?: DateTime; completed_at?: DateTime; url: string; labels?: string[]; steps: WorkflowStep[] }
 /** `attempt`: an earlier attempt instead of the latest. */
-export interface ActionsRunParams { project_id: ProjectId; repo?: string; run_id: number; attempt?: number }
+export interface ActionsRunParams { project_id: ProjectId; repo?: string; run_id?: number; job_id?: number; attempt?: number }
 export interface ActionsRunResult {
   run: WorkflowRun
   jobs: WorkflowJob[]
@@ -3471,6 +3585,27 @@ export interface ThreadFilesResolveResult {
   paths: (string | null)[];
 }
 
+export type OutsideAllow = "check" | "once" | "folder";
+export type OutsideVerdict = "open" | "ask" | "refused";
+export interface ThreadFileOutsideParams {
+  thread_id: ThreadId;
+  /** As written in the link: absolute, or relative to the thread cwd. */
+  path: string;
+  /** `once` / `folder`: allow it (the desktop app on the daemon's own machine only). Absent: only ask. */
+  allow?: OutsideAllow;
+}
+export interface ThreadFileOutsideResult {
+  verdict: OutsideVerdict;
+  /** What `threads.files.read` opens. */
+  path?: string;
+  /** The folder "Always allow this folder" would add; absent when it can never be allowed. */
+  folder?: string;
+  /** In the system's temporary folder, where agents keep scratch files. */
+  scratch?: boolean;
+  /** Why the file cannot open from this client. */
+  reason?: string;
+}
+
 export interface FilesReadResult {
   content: string;
   truncated: boolean;
@@ -3480,6 +3615,8 @@ export interface FilesReadResult {
   version?: string;
   /** True when `if_version` still matched; `content` is empty. */
   unchanged?: boolean;
+  /** A file outside the workspace the user allowed Kybern to open: nothing writes to it. */
+  read_only?: boolean;
 }
 
 export type SkillScope =
@@ -3492,6 +3629,8 @@ export interface SkillInfo {
   path: string;
   scope: SkillScope;
   enabled: boolean;
+  /** Set on a skill listed from another agent's folder (`include_other_agents`): the home it lives in. */
+  home?: SkillHome | null;
 }
 
 export interface SkillsListParams {
@@ -3499,6 +3638,8 @@ export interface SkillsListParams {
   instance?: string;
   project_id: ProjectId;
   provider: ProviderKind;
+  /** Also list the skills in other agents' folders, each tagged with its `home`. An older daemon ignores it. */
+  include_other_agents?: boolean;
 }
 
 export interface SkillsListResult {
@@ -4703,6 +4844,7 @@ export interface Methods {
   "threads.files.read": [ThreadFileReadParams, FilesReadResult];
   "threads.files.write": [ThreadFileWriteParams, FilesWriteResult];
   "threads.files.resolve": [ThreadFilesResolveParams, ThreadFilesResolveResult];
+  "threads.files.outside": [ThreadFileOutsideParams, ThreadFileOutsideResult];
   "skills.list": [SkillsListParams, SkillsListResult];
   "threads.visuals.publish": [{ thread_id: ThreadId; html: string; title: string; height: number; await_answer?: boolean | null; answer_schema?: JsonValue | null; timeout_seconds?: number | null }, { visual: HtmlVisual }];
   "threads.visuals.snapshot": [{ thread_id: ThreadId; visual_id: Uuid; width: number; theme: JsonValue; lock?: JsonValue | null }, HtmlSnapshotResult];
@@ -4810,6 +4952,8 @@ export interface Methods {
   "github.pr.create_group": [PrCreateGroupParams, PrCreateGroupResult];
   "github.pr.list": [PrListParams, PrListResult];
   "github.pr.detail": [PrDetailParams, PrDetailResult];
+  "github.issue.list": [IssueListParams, IssueListResult];
+  "github.issue.detail": [IssueDetailParams, IssueDetailResult];
   "github.pr.page": [PrPageParams, PrPageResult];
   "github.pr.action": [PrActionParams, Empty];
   "github.actions.runs": [ActionsRunsParams, ActionsRunsResult];

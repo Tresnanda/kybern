@@ -6,7 +6,8 @@ import type { Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { Button } from '../kit/Button.tsx'
 import { Checkbox } from '../kit/Checkbox.tsx'
 import { Dialog } from '../nav/overlay.tsx'
-import { getClient, getState } from '../state.ts'
+import { errorText } from '../nav/actions.ts'
+import { flushTranscriptCache, getClient, getState } from '../state.ts'
 import { Label, ProviderMark, useTheme } from '../ui.tsx'
 import { load, save, flush } from './persist.ts'
 import { closeActiveTab } from '../tabs/open.ts'
@@ -35,7 +36,8 @@ export function CloseGuard() {
       // ⌘W closes the active document tab, never the thread; on the chat tab the window closes as before (ADE-54).
       if (closeRequestSource() !== 'pointer' && closeActiveTab()) return false
       const dirty = dirtyBufferKeys()
-      if (!dirty.length && !busyThreads()) return true
+      // Transcripts written behind are saved first, so the next launch draws them at once.
+      if (!dirty.length && !busyThreads()) return flushTranscriptCache().then(() => true, () => true)
       setUnsaved(dirty.length ? dirty : null); setPending(dirty.length ? null : busyThreads()); setAskAgain(true); setError('')
       return new Promise<boolean>((done) => { resolve.current = done })
     })
@@ -56,8 +58,8 @@ export function CloseGuard() {
     resolve.current = null
     // An allowed decision removes the native window immediately; do not queue
     // a React commit against a renderer whose window has gone.
-    if (!allow) { setPending(null); setUnsaved(null) }
-    done?.(allow)
+    if (!allow) { setPending(null); setUnsaved(null); done?.(false); return }
+    void flushTranscriptCache().catch(() => {}).finally(() => done?.(true))
   }
   // The unsaved files are settled: go on to the working threads, or close.
   const afterFiles = () => {

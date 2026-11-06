@@ -8,7 +8,7 @@ import { SpaceSwitcher, useSpaceMenuItems } from "../src/features/Spaces";
 import { useLayout } from "../src/state/layout";
 import { attentionSignals, dismissAttention, useListState } from "../src/state/listState";
 import { PROVIDER_DISPLAY_NAME, type Thread } from "../src/state/protocol";
-import { errorText, refreshAll, threadHasActivity, useApp } from "../src/state/runtime";
+import { errorText, loadMoreThreads, omittedThreads, prefetchThreads, refreshAll, threadHasActivity, useApp } from "../src/state/runtime";
 import { useLists } from "../src/state/useLists";
 import { useMachineMenuItems } from "../src/features/MachineFilter";
 import { currentSpaceId, useSpaces } from "../src/state/spaces";
@@ -87,6 +87,8 @@ export default function Library() {
   const showMore = useCallback((projectId: string) => {
     shownPages[projectId] = (shownPages[projectId] ?? 0) + 1;
     setPages((old) => ({ ...old, [projectId]: shownPages[projectId] }));
+    // Past the threads the computer listed: its next page of older ones (#248).
+    if (omittedThreads(projectId)) void loadMoreThreads(projectId).catch((e) => setError(errorText(e)));
   }, []);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -132,12 +134,20 @@ export default function Library() {
           filtering ? FILTERED_FIRST_PAGE : undefined,
         );
         out.push(...rowItems(group.threads.slice(0, shown)));
-        if (remaining > 0)
-          out.push({ kind: "more", key: `m:${group.projectId}`, projectId: group.projectId, remaining });
+        // Settled threads the computer has not listed yet count too; "Show more" pages them in.
+        const hidden = remaining + (filtering ? 0 : omittedThreads(group.projectId));
+        if (hidden > 0)
+          out.push({ kind: "more", key: `m:${group.projectId}`, projectId: group.projectId, remaining: hidden });
       }
     }
     return out;
-  }, [top, children, expanded, filter, folded, pages, lists.projects, list.projectOrder]);
+    // `app.omitted` changes with every page the computer lists.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [top, children, expanded, filter, folded, pages, lists.projects, list.projectOrder, app.omitted]);
+  // The first rows' transcripts load ahead of a tap (#248).
+  useEffect(() => {
+    prefetchThreads(items.flatMap((item) => (item.kind === "row" ? [item.row.thread] : [])));
+  }, [items]);
 
   const spaceThreads = useMemo(
     () => filterThreads({ threads: lists.threads, projects: lists.projects, spaceId, filter: DEFAULT_FILTER, isWorking }),

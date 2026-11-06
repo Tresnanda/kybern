@@ -24,6 +24,8 @@ import {
   type TaskOverride,
 } from "./tasksModel";
 import { problemModel, type ProblemModel } from "./problems";
+import { listCache } from "./listCache";
+import { keepAway, listParams, networkTarget, ownerOf, recordList, resetOwners, setOwner, writable, writeClient } from "./federated";
 
 /** A short notice at the bottom of Tasks: "ADE-14 started · Open", "Task deleted · Undo". */
 export interface TaskToast {
@@ -56,6 +58,8 @@ let overrides: Record<string, TaskOverride> = {};
 const tokens = new Map<string, number>();
 const listeners = new Set<() => void>();
 let client: KybernClient | null = null;
+/** The machine the tasks belong to, for the offline copy (`listCache.ts`). */
+let machine: string | undefined;
 let isCurrent: () => boolean = () => false;
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 let toastSeq = 0;
@@ -99,8 +103,10 @@ export function resetTasks() {
   clearTimeout(toastTimer);
   toastTimer = undefined;
   client = null;
+  machine = undefined;
   isCurrent = () => false;
   loading = null;
+  resetOwners("tasks");
   server = [];
   overrides = {};
   tokens.clear();
@@ -108,9 +114,19 @@ export function resetTasks() {
   listeners.forEach((fn) => fn());
 }
 
-export function attachTasks(next: KybernClient, current: () => boolean) {
+/** `machineId` names the computer for the offline copy, shown read-only until its list answers. */
+export function attachTasks(next: KybernClient, current: () => boolean, machineId?: string) {
   client = next;
+  machine = machineId;
   isCurrent = current;
+  const cached = state.loaded ? undefined : listCache().get<TaskItem & { __owner?: string }>(machineId, "tasks");
+  if (cached) {
+    server = cached.map(({ __owner, ...task }) => {
+      setOwner("tasks", task.id, __owner);
+      return task;
+    });
+    publish({ loaded: true });
+  }
   next.onNotification(TASK_ITEMS_CHANGED_NOTIFICATION, (params) => {
     if (!current() || client !== next || !params || typeof params !== "object")
       return;
@@ -121,6 +137,11 @@ export function attachTasks(next: KybernClient, current: () => boolean) {
 function fold(change: TaskItemsChangedNotification) {
   server = applyTaskChange(server, change);
   publish();
+  saveCopy();
+}
+/** The offline copy keeps who holds each task, so an away machine's tasks stay read-only after a restart. */
+function saveCopy() {
+  listCache().put(machine, "tasks", server.map((task) => ({ ...task, __owner: ownerOf("tasks", task.id) })));
 }
 
 function failure(e: unknown) {
@@ -132,17 +153,24 @@ function failure(e: unknown) {
   };
 }
 
-/** Loads the full list. Safe to call repeatedly; overlapping calls share one request. */
+/**
+ * Loads the full list through the network (`federated.ts`): every machine's tasks once there are
+ * several. Safe to call repeatedly; overlapping calls share one request.
+ */
 export function loadTasks() {
   const active = client;
-  if (!active) return Promise.resolve();
+  const target = networkTarget(client, machine);
+  if (!active || !target) return Promise.resolve();
   if (loading) return loading;
-  const request = active
-    .call("tasks.items.list", {})
+  const request = target.client
+    .call("tasks.items.list", listParams())
     .then((result) => {
       if (client !== active || !isCurrent()) return;
-      server = result.tasks ?? [];
+      const fresh = result.tasks ?? [];
+      recordList("tasks", fresh.map((task) => task.id), result.federation, target.machineId);
+      server = keepAway("tasks", fresh, server, target.machineId);
       publish({ loaded: true, unsupported: false, error: "" });
+      saveCopy();
     })
     .catch((e) => {
       if (client !== active || !isCurrent()) return;
@@ -155,9 +183,13 @@ export function loadTasks() {
   return request;
 }
 
-function need() {
-  if (!client) throw new Error("Connect to your computer to continue.");
-  return client;
+/** The client to write a task with: the machine that holds it, else the network's (`federated.ts`). */
+function need(id?: string | null) {
+  return writeClient("tasks", id, client, machine);
+}
+/** A task can be changed now: its machine answers. */
+export function taskWritable(id: string | null | undefined) {
+  return writable("tasks", id, client);
 }
 function confirmed(task: TaskItem) {
   fold({ task });
@@ -202,7 +234,7 @@ export async function createTask(input: {
   priority?: TaskPriority;
   body?: string;
 }) {
-  const task = await need().call("tasks.items.create", {
+  const task = await need(null).call("tasks.items.create", {
     scope: input.projectId ? "project" : "global",
     project_id: input.projectId ?? null,
     title: input.title.trim(),
@@ -210,30 +242,29 @@ export async function createTask(input: {
     status: input.status ?? "inbox",
     ...(input.priority !== undefined ? { priority: input.priority } : {}),
   });
+  // A task made here lives on the machine that answered.
+  setOwner("tasks", task.id, networkTarget(client, machine)?.machineId);
   return confirmed(task);
 }
 
 export function setTaskStatus(id: string, status: TaskStatus) {
-  const c = need();
   return optimistic(id, { status }, () =>
-    c.call("tasks.items.update", { id, status }),
+    need(id).call("tasks.items.update", { id, status }),
   );
 }
 export function setTaskPriority(id: string, priority: TaskPriority) {
-  const c = need();
   return optimistic(id, { priority }, () =>
-    c.call("tasks.items.update", { id, priority }),
+    need(id).call("tasks.items.update", { id, priority }),
   );
 }
 
 /** Tick or untick one acceptance criterion. */
 export function toggleTaskCriterion(id: string, index: number) {
-  const c = need();
   const task = state.tasks.find((t) => t.id === id);
   if (!task) return Promise.reject(new Error("This task is no longer here."));
   const body = toggleCriterion(task.body, index);
   return optimistic(id, { body }, () =>
-    c.call("tasks.items.update", {
+    need(id).call("tasks.items.update", {
       id,
       body,
       expected_revision: task.revision,
@@ -248,7 +279,7 @@ export async function saveTaskText(
   expectedRevision: number,
 ) {
   return confirmed(
-    await need().call("tasks.items.update", {
+    await need(id).call("tasks.items.update", {
       id,
       title: input.title,
       body: input.body,
@@ -259,48 +290,48 @@ export async function saveTaskText(
 
 export async function setTaskNotes(id: string, noteIds: string[]) {
   return confirmed(
-    await need().call("tasks.items.update", { id, note_ids: noteIds }),
+    await need(id).call("tasks.items.update", { id, note_ids: noteIds }),
   );
 }
 export async function clearPendingFollowup(id: string) {
   return confirmed(
-    await need().call("tasks.items.update", { id, pending_followup: "" }),
+    await need(id).call("tasks.items.update", { id, pending_followup: "" }),
   );
 }
 
 export async function fetchTask(id: string) {
-  const { task } = await need().call("tasks.items.get", { id });
+  const { task } = await need(id).call("tasks.items.get", { id });
   if (task) confirmed(task);
   return task ?? null;
 }
 
 export async function deleteTask(id: string) {
   const task = state.tasks.find((t) => t.id === id);
-  await need().call("tasks.items.delete", { id });
+  await need(id).call("tasks.items.delete", { id });
   fold({ deleted_id: id });
   showToast(`${task?.key ?? "Task"} deleted`, { kind: "undo", taskId: id }, UNDO_MS);
 }
 export async function restoreTask(id: string) {
   dismissToast();
-  return confirmed(await need().call("tasks.items.restore", { id }));
+  return confirmed(await need(id).call("tasks.items.restore", { id }));
 }
 
 export async function sendTask(params: TaskItemsSendParams) {
-  const result = await need().call("tasks.items.send", params);
+  const result = await need(params.id).call("tasks.items.send", params);
   confirmed(result.task);
   return result;
 }
 
 /** Starts several tasks at once: one run each (`separate`) or one shared run (`combined`). */
 export async function sendTasks(params: TaskItemsSendBatchParams) {
-  const result = await need().call("tasks.items.send_batch", params);
+  const result = await need(params.ids[0]).call("tasks.items.send_batch", params);
   result.started.forEach(({ task }) => confirmed(task));
   return result;
 }
 
 /** Sends to the latest run's idle thread, queues behind a running one, or saves for the next run. */
 export async function followupTask(id: string, text: string) {
-  const result = await need().call("tasks.items.followup", { id, text });
+  const result = await need(id).call("tasks.items.followup", { id, text });
   confirmed(result.task);
   return result;
 }

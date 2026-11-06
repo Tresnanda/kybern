@@ -22,11 +22,13 @@ export interface SidebarWindowEntry {
 
 /** Sparse hosts share stable logical metadata with the native height summary.
  * Geometry is observed, never polled; leased owners stay mounted offscreen. */
-export function SidebarWindow({ entries, list, box, setList }: {
+export function SidebarWindow({ entries, list, box, setList, onVisible }: {
   entries: SidebarWindowEntry[]
   list: PublicInstance | null
   box: PublicInstance | null
   setList: (node: PublicInstance | null) => void
+  /** The keys of the rows in the viewport, top first (thread prefetch, #248); called when they change. */
+  onVisible?: (keys: readonly string[]) => void
 }) {
   const renderer = useGpuixRequired()
   const live = useRef({ entries, list, viewport: 820 })
@@ -75,6 +77,15 @@ export function SidebarWindow({ entries, list, box, setList }: {
   // rows do not need a separate position event on every scroll frame.
   const observeRows = !sparse || process.env.KYBERN_SIDEBAR_LAYOUT === '0' || process.env.KYBERN_SIDEBAR_ROW_OBSERVERS === '1'
   const indices = sparse ? sparseIndices(window.start, window.end, entries.length, [...pinned, ...[...nativeWindow.retained].flatMap(key => { const index = nativeWindow.indices.get(key); return index === undefined ? [] : [index] })]) : entries.map((_,i) => i)
+  // Rows in the viewport: from the anchor down until the viewport is full. Called only when the set changes.
+  const firstVisible = at < 0 ? anchor.index : at
+  let visibleKeys = ''
+  if (onVisible) {
+    const keys: string[] = []
+    for (let i = firstVisible, height = 0; i < entries.length && height < viewport; i++) { keys.push(entries[i]!.key); height += entries[i]!.height ?? 30 }
+    visibleKeys = keys.join('\u0000')
+  }
+  useEffect(() => { if (onVisible && visibleKeys) onVisible(visibleKeys.split('\u0000')) }, [visibleKeys])
   const traced = useRef(false)
   useLayoutEffect(() => {
     if (!traced.current && entries.length > 3) {

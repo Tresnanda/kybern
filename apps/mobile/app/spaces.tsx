@@ -21,16 +21,19 @@ import { SpaceTile } from "../src/ui/SpaceTile";
 import { CONTENT_MAX_WIDTH, gutter, space as spacing, useTheme } from "../src/ui/theme";
 import { showToast } from "../src/ui/Toast";
 import { deleteTarget } from "../../../packages/kybern-client/src/spaces";
+import { useLists } from "../src/state/useLists";
 
 // Spaces group projects. Tap a space to show it; long-press to edit, reorder or delete it.
 export default function SpacesScreen() {
   const app = useApp();
+  // Every machine's projects: the computer the phone is at may be away (#245).
+  const lists = useLists(null);
   const s = useSpaces();
   const { colors } = useTheme();
   const { width } = useWindowDimensions();
   const [error, setError] = useState("");
   const active = currentSpaceId(s);
-  const projectsIn = (id: string) => app.projects.filter((p) => p.space_id === id);
+  const projectsIn = (id: string) => lists.projects.filter((p) => p.space_id === id);
 
   const remove = (id: string) => {
     const space = s.spaces.find((x) => x.id === id);
