@@ -1,3 +1,4 @@
+import { getNav } from '../nav/store.ts'
 import { imageSource } from '../../../../packages/kybern-client/src/responseImages.ts'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
@@ -11,11 +12,13 @@ import { toast } from '../shell/toasts.tsx'
 import { toastProblem } from '../problems/toast.ts'
 import { showFileInExplorer } from '../dock/explorerSelection.ts'
 
+const fileThread = (id: string) => getState().threads.find(th => th.id === id) ?? (getState().open.thread?.id === id ? getState().open.thread : undefined) ?? getNav().children[id]
+
 export const threadFilesAreLocal = (id: string) => activeEnvironment().local && !machineOfThreadId(id)
 export function absoluteThreadFile(id: string, file: string, root: 'thread' | 'project' = 'thread'): string | null {
   if (file.startsWith('file://')) file = imageSource(file)?.value ?? file
   if (threadFilesAreLocal(id) && file.startsWith('~/')) file = path.join(homedir(), file.slice(2))
-  const thread = getState().threads.find(th => th.id === id) ?? (getState().open.thread?.id === id ? getState().open.thread : undefined)
+  const thread = fileThread(id)
   let cwd = thread?.cwd
   if (root === 'project' && thread) {
     const hub = machineHub(), machine = machineOfThreadId(id) ?? hub.localMachineId
@@ -26,7 +29,7 @@ export function absoluteThreadFile(id: string, file: string, root: 'thread' | 'p
   return p.isAbsolute(file) ? file : cwd ? p.resolve(cwd, file) : null
 }
 export function showThreadFile(id: string, file: string) {
-  const thread = getState().threads.find(th => th.id === id)
+  const thread = fileThread(id)
   const absolute = absoluteThreadFile(id, file)
   if (thread && absolute) showFileInExplorer(id, thread.project_id, absolute)
 }
@@ -34,7 +37,7 @@ const pending = new Map<string, Promise<string>>()
 async function downloadFile(id: string, file: string): Promise<string> {
   const machine = machineOfThreadId(id), hub = machineHub()
   const name = machine ? hub.set.displayName(machine) : activeEnvironment().name
-  const safe = (part: string) => part.replace(/[<>:"|?*\x00-\x1f]/g, '_').replace(/[. ]+$/, '_')
+  const safe = (part: string) => part.replace(/[\\/]/g, '_').replace(/[<>:"|?*\x00-\x1f]/g, '_').replace(/[. ]+$/, '_').replace(/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?=\.|$)/i, '_$1')
   const parts = file.replace(/\\/g, '/').split('/').filter(part => part && part !== '.' && part !== '..').map(safe)
   const target = path.join(downloadsDir(), 'Kybern', safe(name), ...parts)
   await mkdir(path.dirname(target), { recursive: true })
