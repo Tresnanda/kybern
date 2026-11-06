@@ -65,6 +65,32 @@ pub async fn plugin_skills(roots: Vec<(String, PathBuf)>) -> Result<Vec<SkillInf
     .await?)
 }
 
+/// The skills in the given skill homes, each tagged with its home: what `skills.list` adds for `include_other_agents`
+/// (the caller leaves out the homes the selected agent reads itself). A name found in an earlier home hides a later one.
+pub async fn list_homes(homes: Vec<(SkillHome, PathBuf)>) -> Result<Vec<SkillInfo>> {
+    Ok(tokio::task::spawn_blocking(move || {
+        let mut found = Vec::new();
+        let mut visited = HashSet::new();
+        let mut budget = Budget::default();
+        for (home, path) in homes {
+            let root = Root { path, scope: SkillScope::User, depth: MAX_DEPTH };
+            let start = found.len();
+            visit(&root.path, &root, 0, &mut visited, &mut budget, &mut found);
+            for skill in &mut found[start..] {
+                skill.home = Some(home);
+            }
+            if budget.entries >= MAX_ENTRIES || budget.bytes >= MAX_TOTAL_BYTES {
+                break;
+            }
+        }
+        let mut seen = HashSet::new();
+        found.retain(|skill| seen.insert(skill.name.to_ascii_lowercase()));
+        found.sort_by_key(|skill| skill.name.to_ascii_lowercase());
+        found
+    })
+    .await?)
+}
+
 fn scan(cwd: &Path, provider: ProviderKind, env: &BTreeMap<String, String>) -> Vec<SkillInfo> {
     let home = env.get("HOME").map(PathBuf::from).or_else(|| BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf()));
     let roots = roots(cwd, provider, env, home.as_deref());
@@ -282,6 +308,7 @@ fn visit(directory: &Path, root: &Root, depth: usize, visited: &mut HashSet<Path
                 path: skill_path.to_string_lossy().to_string(),
                 scope: effective_scope(&skill_path, root.scope),
                 enabled: true,
+                home: None,
             });
         }
     }
@@ -379,7 +406,7 @@ fn compact_description(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{parse_frontmatter, roots};
-    use kybern_protocol::ProviderKind;
+    use kybern_protocol::{ProviderKind, SkillHome};
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
@@ -457,6 +484,38 @@ mod tests {
         assert!(paths.contains(&home.join(".claude/skills")));
         assert!(!paths.contains(&home.join(".agents/skills")), "Pi should not advertise unconfigured cross-provider roots");
     }
+    #[tokio::test]
+    async fn other_agents_homes_are_listed_with_their_home_and_the_first_name_wins() {
+        let tree = TempTree::new();
+        for (home, name) in [("claude", "polish"), ("claude", "shared"), ("agents", "shared"), ("agents", "review")] {
+            let folder = tree.0.join(home).join(name);
+            std::fs::create_dir_all(&folder).expect("skill folder");
+            std::fs::write(folder.join("SKILL.md"), format!("---\nname: {name}\ndescription: From {home}\n---\nBody")).expect("skill file");
+        }
+        let homes = vec![
+            (SkillHome::Claude, tree.0.join("claude")),
+            (SkillHome::Agents, tree.0.join("agents")),
+            (SkillHome::Pi, tree.0.join("missing")),
+        ];
+        let skills = super::list_homes(homes).await.expect("listing never fails on a missing folder");
+        let found: Vec<_> = skills.iter().map(|skill| (skill.name.as_str(), skill.home)).collect();
+        assert_eq!(found, [("polish", Some(SkillHome::Claude)), ("review", Some(SkillHome::Agents)), ("shared", Some(SkillHome::Claude))]);
+        assert!(skills.iter().all(|skill| skill.enabled && skill.path.ends_with("SKILL.md")));
+    }
+
+    #[test]
+    fn an_agents_own_skills_carry_no_home() {
+        let tree = TempTree::new();
+        let folder = tree.0.join("skills/own");
+        std::fs::create_dir_all(&folder).expect("skill folder");
+        std::fs::write(folder.join("SKILL.md"), "Body").expect("skill file");
+        let root = super::Root { path: tree.0.join("skills"), scope: kybern_protocol::SkillScope::User, depth: 1 };
+        let mut found = Vec::new();
+        super::visit(&root.path, &root, 0, &mut Default::default(), &mut Default::default(), &mut found);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].home, None);
+    }
+
     #[test]
     fn omp_named_profile_skills_do_not_fall_back_to_the_default_profile() {
         let cwd = PathBuf::from("/workspace");

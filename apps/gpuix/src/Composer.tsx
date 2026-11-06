@@ -80,7 +80,7 @@ import { glyphOfMachine, useMachines } from './machines/index.ts'
 import { readClipboardFrom, sendClipboardTo } from './machines/clipboard.ts'
 import { MachineBadge } from './sidebar/MachineBadge.tsx'
 import { ThreadMachine } from './machines/ThreadMachine.tsx'
-import { useCompletion } from './composer/Completion.tsx'
+import { useCompletion, type AttachmentView } from './composer/Completion.tsx'
 import { findSecret, scanInsert, type SecretMatch } from './composer/secretCatcher.ts'
 import { isSummonedCard } from './shell/waitingLine.ts'
 import { SecretDetected, SecretNameForm, type SecretWorkspace, type StoredSecret } from './composer/SecretCatch.tsx'
@@ -102,7 +102,7 @@ import { DropHighlight } from './motion/DropHighlight.tsx'
 import { ImageViewer, type MorphSource } from './motion/ImageMorph.tsx'
 import { PATCHED_NATIVE } from './native/local-build.ts'
 import { usePendingSends } from './composer/pending.ts'
-import type { LayoutRect } from './native/layout.ts'
+import { observeElementBounds, type LayoutRect } from './native/layout.ts'
 import type { PaintTransformProps } from '@gpuix/native/host'
 
 import { hoverPressTransform } from './motion/press.ts'
@@ -132,7 +132,7 @@ import {
   uploadBytes,
   useComposer,
 } from './composer/store.ts'
-import { alreadyAttachedText, contentHash, newFiles } from './composer/attached.ts'
+import { alreadyAttachedText, attachmentView, contentHash, newFiles } from './composer/attached.ts'
 import { isGroupProject } from '../../../packages/kybern-client/src/groups.ts'
 import { canSteer } from '../../../packages/kybern-client/src/steering.ts'
 import { choiceFor, groupCreateParams, mappedGroupChoice } from './groups/tray.ts'
@@ -651,6 +651,13 @@ export function ComposerView(input: ComposerViewProps) {
   const editor = useRef<PublicInstance | null>(null)
   const tokenEditor = useRef<TokenTextareaHandle>(null)
   const card = useRef<PublicInstance | null>(null)
+  // The completion list is as wide as the card. A layout observer feeds it: a synchronous bounds read returns nothing off macOS.
+  const [cardWidth, setCardWidth] = useState<number | null>(null)
+  useEffect(() => {
+    const id = card.current?.id
+    if (id == null) return
+    return observeElementBounds(renderer, { id }, (event) => { if (event.rect) setCardWidth((old) => (old !== null && Math.abs(old - event.rect!.width) < 0.5 ? old : event.rect!.width)) })
+  }, [renderer])
   const [selection, setSelection] = useState<InputSelection>({ start: text.length, end: text.length, reversed: false, composing: false })
   const readSelection = () => {
     if (!tokenEditor.current) return
@@ -741,6 +748,8 @@ export function ComposerView(input: ComposerViewProps) {
     () => attachments.map((a) => ({ token: `@${a.label}`, part: { type: 'attachment', asset_id: a.id, name: a.name, media_type: a.media_type, size: a.size } })),
     [attachments],
   )
+  // The @ list names a pasted image by its number ("Pasted image 1") and shows it as a thumbnail; the upload keeps its own name.
+  const attachmentViews = useMemo(() => new Map(attachments.map((a): [string, AttachmentView] => [a.label, attachmentView(a)])), [attachments])
   const threadCommands = useThreadCommands(props.thread ?? null, () => void addFiles())
   const completion = useCompletion({
     draftKey: props.draftKey,
@@ -753,6 +762,7 @@ export function ComposerView(input: ComposerViewProps) {
     provider: provider ?? undefined,
     currentThreadId: props.currentThreadId,
     attachments: attachmentRefs,
+    attachmentViews,
     commands: props.thread ? threadCommands : [
       { name: 'resume', hint: 'Continue a saved session', icon: G.clock, run: () => setNav({ sessions: { projectId: props.projectId ?? null } }) },
       { name: 'sessions', hint: 'Browse saved sessions', icon: G.clock, run: () => setNav({ sessions: { projectId: props.projectId ?? null } }) },
@@ -1010,7 +1020,7 @@ export function ComposerView(input: ComposerViewProps) {
         }}
       >
         <GlassEdge radius={compact ? 14 : COMPOSER_RADIUS} color={g.frostHighlight} />
-        {completion.menu(() => (card.current && renderer.getElementBounds?.(card.current.id)?.width) || 736)}
+        {completion.menu(cardWidth)}
         {/* `dragOver && border-[color:var(--color-border-focus)]` with the card's `transition-colors duration-200`. */}
         <DropHighlight over={dragOver} radius={compact ? 14 : COMPOSER_RADIUS} color={t.v('--color-border-focus')} />
         <div style={{ display: 'flex', flexDirection: 'column', paddingTop: 14, paddingBottom: 8, paddingLeft: 16, paddingRight: 16 }}>

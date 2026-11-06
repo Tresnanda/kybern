@@ -3730,6 +3730,10 @@ pub struct SkillsListParams {
     pub instance: Option<String>,
     pub project_id: ProjectId,
     pub provider: ProviderKind,
+    /// Also list the skills in other agents' folders, each tagged with its `home`. A daemon that predates this
+    /// ignores it and returns only the agent's own skills.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub include_other_agents: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

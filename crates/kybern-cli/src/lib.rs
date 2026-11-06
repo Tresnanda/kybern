@@ -560,6 +560,9 @@ enum Cmd {
         project: Option<String>,
         #[arg(long, default_value = "codex")]
         provider: ProviderKind,
+        /// Also list the skills in other agents' folders
+        #[arg(long)]
+        other_agents: bool,
     },
     /// List one directory of a project (relative path, empty for the root)
     Ls {
@@ -2734,10 +2737,12 @@ pub async fn run() -> Result<()> {
         },
         Cmd::Plugins { cmd } => plugin_sync::run(&client, cmd, json).await?,
         Cmd::Skills { cmd: Some(cmd), .. } => skill_sync::run(&client, cmd, json).await?,
-        Cmd::Skills { cmd: None, project, provider } => {
+        Cmd::Skills { cmd: None, project, provider, other_agents } => {
             let project = project.ok_or_else(|| anyhow!("Name a project: kybern skills <project>, or kybern skills machines"))?;
             let project_id = resolve_project(&client, &project, false).await?;
-            let r = client.call::<SkillsList>(SkillsListParams { project_id, provider, instance: None }).await?;
+            let r = client
+                .call::<SkillsList>(SkillsListParams { project_id, provider, instance: None, include_other_agents: other_agents })
+                .await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&r)?);
             } else {

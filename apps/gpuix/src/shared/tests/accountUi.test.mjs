@@ -36,6 +36,15 @@ test("single-account agents keep one icon-only tab selected by kind", () => {
   assert.equal(codex.tooltip, "Codex")
 })
 
+test("the rail names an agent, or for a multi-account agent its accounts (\"Claude CLI\", not \"Claude Code CLI\")", () => {
+  assert.deepEqual(accountTabs(pickerTabs(base)).map((t) => t.rail), ["Claude CLI", "Work", "Arunika", "Codex", "Pi"])
+  // Display only: the keys and tooltips still carry the full names.
+  assert.equal(accountTabs(pickerTabs(base))[0].key, "claude-code:default")
+  assert.equal(accountTabs(pickerTabs(base))[0].tooltip, "Claude Code · CLI account")
+  // A single-account agent keeps its own name.
+  assert.equal(accountTabs(pickerTabs({ ...base, accounts: [] }))[0].rail, "Claude Code")
+})
+
 test("starred view deselects account tabs", () => {
   const tabs = pickerTabs({ ...base, starredView: true })
   assert.equal(tabs[0].selected, true)

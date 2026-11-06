@@ -260,6 +260,7 @@ pub async fn discover_skills(
                 path: path.to_string(),
                 scope,
                 enabled: skill.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+                home: None,
             })
         })
         .collect();
@@ -289,6 +290,7 @@ fn connected_apps(result: &Value) -> Vec<SkillInfo> {
                 path: format!("app://{id}"),
                 scope: SkillScope::Plugin,
                 enabled: true,
+                home: None,
             })
         })
         .collect()
@@ -330,6 +332,7 @@ fn installed_plugins(result: &Value) -> Vec<SkillInfo> {
                 path: format!("plugin://{id}"),
                 scope: SkillScope::Plugin,
                 enabled: plugin.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+                home: None,
             });
         }
     }

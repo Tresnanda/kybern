@@ -349,6 +349,7 @@ fn parse_skills(bytes: &[u8], cwd: &Path) -> Option<Vec<SkillInfo>> {
             path: location.to_string(),
             scope,
             enabled: true,
+            home: None,
         });
     }
     skills.sort_by_key(|skill| skill.name.to_ascii_lowercase());

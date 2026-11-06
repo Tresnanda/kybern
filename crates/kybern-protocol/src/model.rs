@@ -1334,6 +1334,10 @@ pub struct SkillInfo {
     pub scope: SkillScope,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Set on a skill listed from another agent's folder (`skills.list` with `include_other_agents`): the home it
+    /// lives in. Absent on the selected agent's own skills.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<crate::SkillHome>,
 }
 
 fn default_true() -> bool {

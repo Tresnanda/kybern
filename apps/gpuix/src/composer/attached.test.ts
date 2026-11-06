@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { alreadyAttachedText, contentHash, fileKey, hasToken, newFiles, removalEdit, standingTokens, tokenRanges, withoutTrigger } from './attached.ts'
+import { alreadyAttachedText, attachmentView, contentHash, fileKey, hasToken, newFiles, removalEdit, standingTokens, tokenRanges, withoutTrigger } from './attached.ts'
 
 const apply = (text: string, edit: { start: number; end: number; replacement: string } | null) => edit ? text.slice(0, edit.start) + edit.replacement + text.slice(edit.end) : text
 
@@ -86,4 +86,13 @@ test('one file spelled differently (relative, ./, doubled or trailing slashes, a
     // Two different files that share a name are both attached.
     expect(newFiles([{ path: `${dir}/sub/a.png` }], [`${dir}/a.png`]).fresh).toEqual([`${dir}/a.png`])
   } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+// #246: pasted images are told apart by number; the upload keeps its own name.
+test('a pasted image is "Pasted image N" and every image has a thumbnail; a file keeps its name', () => {
+  const pasted = (label: string) => ({ label, name: 'clipboard.png', media_type: 'image/png', path: 'data:image/png;base64,AAAA' })
+  expect(attachmentView(pasted('image1'))).toEqual({ title: 'Pasted image 1', preview: 'data:image/png;base64,AAAA' })
+  expect(attachmentView(pasted('image12')).title).toBe('Pasted image 12')
+  expect(attachmentView({ label: 'image2', name: 'design.png', media_type: 'image/png', path: '/Users/me/design.png' })).toEqual({ title: 'design.png', preview: '/Users/me/design.png' })
+  expect(attachmentView({ label: 'file1', name: 'spec.pdf', media_type: 'application/pdf', path: '/Users/me/spec.pdf' })).toEqual({ title: 'spec.pdf', preview: null })
 })

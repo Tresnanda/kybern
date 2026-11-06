@@ -735,12 +735,18 @@ impl Orchestrator {
     /// has child results and thread messages cut to `LEAD_COPY_BYTES`, with a
     /// pointer to the rest.
     fn provider_message_for<'a>(&self, thread: &Thread, message: &'a UserMessage, live: &LiveSession) -> std::borrow::Cow<'a, UserMessage> {
-        if thread.coordinator_project_id.is_some()
+        let copy = if thread.coordinator_project_id.is_some()
             && let Some(capped) = lead_capped_message(message)
         {
-            return std::borrow::Cow::Owned(self.provider_message(&capped, live).into_owned());
+            std::borrow::Cow::Owned(self.provider_message(&capped, live).into_owned())
+        } else {
+            self.provider_message(message, live)
+        };
+        // A skill from another agent's folder travels as its text (#219); the agent's own skills keep their native form.
+        match crate::skill_frame::expand(&copy, thread.provider.kind, &crate::network::skill_sync::SkillHomes::default().resolve()) {
+            Some(framed) => std::borrow::Cow::Owned(framed),
+            None => copy,
         }
-        self.provider_message(message, live)
     }
 
     /// The copy of a user message a provider receives. Kybern-only mentions become
