@@ -773,7 +773,10 @@ impl Network {
 
     /// Close every session with a machine and revoke every grant it holds (§2.5).
     pub fn drop_machine(&self, machine_id: &str) {
-        let _ = self.store.meta_delete_prefix(&format!("network.list_cache.{machine_id}"));
+        {
+            let _guard = super::list_cache::CACHE_LOCK.lock().unwrap();
+            let _ = self.store.meta_delete_prefix(&format!("network.list_cache.{machine_id}"));
+        }
         if let Some(link) = self.peers.take(machine_id) {
             self.say_farewell(link);
         }

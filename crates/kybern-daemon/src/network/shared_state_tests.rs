@@ -367,6 +367,16 @@ async fn offline_lists_are_stale_and_removed_or_disabled_copies_are_deleted() {
             .is_some_and(|s| s.threads.iter().any(|thread| thread.id == created.id) && s.projects.iter().any(|p| p.id == project.id))
     })
     .await;
+    let mut untrusted = super::list_cache::local(&t.b.state).unwrap();
+    let mut row = serde_json::to_value(&created).unwrap();
+    let id = uuid::Uuid::now_v7();
+    row["delegation"] = json!({"task_id":id,"operation_id":id,"parent_thread_id":id,"depth":1,
+        "status":"completed","started_at":chrono::Utc::now(),"result":"PRIVATE_DELEGATION_RESULT",
+        "error":"PRIVATE_DELEGATION_RESULT","files_touched":["PRIVATE_DELEGATION_RESULT"]});
+    row["last_message_preview"] = json!("PRIVATE_DELEGATION_RESULT");
+    untrusted.threads = vec![serde_json::from_value(row).unwrap()];
+    super::list_cache::store_snapshot(&t.a.state, untrusted);
+    assert!(!t.a.state.store.meta_get(&format!("network.list_cache.{}", t.b.id())).unwrap().unwrap().contains("PRIVATE_DELEGATION_RESULT"));
     let before = super::list_cache::read(&t.a.state, params.clone()).unwrap().snapshot.unwrap();
     t.go_offline(&t.b).await;
     let at_a = client(&t.a).await;
@@ -381,9 +391,11 @@ async fn offline_lists_are_stale_and_removed_or_disabled_copies_are_deleted() {
     t.a.state.settings.set(settings).unwrap();
     assert!(super::list_cache::read(&t.a.state, params.clone()).unwrap().snapshot.is_none());
     assert!(t.a.state.store.meta_get(&format!("network.list_cache.{}", t.b.id())).unwrap().is_none());
+    super::list_cache::store_snapshot(&t.a.state, before.clone());
     super::list_cache::refresh(&t.a.state).await;
     assert!(super::list_cache::read(&t.a.state, params.clone()).unwrap().snapshot.is_none());
     super::removal::remove(&t.c.state, &t.b.id(), false, &[]).await.unwrap();
+    super::list_cache::store_snapshot(&t.c.state, before);
     assert!(t.c.state.store.meta_get(&format!("network.list_cache.{}", t.b.id())).unwrap().is_none());
 }
 
@@ -408,6 +420,27 @@ async fn queued_task_edit_delivers_once_and_owner_changes_win() {
     )
     .unwrap();
     assert_eq!(item.state, OutboxState::Queued);
+    for body in ["Second save", "Queued text"] {
+        let next_op = uuid::Uuid::now_v7();
+        let next = PeerItemEditParams {
+            operation_id: next_op,
+            params: json!({"id": original.id, "body":body,"expected_revision":original.revision}),
+            ..edit.clone()
+        };
+        let coalesced = super::outbox::enqueue(
+            &t.a.state,
+            OutboxEnqueueParams {
+                target: t.b.id(),
+                operation: OutboxOp {
+                    kind: OutboxKind::ItemEdit,
+                    operation_id: Some(next_op),
+                    payload: serde_json::to_value(next).unwrap(),
+                },
+            },
+        )
+        .unwrap();
+        assert_eq!(coalesced.id, item.id);
+    }
     t.come_back(&t.b).await;
     eventually("queued task delivered", WAIT, || {
         t.a.state.store.outbox_get(item.id).unwrap().is_some_and(|i| i.state == OutboxState::Delivered)

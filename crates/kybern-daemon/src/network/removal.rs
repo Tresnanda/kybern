@@ -94,7 +94,10 @@ impl Network {
     /// session, every grant it issued, and every client token other members minted on it. Its keys
     /// and operation set stay, so Settings can say it was removed and offer Rejoin (§2.6).
     pub fn forget_network_state(&self) {
-        let _ = self.store.meta_delete_prefix("network.list_cache.");
+        {
+            let _guard = super::list_cache::CACHE_LOCK.lock().unwrap();
+            let _ = self.store.meta_delete_prefix("network.list_cache.");
+        }
         let _ = self.store.meta_delete_prefix("network.preferences.");
         self.peers.close_all();
         for grant in self.grants.held() {

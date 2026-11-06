@@ -121,6 +121,7 @@ export class NoteSession {
   detach() {
     this.off?.();
     this.off = null;
+    clearTimeout(this.pendingTimer);
   }
   /** Leaving the note: stop watching and save whatever is pending. */
   async dispose() {
@@ -128,6 +129,15 @@ export class NoteSession {
     await this.flush();
   }
 
+  private pendingTimer?: ReturnType<typeof setTimeout>;
+  private watchPending() {
+    clearTimeout(this.pendingTimer);
+    if (!(this.base as (Note & { pending_operation_id?: string }) | null)?.pending_operation_id || !this.off) return;
+    this.pendingTimer = setTimeout(async () => {
+      await this.sync();
+      this.watchPending();
+    }, 1500);
+  }
   private fetchLatest() {
     const target = this.target;
     return this.deps.call(
@@ -168,12 +178,21 @@ export class NoteSession {
           this.status = "conflict";
         }
       }
+      const pendingError = (note as (Note & { pending_error?: string }) | null)?.pending_error;
+      if (pendingError && note) {
+        this.draft ??= { title: note.title, body: note.body, baseRevision: note.revision };
+        if (this.key) noteDrafts.set(this.key, this.draft);
+        const owner = (note as Note & { pending_owner?: Note }).pending_owner;
+        if (owner) { this.base = owner; this.conflict = true; this.status = "conflict"; }
+        else { this.status = "error"; this.error = pendingError; }
+      }
       this.loadError = "";
     } catch (e) {
       this.loadError = this.message(e, "load this note");
     }
     this.loaded = true;
     this.emit();
+    this.watchPending();
   }
 
   private saving() {
@@ -283,6 +302,7 @@ export class NoteSession {
         this.status = "dirty";
         this.scheduleSave();
       } else this.status = result ? "saved" : "idle";
+      this.watchPending();
     } catch (e) {
       if (this.isConflict(e)) {
         this.conflict = true;

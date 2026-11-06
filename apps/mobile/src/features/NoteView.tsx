@@ -127,7 +127,7 @@ export function NoteView({
   const body = useRef<TextInput>(null);
   const editable = s.connected && s.loaded && !s.deleted;
   const readOnlyTitle = s.note?.scope === "thread";
-  const status = saveStatusText(s.status);
+  const status = saveStatusText(s.status, !!(s.note as { pending_operation_id?: string } | null)?.pending_operation_id);
   return (
     <View style={fill ? { flex: 1 } : undefined}>
       {s.loadError ? (
@@ -230,7 +230,7 @@ export function NoteView({
             accessibilityLiveRegion="polite"
             style={{ minHeight: 19 }}
           >
-            {!s.connected ? "Offline. Changes stay on this phone." : status}
+            {(s.note as { pending_operation_id?: string } | null)?.pending_operation_id ? status : !s.connected ? "Offline. Changes stay on this phone." : status}
           </T>
         </View>
       ) : (

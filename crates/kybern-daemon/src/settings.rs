@@ -64,6 +64,7 @@ impl SettingsStore {
             }
         }
         crate::provider_accounts::validate(&settings)?;
+        let _cache_guard = crate::network::list_cache::CACHE_LOCK.lock().unwrap();
         let before = self.current.read().unwrap().clone();
         write_atomic(&self.path, &settings)?;
         *self.current.write().unwrap() = settings.clone();

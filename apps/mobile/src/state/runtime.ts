@@ -584,7 +584,7 @@ setNetworkRouting({
   network: () => {
     if (client?.status === "open") return { client: hub?.primaryMachineId ? hub.set.handleFor(hub.primaryMachineId) : client, ...(hub?.primaryMachineId ? { machineId: hub.primaryMachineId } : {}) };
     const member = hub?.memberConnection(hub.primaryMachineId);
-    return member && hub ? { client: hub.set.clientFor(member.record.machineId), machineId: member.record.machineId } : null;
+    return member && hub ? { client: hub.set.clientFor(member.record.machineId), machineId: member.record.machineId } : hub?.primaryMachineId ? { client: hub.set.handleFor(hub.primaryMachineId), machineId: hub.primaryMachineId } : null;
   },
   machine: (machineId) =>
     hub?.set.connection(machineId) ? hub.set.handleFor(machineId) : null,

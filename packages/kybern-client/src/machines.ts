@@ -1014,6 +1014,45 @@ export class MachineSet {
 
   private async itemCall(machineId: string, method: string, params: unknown, live?: () => Promise<unknown>): Promise<unknown> {
     const cache = this.options.itemCache!;
+    const isGet = method === 'notes.get' || method === 'tasks.items.get';
+    if (isGet) {
+      const saved = await cache.read(machineId, method, params) as Record<string, Record<string, unknown>> | undefined;
+      const key = method === 'notes.get' ? 'note' : 'task';
+      const pending = saved?.[key];
+      if (pending?.pending_operation_id) {
+        const source = this.slots.get(pending.pending_source_machine as string);
+        if (source?.inner && LIVE.has(source.status)) {
+          try {
+            const { items } = await source.inner.call('outbox.list', { target: machineId });
+            const item = items.find(i => i.operation_id === pending.pending_operation_id);
+            if (item?.state === 'delivered' && item.result) {
+              const result = { [key]: item.result };
+              await cache.put(machineId, method, params, result);
+              return result;
+            }
+            if (item && ['failed', 'expired', 'cancelled'].includes(item.state)) {
+              if (live) {
+                const owner = await live() as Record<string, unknown>;
+                await cache.put(machineId, method, params, owner);
+                return { [key]: { ...pending, pending_owner: owner[key], pending_error: item.last_error || 'The queued edit was not delivered.' } };
+              }
+              const result = { [key]: { ...pending, pending_error: item.last_error || 'The queued edit was not delivered. Compare the owner version and save again.' } };
+              await cache.put(machineId, method, params, result);
+              return result;
+            }
+          } catch { /* Retain the draft until its delivery is known. */ }
+        }
+        return saved;
+      }
+    }
+    if (isItemEdit(method)) {
+      const patch = params as Record<string, unknown>;
+      const get = method === 'notes.update' ? 'notes.get' : 'tasks.items.get';
+      const identity = patch.id ? { id: patch.id } : patch.key ? { key: patch.key } : { thread_id: patch.thread_id };
+      const cached = await cache.read(machineId, get, identity) as Record<string, Record<string, unknown>> | undefined;
+      const pending = cached?.[method === 'notes.update' ? 'note' : 'task'];
+      if (pending?.pending_operation_id) live = undefined;
+    }
     if (live) {
       let value = await live();
       if (method === 'notes.list' || method === 'tasks.items.list') {
@@ -1050,13 +1089,18 @@ export class MachineSet {
       const saved = await cache.read(machineId, readMethod, readParams) as Record<string, Record<string, unknown>> | undefined;
       const previous = saved?.[note ? 'note' : 'task'];
       if (!previous?.updated_at) throw new Error('Open the note or task while its machine is online before editing it offline.');
-      const source = [...this.slots.values()].find(s => s.inner && LIVE.has(s.status));
-      if (!source?.inner) throw new OfflineError(machineId, true, 'Connect to a network member to queue this edit.');
+      const source = previous.pending_source_machine
+        ? this.slots.get(previous.pending_source_machine as string)
+        : [...this.slots.values()].find(s => s.inner && LIVE.has(s.status));
+      if (!source?.inner || !LIVE.has(source.status)) throw new OfflineError(machineId, true, 'Connect to a network member to queue this edit.');
       const operationId = this.options.operationId?.() ?? crypto.randomUUID();
       const item = await source.inner.call('outbox.enqueue', { target: machineId, operation: { kind: 'item_edit', operation_id: operationId,
         payload: { operation_id: operationId, method, params, expected_updated_at: previous.updated_at } } });
-      // Pending edits are visible in the daemon outbox. Keep the owner's cache unchanged for conflict comparison.
-      return { ...previous, ...patch, pending_operation_id: item.operation_id };
+      // Keep the owner's revision/time while retaining the latest queued draft across navigation.
+      const pending = { ...previous, ...patch, pending_operation_id: item.operation_id, pending_source_machine: source.record.machineId };
+      await cache.put(machineId, readMethod, readParams, { [note ? 'note' : 'task']: pending });
+      if (previous.id) await cache.put(machineId, readMethod, { id: previous.id }, { [note ? 'note' : 'task']: pending });
+      return pending;
     }
     throw new OfflineError(machineId, true);
   }

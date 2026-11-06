@@ -1231,7 +1231,17 @@ test("offline notes remain readable and edits queue against the cached owner ver
   assert.equal(queued.target, 'b');
   assert.equal(queued.operation.kind, 'item_edit');
   assert.equal(queued.operation.payload.expected_updated_at, note.updated_at);
-  assert.deepEqual(await set.handleFor('b').call('notes.get', { id: 'n' }), { note }, 'owner version remains available for comparison');
+  assert.equal((await set.handleFor('b').call('notes.get', { id: 'n' })).note.body, 'pending', 'latest queued draft survives navigation');
+  for (const body of ['second', 'third']) {
+    await set.handleFor('b').call('notes.update', { id: 'n', expected_revision: 5, body });
+    assert.equal((await set.handleFor('b').call('notes.get', { id: 'n' })).note.body, body);
+    assert.equal(queued.operation.payload.expected_updated_at, note.updated_at);
+  }
+  world.on('a', 'outbox.list', () => ({ items: [{ operation_id: result.pending_operation_id, state: 'delivered', result: { ...note, body: 'third', revision: 6 } }] }));
+  const delivered = (await set.handleFor('b').call('notes.get', { id: 'n' })).note;
+  assert.equal(delivered.body, 'third');
+  assert.equal(delivered.revision, 6);
+  assert.equal(delivered.pending_operation_id, undefined);
   await set.removeMachine('b');
   set.dispose();
 });

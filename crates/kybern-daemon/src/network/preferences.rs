@@ -20,7 +20,13 @@ fn filename(name: &str) -> bool {
         })
 }
 fn fields(state: &AppState) -> anyhow::Result<Registers> {
-    Ok(state.store.meta_get(KEY)?.map(|s| serde_json::from_str(&s)).transpose()?.unwrap_or_default())
+    let mut all: Registers = state.store.meta_get(KEY)?.map(|s| serde_json::from_str(&s)).transpose()?.unwrap_or_default();
+    // Repair older oversized stores deterministically. Retain deletion clocks;
+    // do not admit an unbounded succession of names after create/delete cycles.
+    while all.len() > 65 {
+        all.pop_last();
+    }
+    Ok(all)
 }
 fn parse(e: &OpEnvelope) -> anyhow::Result<SpaceField> {
     Ok(serde_json::from_str(&e.body)?)
@@ -60,7 +66,10 @@ fn observe(state: &AppState) -> anyhow::Result<Registers> {
     }
     names.sort();
     names.dedup();
-    for name in names.into_iter().take(65) {
+    for name in names {
+        if !all.contains_key(&name) && all.len() >= 65 {
+            continue;
+        }
         let Ok(value) = disk(state, &name) else { continue };
         if baseline.get(&name) == Some(&value) || (!baseline.contains_key(&name) && value.is_null()) {
             continue;
@@ -71,6 +80,7 @@ fn observe(state: &AppState) -> anyhow::Result<Registers> {
         baseline.insert(name, value);
     }
     state.store.meta_set(KEY, &serde_json::to_string(&all)?)?;
+    baseline.retain(|name, _| all.contains_key(name));
     state.store.meta_set(BASE, &serde_json::to_string(&baseline)?)?;
     Ok(all)
 }
@@ -88,6 +98,9 @@ fn merge(state: &AppState, mut all: Registers, incoming: &[OpEnvelope]) -> anyho
         );
         let signer = projection.entry(&e.signer).ok_or_else(|| anyhow::anyhow!("Preference signer is not a member"))?;
         keys::verify_signature(&signer.descriptor.signing_key, &spaces::input(&e.body), &B64.decode(&e.signature)?)?;
+        if !all.contains_key(&f.entity) && all.len() >= 65 {
+            continue;
+        }
         if all.get(&f.entity).is_none_or(|old| stamp(old).ok() < stamp(e).ok()) {
             all.insert(f.entity, e.clone());
         }
@@ -131,6 +144,7 @@ fn merge(state: &AppState, mut all: Registers, incoming: &[OpEnvelope]) -> anyho
         baseline.insert(name.clone(), f.value);
     }
     state.store.meta_set(KEY, &serde_json::to_string(&all)?)?;
+    baseline.retain(|name, _| all.contains_key(name));
     state.store.meta_set(BASE, &serde_json::to_string(&baseline)?)?;
     Ok(all)
 }
@@ -158,5 +172,27 @@ pub async fn sync(state: &AppState, link: &Arc<PeerLink>) {
     let _guard = state.network.spaces_lock.lock().await;
     if let Ok(local) = observe(state) {
         let _ = merge(state, local, &answer.fields);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn create_delete_cycles_remain_bounded() {
+        let Some(cluster) = super::super::harness::Cluster::new(&[super::super::harness::NodeSpec::owner("prefs")]) else { return };
+        let node = cluster.start("prefs", true).await;
+        let dir = node.state.settings.dir().join("themes");
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 0..100 {
+            let path = dir.join(format!("theme-{i}.json"));
+            std::fs::write(&path, "{}").unwrap();
+            observe(&node.state).unwrap();
+            std::fs::remove_file(path).unwrap();
+            let all = observe(&node.state).unwrap();
+            assert!(all.len() <= 65);
+            assert!(all.values().all(|e| parse(e).unwrap().value.is_null()));
+            merge(&node.state, all, &[]).unwrap();
+        }
     }
 }
