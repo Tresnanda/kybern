@@ -49,4 +49,5 @@ zed=a2275d84c575f48d149e8f1768248c843fc66040
 upstream=@gpuix/native@0.11.0
 
 # gpuix generated-files: Markdown linkContextMenu events carry the hit-tested URL and pointer position.
-# No zed or shader change. Windows build; macOS build remains an integration check.
+# No zed or shader change. Built on Windows and macOS; fast-forwarded into
+# gpuix next and kybern at efb24b4 (2026-11-07).
