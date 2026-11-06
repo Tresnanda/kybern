@@ -1,4 +1,5 @@
-//! Keybindings and theme files use the same signed field clocks as Spaces, on a separate capability-gated exchange.
+//! Legacy daemon preference files use signed field clocks on a separate exchange.
+//! GPUIX/mobile have no custom keybinding/theme-file consumers; appearance stays device-local.
 use super::{keys, ops, peers::PeerLink, spaces};
 use crate::state::AppState;
 use base64::{Engine, engine::general_purpose::STANDARD as B64};

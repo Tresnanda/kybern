@@ -18,6 +18,7 @@ fn bounded(mut value: NetworkListSnapshot) -> NetworkListSnapshot {
     value.threads = value
         .threads
         .into_iter()
+        .filter(|t| t.subagent.is_none() && t.inbound.is_none())
         .map(|t| Thread {
             id: t.id,
             project_id: t.project_id,
