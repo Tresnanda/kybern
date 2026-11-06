@@ -285,12 +285,12 @@ export function useCompletion({
     if (term === null) return { any: false, hits: [] as { note: NoteSummary; snippet: string | null }[] }
     // Shared Global notes live on This Mac; this environment's daemon cannot read them into a prompt.
     const shared = sharesHome()
-    const list = noteFeed.filter((note) => !note.deleted_at && !(shared && note.scope === 'global'))
+    const list = (noteFeed ?? []).filter((note) => !note.deleted_at && !(shared && note.scope === 'global'))
     return { any: list.length > 0, hits: rankMentionNotes(list, term, noteHits.query === term ? noteHits.hits : null, projectId) }
   }, [noteFeed, noteHits, projectId, term])
   const mentionTasks = useMemo(() => {
     if (term === null) return { any: false, hits: [] as TaskItem[] }
-    const list = Object.values(taskFeed)
+    const list = Object.values(taskFeed ?? {})
     return { any: list.length > 0, hits: rankMentionTasks(list, term, projectId, keyMatchesQuery) }
   }, [taskFeed, projectId, term])
   const anyThread = !!mention && threads.length > (currentThreadId ? 1 : 0)
