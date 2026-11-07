@@ -37,7 +37,7 @@ function progress(row: UpdateRow, update: DaemonUpdate): UpdateRow {
       if (!targetVersion && row.phase !== 'restarting') return { ...base, phase: 'skipped', text: `Already on ${update.current_version}` }
       const matched = !!update.update_id && (!row.updateId || row.updateId === update.update_id)
         && !!targetVersion && (!row.targetVersion || row.targetVersion === targetVersion) && targetVersion === update.current_version
-      return matched ? { ...base, phase: 'updated', text: `Updated to ${targetVersion}` }
+      return matched ? { ...base, phase: 'updated', text: 'Updated' }
         : { ...base, phase: 'failed', text: 'The requested version did not start. Retry the update.' }
     }
     case 'failed': return { ...base, phase: 'failed', text: 'Unable to finish the update. Retry the update.' }
@@ -48,7 +48,7 @@ function progress(row: UpdateRow, update: DaemonUpdate): UpdateRow {
       const downloading = update.download_percent != null || update.message.startsWith('Downloading')
       return { ...base, phase: downloading ? 'downloading' : 'installing',
         progress: update.download_percent ?? undefined,
-        text: downloading ? `Downloading${update.download_percent == null ? '…' : ` · ${update.download_percent}%`}` : 'Installing…' }
+        text: downloading ? 'Downloading' : 'Installing' }
     }
     default: return { ...base, phase: 'checking', text: 'Checking…' }
   }
@@ -84,7 +84,7 @@ export function acceptUpdates(run: UpdateRun, result: NetworkUpdateAllResult, ma
   }
   for (const skip of result.skipped) {
     const row = next[skip.machine_id]
-    if (!row || row.updateId) continue
+    if (!row || row.phase !== 'checking' || row.updateId) continue
     const version = machines.find(m => m.machine_id === skip.machine_id)?.version
     next[skip.machine_id] = { ...row, phase: 'skipped', text: skip.reason === 'Already up to date' && version ? `Already on ${version}` : skip.reason }
   }
@@ -93,11 +93,11 @@ export function acceptUpdates(run: UpdateRun, result: NetworkUpdateAllResult, ma
 
 export function updateRunSummary(run: UpdateRun, now = Date.now()): string {
   const rows = Object.values(run), busy = rows.filter(isUpdating)
+  const failed = rows.filter(r => r.phase === 'failed').length
   if (busy.length) {
     const slowest = busy.reduce((a,b) => a.startedAt <= b.startedAt ? a : b)
-    return now - slowest.startedAt >= 180_000 ? `Waiting for ${slowest.name}…` : `Updating ${busy.length} ${busy.length === 1 ? 'machine' : 'machines'}…`
+    return now - slowest.startedAt >= 180_000 ? `Waiting for ${slowest.name}…` : `Updating ${busy.length} ${busy.length === 1 ? 'machine' : 'machines'}${failed ? ` · ${failed} needs a retry` : '…'}`
   }
-  const failed = rows.filter(r => r.phase === 'failed').length
   if (failed) return `${failed} ${failed === 1 ? 'machine needs' : 'machines need'} a retry`
   const version = rows[0]?.currentVersion
   if (version && rows.every(r => r.currentVersion === version && (r.phase === 'updated' || r.text === `Already on ${version}`))) return `All machines on ${version}`

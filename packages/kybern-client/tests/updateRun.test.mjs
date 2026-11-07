@@ -68,3 +68,26 @@ test('a later attempt observed on another device uses its own target', () => {
  assert.equal(next.a.targetVersion,'0.24.0')
  assert.equal(next.a.startedAt,1)
 })
+
+test('approved copy avoids repeating version or download percentage', () => {
+ const run = beginUpdate([machine()])
+ assert.equal(reconcileUpdates(run,[machine(update('updating',{download_percent:64}))]).a.text,'Downloading')
+ assert.equal(reconcileUpdates(run,[machine(update('current',{current_version:'0.23.0'}))]).a.text,'Updated')
+})
+test('mixed running and failed updates keep the retry count visible', () => {
+ const run = beginUpdate([machine()],0)
+ run.b = { ...run.a, machineId:'b', phase:'failed' }
+ assert.equal(updateRunSummary(run,1),'Updating 1 machine · 1 needs a retry')
+})
+test('a failed request is actionable and a retry changes only that machine', async () => {
+ const { UpdateRunStore } = await import('../src/updateRun.ts')
+ const store = new UpdateRunStore()
+ store.begin([machine(),{...machine(),machine_id:'b'}],0)
+ store.fail(['a'])
+ assert.equal(store.get().a.phase,'failed')
+ assert.match(store.get().a.text,/retry/)
+ const other = store.get().b
+ store.begin([machine()],1)
+ assert.equal(store.get().a.phase,'checking')
+ assert.equal(store.get().b,other)
+})

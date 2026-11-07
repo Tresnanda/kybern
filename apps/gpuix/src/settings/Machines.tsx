@@ -1,3 +1,6 @@
+import { UpdatesSection } from './Updates.tsx'
+import { useUpdateRun, retryMachineUpdate } from '../machines/network.ts'
+import { isUpdating, updateRunSummary } from '../../../../packages/kybern-client/src/updateRun.ts'
 import { writeClipboardText } from '../platform/os.ts'
 import { useSettings, updateSettings } from './store.ts'
 // Settings › Machines (design §5.2): your network. It replaces the environment switcher. One card per machine: its
@@ -5,7 +8,7 @@ import { useSettings, updateSettings } from './store.ts'
 // code; Update all machines. Everything goes through the `network.*` RPCs of the machine the user is at, which any member
 // answers for the rest. Words come from `machinesModel.ts`.
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { DoctorReport, FoundMachine, NetworkStatus, NetworkUpdateAllResult, OutboxItem } from '../../../../packages/kybern-client/src/types.ts'
+import type { DoctorReport, FoundMachine, NetworkStatus, OutboxItem } from '../../../../packages/kybern-client/src/types.ts'
 import { Dialog, Tip } from '../nav/overlay.tsx'
 import { N } from '../nav/glyphs.ts'
 import { toastProblem } from '../problems/toast.ts'
@@ -30,7 +33,7 @@ import { Switch } from '../kit/Switch.tsx'
 import { readClipboardAuto, setClipboardAuto } from '../machines/clipboard.ts'
 import { S } from './glyphs.ts'
 import { Row, Section } from './controls.tsx'
-import { buildCards, doctorRows, doctorSummary, outboxRows, reachableRow, unnamedMachines, updateResultRows, updateSummary, type MachineCardModel } from './machinesModel.ts'
+import { buildCards, doctorRows, doctorSummary, outboxRows, reachableRow, unnamedMachines, type MachineCardModel } from './machinesModel.ts'
 import { dismissNamesHint, namesHintDismissed } from '../machines/notice.ts'
 import { configDir } from '../environments/registry.ts'
 import { machineGlyph } from '../../../../packages/kybern-client/src/machineMerge.ts'
@@ -42,6 +45,7 @@ import { MachineSetupSection } from '../machines/MachineSetup.tsx'
 export function Machines() {
   const t = useTheme()
   const net = useNetwork()
+  const updateRun = useUpdateRun()
   const settingsState = useSettings()
   const machines = useMachines()
   const [removing, setRemoving] = useState<MachineCardModel | null>(null)
@@ -51,7 +55,7 @@ export function Machines() {
   const online = machines.filter((machine) => !machine.offline).map((machine) => machine.machineId).join(',')
   useEffect(() => { for (const id of online.split(',').filter(Boolean)) if (!net.infos[id]) void loadMachineInfo(id) }, [online])
   const latest = machines.find((machine) => machine.isLocal)?.version
-  const cards = useMemo(() => buildCards({ rows: machines, members: status?.members ?? [], infos: net.infos, latest }), [machines, status, net.infos, latest])
+  const cards = useMemo(() => buildCards({ rows: machines, members: status?.members ?? [], infos: net.infos, latest }).map(card => updateRun[card.machineId]?.phase === 'restarting' ? { ...card, status: 'Restarting…', tone: 'warn' as const, row: { ...card.row, offline: false } } : card), [machines, status, net.infos, latest, updateRun])
   // A machine the daemon reports online and this app has not reached: open the page, and it is dialed now instead of
   // after its backoff, once per visit (ADE-124).
   const reaching = cards.filter((card) => card.reaching && !card.row.connecting).map((card) => card.machineId).join(',')
@@ -86,7 +90,7 @@ export function Machines() {
     {!net.unavailable && <TailnetSection found={found} tailscale={status?.tailscale} busy={net.busy} />}
     {!net.unavailable && <AddByCode busy={net.busy === 'join'} />}
     {!net.unavailable && <Outbox items={net.outbox} machines={cards} />}
-    {!net.unavailable && <Updates busy={net.busy === 'update'} following={status ? !!status.follow_updates : undefined} machines={cards} result={net.updated} />}
+    {!net.unavailable && <Updates busy={net.busy === 'update'} following={status ? !!status.follow_updates : undefined} machines={cards} />}
     {!net.unavailable && status && <Section title="Your network" accessory={<Button testId="machines-intro" size="sm" variant="ghost" onClick={() => openIntro(true)}>What is this?</Button>}>
       <Row title="Let your machines find each other" description="Machines signed in to the same Tailscale account join without a code. Turn this off to leave the network and keep your machines separate."><Switch aria-label="Use your network" testId="machines-enabled" checked={status.enabled} disabled={net.busy === 'enabled'} onCheckedChange={(enabled) => void setNetworkEnabled(enabled).catch((e) => toastProblem(e, { action: 'change the network' }))} /></Row>
       <KeepReachable status={status.keep_reachable} busy={net.busy === 'reachable'} />
@@ -288,28 +292,20 @@ function AddByCode({ busy }: { busy: boolean }) {
   </Section>
 }
 
-function Updates({ busy, following, machines, result }: { busy: boolean; following: boolean | undefined; machines: MachineCardModel[]; result: NetworkUpdateAllResult | null }) {
-  const t = useTheme()
+function Updates({ busy, following, machines }: { busy: boolean; following: boolean | undefined; machines: MachineCardModel[] }) {
   const net = useNetwork()
   const [error, setError] = useState('')
   const behind = machines.filter((card) => card.behind).length
-  const names = new Map(machines.map((card) => [card.machineId, card.name]))
-  const rows = result ? updateResultRows(result, names) : []
+  const updates = useUpdateRun()
+  const rows = machines.map(m => updates[m.machineId] ?? { machineId: m.machineId, name: m.name, phase: 'skipped' as const, currentVersion: m.version ?? '', startedAt: 0, text: m.behind ? 'Ready to update' : 'Check for updates' })
+  const active = rows.some(isUpdating)
+  const [now, setNow] = useState(Date.now)
+  useEffect(() => { if (!active) return; const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer) }, [active])
   const run = async () => {
     setError('')
     try { await updateAllMachines() } catch (e) { setError(problemLine(e, { action: 'update your machines' })) }
   }
-  return <Section title="Updates">
-    <Row title="Update all machines" description={error || (result ? updateSummary(result) : behind ? `${behind} ${behind === 1 ? 'machine is' : 'machines are'} behind. Each one updates itself when it is idle.` : 'Starts an update on every machine that is behind.')}><Button testId="machines-update-all" busy={busy} onClick={() => void run()}>Update all machines</Button></Row>
-    {rows.length > 0 && <div testId="machines-update-results" style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 18, paddingRight: 18, paddingTop: 12, paddingBottom: 14 }}>
-      {rows.map((row) => <div key={row.machineId} testId={`update-result-${row.machineId}`} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <StatusDot tone={row.started ? 'good' : 'idle'} />
-        <Label color={t.text} size={13} lineHeight={20} weight={500}>{row.name}</Label>
-        <Label color={t.textSecondary} size={13} lineHeight={20} truncate style={{ flexGrow: 1 }}>{row.text}</Label>
-      </div>)}
-    </div>}
-    <Row title="Keep all machines on the same version" description="A machine updates itself, once it is idle, when another one runs a newer version. A deb or rpm install shows the command to run instead."><Switch aria-label="Keep all machines on the same version" testId="machines-follow-updates" checked={!!following} disabled={following === undefined || net.busy === 'follow'} onCheckedChange={(enabled) => void setFollowUpdates(enabled).catch((e) => toastProblem(e, { action: 'change the setting' }))} /></Row>
-  </Section>
+  return <UpdatesSection rows={rows} summary={error || (Object.keys(updates).length ? updateRunSummary(Object.fromEntries(rows.map(r => [r.machineId, r])), now) : behind ? `${behind} machines can update` : 'Check for updates on your machines.')} busy={busy} following={following} followBusy={net.busy === 'follow'} onUpdate={() => void run()} onRetry={id => void retryMachineUpdate(id).catch(e => toastProblem(e, { action: 'retry the update' }))} onFollow={enabled => void setFollowUpdates(enabled).catch(e => toastProblem(e, { action: 'change the setting' }))} />
 }
 
 /** "Keep this machine reachable when Kybern is closed" (ADE-119): the daemon starts at login while this machine is in a network. */

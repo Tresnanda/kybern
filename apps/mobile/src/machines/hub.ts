@@ -1,3 +1,4 @@
+import { receiveUpdateStatus } from "./updateRun";
 // The phone's machine set (design §5.3).
 //
 // - The connection `runtime.ts` opens (the computer the phone is at) is the
@@ -515,6 +516,7 @@ export class MachineHub {
       this.watched.add(id);
       const handle = this.set.handleFor(id);
       const refresh = () => void this.refreshOne(id).catch(() => {});
+      handle.onNotification("network.changed", receiveUpdateStatus);
       handle.onNotification("projects.changed", refresh);
       handle.onNotification("threads.changed", refresh);
     }

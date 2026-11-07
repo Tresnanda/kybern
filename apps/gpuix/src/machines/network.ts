@@ -1,3 +1,7 @@
+import { readFileSync, mkdirSync, promises as fs } from 'node:fs'
+import { join } from 'node:path'
+import { configDir } from '../environments/registry.ts'
+import { UpdateRunStore } from '../../../../packages/kybern-client/src/updateRun.ts'
 // The network as Settings → Machines and the sidebar footer read it: `network.status` from the machine the
 // user is at (any member answers for all of them), `machines.info` from each machine about itself, and the
 // actions of design §4.1. One store; it reads while something shows it and follows `network.changed`.
@@ -28,7 +32,10 @@ export interface NetworkState {
 
 let state: NetworkState = { status: null, unavailable: false, error: '', infos: {}, busy: null, outbox: [], updated: null, doctor: null }
 const listeners = new Set<() => void>()
-const emit = (patch: Partial<NetworkState>) => { state = { ...state, ...patch }; for (const listener of listeners) listener() }
+export const updateRuns = new UpdateRunStore(async value => { const dir = configDir(); mkdirSync(dir, { recursive: true }); await fs.writeFile(join(dir, 'machine-updates.json'), value) })
+try { updateRuns.hydrate(readFileSync(join(configDir(), 'machine-updates.json'), 'utf8')) } catch {}
+export const useUpdateRun = () => useSyncExternalStore(updateRuns.subscribe, updateRuns.get)
+const emit = (patch: Partial<NetworkState>) => { if (patch.status) updateRuns.reconcile(patch.status.members ?? []); state = { ...state, ...patch }; for (const listener of listeners) listener() }
 export const getNetwork = () => state
 /** Tests: forget everything. */
 export function resetNetwork() { state = { status: null, unavailable: false, error: '', infos: {}, busy: null, outbox: [], updated: null, doctor: null }; reading = undefined; again = false; pushes = 0 }
@@ -151,7 +158,26 @@ export const setNetworkEnabled = (enabled: boolean) => act('enabled', enabled ? 
   if (enabled) setup.startMachineSetup()
   return result
 })
-export const updateAllMachines = (): Promise<NetworkUpdateAllResult> => act('update', 'update your machines', async (c) => { const updated = await c.call('network.update_all', {}); emit({ updated }); return updated })
+export async function updateAllMachines(): Promise<NetworkUpdateAllResult> {
+  const members = state.status?.members ?? []
+  updateRuns.begin(members)
+  try {
+    return await act('update', 'update your machines', async c => {
+      const updated = await c.call('network.update_all', {})
+      updateRuns.accept(updated, state.status?.members ?? members)
+      emit({ updated })
+      return updated
+    })
+  } catch (e) { updateRuns.fail(members.map(m => m.machine_id)); throw e }
+}
+export async function retryMachineUpdate(id: string) {
+  const members = state.status?.members.filter(m => m.machine_id === id) ?? []
+  updateRuns.begin(members)
+  try {
+    const update = await machineHub().clientFor(id).call('daemon_update.run', {})
+    updateRuns.reconcile(members.map(m => ({ ...m, update })))
+  } catch (e) { updateRuns.fail([id]); throw e }
+}
 /** "Keep all machines on the same version": a member that sees a newer version updates itself when idle. */
 export const setFollowUpdates = (enabled: boolean) => act('follow', 'change the update setting', (c) => c.call('network.follow_updates.set', { enabled }))
 /** "Keep this machine reachable when Kybern is closed": the daemon registers or removes its login item before answering. */

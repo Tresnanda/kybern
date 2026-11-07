@@ -1,3 +1,7 @@
+import { UpdateDot } from "../../ui/UpdateDot";
+import { useUpdateRun } from "../../machines/updateRun";
+import { isUpdating, updateRunSummary } from "../../../../../packages/kybern-client/src/updateRun";
+import { retryMachineUpdate } from "../../state/machineActions";
 // Settings → Machines (design §5.3): every machine this phone sees, with its
 // status, Pause and Remove; the machines Kybern found on your tailnet to add;
 // and adding one with a code. The phone is a client of the network, never a
@@ -6,7 +10,6 @@ import { setStringAsync } from "expo-clipboard";
 import { router } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import { View } from "react-native";
-import { updateSummary } from "../../../../../packages/kybern-client/src/networkSettings";
 import type { FoundMachine, MachineId, NetworkStatus } from "../../../../../packages/kybern-client/src/types";
 import { parityFooter } from "../../machines/gate";
 import { machineStatusLine, sameNameAddresses } from "../../machines/labels";
@@ -30,9 +33,9 @@ import { errorText, machineHub, problemFor, useApp, useMachineView } from "../..
 import { Alert, confirm } from "../../ui/Alert";
 import { MenuButton } from "../../ui/ActionMenu";
 import { ListRow } from "../../ui/List";
-import { Button, ErrorBanner, Field } from "../../ui/primitives";
+import { Button, ErrorBanner, Field, T, Icon } from "../../ui/primitives";
 import { Busy } from "../../ui/Busy";
-import { space } from "../../ui/theme";
+import { space, useTheme } from "../../ui/theme";
 import { MachineGlyph, StatusDot } from "../MachineGlyph";
 import { Section, ToggleRow } from "./common";
 import { machineMenu } from "./machineActions";
@@ -44,7 +47,11 @@ export function MachinesSettings() {
   const [network, setNetwork] = useState<NetworkStatus | null>(null);
   const [adding, setAdding] = useState(false);
   const [updating, setUpdating] = useState(false);
-  const [updateLine, setUpdateLine] = useState("");
+  const updates = useUpdateRun();
+  const { colors } = useTheme();
+  const [now, setNow] = useState(Date.now);
+  const active = Object.values(updates).some(isUpdating);
+  useEffect(() => { if (!active) return; const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, [active]);
   const [outbox, setOutbox] = useState<OutboxEntry[]>([]);
   const [devices, setDevices] = useState<DeviceGroup[]>([]);
   const hub = machineHub();
@@ -107,9 +114,7 @@ export function MachinesSettings() {
   const networkPaused = (id: MachineId) => network?.members.find((card) => card.machine_id === id)?.status === "paused";
   const updateAll = () => {
     setUpdating(true);
-    setUpdateLine("");
-    updateAllMachines()
-      .then((result) => setUpdateLine(updateSummary(result)))
+    updateAllMachines(network?.members ?? [])
       .catch((e) => setError(errorText(e, "update your machines")))
       .finally(() => setUpdating(false));
   };
@@ -180,11 +185,11 @@ export function MachinesSettings() {
             <ListRow
               key={id}
               title={connection.record.name}
-              subtitle={here ? `${line} · Paired with this phone` : line}
+              subtitle={updates[id]?.phase === "restarting" ? "Restarting…" : here ? `${line} · Paired with this phone` : line}
               subtitleLines={2}
               leading={summary ? <MachineGlyph glyph={summary.glyph} size={24} /> : "laptopcomputer"}
               trailing={<StatusDot status={connection.status} connecting={connection.connecting} />}
-              dimmed={connection.status === "offline" || paused}
+              dimmed={updates[id]?.phase !== "restarting" && (connection.status === "offline" || paused)}
               label={`${connection.record.name}, ${line}`}
               chevron
               onPress={() => router.push({ pathname: "/machine/[id]", params: { id } })}
@@ -213,19 +218,21 @@ export function MachinesSettings() {
               onChange={(value) => run(async () => { await setFollowUpdates(value); await reloadFound(); })}
             />
           ) : null}
-          {gated ? (
-            <ListRow
-              title={MACHINES_COPY.updateAll}
-              subtitle={updateLine || undefined}
-              leading="arrow.up"
-              trailing={updating ? <Busy /> : undefined}
-              disabled={updating}
-              onPress={updateAll}
-            />
-          ) : null}
           {gated ? <ListRow title={MACHINES_COPY.check} leading="checkmark.circle" chevron onPress={() => router.push("/network-check")} /> : null}
         </Section>
       ) : null}
+      {gated ? <Section title="Updates">
+        <ListRow title={MACHINES_COPY.updateAll} subtitle={Object.keys(updates).length ? updateRunSummary(updates, now) : "Check for updates on your machines."} leading="arrow.up" trailing={updating ? <Busy /> : undefined} disabled={updating || active} onPress={updateAll} />
+        {(network?.members ?? []).map(machine => {
+          const row = updates[machine.machine_id] ?? { machineId: machine.machine_id, name: machine.name, phase: "skipped" as const, currentVersion: machine.version ?? "", startedAt: 0, text: "Check for updates", targetVersion: undefined, progress: undefined };
+          return <View key={row.machineId}>
+            <ListRow title={row.name} subtitle={row.phase === "failed" ? `Failed: ${row.text}` : row.text} subtitleLines={3}
+              leading={row.phase === "updated" ? <Icon name="checkmark" size={18} /> : <UpdateDot busy={isUpdating(row)} failed={row.phase === "failed"} />}
+              trailing={<View style={{ alignItems: "flex-end", gap: space.xs }}><T variant="footnote" tone="muted">{isUpdating(row) && row.targetVersion ? `${row.currentVersion} → ${row.targetVersion}` : row.currentVersion}</T>{row.phase === "failed" ? <Button size="small" role="plain" onPress={() => run(() => retryMachineUpdate(machine))}>Retry</Button> : null}</View>} />
+            {row.phase === "downloading" && row.progress !== undefined ? <View accessibilityRole="progressbar" accessibilityValue={{ min: 0, max: 100, now: row.progress }} style={{ marginHorizontal: space.lg, marginBottom: space.sm, height: 3, backgroundColor: colors.line }}><View style={{ height: 3, width: `${row.progress}%`, backgroundColor: colors.accent }} /></View> : null}
+          </View>;
+        })}
+      </Section> : null}
       {gated && outbox.length ? (
         <Section title={MACHINES_COPY.outbox}>
           {outbox.map((entry) => (

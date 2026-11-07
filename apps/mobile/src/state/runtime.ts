@@ -1,3 +1,4 @@
+import { receiveUpdateStatus, initializeUpdateStorage } from "../machines/updateRun";
 import { EARLIER_HISTORY_ENTRIES, FIRST_PAGE_BUDGET } from "../../../../packages/kybern-client/src/historyPaging";
 import { applyThreadList, hasListCursor, moreParams, refreshParams, type ThreadListState } from "../../../../packages/kybern-client/src/threadListCursor";
 import { createLinger, createPrefetchQueue, PREFETCH_TOP_ROWS } from "../../../../packages/kybern-client/src/threadWarmth";
@@ -690,6 +691,7 @@ export async function boot() {
   if (booted) return;
   booted = true;
   setListCacheStorage(fileStorage());
+  initializeUpdateStorage(fileStorage("kybern-machine-updates.json"));
   try {
     phoneDeviceId = await loadDeviceId(secureKv, randomId);
     const saved = await loadMachines(secureKv);
@@ -933,6 +935,7 @@ export function connect(id: string | null) {
   attachHooks.forEach((attach) => attach(next, () => generation === thisGeneration && client === next));
   attachPreviews(next, () => generation === thisGeneration);
   // Projects added or removed elsewhere (desktop, CLI) arrive as the whole list.
+  next.onNotification("network.changed", receiveUpdateStatus);
   next.onNotification(PROJECTS_CHANGED_NOTIFICATION, (params) => {
     if (generation !== thisGeneration || client !== next) return;
     const projects = (params as ProjectsChangedNotification | null)?.projects;
