@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.23.0
+
+<!-- kybern-release-title: Agents' own commands, live machine updates, and glass on Linux -->
+<!-- kybern-release-summary: The / menu lists each agent's own commands, Update all machines shows every machine's progress live, files an agent makes are one click from Finder, links show what they point to, and Linux gets translucent windows. -->
+
+- The `/` menu lists each agent's own commands next to Kybern's. In Oh My Pi that includes `/handoff`, which summarizes the conversation and compacts it in place, and `/usage`, whose report shows in the thread. Codex gets `/review`, `/goal`, `/rename` and `/init`; Antigravity, Grok Build and Cursor list theirs too. A command with the same name as one of Kybern's is listed with the agent's name in front, like `/omp:usage`.
+- **Update all machines** shows each machine's update as it happens: waiting for running work (with the conversation's name), downloading, restarting and updated, with the version on each row. A failed machine says what to do next and has **Retry**. Progress stays when you leave the page or restart the app, and every one of your devices sees it.
+- Files an agent creates or edits are one click away: **Reveal in Finder** (Show in Explorer or Files elsewhere) and **Open** on each edited file and in the menu of file links. A file on another machine is downloaded first, and **Show in Kybern Explorer** opens its folder there. Markdown files open formatted, read-only ones included. Videos and other files Kybern can't show open in their default app.
+- Links in replies show what they point to: GitHub issues and pull requests with their state colour, repositories with the GitHub mark, files with their file-type icon and websites with their own icon.
+- Images an agent shows inline load like the ones in its Markdown, so an animated GIF that said "Preview unavailable" plays in the reply.
+- Linux windows can be translucent. KDE Plasma (Wayland and X11), Hyprland and other desktops that support it blur what's behind the window. GNOME can't blur on its own and starts solid; the Blur my Shell extension can blur Kybern's window. Window corners are rounded on Linux in both modes.
+- The Coordinator can use MCP servers you allow in **Settings → Coordinator → Tools the Coordinator may use** (Claude Code, OpenCode, Oh My Pi and Pi). All are off by default.
+- When one of your computers is offline, its conversation and project lists still show on a device that never saw them, from any computer that's online, marked with when they were fetched. Notes and tasks stay readable offline, and edits to them wait until their computer is back.
+- A question an Oh My Pi agent asks waits for your answer instead of failing after 30 seconds.
+- Switching macOS desktops no longer replaces the conversation with "Something went wrong"; the transcript recovers by itself.
+- Large images look sharp on Windows and Linux, and a file chip's icon is visible in dark mode.
+
 ## 0.22.1
 
 <!-- kybern-release-title: Images and comments on issues and pull requests -->
