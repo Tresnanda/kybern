@@ -137,7 +137,7 @@ render(
     titlebarTransparent: true,
     // Opaque for Solid, an accessibility override or `KYBERN_OPAQUE`; else the native vibrancy (Blur Auto) or a
     // transparent window with the adjustable desktop blur behind it (`shell/windowMaterial.ts`). Windows 11: Mica or
-    // Acrylic; Linux and Windows 10: opaque.
+    // Acrylic; Linux uses the compositor capability, and Windows 10 stays opaque.
     windowBackground: nativeBackground(launchBacking),
     trafficLightX: 16,
     trafficLightY: 16,

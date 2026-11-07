@@ -16,7 +16,7 @@ test('picks the desktop material per OS, build and addon', () => {
   expect(desktopMaterialFor('win32', '10.0.19045', all, undefined, true)).toBe('none') // Windows 10
   expect(desktopMaterialFor('win32', '10.0.22631', [], undefined, true)).toBe('none') // an addon without the materials
   expect(desktopMaterialFor('linux', '6.8.0', all)).toBe('none')
-  expect(desktopMaterialFor('linux', '6.8.0', [], 'dwm')).toBe('dwm')
+  expect(desktopMaterialFor('linux', '6.8.0', [], 'dwm', true, { translucent: false, blur: false })).toBe('none')
   expect(windowsBuild('10.0.26100')).toBe(26100)
   expect(windowsBuild('6.8.0-generic')).toBe(0)
 })
@@ -39,4 +39,25 @@ test('an opaque window puts the frame coat on the Solid frame colour; the other 
     expect(solid.content).toBe(glass.content)
   }
   expect(materialFor('dark', 'none', 100, 100, null, 'none')).toBe(materialFor('dark', 'none', 100))
+})
+
+test('Linux selects blur from capabilities and refuses alpha without composition', () => {
+  expect(desktopMaterialFor('linux', '', [], undefined, true, { translucent: true, blur: true })).toBe('linux-blur')
+  expect(desktopMaterialFor('linux', '', [], undefined, true, { translucent: true, blur: false })).toBe('linux-transparent')
+  expect(desktopMaterialFor('linux', '', [], 'vibrancy', true, { translucent: false, blur: false })).toBe('none')
+  const custom = { mode: 'transparent', radius: 64 } as const
+  expect(nativeBackground(custom, 'linux-blur')).toBe('blurred')
+  expect(nativeBackground(custom, 'linux-transparent')).toBe('transparent')
+})
+
+test('Linux defaults preserve readability on a sharp desktop', async () => {
+  const { defaultVariantMaterial, normalizeVariantMaterial } = await import('./translucency.ts')
+  for (const desktop of ['linux-transparent', 'none'] as const) {
+    const m = defaultVariantMaterial('linux', desktop)
+    expect(m.material).toBe('solid')
+    expect(m.sidebarOpacity).toBe(97)
+    expect(m.surfaceOpacity).toBe(95)
+  }
+  expect(defaultVariantMaterial('linux', 'linux-blur').material).toBe('translucent')
+  expect(normalizeVariantMaterial({ surfaceOpacity: null }).surfaceOpacity).toBeNull()
 })

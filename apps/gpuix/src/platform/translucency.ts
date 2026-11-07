@@ -8,7 +8,8 @@
 // Kybern's own theme colors stay; only the material system is ported. The desktop's opaque
 // variables go in (`buildThemeCssVariables` with `isMac: false`), and `materialVars` returns a
 // GPUIX-only override map for the chosen scope, resolved by `theme.ts`.
-// No runtime imports: `theme.ts` loads this before the UI module graph exists.
+// Only the native capability probe loads here, before the UI module graph exists.
+import { DESKTOP_MATERIAL, type DesktopMaterial } from './desktopMaterial.ts'
 import type { AccessibilityDisplay } from './material.ts'
 
 /** Capture mode (`KYBERN_OPAQUE=1`): an opaque window with no native material. */
@@ -55,10 +56,12 @@ export const DEFAULT_SIDEBAR_ONLY = true
  * The new-install blur: 64 on macOS. On Windows Auto (null), which is Mica there (`shell/windowMaterial.ts`): a custom radius
  * is Acrylic, which also shows the windows behind Kybern, and the radius itself is not applied (Windows sets the strength).
  */
-export const defaultBlur = (platform: NodeJS.Platform = process.platform): number | null => platform === 'win32' ? null : 64
-export const DEFAULT_VARIANT_MATERIAL: VariantMaterial = {
-  material: 'translucent', sidebarOpacity: 90, contentOpacity: DEFAULT_SIDEBAR_ONLY ? 100 : 90, lastContentOpacity: 90, blur: defaultBlur(), surfaceOpacity: null,
+export const defaultBlur = (platform: NodeJS.Platform = process.platform): number | null => platform === 'darwin' ? 64 : null
+export function defaultVariantMaterial(platform: NodeJS.Platform = process.platform, desktop: DesktopMaterial = DESKTOP_MATERIAL): VariantMaterial {
+  const sharp = platform === 'linux' && desktop !== 'linux-blur'
+  return { material: sharp ? 'solid' : 'translucent', sidebarOpacity: sharp ? 97 : 90, contentOpacity: DEFAULT_SIDEBAR_ONLY ? 100 : 90, lastContentOpacity: sharp ? 97 : 90, blur: defaultBlur(platform), surfaceOpacity: sharp ? 95 : null }
 }
+export const DEFAULT_VARIANT_MATERIAL = defaultVariantMaterial()
 /** Sidebar only also makes the thread panel glass (the source's own `--app-sidebar-surface`); false keeps it opaque. */
 export const SIDEBAR_ONLY_PANEL_GLASS = true
 /** Content opacity 100 is the "Sidebar only" preset. */
@@ -80,7 +83,7 @@ export function normalizeVariantMaterial(value: unknown): VariantMaterial {
     // 100 would make the preset restore itself: only a content opacity below 100 is worth coming back to.
     lastContentOpacity: typeof v.lastContentOpacity === 'number' && v.lastContentOpacity < 99.5 ? integerInRange(v.lastContentOpacity, OPACITY_MIN, 99, fallback.lastContentOpacity) : fallback.lastContentOpacity,
     blur: typeof v.blur === 'number' && Number.isFinite(v.blur) ? integerInRange(v.blur, BLUR_MIN, BLUR_MAX, BLUR_MIN) : v.blur === null ? null : fallback.blur,
-    surfaceOpacity: typeof v.surfaceOpacity === 'number' && Number.isFinite(v.surfaceOpacity) ? integerInRange(v.surfaceOpacity, SURFACE_MIN, 100, SURFACE_MIN) : null,
+    surfaceOpacity: typeof v.surfaceOpacity === 'number' && Number.isFinite(v.surfaceOpacity) ? integerInRange(v.surfaceOpacity, SURFACE_MIN, 100, SURFACE_MIN) : v.surfaceOpacity === null ? null : fallback.surfaceOpacity,
   }
 }
 
@@ -123,13 +126,13 @@ export function migrateWindow(saved: unknown): Record<ThemeVariant, VariantMater
 /** The Advanced section's values (§5.4) at their defaults: Sidebar only keeps the content at 100, else it is 90. */
 export function advancedDefaults(m: Pick<VariantMaterial, 'contentOpacity'>): Pick<VariantMaterial, 'sidebarOpacity' | 'contentOpacity' | 'lastContentOpacity' | 'blur' | 'surfaceOpacity'> {
   const d = DEFAULT_VARIANT_MATERIAL
-  return { sidebarOpacity: d.sidebarOpacity, contentOpacity: isSidebarOnly(m) ? 100 : 90, lastContentOpacity: d.lastContentOpacity, blur: d.blur, surfaceOpacity: null }
+  return { sidebarOpacity: d.sidebarOpacity, contentOpacity: isSidebarOnly(m) ? 100 : d.lastContentOpacity, lastContentOpacity: d.lastContentOpacity, blur: d.blur, surfaceOpacity: d.surfaceOpacity }
 }
 /** Whether the Advanced values already equal their defaults (the Sidebar only preset aside); the Reset button is disabled then. */
 export function isAdvancedDefault(m: VariantMaterial, variant: ThemeVariant): boolean {
   const d = advancedDefaults(m)
   return m.sidebarOpacity === d.sidebarOpacity && m.blur === d.blur && (isSidebarOnly(m) || m.contentOpacity === d.contentOpacity)
-    && (m.surfaceOpacity === null || m.surfaceOpacity === SURFACE_DEFAULT[variant])
+    && (m.surfaceOpacity === d.surfaceOpacity || (d.surfaceOpacity === null && m.surfaceOpacity === SURFACE_DEFAULT[variant]))
 }
 
 export function resolveScope(m: Pick<VariantMaterial, 'material' | 'contentOpacity'>, a11y: Pick<AccessibilityDisplay, 'reduceTransparency' | 'increaseContrast'>, opaqueWindow = OPAQUE_WINDOW): WindowScope {

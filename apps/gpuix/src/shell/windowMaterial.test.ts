@@ -40,10 +40,10 @@ describe('backingFor: the window is opaque exactly when nothing can show through
     }
   })
 
-  test('the default: light is opaque, dark keeps the radius-64 blur', () => {
+  test('the default backing follows the platform material', () => {
     const m = DEFAULT_VARIANT_MATERIAL
     expect(backingFor(m, resolveScope(m, { reduceTransparency: false, increaseContrast: false }, false), 'light')).toEqual(OPAQUE)
-    expect(backingFor(m, resolveScope(m, { reduceTransparency: false, increaseContrast: false }, false), 'dark')).toEqual({ mode: 'transparent', radius: 64 })
+    expect(backingFor(m, resolveScope(m, { reduceTransparency: false, increaseContrast: false }, false), 'dark')).toEqual(m.material === 'solid' ? OPAQUE : m.blur === null ? { mode: 'blurred', radius: 0 } : { mode: 'transparent', radius: m.blur })
   })
 
   test('the readability floor holds the low end (light window 15% paints 55%, still glass); 99% covers the desktop', () => {

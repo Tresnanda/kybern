@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { AccountSummary, ProviderKind, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
-import { BLUR_MAX, DEFAULT_VARIANT_MATERIAL, defaultBlur, normalizeVariantMaterial } from '../platform/translucency.ts'
+import { BLUR_MAX, DEFAULT_VARIANT_MATERIAL, defaultVariantMaterial, defaultBlur, normalizeVariantMaterial } from '../platform/translucency.ts'
 import { applyMaterialPatch } from './prefsModel.ts'
 import {
   agentCommand, applyOverride, blurPercent, contentSlider, continueLabel, deriveAgent, isReturningUser, limitFor, materialPatch, materialSummary, optionOf, pickDefault, shouldOnboard,
@@ -140,19 +140,21 @@ describe('window material', () => {
   })
   test('Translucent sidebar is exactly the shipped default, so picking it on a fresh install changes nothing', () => {
     for (const platform of ['darwin', 'win32', 'linux'] as const) {
-      const fresh = { ...DEFAULT_VARIANT_MATERIAL, blur: defaultBlur(platform) }
+      const fresh = { ...defaultVariantMaterial(platform), material: 'translucent' as const }
       expect(applyMaterialPatch(fresh, materialPatch('sidebar', platform))).toEqual(fresh)
     }
-    expect(applyMaterialPatch(base, materialPatch('sidebar', process.platform))).toEqual(DEFAULT_VARIANT_MATERIAL)
+    expect(applyMaterialPatch(base, materialPatch('sidebar', process.platform))).toEqual({ ...DEFAULT_VARIANT_MATERIAL, material: 'translucent' })
   })
   test('Full translucency and back lands on the default again', () => {
     const full = applyMaterialPatch(base, materialPatch('full', 'darwin'))
-    expect(applyMaterialPatch(full, materialPatch('sidebar', 'darwin'))).toEqual({ ...DEFAULT_VARIANT_MATERIAL, blur: defaultBlur('darwin') })
+    expect(applyMaterialPatch(full, materialPatch('sidebar', 'darwin'))).toEqual(defaultVariantMaterial('darwin'))
   })
   test('the Window section is offered only where translucency can work', () => {
     expect(windowMaterialAvailable('vibrancy')).toBe(true)
     expect(windowMaterialAvailable('dwm')).toBe(true)
     expect(windowMaterialAvailable('none')).toBe(false)
+    expect(windowMaterialAvailable('linux-blur')).toBe(true)
+    expect(windowMaterialAvailable('linux-transparent')).toBe(true)
   })
   test('on Windows the sidebar keeps Mica and the whole window is Acrylic', () => {
     expect(materialPatch('sidebar', 'win32').blur).toBeNull()
