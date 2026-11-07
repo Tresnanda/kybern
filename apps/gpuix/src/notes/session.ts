@@ -15,6 +15,7 @@ export class NoteSession {
   private timer?: ReturnType<typeof setTimeout>
   private writing: Promise<void> | null = null
   private off?: () => void
+  private pendingTimer?: ReturnType<typeof setTimeout>
   private refreshing = false
   private generation = 0
   private mounted = 0
@@ -39,8 +40,8 @@ export class NoteSession {
     this.off?.()
     this.off = undefined
   }
-  attach() { if (++this.mounted > 1) return; this.off = subscribeNotes(() => void this.remote()); if (this.snap.phase !== 'ready') void this.reload(); else void this.remote() }
-  detach() { if (--this.mounted > 0) return; this.off?.(); this.off = undefined; clearTimeout(this.timer); void this.flush() }
+  attach() { if (++this.mounted > 1) return; this.off = subscribeNotes(() => void this.remote()); this.watchPending(); if (this.snap.phase !== 'ready') void this.reload(); else void this.remote() }
+  detach() { if (--this.mounted > 0) return; this.off?.(); this.off = undefined; clearTimeout(this.pendingTimer); clearTimeout(this.timer); void this.flush() }
   async reload() {
     if (!this.live) return
     try {
@@ -55,6 +56,21 @@ export class NoteSession {
         if (!this.snap.conflict && !note.deleted_at) this.schedule()
       }
     } catch (e) { this.set({ phase: 'error', error: asError(e) }) }
+  }
+  private watchPending() {
+    clearTimeout(this.pendingTimer)
+    if (!(this.snap.note as (Note & { pending_operation_id?: string }) | null)?.pending_operation_id || !this.mounted) return
+    this.pendingTimer = setTimeout(async () => {
+      try {
+        const { note } = await this.client.call('notes.get', { id: this.id })
+        if (note && this.live && !this.writing) {
+          const error = (note as Note & { pending_error?: string }).pending_error
+          if (error) { const owner = (note as Note & { pending_owner?: Note }).pending_owner; this.set(owner ? { status: 'conflict', conflict: owner } : { status: 'error', error: new Error(error) }); this.persist(); return }
+          this.merge(note)
+        }
+      } catch { /* Retry while pending. */ }
+      this.watchPending()
+    }, 1500)
   }
   private adopt(note: Note) { this.generation++; this.set({ note, title: note.title, body: note.body, phase: 'ready', status: 'saved', conflict: null, error: null, epoch: this.snap.epoch + 1 }); save(this.draftKey, undefined) }
   edit(patch: { title?: string; body?: string }) {
@@ -104,6 +120,7 @@ export class NoteSession {
         if (generation === this.generation) save(this.draftKey, undefined)
         else this.persist()
         recordNote(note)
+        this.watchPending()
       } catch (e) {
         if (!this.live) return
         if ((e as { code?: number }).code === -32004) {

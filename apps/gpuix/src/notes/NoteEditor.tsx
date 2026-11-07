@@ -30,7 +30,7 @@ import { RichEditor, withAlpha, type EditorState, type MakeTaskLine, type RichEd
 import type { ImageHome } from '../editor/images.ts'
 import { plainText as docText, type DocBlock } from '../editor/markdown.ts'
 import { NOTES_HISTORY_COPY, NOTE_CATEGORIES, supersededLabel, supersededLines } from '../../../../packages/kybern-client/src/notesHistory.ts'
-import type { NoteCategory } from '../../../../packages/kybern-client/src/types.ts'
+import type { Note, NoteCategory } from '../../../../packages/kybern-client/src/types.ts'
 import { Menu, MenuItem } from '../nav/overlay.tsx'
 import { FONT_MONO } from '../theme.ts'
 import { supersededBlocks, type SupersededBlock } from './superseded.ts'
@@ -189,7 +189,7 @@ export function NoteEditor({ id, compact = false, width, onClose }: { id: string
   const [saveEra, setSaveEra] = useState(0)
   const [lastStatus, setLastStatus] = useState(snap.status)
   if (lastStatus !== snap.status) { setLastStatus(snap.status); if (snap.status === 'saved') setSaveEra((n) => n + 1) }
-  const status = snap.status === 'saved' ? (note ? editedAgo(note.updated_at) : 'Saved') : snap.status === 'dirty' ? 'Unsaved changes' : snap.status === 'saving' ? 'Saving…' : snap.status === 'conflict' ? 'Choose a version' : 'Couldn’t save · Retry'
+  const status = (note as (Note & { pending_operation_id?: string }) | null)?.pending_operation_id && snap.status === 'saved' ? 'Waiting for machine' : snap.status === 'saved' ? (note ? editedAgo(note.updated_at) : 'Saved') : snap.status === 'dirty' ? 'Unsaved changes' : snap.status === 'saving' ? 'Saving…' : snap.status === 'conflict' ? 'Choose a version' : 'Couldn’t save · Retry'
   const body = (variant: 'page' | 'compact') => <RichEditor
     ref={editor}
     testId={variant === 'page' ? 'note-body' : 'thread-note-body'}

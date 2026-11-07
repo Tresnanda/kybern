@@ -39,7 +39,7 @@ describe('migrate', () => {
   test('version 2 becomes version 3 in memory: opacity is the sidebar opacity, Sidebar only is content 100', () => {
     const m = migrate({ version: 2, theme: 'light', window: { light: { material: 'solid', opacity: 3, blur: 0, sidebarOnly: 1 }, dark: { material: 'translucent', opacity: 60, blur: 20, sidebarOnly: false } } })
     expect(m.window.light).toEqual({ ...DEFAULT_VARIANT_MATERIAL, material: 'solid', sidebarOpacity: 15, contentOpacity: DEFAULT_VARIANT_MATERIAL.contentOpacity, lastContentOpacity: 15, blur: 1 })
-    expect(m.window.dark).toEqual({ ...DEFAULT_VARIANT_MATERIAL, sidebarOpacity: 60, contentOpacity: 60, lastContentOpacity: 60, blur: 20 })
+    expect(m.window.dark).toEqual({ ...DEFAULT_VARIANT_MATERIAL, material: 'translucent', sidebarOpacity: 60, contentOpacity: 60, lastContentOpacity: 60, blur: 20 })
     expect(files()).toEqual([])
   })
 })
@@ -137,10 +137,10 @@ console.log(JSON.stringify({ shown: a.appearance().window, file: JSON.parse(read
     expect(shown.dark).toEqual({ ...DEFAULT_VARIANT_MATERIAL, material: 'translucent', sidebarOpacity: 50, contentOpacity: 100, blur: null })
     expect(shown.light).toEqual({ ...DEFAULT_VARIANT_MATERIAL, material: 'translucent', sidebarOpacity: 50, contentOpacity: 100, blur: null })
     // The pin stays over the saved opacity of 60; the file holds the saved value only.
-    expect(file.dark).toMatchObject({ sidebarOpacity: 60, blur: 64, contentOpacity: DEFAULT_VARIANT_MATERIAL.contentOpacity })
+    expect(file.dark).toMatchObject({ sidebarOpacity: 60, blur: DEFAULT_VARIANT_MATERIAL.blur, contentOpacity: DEFAULT_VARIANT_MATERIAL.contentOpacity })
   })
   test('window and solid', () => {
-    expect(run({ KYBERN_WINDOW_MATERIAL: 'window' }).shown.light).toMatchObject({ material: 'translucent', sidebarOpacity: 90, contentOpacity: 90 })
+    expect(run({ KYBERN_WINDOW_MATERIAL: 'window' }).shown.light).toMatchObject({ material: 'translucent', sidebarOpacity: DEFAULT_VARIANT_MATERIAL.sidebarOpacity, contentOpacity: 90 })
     expect(run({ KYBERN_WINDOW_MATERIAL: 'solid' }).shown.dark).toMatchObject({ material: 'solid' })
     expect(run({ KYBERN_WINDOW_BLUR: '7', KYBERN_WINDOW_OPACITY: '999' }).shown.dark).toMatchObject({ blur: 7, sidebarOpacity: 100 })
   })

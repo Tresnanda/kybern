@@ -370,3 +370,13 @@ test("a context refresh closes its turn instead of folding into the work above t
   assert.equal(settled.at(-1).key, rows.at(-1).key);
   for (let i = 0; i < rows.length - 1; i++) assert.equal(settled[i].key, rows[i].key);
 });
+
+
+test("a completed handoff shows the compaction notice without an empty response", () => {
+  const notice = { ...base, kind: "notice", id: "compacted", seq: 4, level: "info", text: "Context compacted" };
+  const empty = { ...answer, text: "", thinking: "" };
+  const rows = createTurnRows("thread-1")([user, empty, notice, end], new Set());
+  assert.ok(content(rows).some(block => block.id === notice.id));
+  assert.ok(!content(rows).some(block => block.kind === "assistant"));
+  assert.ok(!rows.some(row => row.kind === "work"));
+});

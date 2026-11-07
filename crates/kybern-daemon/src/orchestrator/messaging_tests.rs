@@ -1052,3 +1052,22 @@ async fn conflicts_are_capped_per_delegation() {
     assert_eq!(info.conflicts.len(), 50);
     assert_eq!(info.files_touched.len(), 60, "files are still all recorded");
 }
+
+#[tokio::test]
+async fn a_new_child_turn_reopens_delegation_even_without_the_local_parent_sender_id() {
+    let t = Delegating::new().await;
+    let started = t.delegate(json!({"task":"Initial findings"})).await;
+    let child = t.delegation(&started["task_id"]);
+    let agent = t.agent("Initial findings").await;
+    agent.finish("first findings").await;
+    eventually(|| async { (t.fixture.store.thread_get(child.id).unwrap().unwrap().delegation.unwrap().status == DelegationStatus::Completed).then_some(()) }).await;
+    t.fixture.orchestrator.send(child.id, UserMessage::text("Continue from a forwarded sender")).await.unwrap();
+    let info = t.fixture.store.thread_get(child.id).unwrap().unwrap().delegation.unwrap();
+    assert_eq!(info.status, DelegationStatus::Running);
+    assert!(info.result.is_none() && info.completed_at.is_none());
+    eventually(|| async { agent.transcript().await.contains("Continue from a forwarded sender").then_some(()) }).await;
+    agent.finish("new findings").await;
+    eventually(|| async {
+        t.parent_messages.lock().await.iter().any(|m| matches!(m.parts.as_slice(), [ContentPart::AgentResults { items }] if items.iter().any(|item| item.result.as_deref() == Some("new findings")))).then_some(())
+    }).await;
+}

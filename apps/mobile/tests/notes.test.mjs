@@ -345,3 +345,8 @@ test("the project filter keeps Global notes, or every note of one project", () =
   assert.deepEqual(model.scopeNotes(notes, "p1", inSpace).map((n) => n.id), ["pn", "tn", "gone"]);
   assert.deepEqual(model.scopeNotes(notes, "p2", inSpace).map((n) => n.id), ["other"]);
 });
+
+ test("queued note status names the pending delivery", () => {
+  assert.equal(model.saveStatusText("saved", true), "Waiting for machine");
+  assert.equal(model.saveStatusText("saved", false), "Saved");
+});

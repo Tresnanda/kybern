@@ -19,7 +19,9 @@ import * as SecureStore from "expo-secure-store";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { AppState, Platform } from "react-native";
 import { createNativeSocket } from "./nativeSocket";
-import { getRandomValues } from "expo-crypto";
+import { getRandomValues, randomUUID } from "expo-crypto";
+import { ItemCache } from "../../../../packages/kybern-client/src/itemCache";
+import { defaultTranscriptStore as itemStore } from "./transcriptDisk";
 import { MachineCache } from "../../../../packages/kybern-client/src/machineCache";
 import { MachineHub } from "../machines/hub";
 import { machineCacheFile } from "../machines/cacheFile";
@@ -421,6 +423,8 @@ export function machineHub(): MachineHub {
       store: machineStore(secureKv),
       credentials: machineCredentials(secureKv),
       cache: new MachineCache(cacheFile),
+      itemCache: new ItemCache(itemStore("kybern-items.db")!),
+      operationId: randomUUID,
       deviceId: phoneDeviceId,
       // Hermes has no Web Crypto: the identity check's nonce comes from expo-crypto (the app already ships it).
       randomFill: (bytes) => {
@@ -562,7 +566,7 @@ export async function respondApproval(
  * nearest live member (`MachineHub.memberClient`). Null while nothing answers.
  */
 export function networkClient(): KybernClient | null {
-  if (client?.status === "open") return client;
+  if (client?.status === "open") return hub?.primaryMachineId ? hub.set.handleFor(hub.primaryMachineId) : client;
   return hub?.memberClient(hub.primaryMachineId) ?? null;
 }
 const networkHooks = new Set<(client: KybernClient) => void>();
@@ -578,12 +582,12 @@ export function useNetworkLive(): boolean {
 // while it answers, else the nearest member; an item goes to the machine that holds it.
 setNetworkRouting({
   network: () => {
-    if (client?.status === "open") return { client, ...(hub?.primaryMachineId ? { machineId: hub.primaryMachineId } : {}) };
+    if (client?.status === "open") return { client: hub?.primaryMachineId ? hub.set.handleFor(hub.primaryMachineId) : client, ...(hub?.primaryMachineId ? { machineId: hub.primaryMachineId } : {}) };
     const member = hub?.memberConnection(hub.primaryMachineId);
-    return member && hub ? { client: hub.set.clientFor(member.record.machineId), machineId: member.record.machineId } : null;
+    return member && hub ? { client: hub.set.clientFor(member.record.machineId), machineId: member.record.machineId } : hub?.primaryMachineId ? { client: hub.set.handleFor(hub.primaryMachineId), machineId: hub.primaryMachineId } : null;
   },
   machine: (machineId) =>
-    machineId === hub?.primaryMachineId ? (client?.status === "open" ? client : null) : (hub?.liveClientFor(machineId) ?? null),
+    hub?.set.connection(machineId) ? hub.set.handleFor(machineId) : null,
   name: (machineId) => hub?.set.displayName(machineId) ?? machineId,
   multiple: () => (hub?.machineCount ?? 0) > 1,
 });
@@ -613,6 +617,10 @@ export function rpc<M extends MethodName>(
   machineId?: MachineId,
 ): Promise<ResultOf<M>> {
   const target = machineId ?? hub?.routeFor(params);
+  if (hub && ['notes.list', 'notes.get', 'notes.update', 'tasks.items.list', 'tasks.items.get', 'tasks.items.update'].includes(method)) {
+    const owner = target ?? hub.primaryMachineId;
+    if (owner) return hub.set.handleFor(owner).call(method, params);
+  }
   if (target && hub && target !== hub.primaryMachineId) {
     try {
       return hub.clientFor(target).call(method, params);

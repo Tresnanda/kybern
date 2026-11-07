@@ -458,3 +458,34 @@ async fn stale_stats_cannot_overwrite_the_next_turn() {
     assert!(harness.events.try_recv().is_err());
     assert_eq!(harness.session.state.lock().await.generation, 2);
 }
+
+#[tokio::test]
+async fn omp_handoff_emits_one_compaction_notice_only_on_success() {
+    for (aborted, failed, already_noticed, expected) in
+        [(false, false, false, 1), (false, false, true, 0), (true, false, false, 0), (false, true, false, 0)]
+    {
+        let mut harness = Harness::new(Flavor::Omp);
+        {
+            let mut state = harness.session.state.lock().await;
+            state.active = true;
+            state.native_command = Some("handoff".into());
+            state.aborted = aborted;
+            state.turn_error = failed.then(|| "handoff failed".into());
+            state.compaction_noticed = already_noticed;
+        }
+        harness.session.handle_frame(json!({ "type": "agent_end", "isTerminal": true })).await;
+        let messages = harness.wire("get_branch_messages").await;
+        harness.reply(&messages, json!({ "messages": [] })).await;
+        let mut notices = 0;
+        loop {
+            match harness.next_event().await {
+                DriverEvent::Notice { text, .. } if text == "Context compacted" => notices += 1,
+                DriverEvent::TurnCompleted { .. } | DriverEvent::TurnFailed { .. } => break,
+                _ => {}
+            }
+        }
+        assert_eq!(notices, expected);
+        let stats = harness.wire("get_session_stats").await;
+        harness.reply(&stats, json!({})).await;
+    }
+}

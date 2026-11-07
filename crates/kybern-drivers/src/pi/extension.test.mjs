@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 
-const extensionPath = process.argv.at(-1);
+const extensionPath = process.env.KYBERN_PI_EXTENSION_TEST_PATH ?? process.argv[2] ?? new URL('./extension.ts', import.meta.url).pathname;
 const { default: loadExtension } = await import(pathToFileURL(extensionPath));
 
 function fakePi(initialMode = "supervised", configuredTools, policy = {}) {
@@ -18,10 +18,13 @@ function fakePi(initialMode = "supervised", configuredTools, policy = {}) {
   else delete process.env.KYBERN_PI_COORDINATOR_ONLY;
   if (policy.deniedTools) process.env.KYBERN_PI_DENIED_TOOLS = JSON.stringify(policy.deniedTools);
   else delete process.env.KYBERN_PI_DENIED_TOOLS;
+  if (policy.allowedMcpServers) process.env.KYBERN_PI_ALLOWED_MCP_SERVERS = JSON.stringify(policy.allowedMcpServers);
+  else delete process.env.KYBERN_PI_ALLOWED_MCP_SERVERS;
   const commands = new Map();
   const tools = new Map();
   const handlers = new Map();
   const pi = {
+    getAllTools: () => policy.toolInfos ?? [],
     registerCommand(name, definition) {
       commands.set(name, definition);
     },
@@ -138,7 +141,7 @@ test("configured HTML tools retain schemas, route requests, and allow rendering 
       hasUI: true,
       ui: {
         input: async (title, _prompt, options) => {
-          assert.equal(options.timeout, 70_000);
+          assert.equal(options.timeout, undefined, "the daemon owns the call deadline");
           assert.match(title, /^kybern_app_tool_request:/);
           const request = JSON.parse(Buffer.from(title.split(":")[1], "base64url").toString());
           assert.equal(request.name, definition.name);
@@ -413,3 +416,31 @@ if (validationModule) {
     );
   });
 }
+
+test("human waits and approvals leave deadlines to Kybern", async () => {
+  for (const name of ["kybern_ask_user", "kybern_request_pick", "kybern_request_secret", "kybern_html_publish", "kybern_note_create"]) {
+    const harness = fakePi("full_access", [{ name, description: name, parameters: { type: "object", properties: {} } }]);
+    const ctx = context();
+    ctx.ui.input = async (_title, _placeholder, options) => {
+      assert.equal(options.timeout, undefined, name);
+      return Buffer.from(JSON.stringify({ version: 1, success: true, data: { status: "answered" } })).toString("base64url");
+    };
+    await harness.tools.get(name).execute("human-wait", { await_answer: true, deadline_seconds: 30 }, undefined, undefined, ctx);
+  }
+});
+
+test("Coordinator permits only MCP tools owned by allowed servers", async () => {
+  const toolInfos = [
+    { name: "mcp__memory_lookup", sourceInfo: { source: "mcp" }, mcpServerName: "memory" },
+    { name: "mcp__other_lookup", sourceInfo: { source: "mcp" }, mcpServerName: "other" },
+    { name: "mcp__memory_spoof", sourceInfo: { source: "extension" }, mcpServerName: "memory" },
+  ];
+  const harness = fakePi("full_access", [], { coordinatorOnly: true, allowedMcpServers: ["memory"], toolInfos });
+  const call = harness.handlers.get("tool_call");
+  const event = (name) => ({ toolName: name, toolCallId: "t1", input: {} });
+  assert.equal(await call(event("mcp__memory_lookup"), context()), undefined);
+  for (const name of ["mcp__other_lookup", "mcp__memory_spoof", "mcp__memory_unknown", "bash"])
+    assert.equal((await call(event(name), context())).block, true, name);
+  const regular = fakePi("full_access", [], { allowedMcpServers: ["memory"], toolInfos });
+  assert.equal(await regular.handlers.get("tool_call")(event("mcp__other_lookup"), context()), undefined);
+});

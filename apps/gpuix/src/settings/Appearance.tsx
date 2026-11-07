@@ -24,7 +24,7 @@ import {
   BLUR_MAX, BLUR_MIN, OPACITY_MIN, SURFACE_DEFAULT, SURFACE_MIN, VIBRANCY_EQUIVALENT_BLUR, advancedDefaults, isAdvancedDefault, isSidebarOnly, type ThemeVariant,
 } from '../platform/translucency.ts'
 import { useBlurUnavailable } from '../shell/windowMaterial.ts'
-import { DESKTOP_MATERIAL } from '../platform/desktopMaterial.ts'
+import { DESKTOP_MATERIAL, WINDOW_MATERIAL_DESCRIPTION } from '../platform/desktopMaterial.ts'
 import { previewWindowMaterial, setAppearance, setWindowMaterial, useAppearance } from './appearance.ts'
 
 const WINDOW_OPTIONS = [{ value: 'solid', label: 'Solid' }, { value: 'translucent', label: 'Translucent' }] as const
@@ -116,10 +116,10 @@ function VariantSection({ variant, active, save }: { variant: ThemeVariant; acti
   const accessory = active ? <Label color={t.textSecondary} size={13} lineHeight={18}>In use now</Label>
     : <><Label color={t.textSecondary} size={13} lineHeight={18}>{inactive}</Label><Button variant="secondary" size="sm" testId={`settings-use-${variant}`} onClick={() => save(() => setAppearance({ theme: variant }))}>{`Use ${variant} theme`}</Button></>
   const backdrop = DESKTOP_MATERIAL === 'dwm' ? (m.blur === null ? 'Mica' : 'Acrylic') : `Blur ${m.blur === null ? 'Auto' : m.blur}`
-  const summary = `Sidebar ${m.sidebarOpacity}% · Content ${m.contentOpacity}% · Surface ${m.surfaceOpacity ?? SURFACE_DEFAULT[variant]}%${DESKTOP_MATERIAL === 'none' ? '' : ` · ${backdrop}`}`
+  const summary = `Sidebar ${m.sidebarOpacity}% · Content ${m.contentOpacity}% · Surface ${m.surfaceOpacity ?? SURFACE_DEFAULT[variant]}%${DESKTOP_MATERIAL === 'vibrancy' || DESKTOP_MATERIAL === 'dwm' ? ` · ${backdrop}` : ''}`
 
   return <Section title={`${Name} theme`} accessory={accessory}>
-    <Row title="Window" description={DESKTOP_MATERIAL === 'none' ? 'Translucent turns the sidebar, menus and composer to glass. On this system the window itself stays solid.' : 'Translucent lets your desktop show through Kybern.'} status={status}>
+    <Row title="Window" description={WINDOW_MATERIAL_DESCRIPTION} status={status}>
       <Segmented testId={`settings-window-${variant}`} aria-label={`${Name} theme window material`} options={WINDOW_OPTIONS} value={m.material} onChange={(material) => { setDisclose(true); patch({ material: material as typeof m.material }) }} />
     </Row>
     {translucent && <div key="sidebar" paintTransform={rise}><Row title="Sidebar only" description={DESKTOP_MATERIAL === 'none' ? 'Keep the conversation solid. Only the sidebar and window frame are glass.' : 'Keep the conversation solid. Only the sidebar and window frame are translucent.'}>

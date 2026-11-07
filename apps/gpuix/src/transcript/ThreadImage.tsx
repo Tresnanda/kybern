@@ -1,12 +1,12 @@
+import { actOnThreadFile } from './threadFiles.ts'
 // A Markdown image in an agent reply (`![Caption](.screenshots/shot.png)`). Native Markdown paints images as links, so
 // image lines are split out (`splitImages`) and drawn here. A local reference loads through the daemon's
 // `/threads/{id}/image` route, as written: relative to the thread's own folder (worktree, Coordinator and delegated
 // threads included), or an absolute or `~/` path in any folder (ADE-122). It works the same for remote environments. A source that cannot load shows a card with the caption, the reason and what to do, never a bare
 // link; one written moments before the reply finished is retried once. Fresh images resolve from a blur (`ResponseImage`).
-import path from 'node:path'
 import { useEffect, useState } from 'react'
 import { imageSource } from '../../../../packages/kybern-client/src/responseImages.ts'
-import { threadClient, useApp } from '../state.ts'
+import { threadClient } from '../state.ts'
 import { useEnvironment } from '../shell/environment.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { Rise } from '../motion/kit.tsx'
@@ -18,7 +18,7 @@ import { ImageLightbox, ResponseImage } from './images.tsx'
 import { ImageViewer } from '../motion/ImageMorph.tsx'
 import { openTab } from '../tabs/open.ts'
 import { storeImageBytes } from './imageFiles.ts'
-import { openQuietly, osLabels, revealQuietly } from '../platform/os.ts'
+import { osLabels } from '../platform/os.ts'
 
 /** Retried once after this, for an image the agent wrote moments before its reply arrived. */
 const RETRY_MS = 1500
@@ -101,16 +101,12 @@ export function ThreadImage({ threadId, source, alt, at }: { threadId: string | 
 
 function LocalThreadImage({ threadId, source, label, at }: { threadId: string | null; source: string; label: string; at?: string }) {
   const image = useThreadImage(threadId, source)
-  const cwd = useApp(s => s.threads.find(th => th.id === threadId)?.cwd ?? (s.open.thread?.id === threadId ? s.open.thread?.cwd : undefined))
-  const environment = useEnvironment()
   if (image.image) return <ResponseImage source={image.image.source} tabSource={source} label={label} at={at} />
   if (!image.failure) return <ImageCard label={label} loading />
-  const local = environment.local && cwd
-  const file = local ? path.resolve(cwd, decodeURIComponent(reference(source).replace(/^file:\/\/(localhost)?/, ''))) : null
   // Retry helps only when the file may still appear or the connection failed.
   const retryable = image.failure.status === 404 || image.failure.status === 0 || image.failure.status >= 500
   return <ImageCard label={label} reason={image.failure.reason} onRetry={retryable ? image.retry : undefined}
-    onReveal={file ? () => { if (image.failure!.status === 404) openQuietly(path.dirname(file)); else revealQuietly(file) } : undefined} />
+    onReveal={threadId ? () => void actOnThreadFile(threadId, source, 'reveal') : undefined} />
 }
 
 /** The image's slot while it loads, or why it cannot show: a quiet card with its caption (`ResponseImage`'s width). `testId`
@@ -135,7 +131,7 @@ export function ImageCard({ label, reason, loading = false, onRetry, onReveal, t
 /** An image link clicked in a reply: the image, or the card that says why it cannot load, in the image viewer. */
 export function ThreadImagePreview({ threadId, source, onClose }: { threadId: string; source: string; onClose: () => void }) {
   const image = useThreadImage(threadId, source)
-  const label = decodeURIComponent(reference(source).split('/').pop() ?? 'Image')
+  const label = reference(source).split('/').pop() ?? 'Image'
   if (image.image) return <ImageViewer testId="image-lightbox" src={image.image.source} label={label} from={null} source={() => null} onClose={onClose} onOpenInTab={() => openTab(threadId, { kind: 'image', source, label })} />
   return image.failure ? <ImageLightboxCard label={label} reason={image.failure.reason} onClose={onClose} onRetry={image.retry} /> : null
 }

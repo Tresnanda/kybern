@@ -146,6 +146,7 @@ impl StagedExtension {
         command.env_remove("KYBERN_PI_SYSTEM_PROMPT");
         command.env_remove("KYBERN_PI_NO_BOOTSTRAP");
         command.env_remove("KYBERN_PI_COORDINATOR_ONLY");
+        command.env_remove("KYBERN_PI_ALLOWED_MCP_SERVERS");
         command.env_remove("KYBERN_PI_READ_ONLY_BUILTINS");
         command.env_remove("KYBERN_PI_DENIED_TOOLS");
         if let Some(bridge) = bridge {
@@ -169,6 +170,11 @@ impl StagedExtension {
             command.env("KYBERN_PI_APP_TOOLS", serde_json::to_string(&tools).unwrap_or_else(|_| "[]".into()));
             if bridge.restrictions.require_enforcement {
                 command.env("KYBERN_PI_COORDINATOR_ONLY", "1");
+                command.env(
+                    "KYBERN_PI_ALLOWED_MCP_SERVERS",
+                    serde_json::to_string(&bridge.restrictions.allowed_mcp_servers.keys().collect::<Vec<_>>())
+                        .unwrap_or_else(|_| "[]".into()),
+                );
                 if bridge.restrictions.allow_read_only_builtins {
                     command.env("KYBERN_PI_READ_ONLY_BUILTINS", "1");
                 }
@@ -459,10 +465,14 @@ mod tests {
                 denied_tools: vec!["bash".into()],
                 require_enforcement: true,
                 allow_read_only_builtins: false,
+                allowed_mcp_servers: Default::default(),
             },
         };
+        let mut bridge = bridge;
+        bridge.restrictions.allowed_mcp_servers.insert("memory".into(), json!({}));
         let mut command = Command::new("pi");
         staged.configure(&mut command, Some(&bridge));
+        assert_eq!(command_env(&command, "KYBERN_PI_ALLOWED_MCP_SERVERS").unwrap().unwrap(), r#"["memory"]"#);
 
         let encoded = command_env(&command, "KYBERN_PI_APP_TOOLS").unwrap().unwrap().to_str().unwrap();
         let tools: Value = serde_json::from_str(encoded).unwrap();
@@ -495,6 +505,7 @@ mod tests {
                     denied_tools: vec![],
                     require_enforcement: enforced,
                     allow_read_only_builtins: read_only,
+                    allowed_mcp_servers: Default::default(),
                 },
             };
             let mut command = Command::new("pi");
@@ -675,7 +686,7 @@ mod tests {
     }
 
     #[test]
-    fn rust_and_typescript_allow_lists_match_and_waits_and_html_get_the_long_timeout() {
+    fn rust_and_typescript_allow_lists_match_and_daemon_owns_app_tool_deadlines() {
         let source = include_str!("extension.ts");
         let typescript_tools: HashSet<_> = source
             .split("const APP_TOOL_NAMES = new Set([")
@@ -688,16 +699,7 @@ mod tests {
             .filter_map(|line| line.trim().strip_prefix('"').and_then(|name| name.split_once('"').map(|(name, _)| name)))
             .collect();
         assert_eq!(typescript_tools, APP_TOOL_NAMES.into_iter().collect(), "The native and extension catalogs must agree");
-        // Blocking replies and HTML rendering need more than the 30 s default.
-        assert!(source.contains("const COMPUTER_TOOL_TIMEOUT_MS = 70 * 1000;"));
-        for name in ["kybern_agent_delegate", "kybern_agent_wait", "kybern_thread_send", "kybern_html_preview", "kybern_html_publish"] {
-            assert!(APP_TOOL_NAMES.contains(&name), "{name}");
-        }
-        let long = source.split("const LONG_TOOL_NAMES = new Set([").nth(1).and_then(|rest| rest.split("]);").next()).unwrap();
-        for name in ["kybern_agent_delegate", "kybern_agent_wait", "kybern_thread_send", "kybern_html_preview", "kybern_html_publish"] {
-            assert!(long.contains(name), "{name} must use the long timeout");
-        }
-        assert!(source.contains("LONG_TOOL_NAMES.has(name)"));
+        assert!(source.contains("ctx.ui.input(title, \"Kybern app tool bridge\", { signal })"));
     }
 
     #[test]

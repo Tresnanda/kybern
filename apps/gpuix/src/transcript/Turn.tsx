@@ -1,3 +1,6 @@
+import { actOnThreadFile, showThreadFile } from './threadFiles.ts'
+import { Menu, MenuItem } from '../nav/overlay.tsx'
+import { osLabels } from '../platform/os.ts'
 import { useWorkspaceProgress } from '../groups/store.ts'
 import { editedFilesTitle, groupFilesByRepo, includedMembers, stripRepoPrefix, workspaceProgressLabel } from '../../../../packages/kybern-client/src/groups.ts'
 import { OutsideChange } from './OutsideChange.tsx'
@@ -19,6 +22,7 @@ import { AgentItemCard } from '../coordinator/AgentItem.tsx'
 // the "Edited N files" card and the footer.
 import { SubagentDivider } from '../subagents/Page.tsx'
 import { Fragment, memo, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { DOCK_ICONS } from '../dock/icons.ts'
 import { N } from '../nav/glyphs.ts'
 import { calendarDateKey, calendarDateLabel, elapsedSince, plural } from '../shared/lib/format.ts'
 import { clockTime } from './clock.ts'
@@ -45,7 +49,7 @@ import { Button } from '../kit/Button.tsx'
 import { IconButton } from '../kit/IconButton.tsx'
 import { CopyAction, messageText, SaveToNoteAction, UserBubble } from './bubble.tsx'
 import { T } from './glyphs.ts'
-import { ResponseImage } from './images.tsx'
+import { ThreadImage } from './ThreadImage.tsx'
 import { alpha, cachedMarkdownTheme, Chevron, fg, META, muted, Para, ROW_LINE, RowIcon, TEXT } from './kit.tsx'
 import { over } from '../theme.ts'
 import { Collapse, Rise } from '../motion/kit.tsx'
@@ -160,6 +164,7 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
         (block.kind === 'tool' && isAgentLaunchBlock(block, tasksByToolCall.get(block.call.id))) ||
         (block.kind === 'runtime_task' && block.task.kind === 'agent') ||
         isOrchestrationBlock(block) ||
+        (block.kind === 'notice' && !group.answer) ||
         // A question a restart cut off still wants an answer (its "Reply in chat"), and an answer an agent gave for the user
         // ("Answered by Coordinator") is the user's to see: both stay outside the fold.
         (block.kind === 'approval' && (expiredQuestion(block.approval, block.decision) || !!block.answeredBy))
@@ -168,7 +173,7 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
       else if (block.kind !== 'visual') disclosureBlocks.push(block)
     }
     return { agentBlocks, disclosureBlocks }
-  }, [roots, tasksByToolCall])
+  }, [roots, tasksByToolCall, group.answer])
   const [expanded, setExpanded] = useRowState(`work:${group.turnId}`, false)
   // The fold: when this turn settles while it is on screen at the tail, the "Worked for" disclosure first shows its work, then closes
   // with the same 220 ms height tween as a click (the rows fold away instead of vanishing). A turn first rendered settled, one the reader
@@ -272,7 +277,7 @@ export const AnswerImages = memo(function AnswerImages({ group, threadId }: { gr
           {images.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               {images.map((image) => (
-                <ResponseImage key={image.source} source={image.source} label={image.label} at={image.at} />
+                <ThreadImage key={image.source} threadId={threadId} source={image.source} alt={image.label} at={image.at} />
               ))}
             </div>
           )}
@@ -304,7 +309,7 @@ export const TurnFooter = memo(function TurnFooter({ group, threadId, isLast }: 
               <Para color={muted(t)}>Reverted to before this turn</Para>
             </div>
           )}
-          {(group.answer || group.end) && (
+          {answerText.trim() && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2, marginLeft: -5 }}>
               <CopyAction text={answerText} testId="answer-copy" />
               <SaveToNoteAction text={answerText} testId="answer-save-note" />
@@ -447,6 +452,8 @@ function RepoCaption({ name, border }: { name: string; border?: string }) {
 function EditedFileRow({ file, threadId, turnId, first, border, repo }: { file: Diff['files'][number]; threadId: ThreadId; turnId: string; first?: boolean; border: string; /** The member it belongs to: its path prefix is drawn muted. */ repo?: string }) {
   const t = useTheme()
   const g = useGlass()
+  const [hover, setHover] = useState(false)
+  const [actionFocus, setActionFocus] = useState(false)
   const [open, setOpen] = useRowState(`file:${turnId}:${file.path}`, false)
   // The patch is cached outside the row: the virtual list and the card's
   // disclosure both remount rows, and an open row must not come back empty.
@@ -479,6 +486,7 @@ function EditedFileRow({ file, threadId, turnId, first, border, repo }: { file: 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', ...(first ? {} : { borderTopWidth: 1, borderColor: border }) }}>
       <div
+        onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
         style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 12, paddingRight: 8, paddingTop: 10, paddingBottom: 10, minWidth: 0, cursor: 'pointer', hover: { backgroundColor: t.variant === 'dark' ? 'rgba(0, 0, 0, 0)' : t.buttonSecondaryHover } }}
       >
         <div testId={`edited-file-${file.path}`} onClick={toggle} style={{ display: 'flex', alignItems: 'center', gap: 8, flexGrow: 1, minWidth: 0 }}>
@@ -497,6 +505,15 @@ function EditedFileRow({ file, threadId, turnId, first, border, repo }: { file: 
         <div style={{ flexGrow: 1 }} />
         <DiffStat additions={file.additions} deletions={file.deletions} />
         </div>
+        <div style={{ display: 'flex', opacity: hover || actionFocus ? 1 : 0, pointerEvents: hover || actionFocus ? undefined : 'none' }}>
+        <IconButton onFocus={() => setActionFocus(true)} onBlur={() => setActionFocus(false)} label="Open" icon={N.external} size="sm" onClick={() => void actOnThreadFile(threadId, file.path, 'open')} />
+        <IconButton onFocus={() => setActionFocus(true)} onBlur={() => setActionFocus(false)} label={osLabels().reveal} icon={N.folder} size="sm" onClick={() => void actOnThreadFile(threadId, file.path, 'reveal')} />
+        </div>
+        <Menu testId={`edited-actions-${file.path}`} align="end" trigger={() => <IconButton icon={N.ellipsis} label="File actions" size="sm" />}>
+          <MenuItem id="reveal" label={osLabels().reveal} icon={N.folder} onSelect={() => void actOnThreadFile(threadId, file.path, 'reveal')} />
+          <MenuItem id="open" label="Open" icon={N.external} onSelect={() => void actOnThreadFile(threadId, file.path, 'open')} />
+          <MenuItem id="explorer" label="Show in Kybern Explorer" icon={DOCK_ICONS.explorer} onSelect={() => showThreadFile(threadId, file.path)} />
+        </Menu>
         <IconButton testId={`edited-review-${file.path}`} label={`Open the changes in ${file.path} in a tab`} icon={T.panelRight} size="sm" onClick={() => openTab(threadId, { kind: 'diff', path: file.path })} />
       </div>
       <Collapse open={open && ready}>

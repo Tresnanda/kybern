@@ -1131,3 +1131,13 @@ The plan this replaced, kept for reference. The final Tauri release (call it vT)
   - README, `docs/`, `AGENTS.md` and `CLAUDE.md` mark `apps/desktop` retired
     (it stays as the visual reference until removed)
   - the Tauri CI and release jobs are deleted
+
+## Linux window materials (#258)
+
+Linux uses a native display probe before loading the appearance defaults. Wayland binds KWin blur and ext-background-effect-v1, reading the latter's Blur capability. Hyprland's session marker also enables the blurred default. X11 requires a compositing-manager selection owner; blur additionally requires the KWin effect property on the root window.
+
+Compositing desktops offer Translucent. Blur-capable desktops start with it; other desktops start Solid, with 97% sidebar/remembered-content and 95% surface opacity when choosing translucency. Saved settings are preserved. Radius controls remain macOS-only. Linux always requests `blurred` for a translucent blurred backing, including old saved numeric blur radii.
+
+The native window wrapper clips untiled Linux CSD windows to 12 logical pixels. Wayland and X11 blur regions follow that shape, and X11 retains an alpha surface for Solid CSD windows. Standard Wayland blur capability changes refresh existing windows; KWin is the fallback when standard blur is unavailable.
+
+Hardware acceptance remains required: CI software renderers cannot prove compositor blur. On KDE Wayland, launch the test image from fish with a scratch data directory, toggle Settings → Appearance → Window between Solid and Translucent, and check all four outer corners, maximize/restore, both themes, text over a busy window, and Sidebar only on/off. If blur fails, capture `env WAYLAND_DEBUG=1 ./Kybern-GPUIX-linux-glass-x86_64.AppImage 2>wayland.log` and filter with `rg 'kwin_blur|background_effect|set_region|set_blur_region|set_opaque_region|wl_surface.*commit' wayland.log`.

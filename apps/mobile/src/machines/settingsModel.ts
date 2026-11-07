@@ -47,6 +47,7 @@ export const MACHINES_COPY = {
 // ---- the outbox ----
 
 export interface OutboxEntry {
+  editText?: string;
   id: string;
   /** The member whose outbox holds the item: Retry and Cancel go to it. */
   holder: MachineId;
@@ -71,7 +72,7 @@ export function outboxEntries(lists: readonly { holder: MachineId; items: readon
     const targetName = names.get(item.target) ?? "that machine";
     // The spec's words for a failure: "Failed: <error>".
     const detail = item.state === "failed" ? `Failed: ${plainReason(item.last_error) ?? `${targetName} did not answer`}` : row.detail;
-    return [{ id: item.id, holder, title: row.title, detail, targetName, canRetry: row.canRetry, canCancel: row.canCancel }];
+    return [{ id: item.id, ...(row.editText !== undefined ? { editText: row.editText } : {}), holder, title: row.title, detail, targetName, canRetry: row.canRetry, canCancel: row.canCancel }];
   });
 }
 

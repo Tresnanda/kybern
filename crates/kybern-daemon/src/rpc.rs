@@ -170,8 +170,23 @@ async fn dispatch_part_2(state: &AppState, ctx: &ConnectionCtx, method: &str, sl
                         .ok_or_else(|| RpcError::not_found("project"))
                 })
                 .transpose()?;
+            let settings = state.settings.get();
+            let coordinator_mcp_servers = [ProviderKind::ClaudeCode, ProviderKind::Opencode, ProviderKind::Pi, ProviderKind::Omp]
+                .into_iter()
+                .filter_map(|kind| {
+                    let provider = crate::settings::provider_settings(&settings, kind, cwd.as_deref().and_then(|p| p.to_str()));
+                    let mut names = std::collections::BTreeSet::new();
+                    for instance in std::iter::once("default").chain(provider.accounts.keys().map(String::as_str)) {
+                        let Ok(env) = crate::provider_accounts::environment(&provider, kind, instance) else { continue };
+                        let context = kybern_drivers::ProbeContext { binary: None, cwd: cwd.clone(), env };
+                        names.extend(kybern_drivers::coordinator_mcp::servers(kind, &context).into_keys());
+                    }
+                    let names: Vec<_> = names.into_iter().collect();
+                    (!names.is_empty()).then_some((kind, names))
+                })
+                .collect();
             let providers = crate::network::machine_info::provider_statuses(state, p.project_id, cwd, p.force_refresh).await;
-            ok(ProvidersListResult { providers })
+            ok(ProvidersListResult { providers, coordinator_mcp_servers })
         }
         AccountsCreate::NAME => ok(crate::provider_accounts::create(state, parse(params)?).map_err(bad)?),
         AccountsSignIn::NAME => ok(crate::provider_accounts::sign_in(state, parse(params)?).map_err(provider_err)?),
@@ -1396,6 +1411,7 @@ async fn dispatch_part_16(state: &AppState, ctx: &ConnectionCtx, method: &str, s
         ThreadsMoveToMachine::NAME => ok(crate::orchestrator::move_thread::serve_move_to_machine(state, params).await?),
         ThreadsMoveAbandon::NAME => ok(state.orchestrator.move_abandon(parse(params)?).await?),
         // The machine network (N4). The logic is in `network/`; these arms parse and answer.
+        NetworkCachedLists::NAME => ok(crate::network::list_cache::read(state, parse(params)?)?),
         NetworkStatusMethod::NAME => ok(network_status(state).await?),
         NetworkSetEnabled::NAME => {
             let p: NetworkSetEnabledParams = parse(params)?;
@@ -1709,7 +1725,7 @@ fn bad(e: anyhow::Error) -> RpcError {
 
 /// Notes failures: a stale revision is a CONFLICT the client can resolve, the rest
 /// say what to do next. Anything unexpected is an internal error.
-fn note_err(e: anyhow::Error) -> RpcError {
+pub(crate) fn note_err(e: anyhow::Error) -> RpcError {
     use kybern_store::NoteError;
     match e.downcast_ref::<NoteError>() {
         Some(NoteError::Conflict) => crate::problem::rpc_error(codes::CONFLICT, &e),
@@ -1722,7 +1738,7 @@ fn note_err(e: anyhow::Error) -> RpcError {
 /// Task failures: a stale revision is a CONFLICT the client can resolve, the rest
 /// say what to do next. Notes and threads reached through a task keep their own
 /// codes. Anything unexpected is an internal error.
-fn task_err(e: anyhow::Error) -> RpcError {
+pub(crate) fn task_err(e: anyhow::Error) -> RpcError {
     use kybern_store::TaskError;
     match e.downcast_ref::<TaskError>() {
         Some(TaskError::Conflict) => crate::problem::rpc_error(codes::CONFLICT, &e),

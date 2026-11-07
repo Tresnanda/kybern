@@ -8,10 +8,6 @@ const COMMAND_SENTINEL = "kybern-extension";
 const MODE_COMMAND = "kybern-permission-mode";
 const PERMISSION_PREFIX = "kybern_permission_request:";
 const APP_TOOL_PREFIX = "kybern_app_tool_request:";
-const PERMISSION_TIMEOUT_MS = 10 * 60 * 1000;
-const APP_TOOL_TIMEOUT_MS = 30 * 1000;
-// Computer use can wait for the user's approval card.
-const COMPUTER_TOOL_TIMEOUT_MS = 70 * 1000;
 const CONTENT_KEY = "_kybern_content";
 const COORDINATOR_BOOTSTRAP_TYPE = "kybern-coordinator-bootstrap-v1";
 const MAX_EXACT_CALL_GRANTS = 256;
@@ -75,72 +71,9 @@ const APP_TOOL_NAMES = new Set([
   "kybern_coordinator_propose_brief",
   "kybern_coordinator_propose_settings",
 ]);
-// Delegation can wait on a child agent (up to 60 s) and send/wait tools can
-// block on a reply. HTML preparation and preview rendering can also outlast
-// the default 30 s, so these tools get the same 70 s budget as computer use.
-const LONG_TOOL_NAMES = new Set([
-  "kybern_agent_delegate",
-  "kybern_agent_wait",
-  "kybern_thread_send",
-  "kybern_html_preview",
-  "kybern_html_publish",
-]);
-// Note and task writes may wait for the user's approval in Kybern.
-const APPROVAL_TOOL_NAMES = new Set([
-  "kybern_note_create",
-  "kybern_note_append",
-  "kybern_note_update",
-  "kybern_task_create",
-  "kybern_task_update",
-  "kybern_task_claim",
-  "kybern_coordinator_propose_brief",
-  "kybern_coordinator_propose_settings",
-]);
-// kybern_request_secret waits for the user for up to timeout_seconds (default
-// 600, at most 3600), plus the daemon's slack.
-const SECRET_TOOL_NAME = "kybern_request_secret";
-function secretToolTimeoutMs(args) {
-  const seconds = Number.isFinite(args?.timeout_seconds) ? Math.min(Math.max(args.timeout_seconds, 10), 3600) : 600;
-  return seconds * 1000 + 30 * 1000;
-}
-// kybern_html_publish with await_answer waits for the reader for up to
-// timeout_seconds (default 900, 30 to 3600), plus the daemon's slack.
-function visualAnswerTimeoutMs(args) {
-  const seconds = Number.isFinite(args?.timeout_seconds) ? Math.min(Math.max(args.timeout_seconds, 30), 3600) : 900;
-  return seconds * 1000 + 30 * 1000;
-}
-
-// The summoned-card tools wait for the user; the daemon's own budget (a little
-// over each tool's wait) is mirrored here.
-function requestToolTimeoutMs(name, args) {
-  switch (name) {
-    case "kybern_request_login":
-      return 26 * 60 * 1000;
-    case "kybern_request_permission":
-      return 31 * 60 * 1000;
-    case "kybern_ask_user": {
-      const deadline = Number.isFinite(args?.deadline_seconds) ? Math.min(Math.max(args.deadline_seconds, 0), 14400) : 0;
-      return (3600 + deadline + 60) * 1000;
-    }
-    case "kybern_request_pick": {
-      const wait = Number.isFinite(args?.timeout_seconds) ? Math.min(Math.max(args.timeout_seconds, 10), 3600) : 900;
-      return (wait + 60) * 1000;
-    }
-    case "kybern_run_in_terminal": {
-      const wait = Number.isFinite(args?.timeout_seconds) ? Math.min(Math.max(args.timeout_seconds, 10), 1800) : 600;
-      return (wait + 11 * 60) * 1000;
-    }
-    default:
-      return undefined;
-  }
-}
-// kybern_git push, open_pr and merge_pr wait for the user's card for up to 10
-// minutes, plus the daemon's slack. Its other ops fit the long tool budget.
-const GIT_TOOL_NAME = "kybern_git";
-const GIT_ASKING_OPS = new Set(["push", "open_pr", "merge_pr"]);
-function gitToolTimeoutMs(args) {
-  return GIT_ASKING_OPS.has(args?.op) ? 690 * 1000 : COMPUTER_TOOL_TIMEOUT_MS;
-}
+// App calls and approvals wait on the daemon's response or cancellation. Do not
+// mirror its deadlines in RPC UI options: pause/hold and approval time are owned
+// by Kybern, and a harness timer can otherwise discard a still-live card.
 function configuredToolSet(environmentName) {
   if (process.env[environmentName] === undefined) return new Set();
   try {
@@ -357,21 +290,7 @@ async function executeAppTool(name, toolCallId, args, signal, ctx) {
       toolCallId,
     });
 
-  const encodedResult = await ctx.ui.input(title, "Kybern app tool bridge", {
-    signal,
-    timeout:
-      name === SECRET_TOOL_NAME
-        ? secretToolTimeoutMs(args)
-        : name === "kybern_html_publish" && args?.await_answer === true
-        ? visualAnswerTimeoutMs(args)
-        : requestToolTimeoutMs(name, args) !== undefined
-        ? requestToolTimeoutMs(name, args)
-        : name === GIT_TOOL_NAME
-        ? gitToolTimeoutMs(args)
-        : name.startsWith("kybern_computer_") || APPROVAL_TOOL_NAMES.has(name) || LONG_TOOL_NAMES.has(name)
-        ? COMPUTER_TOOL_TIMEOUT_MS
-        : APP_TOOL_TIMEOUT_MS,
-  });
+  const encodedResult = await ctx.ui.input(title, "Kybern app tool bridge", { signal });
   if (encodedResult === undefined) {
     throw new Error(signal?.aborted ? "Kybern app tool was cancelled." : "Kybern app tool timed out.");
   }
@@ -401,6 +320,7 @@ export default function kybernExtension(pi) {
   const configuredTools = configuredAppTools(appTools);
   const appToolNames = new Set(configuredTools.map((tool) => tool.name));
   const deniedTools = configuredToolSet("KYBERN_PI_DENIED_TOOLS");
+  const allowedMcpServers = configuredToolSet("KYBERN_PI_ALLOWED_MCP_SERVERS");
   const coordinatorOnly = process.env.KYBERN_PI_COORDINATOR_ONLY === "1";
   const leadReadOnlyBuiltins = process.env.KYBERN_PI_READ_ONLY_BUILTINS === "1";
   const coordinatorInstructions = process.env.KYBERN_PI_SYSTEM_PROMPT || "";
@@ -482,7 +402,10 @@ export default function kybernExtension(pi) {
       if (deniedTools.has(toolName)) {
         return { block: true, reason: `Kybern coordinator policy denied ${toolName}.` };
       }
-      if (coordinatorOnly && !appToolNames.has(toolName) && !(leadReadOnlyBuiltins && LEAD_READ_ONLY_TOOLS.has(toolName))) {
+      // Resolve provenance from the harness registry, never a model-supplied name prefix.
+      const toolInfo = coordinatorOnly && allowedMcpServers.size ? pi.getAllTools?.().find((tool) => tool.name === toolName) : undefined;
+      const allowedMcp = toolInfo?.sourceInfo?.source === "mcp" && allowedMcpServers.has(toolInfo.mcpServerName);
+      if (coordinatorOnly && !allowedMcp && !appToolNames.has(toolName) && !(leadReadOnlyBuiltins && LEAD_READ_ONLY_TOOLS.has(toolName))) {
         return { block: true, reason: "Kybern coordinator policy permits only Kybern tools and read-only file tools." };
       }
       if (isAllowedWithoutPrompt(mode, toolName, appToolNames)) return;
@@ -518,7 +441,6 @@ export default function kybernExtension(pi) {
         });
       const choice = await ctx.ui.select(title, [ALLOW_ONCE, ALLOW_ALWAYS, DENY], {
         signal: ctx.signal,
-        timeout: PERMISSION_TIMEOUT_MS,
       });
 
       if (approvalRevision !== modeRevision) {

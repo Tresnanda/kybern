@@ -414,6 +414,9 @@ pub struct ProvidersListParams {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProvidersListResult {
     pub providers: Vec<ProviderStatus>,
+    /// Configured server names only; credentials never leave the daemon.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub coordinator_mcp_servers: std::collections::BTreeMap<ProviderKind, Vec<String>>,
 }
 method!(ProvidersList, "providers.list", Some(Scope::OrchestrationRead), ProvidersListParams, ProvidersListResult);
 
@@ -4886,6 +4889,9 @@ pub struct TaskItemsChangedNotification {
 
 // ---- machine network (M1; payloads in network.rs) ----
 
+method!(NetworkCachedLists, "network.cached_lists", Some(Scope::NetworkRead), NetworkCachedListsParams, NetworkCachedListsResult);
+method!(PeerPreferencesSync, "peer.preferences.sync", Some(Scope::MachineSettings), PeerSpacesSyncParams, PeerSpacesSyncResult);
+method!(PeerListSnapshot, "peer.lists.snapshot", Some(Scope::MachineTools), Empty, NetworkListSnapshot);
 method!(NetworkStatusMethod, "network.status", Some(Scope::NetworkRead), Empty, NetworkStatus);
 method!(NetworkSetEnabled, "network.set_enabled", Some(Scope::NetworkAdmin), NetworkSetEnabledParams, NetworkStatus);
 method!(NetworkAdd, "network.add", Some(Scope::NetworkAdmin), NetworkFoundParams, NetworkAddResult);
@@ -4946,6 +4952,7 @@ method!(SettingsNetworkViewMethod, "settings.network_view", Some(Scope::Orchestr
 method!(SettingsShare, "settings.share", Some(Scope::OrchestrationOperate), SettingsShareParams, SettingsShareResult);
 method!(PeerSettingsGet, "peer.settings.get", Some(Scope::MachineSettings), Empty, PeerSettingsGetResult);
 method!(PeerSettingsPatch, "peer.settings.patch", Some(Scope::MachineSettings), SettingsPatch, PeerSettingsPatchResult);
+method!(PeerItemEdit, "peer.items.edit", Some(Scope::MachineTools), PeerItemEditParams, serde_json::Value);
 method!(PeerFederatedRead, "peer.federated.read", Some(Scope::MachineTools), PeerFederatedReadParams, PeerFederatedReadResult);
 // The login broker and pushed keys (S4; payloads in login_broker.rs). The `machine:logins` calls are served only
 // by the machine the `broker` register names (borrow, usage, release_all) or sent only by it (push); `machine:secrets`
@@ -5265,6 +5272,9 @@ registry!(
     EventsSubscribe,
     EventsUnsubscribe,
     EventsRange,
+    NetworkCachedLists,
+    PeerListSnapshot,
+    PeerPreferencesSync,
     NetworkStatusMethod,
     NetworkSetEnabled,
     NetworkAdd,
@@ -5328,6 +5338,7 @@ registry!(
     SettingsShare,
     PeerSettingsGet,
     PeerSettingsPatch,
+    PeerItemEdit,
     PeerFederatedRead,
     PeerLoginBorrow,
     PeerLoginPush,

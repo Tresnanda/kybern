@@ -19,6 +19,7 @@ use crate::thread_image::ImageError;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .route("/links/icon", get(get_link_icon).options(asset_preflight))
         .route("/health", get(|| async { "ok" }))
         .route("/artifact-preview/{ticket}", get(crate::artifacts::serve))
         .route("/visual-frame/{ticket}", get(crate::visuals::serve))
@@ -32,6 +33,7 @@ pub fn routes() -> Router<AppState> {
         .route("/session", post(session).options(asset_preflight))
         .route("/assets", post(upload_asset).options(asset_preflight))
         .route("/assets/{id}", get(get_asset).options(asset_preflight))
+        .route("/threads/{id}/file", get(get_thread_file).options(asset_preflight))
         .route("/threads/{id}/image", get(get_thread_image).options(asset_preflight))
         .route("/github/image", get(get_github_image).options(asset_preflight))
         .route("/threads/{id}/snapshot", post(post_thread_snapshot).options(asset_preflight))
@@ -342,6 +344,60 @@ struct ImageQuery {
     preview: bool,
 }
 
+/// A binary-preserving download, under the same workspace and outside-folder policy as file reads.
+async fn get_thread_file(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Query(query): Query<ImageQuery>,
+) -> Response {
+    let Some(raw) = bearer(&headers) else { return StatusCode::UNAUTHORIZED.into_response() };
+    if !matches!(authenticate(&state.store, &raw), Ok(Some(p)) if p.has(kybern_protocol::Scope::OrchestrationRead)) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Ok(Some(thread)) = state.store.thread_get(id) else { return StatusCode::NOT_FOUND.into_response() };
+    let root = match tokio::fs::canonicalize(&thread.cwd).await {
+        Ok(root) => root,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let reference = crate::files::resolve_reference(&state.file_indexes, &root, &root, &mut None, &query.path).await;
+    let file = match reference {
+        Ok(crate::files::Reference::Found(relative)) => crate::files::resolve(&root, &relative).ok(),
+        Ok(crate::files::Reference::Outside(file)) => {
+            // The Explorer can show the project's checkout beside a worktree thread.
+            // Keep the ordinary project-file policy, including credential refusals.
+            let project_root = match state.store.project_get(thread.project_id) {
+                Ok(Some(project)) => tokio::fs::canonicalize(project.path).await.ok(),
+                _ => None,
+            };
+            let project_file = project_root.as_ref().and_then(|root| {
+                file.strip_prefix(root).ok().and_then(|relative| crate::files::resolve(root, &relative.to_string_lossy()).ok())
+            });
+            (project_file.as_ref() == Some(&file) || crate::files_outside::access(&state, id, false).allows(&file)).then_some(file)
+        }
+        _ => None,
+    };
+    let Some(file) = file else { return StatusCode::FORBIDDEN.into_response() };
+    let Ok(file) = tokio::fs::File::open(file).await else { return StatusCode::NOT_FOUND.into_response() };
+    let Ok(meta) = file.metadata().await else { return StatusCode::NOT_FOUND.into_response() };
+    if !meta.is_file() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let modified =
+        meta.modified().ok().and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok()).map(|time| time.as_nanos()).unwrap_or(0);
+    let etag = format!("\"{}-{modified}\"", meta.len());
+    if headers.get(header::IF_NONE_MATCH).is_some_and(|value| value == etag.as_str()) {
+        return StatusCode::NOT_MODIFIED.into_response();
+    }
+    let mut response = axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(file)).into_response();
+    response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
+    response.headers_mut().insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    response.headers_mut().insert(header::CONTENT_LENGTH, HeaderValue::from(meta.len()));
+    response.headers_mut().insert(header::ETAG, HeaderValue::from_str(&etag).unwrap());
+    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("private, no-cache"));
+    response
+}
+
 async fn get_thread_image(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -484,3 +540,15 @@ const IMAGE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1
 /// A reference that names no regular file.
 const IMAGE_NOT_FOUND: (StatusCode, &str) =
     (StatusCode::NOT_FOUND, "Image not found. Check the path, or retry once the agent has saved it.");
+
+#[derive(Deserialize)]
+struct LinkIconQuery {
+    url: String,
+}
+async fn get_link_icon(State(state): State<AppState>, headers: HeaderMap, Query(query): Query<LinkIconQuery>) -> Response {
+    let Some(raw) = bearer(&headers) else { return StatusCode::UNAUTHORIZED.into_response() };
+    if !matches!(authenticate(&state.store, &raw), Ok(Some(p)) if p.has(kybern_protocol::Scope::OrchestrationRead)) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    Json(crate::link_metadata::load(&state.paths.root.join("cache"), &query.url).await).into_response()
+}

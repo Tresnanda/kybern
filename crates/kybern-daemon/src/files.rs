@@ -219,7 +219,7 @@ fn relative_wire_path(path: &Path) -> String {
 /// the canonical root and pass the same check, so a symlink cannot reach
 /// `.git` or `.env` either. Listing a folder still hides dotfiles and
 /// generated folders (`list_dir`); that is browsing, not naming.
-fn resolve(root: &Path, rel: &str) -> Result<std::path::PathBuf> {
+pub(crate) fn resolve(root: &Path, rel: &str) -> Result<std::path::PathBuf> {
     let rel = rel.trim_matches('/');
     let mut path = root.to_path_buf();
     let parts: Vec<&str> = rel.split('/').filter(|p| !p.is_empty()).collect();

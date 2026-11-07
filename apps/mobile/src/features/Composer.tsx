@@ -566,8 +566,7 @@ export const Composer = memo(function Composer({
   }
   const canCompact =
     !!thread?.provider_session_id &&
-    (["codex", "pi", "omp", "opencode"].includes(thread.provider.kind) ||
-      commands?.some((c) => c.name === "compact"));
+    (["codex", "pi", "omp", "opencode", "cursor", "claude-code"].includes(thread.provider.kind));
   const actions = [
     { name: "resume", description: "Continue a saved session" },
     { name: "sessions", description: "Browse saved sessions" },
@@ -788,7 +787,7 @@ export const Composer = memo(function Composer({
           instance={thread?.provider.instance ?? draft.instance}
           threadId={thread?.id}
           commands={(commands ?? []).filter(
-            (c) => c.name !== "compact" || !canCompact,
+            (c) => c.name !== "compact" || !canCompact || (thread.provider.kind === "omp" && !!c.subcommands?.length),
           )}
           actions={actions}
           onAction={runAction}

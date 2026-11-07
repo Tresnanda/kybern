@@ -1821,7 +1821,7 @@ async fn whole_turn_history_pages_add_whole_turns_and_leave_thread_state_out() {
             thread.id,
             Some(turns[2]),
             EventPayload::ProviderCommandsUpdated {
-                commands: vec![ProviderCommand { name: "review".into(), description: "Review the change".into() }],
+                commands: vec![ProviderCommand { name: "review".into(), description: "Review the change".into(), ..Default::default() }],
             },
         )
         .unwrap();
@@ -2865,4 +2865,70 @@ async fn files_outside_the_workspace_open_read_only_after_the_desktop_allows_the
     assert!(!read(&desktop, id, "inside.txt".into()).await.unwrap().read_only);
 
     let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn downloaded_files_preserve_binary_bytes_and_revalidate() {
+    let host = Host::start().await;
+    let thread = host.thread();
+    let http = reqwest::Client::new();
+    let url = format!("{}/threads/{}/file", host.url, thread.id);
+    let bytes = b"%PDF-1.7\0\xff\nfixture";
+    std::fs::write(host.root.join("report.pdf"), bytes).unwrap();
+    assert_eq!(http.get(&url).query(&[("path", "report.pdf")]).send().await.unwrap().status(), reqwest::StatusCode::UNAUTHORIZED);
+    let response = http.get(&url).bearer_auth(&host.state.bootstrap_token).query(&[("path", "report.pdf")]).send().await.unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let etag = response.headers()["etag"].clone();
+    assert_eq!(response.bytes().await.unwrap().as_ref(), bytes);
+    let response = http
+        .get(&url)
+        .bearer_auth(&host.state.bootstrap_token)
+        .header("if-none-match", &etag)
+        .query(&[("path", "report.pdf")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_MODIFIED);
+    std::fs::write(host.root.join(".env"), b"secret").unwrap();
+    assert_eq!(
+        http.get(&url).bearer_auth(&host.state.bootstrap_token).query(&[("path", ".env")]).send().await.unwrap().status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
+    let outside = outside_folder().join("private.pdf");
+    std::fs::write(&outside, bytes).unwrap();
+    assert_eq!(
+        http.get(&url)
+            .bearer_auth(&host.state.bootstrap_token)
+            .query(&[("path", outside.to_string_lossy().as_ref())])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
+    // A worktree thread's Explorer can still open files in its own project's checkout.
+    let worktree = host.root.join("worktree");
+    std::fs::create_dir_all(&worktree).unwrap();
+    let mut moved = thread;
+    moved.cwd = worktree.to_string_lossy().into_owned();
+    host.state.store.thread_upsert(&moved).unwrap();
+    let response = http
+        .get(&url)
+        .bearer_auth(&host.state.bootstrap_token)
+        .query(&[("path", host.root.join("report.pdf").to_string_lossy().as_ref())])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(response.bytes().await.unwrap().as_ref(), bytes);
+    assert_eq!(
+        http.get(&url)
+            .bearer_auth(&host.state.bootstrap_token)
+            .query(&[("path", host.root.join(".env").to_string_lossy().as_ref())])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
 }

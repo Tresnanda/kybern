@@ -1,10 +1,12 @@
+import { itemClient } from '../machines/federated.ts'
+const getClient = () => itemClient(rawClient)
 import { homeClient, sharesHome, watchGlobalNotesHome } from './home.ts'
 import { failure, type Failure } from '../problems/Line.tsx'
 import { toastProblem } from '../problems/toast.ts'
 import { useEffect, useSyncExternalStore } from 'react'
 import type { Federation, Note, NoteSummary } from '../../../../packages/kybern-client/src/types.ts'
 import type { NotesFilter, NotesGroupBy, NotesSortBy } from '@/state/notesModel'
-import { getClient, getState, subscribe } from '../state.ts'
+import { getClient as rawClient, getState, subscribe } from '../state.ts'
 import { goPage } from '../nav/history.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { load, save } from '../shell/persist.ts'
@@ -97,7 +99,7 @@ export function useNotesFeed() {
       const next = getClient()
       if (next !== client || !stop) { stop?.(); client = next; stop = client?.onNotification('notes.changed', () => void refreshNotes()) }
       const nextStatus = getState().status
-      if (nextStatus === 'open' && status !== 'open') void refreshNotes()
+      if (nextStatus !== status && client) void refreshNotes()
       status = nextStatus
     }
     sync()

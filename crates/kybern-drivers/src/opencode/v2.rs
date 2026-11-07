@@ -232,6 +232,7 @@ fn restriction_rules(bridge: Option<&NativeToolBridge>) -> Vec<Value> {
     let rule = |action: &str, effect: &str| json!({ "action": action, "resource": "*", "effect": effect });
     // MCP tools are named `<server>_<tool>`; the gateway already filters the server's list.
     let mut rules = vec![rule("*", "deny"), rule(&format!("{}_*", bridge.server_name), "allow")];
+    rules.extend(bridge.restrictions.allowed_mcp_servers.keys().map(|name| rule(&format!("{name}_*"), "allow")));
     if bridge.restrictions.allow_read_only_builtins {
         rules.extend(OPENCODE_READ_ONLY_TOOLS.iter().map(|tool| rule(tool, "allow")));
     }

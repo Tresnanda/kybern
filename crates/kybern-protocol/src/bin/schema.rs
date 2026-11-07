@@ -291,6 +291,9 @@ fn main() {
     method::<EventsSubscribe>(&mut methods);
     method::<EventsUnsubscribe>(&mut methods);
     method::<EventsRange>(&mut methods);
+    method::<NetworkCachedLists>(&mut methods);
+    method::<PeerPreferencesSync>(&mut methods);
+    method::<PeerListSnapshot>(&mut methods);
     method::<NetworkStatusMethod>(&mut methods);
     method::<NetworkSetEnabled>(&mut methods);
     method::<NetworkAdd>(&mut methods);
@@ -387,6 +390,7 @@ fn main() {
     method::<SettingsShare>(&mut methods);
     method::<PeerSettingsGet>(&mut methods);
     method::<PeerSettingsPatch>(&mut methods);
+    method::<PeerItemEdit>(&mut methods);
     method::<PeerFederatedRead>(&mut methods);
     method::<PeerLoginBorrow>(&mut methods);
     method::<PeerLoginPush>(&mut methods);

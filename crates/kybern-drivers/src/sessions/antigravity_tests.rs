@@ -313,7 +313,7 @@ async fn the_list_skips_subagents_and_finds_each_conversations_folder() {
     let filtered =
         list(ProviderKind::Antigravity, &ProbeContext { cwd: Some(work.join("other")), ..agy.context() }, None, "").await.unwrap();
     assert_eq!(filtered.sessions.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["preview-title", "no-workspace"]);
-    let queried = list(ProviderKind::Antigravity, &agy.context(), None, "command").await.unwrap();
+    let queried = list(ProviderKind::Antigravity, &agy.context(), None, "From a command").await.unwrap();
     assert_eq!(queried.sessions.len(), 1);
 }
 

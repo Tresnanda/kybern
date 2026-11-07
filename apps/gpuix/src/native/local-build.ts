@@ -23,7 +23,7 @@ export const PATCHED_NATIVE =
 
 if (PATCHED_NATIVE && !process.env.NAPI_RS_NATIVE_LIBRARY_PATH) process.env.NAPI_RS_NATIVE_LIBRARY_PATH = built
 
-interface Capabilities { edgeFade?: boolean; backdrop?: boolean; windowMaterials?: unknown }
+interface Capabilities { edgeFade?: boolean; backdrop?: boolean; windowMaterials?: unknown; desktopMaterial?: { translucent?: boolean; blur?: boolean } }
 /** `kybernCapabilities()` of the addon this process loads, read once; the stock addon has none. */
 const CAPABILITIES: Capabilities = PATCHED_NATIVE ? (() => {
   try {
@@ -43,3 +43,5 @@ export const BACKDROP_BLUR: boolean = PATCHED_NATIVE && (process.platform === 'd
 export const WINDOW_MATERIALS: readonly string[] = Array.isArray(CAPABILITIES.windowMaterials) ? CAPABILITIES.windowMaterials.filter((m): m is string => typeof m === 'string') : []
 // The reconciler forwards only listed props from built-in elements; the pinned JS patch predates `edgeFade`.
 if (EDGE_FADE) (UNIVERSAL_PROPS as Set<string>).add('edgeFade')
+
+export const LINUX_DESKTOP_MATERIAL = { translucent: CAPABILITIES.desktopMaterial?.translucent === true, blur: CAPABILITIES.desktopMaterial?.blur === true }

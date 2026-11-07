@@ -1,3 +1,4 @@
+import { ImageCard } from './ThreadImage.tsx'
 import { useTranscriptRowLease, useTranscriptFocusRestoration } from './Window.tsx'
 // `components/kybern/ResponseImage.tsx`: a 280px-wide image (rounded 12, 8 when
 // compact) or a 64px thumbnail, with a hairline outline. GPUIX's <img> needs a
@@ -11,7 +12,7 @@ import { ImageViewer, useImageViewer } from '../motion/ImageMorph.tsx'
 import { imageSource } from '../../../../packages/kybern-client/src/responseImages.ts'
 import { EASE_OUT, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { DURATION, Rise, ZOOM } from '../motion/kit.tsx'
-import { alpha, muted, Para } from './kit.tsx'
+import { alpha } from './kit.tsx'
 import { useFresh } from './motion.tsx'
 import { usePaneAccess } from '../state.ts'
 import { openTabFromPane } from '../tabs/open.ts'
@@ -110,12 +111,7 @@ export function ResponseImage({ source, tabSource, label = 'Agent image', compac
   const size = useMemo(() => imageSize(source), [source])
   const src = srcFor(source)
   const outline = alpha(t.variant === 'dark' ? '#ffffff' : '#000000', 0.1)
-  if (!src)
-    return (
-      <div style={{ padding: 16, borderRadius: 8, backgroundColor: t.buttonSecondary, marginTop: compact ? 0 : 12, marginBottom: compact ? 0 : 12 }}>
-        <Para color={muted(t)} size={14}>Preview unavailable</Para>
-      </div>
-    )
+  if (!src) return <ImageCard label={label} reason="This image source cannot be shown. Open the file to view it." />
   const box = boxFor(size, maxWidth, maxHeight)
   const width = thumbnail ? 64 : box.width
   const height = thumbnail ? 64 : box.height

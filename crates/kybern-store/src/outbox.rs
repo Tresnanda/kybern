@@ -94,6 +94,49 @@ impl Store {
     /// Queue an item. A repeated `operation_id` returns the first item and writes nothing.
     pub fn outbox_insert(&self, item: &OutboxItem) -> Result<OutboxItem> {
         self.with(|c| {
+            if let Some(existing) =
+                c.query_row(&format!("{OUTBOX_SELECT} WHERE operation_id = ?1"), [item.operation_id.to_string()], row_to_item).optional()?
+            {
+                return Ok(existing);
+            }
+            // Coalesce only operations which have never been attempted: their idempotency
+            // key has not reached the owner. The store lock also serializes claims.
+            if item.kind == kybern_protocol::OutboxKind::ItemEdit {
+                let mut stmt =
+                    c.prepare(&format!("{OUTBOX_SELECT} WHERE target = ?1 AND kind = 'item_edit' AND state IN ('queued', 'sending')"))?;
+                let queued = stmt.query_map([&item.target], row_to_item)?.collect::<Result<Vec<_>, _>>()?;
+                for mut old in queued {
+                    let a = &old.payload;
+                    let b = &item.payload;
+                    let identity = |v: &serde_json::Value| {
+                        v["params"]["id"]
+                            .as_str()
+                            .or_else(|| v["params"]["key"].as_str())
+                            .or_else(|| v["params"]["thread_id"].as_str())
+                            .map(str::to_owned)
+                    };
+                    if a["method"] != b["method"] || identity(a).is_none() || identity(a) != identity(b) {
+                        continue;
+                    }
+                    anyhow::ensure!(
+                        old.state == OutboxState::Queued && old.attempts == 0,
+                        "The previous edit is being delivered. Wait for delivery before saving again."
+                    );
+                    if let Some(patch) = b["params"].as_object() {
+                        for (key, value) in patch {
+                            if key != "expected_revision" {
+                                old.payload["params"][key] = value.clone();
+                            }
+                        }
+                    }
+                    old.updated_at = item.updated_at;
+                    c.execute(
+                        "UPDATE outbox SET payload = ?2, updated_at = ?3 WHERE id = ?1",
+                        params![old.id.to_string(), serde_json::to_string(&old.payload)?, old.updated_at.to_rfc3339()],
+                    )?;
+                    return Ok(old);
+                }
+            }
             c.execute(
                 "INSERT OR IGNORE INTO outbox(id, operation_id, target, kind, payload, origin, state, attempts, next_attempt_at,
                     last_error, result, created_at, expires_at, updated_at)
@@ -566,6 +609,33 @@ mod tests {
             created_at: now,
             updated_at: now,
         }
+    }
+
+    #[test]
+    fn three_unsent_item_edits_keep_one_operation_and_original_version() {
+        let store = store();
+        let now = Utc::now();
+        let mut first = None;
+        for i in 0..3 {
+            let mut next = item(Uuid::now_v7(), "m2", now);
+            next.kind = kybern_protocol::OutboxKind::ItemEdit;
+            next.payload = serde_json::json!({"operation_id":next.operation_id,"method":"notes.update",
+                "expected_updated_at":now,"params":{"id":"note", "body":format!("draft {i}"),"expected_revision":i + 4}});
+            let saved = store.outbox_insert(&next).unwrap();
+            assert_eq!(saved.payload["params"]["expected_revision"], 4);
+            if let Some(id) = first {
+                assert_eq!(saved.id, id);
+            } else {
+                first = Some(saved.id);
+            }
+        }
+        let rows = store.outbox_list(None, None).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].payload["params"]["body"], "draft 2");
+        store.outbox_claim(rows[0].id, now).unwrap().unwrap();
+        let mut attempted = rows[0].clone();
+        attempted.operation_id = Uuid::now_v7();
+        assert!(store.outbox_insert(&attempted).is_err(), "never mutate an operation that may have reached the owner");
     }
 
     #[test]

@@ -1,3 +1,5 @@
+import { errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
+
 export type LayoutRect = { x: number; y: number; width: number; height: number }
 export type WindowResizeEvent = { width: number; height: number; scaleFactor: number; frame: number }
 /** Window coordinates: x, y, width, height, then top-left/right, bottom-right/left radii. */
@@ -15,11 +17,22 @@ function observe<T>(renderer: object, target: number | { testId: string } | null
   // `live` drops callbacks queued before a JS removal. No native liveness check per callback: off macOS it is a
   // waited UI-thread round trip on every layout event (scrolling). A callback queued as the window closes still
   // runs; the window and app are going away with it.
-  const token = native.addLayoutObserver(target, (error, event) => {
+  const unmounted = (error: unknown) => error instanceof Error && errorMessage(error) === 'Element is not mounted'
+  const removed = () => {
+    console.warn('[layout-observer] Element is not mounted', target)
+    callback({ elementId: typeof target === 'number' ? target : null, rect: null, clippedRect: null, frame: 0 } as T)
+  }
+  let token: number
+  try { token = native.addLayoutObserver(target, (error, event) => {
     if (!live) return
-    if (error) { console.error(error); return }
+    if (error) { if (unmounted(error)) removed(); else console.error(error); return }
     callback(event as T)
-  })
+  }) } catch (error) {
+    if (!unmounted(error) || target === null) throw error
+    removed()
+    live = false
+    return () => {}
+  }
   return () => {
     if (!live) return
     live = false

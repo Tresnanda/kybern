@@ -4,7 +4,7 @@
 // for a 280 pt reply image, and a reply that streams several of them re-decoded
 // them as the image cache churned (`perf/memlog/README.md`). Each source is
 // written once per content (`data:` URLs and fetched bytes) or used in place
-// (local files), plus a copy at most twice its slot wide (`sips`, ImageIO); the
+// (local files), plus a filtered copy at most twice its slot wide (ImageIO on macOS, the bundled CLI elsewhere); the
 // viewer and image tabs read the original. The folder is pruned to CACHE_BYTES at
 // launch, oldest first.
 //
@@ -12,6 +12,7 @@
 // that finds it gone makes it again and tries once more, and bytes that still
 // cannot be written there go to this process's own folder in the OS temp dir
 // (made with mkdtemp, removed on exit), so a fetched image still shows.
+import { bundledCommand } from '../shell/daemon.ts'
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, unlinkSync, utimesSync } from 'node:fs'
 import { mkdir, rename, writeFile } from 'node:fs/promises'
@@ -23,10 +24,10 @@ import { gpuixCacheDir } from '../platform/os.ts'
 
 const CACHE_BYTES = 256 * 1024 * 1024
 const MEMORY_ENTRIES = 512
-/** `sips` processes at a time. */
+/** Conversion processes at a time. */
 const CONVERSIONS = 2
 const ENABLED = process.env.KYBERN_IMAGE_FILES !== '0'
-const EXTENSIONS: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif' }
+const EXTENSIONS: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif' }
 
 let folder: string | null = null
 function cacheFolder() {
@@ -127,8 +128,8 @@ export async function storeImageBytes(bytes: Uint8Array, media: string): Promise
 let running = 0
 const waiting: (() => void)[] = []
 async function convert(input: string, output: string, width: number, jpeg: boolean) {
-  // `sips` is macOS's: elsewhere the original file is the inline image too (callers fall back to it on `false`).
-  if (process.platform !== 'darwin') return false
+  // macOS uses ImageIO; Windows/Linux use the bundled CLI's filtered decoder.
+  const helper = process.platform === 'darwin' ? null : bundledCommand('kybern')
   if (running >= CONVERSIONS) await new Promise<void>(resolve => waiting.push(resolve))
   running++
   try {
@@ -137,7 +138,9 @@ async function convert(input: string, output: string, width: number, jpeg: boole
       ensureCacheFolder()
       const temp = `${output}.${process.pid}.${++writes}.tmp`
       const ok = await new Promise<boolean>(resolve => {
-        const child = spawn('/usr/bin/sips', ['--resampleWidth', String(width), '-s', 'format', jpeg ? 'jpeg' : 'png', input, '--out', temp], { stdio: 'ignore' })
+        const child = helper
+          ? spawn(helper, ['image-preview', input, temp, '--width', String(width)], { stdio: 'ignore', windowsHide: true })
+          : spawn('/usr/bin/sips', ['--resampleWidth', String(width), '-s', 'format', jpeg ? 'jpeg' : 'png', input, '--out', temp], { stdio: 'ignore' })
         child.on('error', () => resolve(false))
         child.on('exit', code => resolve(code === 0))
       })
@@ -178,7 +181,7 @@ async function prepare(source: string, maxPx: number, width: number | null): Pro
   let full: string, id: string, media: string
   if (target.kind === 'inline') {
     const comma = target.value.indexOf(',')
-    media = target.value.slice(5, target.value.indexOf(';'))
+    media = target.value.slice(5, target.value.indexOf(';')).toLowerCase().replace(/^image\/jpg$/, 'image/jpeg')
     full = await storeImageBytes(Buffer.from(target.value.slice(comma + 1), 'base64'), media)
     id = path.basename(full).replace(/\.\w+$/, '')
   } else {
@@ -189,8 +192,8 @@ async function prepare(source: string, maxPx: number, width: number | null): Pro
     media = /\.jpe?g$/i.test(full) ? 'image/jpeg' : /\.gif$/i.test(full) ? 'image/gif' : 'image/png'
   }
   // Small enough already, or animated (a GIF keeps its frames).
-  if (process.platform !== 'darwin' || media === 'image/gif' || (width != null && width <= maxPx)) return { inline: full, full }
-  const jpeg = media === 'image/jpeg'
+  if (media === 'image/gif' || (width != null && width <= maxPx)) return { inline: full, full }
+  const jpeg = process.platform === 'darwin' && media === 'image/jpeg'
   const inline = path.join(cacheFolder(), `${id}-w${maxPx}.${jpeg ? 'jpg' : 'png'}`)
   if (existsSync(inline)) { touch(inline); return { inline, full } }
   return await convert(full, inline, maxPx, jpeg) ? { inline, full } : { inline: full, full }
