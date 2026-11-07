@@ -24,7 +24,7 @@ import {
   BLUR_MAX, BLUR_MIN, OPACITY_MIN, SURFACE_DEFAULT, SURFACE_MIN, VIBRANCY_EQUIVALENT_BLUR, advancedDefaults, isAdvancedDefault, isSidebarOnly, type ThemeVariant,
 } from '../platform/translucency.ts'
 import { useBlurUnavailable } from '../shell/windowMaterial.ts'
-import { DESKTOP_MATERIAL, WINDOW_MATERIAL_DESCRIPTION } from '../platform/desktopMaterial.ts'
+import { BLUR_STRENGTH, DESKTOP_MATERIAL, WINDOW_MATERIAL_DESCRIPTION } from '../platform/desktopMaterial.ts'
 import { previewWindowMaterial, setAppearance, setWindowMaterial, useAppearance } from './appearance.ts'
 
 const WINDOW_OPTIONS = [{ value: 'solid', label: 'Solid' }, { value: 'translucent', label: 'Translucent' }] as const
@@ -138,7 +138,7 @@ function VariantSection({ variant, active, save }: { variant: ThemeVariant; acti
     {translucent && open && DESKTOP_MATERIAL === 'dwm' && <div key="backdrop" paintTransform={advanced}><Row title="Backdrop" description="Mica tints Kybern with your desktop wallpaper. Acrylic also blurs the windows behind it. Windows sets the strength of both.">
       <Segmented testId={`settings-backdrop-${variant}`} aria-label={`${Name} theme window backdrop`} options={DWM_OPTIONS} value={m.blur === null ? 'mica' : 'acrylic'} onChange={(value) => patch({ blur: value === 'mica' ? null : m.blur ?? VIBRANCY_EQUIVALENT_BLUR })} />
     </Row></div>}
-    {translucent && open && DESKTOP_MATERIAL === 'vibrancy' && <div key="blur" paintTransform={advanced}><Row title="Blur" description="How much your desktop is blurred behind the whole window. Auto uses the macOS material.">
+    {translucent && open && BLUR_STRENGTH && <div key="blur" paintTransform={advanced}><Row title="Blur" description="How much your desktop is blurred behind the whole window. Auto uses the macOS material.">
       {m.blur !== null && <Button variant="secondary" size="sm" testId={`settings-blur-auto-${variant}`} label={`${Name} theme automatic blur`} onClick={() => patch({ blur: null })}>{active && unavailable ? 'Unavailable, use Auto' : 'Auto'}</Button>}
       <Slider testId={`settings-blur-${variant}`} aria-label={`${Name} theme blur`} ariaValueText={blurValue === null ? 'Automatic' : `${blurValue} points`} value={blurValue ?? VIBRANCY_EQUIVALENT_BLUR} min={BLUR_MIN} max={BLUR_MAX} muted={blurValue === null} valueLabel={blurValue === null ? 'Auto' : String(blurValue)} onChange={blur.onChange} onCommit={blur.onCommit} />
     </Row></div>}

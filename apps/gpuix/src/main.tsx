@@ -131,6 +131,8 @@ render(
   {
     title: 'Kybern',
     appName: 'Kybern',
+    // Match dev.kybern.gpuix.desktop for grouping and compositor rules (including Blur my Shell).
+    ...(process.platform === 'linux' ? { appId: 'dev.kybern.gpuix' } : {}),
     // `KYBERN_WINDOW_SIZE=WxH` lets the pair tool match a real Tauri window's size.
     width: Number(process.env.KYBERN_WINDOW_SIZE?.split('x')[0]) || 1280,
     height: Number(process.env.KYBERN_WINDOW_SIZE?.split('x')[1]) || 820,
