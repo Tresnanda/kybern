@@ -19,7 +19,7 @@ export function UpdatesSection({ rows, summary, busy, following, followBusy, onU
         {row.phase === 'updated' ? <SuccessCheck size={12} color={t.green} /> : <StatusDot tone={row.phase === 'failed' ? 'bad' : isUpdating(row) ? 'warn' : 'idle'} busy={isUpdating(row)} />}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flexGrow: 1, minWidth: 0 }}>
           <Label color={t.text} size={14} lineHeight={21} weight={500}>{row.name}</Label>
-          <SwapOnChange active={row.phase}><Label color={row.phase === 'failed' ? t.red : t.textSecondary} size={13} lineHeight={20}>{row.phase === 'failed' ? `Failed: ${row.text}` : row.text}</Label></SwapOnChange>
+          <SwapOnChange active={row.phase} style={{ justifyContent: 'flex-start' }} innerStyle={{ justifyContent: 'flex-start', minWidth: 0 }}><Label color={row.phase === 'failed' ? t.red : t.textSecondary} size={13} lineHeight={20}>{row.phase === 'failed' ? `Failed: ${row.text}` : row.text}</Label></SwapOnChange>
           {row.progress !== undefined && row.phase === 'downloading' && <div aria-label={`Download ${row.progress}%`} style={{ height: 3, borderRadius: 2, backgroundColor: ink(t, 0.1), width: 160 }}><div style={{ height: 3, borderRadius: 2, width: `${row.progress}%`, backgroundColor: t.textSecondary }} /></div>}
         </div>
         <Label color={t.textSecondary} size={13} lineHeight={20}>{isUpdating(row) && row.targetVersion ? `${row.currentVersion} → ${row.targetVersion}` : row.currentVersion}</Label>
