@@ -406,6 +406,7 @@ async fn send_offer(state: &AppState, target: &Candidate, via: JoinVia, code: Op
 
 fn fallback_card(target: &Candidate) -> MachineCard {
     MachineCard {
+        update: None,
         machine_id: target.descriptor.machine_id.clone(),
         name: target.descriptor.name.clone(),
         os: target.descriptor.os.clone(),

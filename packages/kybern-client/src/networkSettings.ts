@@ -99,3 +99,6 @@ export function doctorSummary(report: DoctorReport): string {
   const bad = report.checks.filter((check) => check.status !== "pass").length
   return bad ? `${bad} of ${report.checks.length} ${report.checks.length === 1 ? "check needs" : "checks need"} a look` : `All ${report.checks.length} ${report.checks.length === 1 ? "check" : "checks"} passed`
 }
+
+export { UpdateRunStore, updateRunSummary, isUpdating } from './updateRun.ts'
+export type { UpdateRow, UpdateRun } from './updateRun.ts'

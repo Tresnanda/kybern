@@ -266,6 +266,9 @@ pub fn blocked(state: &AppState, version: Option<&str>) -> Option<String> {
 /// Queue an update of the app; [`run`] carries it out once nothing is running. An `automatic` one (following another
 /// machine) also waits for this machine's terminals to close.
 pub fn request(state: &AppState, version: Option<String>, automatic: bool) {
+    if state.app_updates.pending().is_none() {
+        state.daemon_updates.begin_attempt(&state.store, version.clone());
+    }
     state.app_updates.request(version, automatic);
     note(state, Status::Waiting, "Waiting for running work to finish".into());
 }
@@ -273,6 +276,11 @@ pub fn request(state: &AppState, version: Option<String>, automatic: bool) {
 /// What the attached window said about the update it was handed.
 pub fn report(state: &AppState, connection: Uuid, report: AppUpdaterReportParams) {
     let handed = state.app_updates.pending().is_some_and(|pending| pending.handed_to == Some(connection));
+    if let Some(version) = &report.version {
+        let mut record = state.daemon_updates.get();
+        record.target_version = Some(version.clone());
+        state.daemon_updates.record(&state.store, record);
+    }
     let version = report.version.clone().unwrap_or_else(|| "the new version".into());
     tracing::info!(target: TARGET, %connection, phase = ?report.phase, message = ?report.message, "the app reported on its update");
     match report.phase {
@@ -303,6 +311,12 @@ pub fn report(state: &AppState, connection: Uuid, report: AppUpdaterReportParams
 /// Record progress where `daemon_update.status` and the machines page read it.
 fn note(state: &AppState, status: Status, message: String) {
     let mut record: DaemonUpdate = state.daemon_updates.get();
+    record.busy_thread = if status == Status::Waiting {
+        state.store.threads_running().ok().and_then(|threads| threads.into_iter().next()).map(|thread| thread.title)
+    } else {
+        None
+    };
+    record.download_percent = None;
     record.status = status;
     record.message = message;
     record.checked_at = Some(chrono::Utc::now());
@@ -382,8 +396,18 @@ async fn install_here(state: &AppState, target: &DesktopInstall, pending: &Pendi
         return Step::Wait;
     }
     let track = state.settings.get().update_track;
-    note(state, Status::Updating, "Checking the release feed…".into());
-    let prepared = match install::prepare(target, track, CURRENT_VERSION).await {
+    note(state, Status::Checking, "Checking the release feed…".into());
+    let prepared = match install::prepare_with_progress(target, track, CURRENT_VERSION, |version, percent| {
+        let mut record = state.daemon_updates.get();
+        record.target_version = Some(version.into());
+        record.latest_version = Some(version.into());
+        record.download_percent = percent;
+        record.status = Status::Updating;
+        record.message = format!("Downloading {version}…");
+        state.daemon_updates.record(&state.store, record);
+    })
+    .await
+    {
         Ok(Some(prepared)) => prepared,
         Ok(None) => {
             tracing::info!(target: TARGET, ?wanted, "the app's feed has nothing newer for this machine's update track");
@@ -410,6 +434,7 @@ async fn install_here(state: &AppState, target: &DesktopInstall, pending: &Pendi
             note(state, Status::Restarting, format!("Restarting on {version}"));
             state.app_updates.finish();
             *state.restart_exe.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(exe);
+            state.network.broadcast_update().await;
             state.restart_pending.store(true, Ordering::SeqCst);
             state.shutdown.cancel();
             Step::Installed(version)

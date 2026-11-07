@@ -821,6 +821,7 @@ impl Network {
     /// battery come with the packages that own them.
     pub fn presence(&self) -> PeerPresence {
         PeerPresence {
+            update: self.update.borrow().clone(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             network_protocol: NETWORK_PROTOCOL,
             features: self.features(),
@@ -1024,7 +1025,9 @@ pub async fn inbound(state: &AppState, link: &Arc<PeerLink>, text: &str) {
     let params = value.get("params").cloned().unwrap_or(Value::Null);
     // Relay data is hot and ordered: it is handled inline. Other requests run on their own task,
     // bounded per link.
-    let ordered = [PeerRelayData::NAME, PeerRelayClose::NAME, PeerPortsData::NAME, PeerPortsClose::NAME].contains(&method.as_str());
+    // Presence must stay in wire order: a delayed initial snapshot must not erase update progress.
+    let ordered = [PeerPresenceMethod::NAME, PeerRelayData::NAME, PeerRelayClose::NAME, PeerPortsData::NAME, PeerPortsClose::NAME]
+        .contains(&method.as_str());
     let state = state.clone();
     let link = link.clone();
     let busy_link = link.clone();

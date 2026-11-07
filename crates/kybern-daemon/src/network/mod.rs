@@ -232,6 +232,7 @@ pub struct SelfTs {
 }
 
 pub struct Network {
+    pub(crate) update: tokio::sync::watch::Sender<Option<kybern_protocol::DaemonUpdate>>,
     membership: Option<Arc<Membership>>,
     /// Why the network is unavailable (the key file could not be read), when it is.
     pub unavailable: Option<String>,
@@ -286,6 +287,43 @@ pub struct Network {
 }
 
 impl Network {
+    pub fn set_update(&self, update: kybern_protocol::DaemonUpdate) {
+        self.update.send_replace(Some(update));
+        self.notify_changed();
+    }
+
+    pub async fn broadcast_update(&self) {
+        let presence = self.presence();
+        let restarting = presence.update.as_ref().is_some_and(|r| r.status == kybern_protocol::DaemonUpdateStatus::Restarting);
+        futures::future::join_all(
+            self.peers
+                .links()
+                .into_iter()
+                .filter(|link| {
+                    self.peers
+                        .status(&link.machine_id)
+                        .presence
+                        .is_some_and(|p| p.features.iter().any(|f| f == features::UPDATE_PROGRESS_V1))
+                })
+                .map(|link| {
+                    let presence = presence.clone();
+                    async move {
+                        if restarting {
+                            // Wait for receipt before the installing process tears down its sockets.
+                            let _ = tokio::time::timeout(
+                                Duration::from_secs(2),
+                                link.call::<kybern_protocol::methods::PeerPresenceMethod>(presence),
+                            )
+                            .await;
+                        } else {
+                            link.notify("peer.presence", serde_json::to_value(presence).expect("serializable presence")).await;
+                        }
+                    }
+                }),
+        )
+        .await;
+    }
+
     /// Open the machine's identity and membership (N2) and the empty transport state. A key file
     /// that cannot be read leaves the network unavailable rather than stopping the daemon.
     pub fn new(data_dir: &Path, store: &Store, machine_id: &str, tailscale: Arc<dyn Tailscale>, timing: Timing) -> Self {
@@ -301,6 +339,7 @@ impl Network {
             http = http.local_address(source);
         }
         Self {
+            update: tokio::sync::watch::channel(None).0,
             membership,
             unavailable,
             http: http.build().unwrap_or_default(),
@@ -378,6 +417,7 @@ impl Network {
             features::SECRETS_STORE_V1.to_string(),
             features::LOGIN_BROKER_V1.to_string(),
             features::UPDATE_V1.to_string(),
+            features::UPDATE_PROGRESS_V1.to_string(),
             features::APP_UPDATE_V1.to_string(),
             features::FILES_PUSH_V1.to_string(),
             features::PORTS_V1.to_string(),

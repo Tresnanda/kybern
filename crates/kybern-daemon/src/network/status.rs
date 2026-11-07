@@ -28,6 +28,7 @@ fn card_now(state: &AppState, machine_id: &str) -> Option<MachineCard> {
     if machine_id == me {
         card.arch = Some(std::env::consts::ARCH.to_string());
         let presence = network.presence();
+        card.update = presence.update;
         card.version = Some(presence.version);
         card.network_protocol = presence.network_protocol;
         card.features = presence.features;
@@ -38,6 +39,7 @@ fn card_now(state: &AppState, machine_id: &str) -> Option<MachineCard> {
     let cached = state.store.network_machine_get(machine_id).ok().flatten();
     let presence = peer.presence.clone().or_else(|| cached.as_ref().and_then(|row| row.presence.clone()));
     if let Some(presence) = presence {
+        card.update = presence.update;
         card.version = Some(presence.version);
         card.network_protocol = presence.network_protocol;
         card.features = presence.features;
@@ -63,6 +65,7 @@ async fn lone_card(state: &AppState) -> MachineCard {
     let info = network.self_info().await;
     let presence = network.presence();
     MachineCard {
+        update: presence.update,
         machine_id: network.machine_id().unwrap_or_else(|| state.environment_id.clone()),
         name: info.name,
         os: info.os,

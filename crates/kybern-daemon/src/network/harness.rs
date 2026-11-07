@@ -417,3 +417,75 @@ pub const WAIT: Duration = Duration::from_secs(20);
 pub fn linked(a: &Node, b: &Node) -> bool {
     a.state.network.peers.link(&b.id()).is_some() && b.state.network.peers.link(&a.id()).is_some()
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn update_progress_reaches_peers_and_reconnect_requires_the_target() {
+    use kybern_protocol::DaemonUpdateStatus as Status;
+    let Some(cluster) = Cluster::new(&[NodeSpec::owner("a"), NodeSpec::owner("b")]) else { return };
+    let a = cluster.start("a", true).await;
+    let b = cluster.start("b", true).await;
+    cluster.form(&a, &[&b], JoinVia::Auto).await;
+    eventually("peers connected with progress support", WAIT, || {
+        linked(&a, &b)
+            && b.state
+                .network
+                .peers
+                .status(&a.id())
+                .presence
+                .is_some_and(|p| p.features.iter().any(|f| f == kybern_protocol::features::UPDATE_PROGRESS_V1))
+    })
+    .await;
+    let worker = tokio::spawn(super::updates::run(b.state.clone()));
+    let mut record = b.state.daemon_updates.request(&b.state.store);
+    record.target_version = Some(crate::self_update::CURRENT_VERSION.into());
+    record.current_version = "0.0.1".into();
+    record.status = Status::Restarting;
+    let id = record.update_id.clone();
+    b.state.daemon_updates.record(&b.state.store, record);
+    eventually("restart reaches another device", WAIT, || {
+        a.state
+            .network
+            .peers
+            .status(&b.id())
+            .presence
+            .and_then(|p| p.update)
+            .is_some_and(|r| r.status == Status::Restarting && r.update_id == id)
+    })
+    .await;
+    // Read the persisted record exactly as the replacement daemon does at startup.
+    let boot = crate::self_update::DaemonUpdates::new(&b.state.store).unwrap().get();
+    assert_eq!(boot.status, Status::Current);
+    assert_eq!(boot.update_id, id);
+    b.state.daemon_updates.record(&b.state.store, boot);
+    eventually("completion reaches another device", WAIT, || {
+        a.state
+            .network
+            .peers
+            .status(&b.id())
+            .presence
+            .and_then(|p| p.update)
+            .is_some_and(|r| r.status == Status::Current && r.update_id == id && r.current_version == crate::self_update::CURRENT_VERSION)
+    })
+    .await;
+    let mut rollback = b.state.daemon_updates.request(&b.state.store);
+    rollback.status = Status::Restarting;
+    rollback.target_version = Some("999.0.0".into());
+    let rollback_id = rollback.update_id.clone();
+    b.state.daemon_updates.record(&b.state.store, rollback);
+    let boot = crate::self_update::DaemonUpdates::new(&b.state.store).unwrap().get();
+    assert_eq!(boot.status, Status::Failed);
+    assert_eq!(boot.update_id, rollback_id);
+    b.state.daemon_updates.record(&b.state.store, boot);
+    eventually("rollback reaches another device as failure", WAIT, || {
+        a.state
+            .network
+            .peers
+            .status(&b.id())
+            .presence
+            .and_then(|p| p.update)
+            .is_some_and(|r| r.status == Status::Failed && r.update_id == rollback_id)
+    })
+    .await;
+    worker.abort();
+    let _ = worker.await;
+}

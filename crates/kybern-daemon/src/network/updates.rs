@@ -312,10 +312,16 @@ pub async fn follow_tick(state: &AppState) -> Option<String> {
 
 /// The background worker behind "Keep all machines on the same version".
 pub async fn run(state: AppState) {
+    let mut progress = state.network.update.subscribe();
+    state.network.broadcast_update().await;
     let mut interval = tokio::time::interval(FOLLOW_EVERY);
     loop {
         tokio::select! {
             _ = state.shutdown.cancelled() => break,
+            changed = progress.changed() => {
+                if changed.is_err() { break; }
+                state.network.broadcast_update().await;
+            }
             _ = interval.tick() => {
                 follow_tick(&state).await;
             }

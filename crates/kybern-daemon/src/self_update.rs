@@ -33,6 +33,7 @@ pub const RESTART_EXIT_CODE: i32 = 75;
 
 pub struct DaemonUpdates {
     record: Mutex<DaemonUpdate>,
+    network: std::sync::OnceLock<std::sync::Weak<crate::network::Network>>,
     requested: AtomicBool,
     worker: tokio::sync::Mutex<()>,
     /// A test build is a development build, which never replaces itself; the machine-network tests
@@ -48,28 +49,20 @@ impl DaemonUpdates {
     pub fn new(store: &Store) -> Result<Self> {
         let mut record =
             store.meta_get(META_KEY)?.and_then(|value| serde_json::from_str::<DaemonUpdate>(&value).ok()).unwrap_or_else(|| DaemonUpdate {
+                update_id: None,
+                target_version: None,
+                download_percent: None,
+                busy_thread: None,
                 status: Status::NotChecked,
                 message: "Not checked yet".into(),
                 current_version: CURRENT_VERSION.into(),
                 latest_version: None,
                 checked_at: None,
             });
-        if record.current_version != CURRENT_VERSION {
-            // The previous binary wrote this record; we are the update it installed.
-            record = DaemonUpdate {
-                status: Status::Current,
-                message: format!("Updated from {}", record.current_version),
-                current_version: CURRENT_VERSION.into(),
-                latest_version: Some(CURRENT_VERSION.into()),
-                checked_at: Some(Utc::now()),
-            };
-        } else if matches!(record.status, Status::Checking | Status::Waiting | Status::Updating | Status::Restarting) {
-            record.status = Status::Failed;
-            record.message = "The daemon restarted during an update. Retry the update.".into();
-            record.checked_at = Some(Utc::now());
-        }
+        reconcile_restart(&mut record, CURRENT_VERSION);
         Ok(Self {
             record: Mutex::new(record),
+            network: std::sync::OnceLock::new(),
             requested: AtomicBool::new(false),
             worker: tokio::sync::Mutex::new(()),
             #[cfg(test)]
@@ -77,6 +70,11 @@ impl DaemonUpdates {
             #[cfg(test)]
             test_feeds: Mutex::new(None),
         })
+    }
+
+    pub fn attach_network(&self, network: &std::sync::Arc<crate::network::Network>) {
+        let _ = self.network.set(std::sync::Arc::downgrade(network));
+        network.set_update(self.get());
     }
 
     pub fn get(&self) -> DaemonUpdate {
@@ -87,7 +85,10 @@ impl DaemonUpdates {
         if let Err(error) = store.meta_set(META_KEY, &serde_json::to_string(&record).expect("serializable record")) {
             tracing::error!(%error, "could not persist daemon update status");
         }
-        *self.record.lock().unwrap() = record;
+        *self.record.lock().unwrap() = record.clone();
+        if let Some(network) = self.network.get().and_then(|network| network.upgrade()) {
+            network.set_update(record);
+        }
     }
 
     /// Record progress made elsewhere: the desktop app's update (`app_update`).
@@ -97,16 +98,39 @@ impl DaemonUpdates {
 
     /// Queue an install; the worker picks it up on its next pass.
     pub fn request(&self, store: &Store) -> DaemonUpdate {
-        let mut record = self.get();
+        let record = self.get();
         if matches!(record.status, Status::Updating | Status::Restarting) {
             return record;
         }
         self.requested.store(true, Ordering::SeqCst);
+        self.begin_attempt(store, None)
+    }
+
+    pub(crate) fn begin_attempt(&self, store: &Store, target: Option<String>) -> DaemonUpdate {
+        let mut record = self.get();
+        record.update_id = Some(uuid::Uuid::now_v7().to_string());
+        record.target_version = target;
+        record.download_percent = None;
+        record.busy_thread = None;
         record.status = Status::Waiting;
         record.message = "Waiting for running work to finish".into();
         self.save(store, record.clone());
         record
     }
+}
+
+/// Only the intended binary may complete a persisted attempt. A rollback keeps its identity and fails.
+fn reconcile_restart(record: &mut DaemonUpdate, version: &str) {
+    let pending = matches!(record.status, Status::Checking | Status::Waiting | Status::Updating | Status::Restarting);
+    if pending {
+        let completed =
+            record.status == Status::Restarting && record.update_id.is_some() && record.target_version.as_deref() == Some(version);
+        record.status = if completed { Status::Current } else { Status::Failed };
+        record.message =
+            if completed { format!("Updated to {version}") } else { "The requested version did not start. Retry the update.".into() };
+        record.checked_at = Some(Utc::now());
+    }
+    record.current_version = version.into();
 }
 
 // ---- release feed ----------------------------------------------------------
@@ -287,7 +311,7 @@ fn replace_binary(source: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn install(client: &reqwest::Client, version: &str) -> Result<()> {
+async fn install(state: &AppState, client: &reqwest::Client, version: &str) -> Result<()> {
     let exe = std::env::current_exe()?.canonicalize()?;
     let dir = exe.parent().context("binary has no parent directory")?.to_path_buf();
     let probe = dir.join(".kybern-update-probe");
@@ -296,8 +320,25 @@ async fn install(client: &reqwest::Client, version: &str) -> Result<()> {
 
     let name = archive_name()?;
     let base = format!("https://github.com/{REPO}/releases/download/v{version}");
-    let archive =
-        client.get(format!("{base}/{name}")).send().await?.error_for_status()?.bytes().await.context("download the release archive")?;
+    let mut response = client.get(format!("{base}/{name}")).send().await?.error_for_status()?;
+    let total = response.content_length();
+    let mut archive = Vec::new();
+    let mut last_percent = None;
+    while let Some(chunk) = response.chunk().await.context("download the release archive")? {
+        archive.extend_from_slice(&chunk);
+        let percent = total.filter(|total| *total > 0).map(|total| ((archive.len() as u64 * 100 / total).min(100)) as u8);
+        if percent != last_percent {
+            let mut record = state.daemon_updates.get();
+            record.download_percent = percent;
+            record.message = format!("Downloading {version}…");
+            state.daemon_updates.save(&state.store, record);
+            last_percent = percent;
+        }
+    }
+    let mut record = state.daemon_updates.get();
+    record.download_percent = None;
+    record.message = format!("Installing {version}…");
+    state.daemon_updates.save(&state.store, record);
     let published =
         client.get(format!("{base}/{name}.sha256")).send().await?.error_for_status()?.text().await.context("download the checksum")?;
     let expected = published.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
@@ -418,11 +459,17 @@ pub async fn tick(state: AppState) {
         finish(record);
         return;
     }
+    if !manual {
+        record = state.daemon_updates.begin_attempt(&state.store, Some(latest.clone()));
+    }
+    record.target_version = Some(latest.clone());
     match busy(&state, !manual).await {
         Ok(false) => {}
         Ok(true) => {
             record.status = Status::Waiting;
             record.message = format!("{latest} is ready. Waiting for running work to finish");
+            record.busy_thread =
+                state.store.threads_running().ok().and_then(|threads| threads.into_iter().next()).map(|thread| thread.title);
             state.daemon_updates.save(&state.store, record);
             if !manual {
                 state.daemon_updates.requested.store(true, Ordering::SeqCst);
@@ -437,10 +484,11 @@ pub async fn tick(state: AppState) {
         }
     }
     record.status = Status::Updating;
-    record.message = format!("Installing {latest}…");
+    record.busy_thread = None;
+    record.message = format!("Downloading {latest}…");
     state.daemon_updates.save(&state.store, record.clone());
     let result = tokio::select! {
-        result = async { install(&http()?, &latest).await } => result,
+        result = async { install(&state, &http()?, &latest).await } => result,
         _ = state.shutdown.cancelled() => Err(anyhow!("Update interrupted by daemon shutdown. Retry the update.")),
     };
     match result {
@@ -449,6 +497,7 @@ pub async fn tick(state: AppState) {
             record.message = format!("Restarting on {latest}");
             finish(record);
             tracing::info!(version = %latest, "daemon updated; restarting");
+            state.network.broadcast_update().await;
             state.restart_pending.store(true, Ordering::SeqCst);
             state.shutdown.cancel();
         }
@@ -511,6 +560,34 @@ pub fn restart(log_file: &Path, exe: Option<PathBuf>) -> ! {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restart_requires_an_attempt_and_exact_target() {
+        let record = || DaemonUpdate {
+            update_id: Some("attempt".into()),
+            target_version: Some("0.23.0".into()),
+            download_percent: None,
+            busy_thread: None,
+            status: Status::Restarting,
+            message: String::new(),
+            current_version: "0.22.1".into(),
+            latest_version: Some("0.23.0".into()),
+            checked_at: None,
+        };
+        let mut success = record();
+        reconcile_restart(&mut success, "0.23.0");
+        assert_eq!(success.status, Status::Current);
+        assert_eq!(success.update_id.as_deref(), Some("attempt"));
+        for actual in ["0.22.1", "0.22.0", "0.24.0"] {
+            let mut wrong = record();
+            reconcile_restart(&mut wrong, actual);
+            assert_eq!(wrong.status, Status::Failed);
+        }
+        let mut anonymous = record();
+        anonymous.update_id = None;
+        reconcile_restart(&mut anonymous, "0.23.0");
+        assert_eq!(anonymous.status, Status::Failed);
+    }
 
     #[test]
     fn compares_release_versions() {
