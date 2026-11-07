@@ -16,7 +16,7 @@ export function UpdatesSection({ rows, summary, busy, following, followBusy, onU
     <Row title="" description={summary} />
     <div testId="machines-update-results" style={{ display: 'flex', flexDirection: 'column' }}>
       {rows.map(row => <div key={row.machineId} testId={`update-result-${row.machineId}`} style={{ display: 'flex', alignItems: 'center', gap: 12, paddingLeft: 18, paddingRight: 18, paddingTop: 10, paddingBottom: 10 }}>
-        {row.phase === 'updated' ? <SuccessCheck size={12} color={t.green} /> : <StatusDot tone={row.phase === 'failed' ? 'bad' : isUpdating(row) ? 'warn' : 'idle'} busy={isUpdating(row)} />}
+        <div style={{ width: 12, flexShrink: 0, display: 'flex', justifyContent: 'center' }}>{row.phase === 'updated' ? <SuccessCheck size={12} color={t.green} /> : <StatusDot tone={row.phase === 'failed' ? 'bad' : isUpdating(row) ? 'warn' : 'idle'} busy={isUpdating(row)} />}</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flexGrow: 1, minWidth: 0 }}>
           <Label color={t.text} size={14} lineHeight={21} weight={500}>{row.name}</Label>
           <SwapOnChange active={row.phase} style={{ justifyContent: 'flex-start' }} innerStyle={{ justifyContent: 'flex-start', minWidth: 0 }}><Label color={row.phase === 'failed' ? t.red : t.textSecondary} size={13} lineHeight={20}>{row.phase === 'failed' ? `Failed: ${row.text}` : row.text}</Label></SwapOnChange>

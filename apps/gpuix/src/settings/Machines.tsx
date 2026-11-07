@@ -300,7 +300,8 @@ function Updates({ busy, following, machines }: { busy: boolean; following: bool
   const rows = machines.map(m => updates[m.machineId] ?? { machineId: m.machineId, name: m.name, phase: 'skipped' as const, currentVersion: m.version ?? '', startedAt: 0, text: m.behind ? 'Ready to update' : 'Check for updates' })
   const active = rows.some(isUpdating)
   const [now, setNow] = useState(Date.now)
-  useEffect(() => { if (!active) return; const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer) }, [active])
+  const slowAt = Math.min(...rows.filter(isUpdating).map(r => r.startedAt)) + 180_000
+  useEffect(() => { if (!active) return; const timer = setTimeout(() => setNow(Date.now()), Math.max(0, slowAt - Date.now())); return () => clearTimeout(timer) }, [active, slowAt])
   const run = async () => {
     setError('')
     try { await updateAllMachines() } catch (e) { setError(problemLine(e, { action: 'update your machines' })) }

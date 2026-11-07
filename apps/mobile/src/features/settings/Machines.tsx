@@ -51,7 +51,8 @@ export function MachinesSettings() {
   const { colors } = useTheme();
   const [now, setNow] = useState(Date.now);
   const active = Object.values(updates).some(isUpdating);
-  useEffect(() => { if (!active) return; const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, [active]);
+  const slowAt = Math.min(...Object.values(updates).filter(isUpdating).map(r => r.startedAt)) + 180_000;
+  useEffect(() => { if (!active) return; const timer = setTimeout(() => setNow(Date.now()), Math.max(0, slowAt - Date.now())); return () => clearTimeout(timer); }, [active, slowAt]);
   const [outbox, setOutbox] = useState<OutboxEntry[]>([]);
   const [devices, setDevices] = useState<DeviceGroup[]>([]);
   const hub = machineHub();
