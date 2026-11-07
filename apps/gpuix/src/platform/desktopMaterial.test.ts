@@ -61,3 +61,14 @@ test('Linux defaults preserve readability on a sharp desktop', async () => {
   expect(defaultVariantMaterial('linux', 'linux-blur').material).toBe('translucent')
   expect(normalizeVariantMaterial({ surfaceOpacity: null }).surfaceOpacity).toBeNull()
 })
+
+test('Linux hides blur strength for every compositor; macOS keeps it', async () => {
+  const { supportsBlurStrength, windowMaterialDescription } = await import('./desktopMaterial.ts')
+  for (const material of ['vibrancy', 'dwm', 'none', 'linux-blur', 'linux-transparent'] as const) expect(supportsBlurStrength('linux', material)).toBe(false)
+  expect(supportsBlurStrength('darwin', 'vibrancy')).toBe(true)
+  expect(supportsBlurStrength('win32', 'dwm')).toBe(false)
+  const gnome = desktopMaterialFor('linux', '', [], undefined, true, { translucent: true, blur: false })
+  expect(windowMaterialDescription(gnome, 'GNOME')).toBe("This desktop can't blur, so the background shows through sharply. You can try the Blur my Shell extension.")
+  expect(windowMaterialDescription(gnome, 'ubuntu:GNOME')).toContain('Blur my Shell')
+  expect(windowMaterialDescription(gnome, 'Hyprland')).not.toContain('Blur my Shell')
+})

@@ -151,3 +151,50 @@ console.log(JSON.stringify({ shown: a.appearance().window, file: JSON.parse(read
     expect(run({ KYBERN_WINDOW_SURFACE_OPACITY: '80' }).shown.dark).toMatchObject({ surfaceOpacity: 80 })
   })
 })
+
+test('GNOME renders the Window note and hides blur controls with a saved radius', () => {
+  const script = path.join(dir, 'gnome.ts')
+  writeFileSync(script, `import React from ${JSON.stringify(import.meta.resolve('react'))}
+import ${JSON.stringify(import.meta.resolve('@gpuix/react'))}
+import { mock } from 'bun:test'
+Object.defineProperty(process, 'platform', { value: 'linux' })
+process.env.XDG_CURRENT_DESKTOP = 'GNOME'
+process.env.XDG_SESSION_TYPE = 'wayland'
+mock.module(${JSON.stringify(path.join(import.meta.dir, '../native/local-build.ts'))}, () => ({ PATCHED_NATIVE: false, BACKDROP_BLUR: false, EDGE_FADE: false, WINDOW_MATERIALS: [], LINUX_DESKTOP_MATERIAL: { translucent: true, blur: false } }))
+const { appearance, setWindowMaterial } = await import(${JSON.stringify(path.join(import.meta.dir, 'appearance.ts'))})
+const fresh = Object.values(appearance().window).map(m => m.material)
+setWindowMaterial('dark', { material: 'translucent', blur: 64, sidebarOpacity: 70 })
+React.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE.H = {
+  useState: v => [typeof v === 'function' ? v() : v, () => {}], useRef: v => ({ current: v }),
+  useContext: c => c._currentValue, useSyncExternalStore: (_, snapshot) => snapshot(),
+  useMemo: f => f(), useEffect: () => {},
+}
+const { Appearance } = await import(${JSON.stringify(path.join(import.meta.dir, 'Appearance.tsx'))})
+const all = []
+function walk(node) {
+  if (!node || typeof node !== 'object') return
+  if (Array.isArray(node)) { node.forEach(walk); return }
+  all.push(node); walk(node.props?.children)
+}
+walk(Appearance())
+const section = all.find(n => n.type?.name === 'VariantSection' && n.props.variant === 'dark')
+all.length = 0
+walk(section.type(section.props))
+const row = all.find(n => n.props?.title === 'Window')
+const description = row.props.description
+walk(row.type(row.props))
+console.log(JSON.stringify({ fresh, description, renderedNote: all.some(n => n.props?.children === description), ids: all.map(n => n.props?.testId).filter(Boolean), unavailable: (await import(${JSON.stringify(path.join(import.meta.dir, '../shell/windowMaterial.ts'))})).blurUnavailable() }))
+`)
+  // Isolated process: the platform and React dispatcher cannot leak to other tests.
+  for (const f of files()) rmSync(path.join(dir, f))
+  const result = Bun.spawnSync(['bun', script], { env: { ...process.env, KYBERN_CLIENT_CONFIG_DIR: dir, KYBERN_DATA_DIR: dir, KYBERN_WINDOW_MATERIAL: '', KYBERN_WINDOW_BLUR: '' } })
+  if (result.exitCode) throw Error(result.stderr.toString())
+  const shown = JSON.parse(result.stdout.toString().trim().split('\n').at(-1)!)
+  expect(shown.fresh).toEqual(['solid', 'solid'])
+  expect(shown.renderedNote).toBe(true)
+  expect(shown.description).toBe("This desktop can't blur, so the background shows through sharply. You can try the Blur my Shell extension.")
+  expect(shown.ids).toContain('settings-sidebar-opacity-dark')
+  expect(shown.ids).not.toContain('settings-blur-dark')
+  expect(shown.ids).not.toContain('settings-blur-auto-dark')
+  expect(shown.unavailable).toBe(false)
+})

@@ -41,7 +41,13 @@ export function desktopMaterialFor(platform: NodeJS.Platform, osRelease: string,
 export const DESKTOP_MATERIAL: DesktopMaterial = desktopMaterialFor(process.platform, release(), WINDOW_MATERIALS, process.env.KYBERN_DESKTOP_MATERIAL, DWM_BY_DEFAULT, LINUX_DESKTOP_MATERIAL)
 
 export const LINUX_WITHOUT_BLUR = process.platform === 'linux' && DESKTOP_MATERIAL !== 'linux-blur'
-export const WINDOW_MATERIAL_DESCRIPTION = DESKTOP_MATERIAL === 'linux-transparent'
-  ? "This desktop can't blur, so the background shows through sharply." + (/gnome/i.test(process.env.XDG_CURRENT_DESKTOP ?? '') ? ' You can try the Blur my Shell extension.' : '')
-  : DESKTOP_MATERIAL === 'none' ? 'Translucent turns the sidebar, menus and composer to glass. On this system the window itself stays solid.'
+// Linux compositor protocols expose no radius, even when background blur is supported.
+export const supportsBlurStrength = (platform: NodeJS.Platform, material: DesktopMaterial) => platform !== 'linux' && material === 'vibrancy'
+export const BLUR_STRENGTH = supportsBlurStrength(process.platform, DESKTOP_MATERIAL)
+
+export const windowMaterialDescription = (material: DesktopMaterial, desktop: string) => material === 'linux-transparent'
+  ? "This desktop can't blur, so the background shows through sharply." + (/gnome/i.test(desktop) ? ' You can try the Blur my Shell extension.' : '')
+  : material === 'none' ? 'Translucent turns the sidebar, menus and composer to glass. On this system the window itself stays solid.'
   : 'Translucent lets your desktop show through Kybern.'
+
+export const WINDOW_MATERIAL_DESCRIPTION = windowMaterialDescription(DESKTOP_MATERIAL, process.env.XDG_CURRENT_DESKTOP ?? '')
