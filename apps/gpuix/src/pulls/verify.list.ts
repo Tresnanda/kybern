@@ -1,6 +1,6 @@
 /** ADE-85 list and Timeline: readiness groups, the project filter with member repositories, repo chips and the Timeline tab. Mock RPC only. */
 import assert from 'node:assert/strict'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { launchFixture } from '../requests/harness.ts'
 import { captureWindow } from '../transcript/live.ts'
@@ -10,7 +10,8 @@ const mode = process.argv.includes('--light') ? 'light' : 'dark'
 const out = process.env.KYBERN_VERIFY_OUTPUT ?? '/Users/mymac/projects/ade/.kybern-artifacts/ade-85/l3'
 mkdirSync(out, { recursive: true })
 const fixture = actionFixture({ readiness: true })
-const f = await launchFixture(path.join(import.meta.dir, '../main.tsx'), { ...fixture.env, KYBERN_APPEARANCE: mode })
+writeFileSync(path.join(fixture.env.KYBERN_DATA_DIR!, 'gpuix-ui.json'), JSON.stringify({ 'kybern.pulls.listWidth': 368 }))
+const f = await launchFixture(path.join(import.meta.dir, '../main.tsx'), { ...fixture.env, KYBERN_APPEARANCE: mode, KYBERN_WINDOW_SIZE: '1100x850' })
 const a = f.app
 const shot = async (name: string) => { const file = `${out}/${name}-${mode}.png`; try { captureWindow(f.pid, file) } catch { await a.screenshot({ path: file }) } }
 const click = async (id: string) => { await a.getByTestId(id).waitFor({ timeoutMs: 10000 }); await a.getByTestId(id).click(); await Bun.sleep(450) }
@@ -19,6 +20,35 @@ try {
   await a.getByTestId('app-ready').waitFor({ timeoutMs: 60000 })
   await click('rail-pulls')
   await a.getByTestId('pr-row-core-2860').waitFor({ timeoutMs: 10000 })
+  // Actions share the number slot and never change the row's geometry.
+  const target = a.getByTestId('pr-row-tele-1190')
+  const more = a.getByTestId('pr-row-more-tele-1190')
+  await a.mouse.move({ x: 10, y: 10 }); await Bun.sleep(150)
+  assert.equal(await more.count(), 0, 'idle row shows its number')
+  const before = await target.bounds()
+  await shot('row-idle')
+  await target.hover(); await more.waitFor(); await Bun.sleep(150)
+  assert.deepEqual(await target.bounds(), before, 'number/action swap does not move or resize the row')
+  await shot('row-hover')
+  const detailCalls = fixture.params.filter(p => p.method === 'github.pr.detail').length
+  await click('pr-row-more-tele-1190')
+  await a.getByTestId('pr-row-open-tab').waitFor()
+  assert.equal(fixture.params.filter(p => p.method === 'github.pr.detail').length, detailCalls, 'more button does not select the row')
+  await a.getByTestId('pr-row-open-tab').press('escape'); await Bun.sleep(200)
+  await target.click({ button: 2 }); await a.getByTestId('pr-row-context-tele-1190').waitFor()
+  await Bun.sleep(250); await shot('row-context-menu')
+  await click('pr-row-open-tab')
+  await a.getByTestId('tab-pr:pages-fixture/tele:1190').waitFor()
+  await click('rail-pulls')
+  await target.click({ modifiers: process.platform === 'darwin' ? 'cmd' : 'ctrl' })
+  await a.getByTestId('tab-pr:pages-fixture/tele:1190').waitFor()
+  await click('rail-pulls')
+  await a.getByTestId('pr-search').press('down'); await Bun.sleep(150)
+  await a.mouse.move({ x: 10, y: 10 }); await Bun.sleep(150)
+  await more.waitFor()
+  await a.getByTestId('pr-row-menu-tele-1190').press('enter')
+  await a.getByTestId('pr-row-open-tab').waitFor()
+  await a.getByTestId('pr-row-open-tab').press('escape'); await Bun.sleep(150)
   // Every readiness group, in order, with counts.
   for (const g of ['needs_attention', 'awaiting_review', 'approved', 'draft']) assert.equal(await a.getByTestId(`pr-group-${g}`).count(), 1, `${g} group`)
   const text = await painted()
