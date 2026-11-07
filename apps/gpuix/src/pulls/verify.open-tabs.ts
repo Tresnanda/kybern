@@ -62,6 +62,7 @@ try{
  // Ordinary global-list click still selects its detail; only the explicit action returns to a tab.
  await click('rail-pulls');await click('pr-row-docs-108')
  assert.equal(await a.getByTestId('page-pulls').count(),1,'ordinary list click stays on global page')
+ await a.getByTestId('pr-row-docs-108').hover();await a.getByTestId('pr-row-more-docs-108').waitFor()
  await click('pr-row-more-docs-108');await click('pr-row-open-tab');current='pr:pages-fixture/docs:108'
  await body().getByTestId('pr-timeline').waitFor()
  if(process.env.KYBERN_VERIFY_OUTPUT){mkdirSync(process.env.KYBERN_VERIFY_OUTPUT,{recursive:true});await a.screenshot({path:path.join(process.env.KYBERN_VERIFY_OUTPUT,`open-tabs-${process.env.KYBERN_APPEARANCE ?? 'dark'}.png`)})}
