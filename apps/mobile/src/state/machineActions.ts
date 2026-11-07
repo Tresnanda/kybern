@@ -1,3 +1,4 @@
+import { updateRuns } from "../machines/updateRun";
 // What the Machines screen does through a member of the network (the phone is a
 // client with `network:admin`, so it asks the computer it is at, or the nearest
 // live member, to change the network). The machine set follows through the
@@ -38,7 +39,9 @@ const follow = async <T>(result: T): Promise<T> => {
 };
 
 export async function networkStatus(): Promise<NetworkStatus> {
-  return member().call("network.status", {});
+  const status = await member().call("network.status", {});
+  updateRuns.reconcile(status.members);
+  return status;
 }
 export async function addFoundMachine(found: FoundMachine): Promise<NetworkAddResult> {
   return follow(await member().call(found.action === "merge" ? "network.merge" : "network.add", { found_id: found.found_id }) as NetworkAddResult);
@@ -96,8 +99,20 @@ export async function setNetworkEnabled(enabled: boolean): Promise<void> {
 export async function setFollowUpdates(enabled: boolean): Promise<void> {
   await follow(await member().call("network.follow_updates.set", { enabled }));
 }
-export async function updateAllMachines(): Promise<NetworkUpdateAllResult> {
-  return follow(await member().call("network.update_all", {}));
+export async function updateAllMachines(machines: readonly MachineCard[]): Promise<NetworkUpdateAllResult> {
+  updateRuns.begin(machines);
+  try {
+    const result = await member().call("network.update_all", {});
+    updateRuns.accept(result, machines);
+    return follow(result);
+  } catch (e) { updateRuns.fail(machines.map(m => m.machine_id)); throw e; }
+}
+export async function retryMachineUpdate(machine: MachineCard) {
+  updateRuns.begin([machine]);
+  try {
+    const update = await machineHub().clientFor(machine.machine_id).call("daemon_update.run", {});
+    updateRuns.reconcile([{ ...machine, update }]);
+  } catch (e) { updateRuns.fail([machine.machine_id]); throw e; }
 }
 export async function checkNetwork(): Promise<DoctorReport> {
   return member().call("network.doctor", { machine_id: null });

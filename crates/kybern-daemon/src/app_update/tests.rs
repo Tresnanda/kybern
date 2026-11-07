@@ -436,7 +436,33 @@ async fn an_open_app_is_asked_to_update_once_nothing_runs_and_reports_back() {
     assert_eq!(notice.connection, window);
     assert_eq!(tick(state).await, Step::WithWindow, "asked once");
 
-    report(state, window, AppUpdaterReportParams { phase: AppUpdatePhase::Restarting, version: Some("0.99.0".into()), message: None });
+    report(
+        state,
+        window,
+        AppUpdaterReportParams {
+            download_percent: Some(64),
+            phase: AppUpdatePhase::Installing,
+            version: Some("0.99.0".into()),
+            message: Some("Downloading".into()),
+        },
+    );
+    let progress = state.daemon_updates.get();
+    assert_eq!(progress.download_percent, Some(64));
+    assert_eq!(progress.target_version.as_deref(), Some("0.99.0"));
+    assert!(progress.message.starts_with("Downloading"));
+    report(
+        state,
+        window,
+        AppUpdaterReportParams { download_percent: None, phase: AppUpdatePhase::Installing, version: Some("0.99.0".into()), message: None },
+    );
+    assert_eq!(state.daemon_updates.get().download_percent, None);
+    assert!(state.daemon_updates.get().message.starts_with("Installing"));
+
+    report(
+        state,
+        window,
+        AppUpdaterReportParams { download_percent: None, phase: AppUpdatePhase::Restarting, version: Some("0.99.0".into()), message: None },
+    );
     assert_eq!(state.daemon_updates.get().status, DaemonUpdateStatus::Restarting);
     assert_eq!(state.app_updates.pending(), None, "the app's restart ends it; the daemon does not install it again");
 }
@@ -452,6 +478,7 @@ async fn a_window_that_fails_or_finds_nothing_closes_the_request() {
         state,
         window,
         AppUpdaterReportParams {
+            download_percent: None,
             phase: AppUpdatePhase::Failed,
             version: None,
             message: Some("The update signature does not match the download".into()),

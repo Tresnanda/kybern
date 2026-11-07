@@ -709,6 +709,9 @@ pub enum AppUpdatePhase {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AppUpdaterReportParams {
+    /// Download percentage from the attached app, when the server supplies a length.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_percent: Option<u8>,
     pub phase: AppUpdatePhase,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,

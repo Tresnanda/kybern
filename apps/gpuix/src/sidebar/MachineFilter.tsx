@@ -1,3 +1,5 @@
+import { useLoopRunning } from '../native/loop-visibility.ts'
+import { REDUCED_MOTION } from '../ui.tsx'
 // "All machines ▾": the sidebar header's filter (design §5.2). It takes the place of the environment row and only
 // exists while more than one machine is known. The choice is per window and kept with the other sidebar preferences.
 import { useState } from 'react'
@@ -16,9 +18,10 @@ import { MachineBadge } from './MachineBadge.tsx'
 
 const toneColor = (t: ReturnType<typeof useTheme>, tone: Tone) => (tone === 'good' ? '#00bc7d' : tone === 'warn' ? '#e8a317' : tone === 'bad' ? t.red : muted(t, 0.4))
 
-export function StatusDot({ tone }: { tone: Tone }) {
+export function StatusDot({ tone, busy = false }: { tone: Tone; busy?: boolean }) {
+  const loop = useLoopRunning(busy && !REDUCED_MOTION)
   const t = useTheme()
-  return <div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: toneColor(t, tone), flexShrink: 0 }} />
+  return <div ref={loop.ref} {...(loop.running ? { paintAnimation: { kind: 'breathe', cycleMs: 1600 } } : {})} style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: toneColor(t, tone), flexShrink: 0 }} />
 }
 
 /** The machine the filter names, or `null` for all (a machine that is gone counts as all). */

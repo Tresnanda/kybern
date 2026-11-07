@@ -139,7 +139,8 @@ async fn a_device_named_bootstrap_cannot_pair_or_act_as_the_local_app() {
     let attach = AppUpdaterAttachParams { version: "0.0.1".into(), can_install: true, reason: None };
     let refused = impostor.call::<AppUpdaterAttach>(attach.clone()).await.unwrap_err().to_string();
     assert!(refused.contains("Only the Kybern app on this machine"), "{refused}");
-    let report = AppUpdaterReportParams { phase: AppUpdatePhase::Restarting, version: Some("0.0.1".into()), message: None };
+    let report =
+        AppUpdaterReportParams { download_percent: None, phase: AppUpdatePhase::Restarting, version: Some("0.0.1".into()), message: None };
     let refused = impostor.call::<AppUpdaterReport>(report).await.unwrap_err().to_string();
     assert!(refused.contains("Only the Kybern app on this machine"), "{refused}");
     let refused = impostor.call::<DaemonShutdown>(Empty {}).await.unwrap_err().to_string();

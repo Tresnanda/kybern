@@ -765,6 +765,7 @@ impl Projection {
             MachineStatus::Offline
         };
         Some(MachineCard {
+            update: None,
             machine_id: machine_id.to_string(),
             name: entry.descriptor.name.clone(),
             os: entry.descriptor.os.clone(),

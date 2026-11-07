@@ -50,6 +50,7 @@ async fn all_linked(nodes: &[&Node]) {
 /// What `owner` last heard `machine` say about itself.
 fn presence(version: &str, features: &[&str]) -> PeerPresence {
     PeerPresence {
+        update: None,
         version: version.into(),
         network_protocol: NETWORK_PROTOCOL,
         features: features.iter().map(|feature| feature.to_string()).collect(),

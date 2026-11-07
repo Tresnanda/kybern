@@ -326,7 +326,12 @@ pub struct Prepared {
 }
 
 /// Read the feed of `track` and, when it has a newer release for this platform, download and verify it.
-pub async fn prepare(install: &DesktopInstall, track: UpdateTrack, current: &str) -> Result<Option<Prepared>> {
+pub async fn prepare_with_progress(
+    install: &DesktopInstall,
+    track: UpdateTrack,
+    current: &str,
+    progress: impl Fn(&str, Option<u8>),
+) -> Result<Option<Prepared>> {
     let feeds = feeds(&|name| std::env::var(name).ok())?;
     let key = platform_key(std::env::consts::OS, std::env::consts::ARCH).context("Kybern publishes no app for this platform")?;
     let client = http()?;
@@ -338,7 +343,19 @@ pub async fn prepare(install: &DesktopInstall, track: UpdateTrack, current: &str
     let release = track_release(track, stable, dev).map_err(|error| anyhow!("Unable to read the release feed: {error:#}"))?;
     let Some(release) = release.filter(|release| newer(&release.version, current)) else { return Ok(None) };
     let entry = release.entry.with_context(|| format!("Kybern {} has no app for this platform yet. Try again later.", release.version))?;
-    let data = client.get(&entry.url).send().await?.error_for_status()?.bytes().await.context("download the update")?.to_vec();
+    progress(&release.version, None);
+    let mut response = client.get(&entry.url).send().await?.error_for_status()?;
+    let total = response.content_length();
+    let mut data = Vec::new();
+    let mut last = None;
+    while let Some(chunk) = response.chunk().await.context("download the update")? {
+        data.extend_from_slice(&chunk);
+        let percent = total.filter(|n| *n > 0).map(|n| (data.len() as u64 * 100 / n).min(100) as u8);
+        if percent != last {
+            progress(&release.version, percent);
+            last = percent;
+        }
+    }
     let trusted = verify(&data, &entry.signature, &feeds.pubkey)?;
     match install {
         DesktopInstall::Windows { .. } => check_signed_release(&trusted, &installer_name(&release.version), &release.version, current)?,

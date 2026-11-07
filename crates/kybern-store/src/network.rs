@@ -389,6 +389,7 @@ mod tests {
 
     fn presence() -> PeerPresence {
         PeerPresence {
+            update: None,
             version: "0.19.0".into(),
             network_protocol: 1,
             features: vec!["network.v1".into()],

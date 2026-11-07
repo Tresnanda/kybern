@@ -699,6 +699,7 @@ mod tests {
 
     fn card(id: &str, name: &str) -> MachineCard {
         MachineCard {
+            update: None,
             machine_id: id.into(),
             name: name.into(),
             os: "linux".into(),
