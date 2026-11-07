@@ -284,7 +284,15 @@ pub fn report(state: &AppState, connection: Uuid, report: AppUpdaterReportParams
     let version = report.version.clone().unwrap_or_else(|| "the new version".into());
     tracing::info!(target: TARGET, %connection, phase = ?report.phase, message = ?report.message, "the app reported on its update");
     match report.phase {
-        AppUpdatePhase::Installing => note(state, Status::Updating, format!("Installing {version}…")),
+        AppUpdatePhase::Installing => {
+            let downloading = report.download_percent.is_some() || report.message.as_deref() == Some("Downloading");
+            note(state, Status::Updating, if downloading { format!("Downloading {version}…") } else { format!("Installing {version}…") });
+            if downloading {
+                let mut record = state.daemon_updates.get();
+                record.download_percent = report.download_percent.map(|percent| percent.min(100));
+                state.daemon_updates.record(&state.store, record);
+            }
+        }
         AppUpdatePhase::Waiting => note(state, Status::Waiting, format!("{version} is ready. Waiting for running work to finish")),
         AppUpdatePhase::Restarting => {
             // The app installed it and restarts; its new daemon replaces this one. Nothing is left to do here.

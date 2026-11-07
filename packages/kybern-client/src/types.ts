@@ -5220,7 +5220,7 @@ export interface AppUpdaterAttachParams {
   reason?: string;
 }
 export type AppUpdatePhase = "installing" | "waiting" | "restarting" | "current" | "failed";
-export interface AppUpdaterReportParams { phase: AppUpdatePhase; version?: string; message?: string }
+export interface AppUpdaterReportParams { download_percent?: number; phase: AppUpdatePhase; version?: string; message?: string }
 export interface AppUpdateRequestedNotification {
   /** The version this machine was asked to reach; the app still installs only what its own track's feed offers. */
   version?: string;
