@@ -39,6 +39,8 @@ export function backingFor(m: Pick<VariantMaterial, 'blur' | 'sidebarOpacity' | 
 export type NativeBackground = Backing['mode'] | 'mica' | 'acrylic'
 export function nativeBackground(backing: Backing, material: DesktopMaterial = DESKTOP_MATERIAL): NativeBackground {
   if (material === 'vibrancy') return backing.mode
+  if (material === 'linux-blur') return backing.mode === 'opaque' ? 'opaque' : 'blurred'
+  if (material === 'linux-transparent') return backing.mode === 'opaque' ? 'opaque' : 'transparent'
   if (material === 'none' || backing.mode === 'opaque') return 'opaque'
   return backing.mode === 'blurred' ? 'mica' : 'acrylic'
 }
