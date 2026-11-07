@@ -19,7 +19,7 @@ import { useEffect, useSyncExternalStore } from 'react'
 import { useGpuix } from '@gpuix/react'
 import { applyDesktopMaterial } from '../native/material.ts'
 import { blurCallAvailable, forgetTransparentFlags, setWindowBlurRadius } from '../native/windowBlur.ts'
-import { DESKTOP_MATERIAL, type DesktopMaterial } from '../platform/desktopMaterial.ts'
+import { BLUR_STRENGTH, DESKTOP_MATERIAL, type DesktopMaterial } from '../platform/desktopMaterial.ts'
 import { OPAQUE_COVERAGE, type ThemeVariant, type VariantMaterial, type WindowScope } from '../platform/translucency.ts'
 import { windowCoverage } from '../theme.ts'
 import { syncWindowAppearance } from './appearance.ts'
@@ -57,8 +57,8 @@ function setUnavailable(value: boolean) {
   for (const l of listeners) l()
 }
 /** The custom blur was refused on this macOS. Only a `transparent` attempt re-evaluates it. */
-export const useBlurUnavailable = () => useSyncExternalStore(subscribe, () => unavailable)
-export const blurUnavailable = () => unavailable
+export const useBlurUnavailable = () => useSyncExternalStore(subscribe, () => BLUR_STRENGTH && unavailable)
+export const blurUnavailable = () => BLUR_STRENGTH && unavailable
 
 type Renderer = { setWindowBackground?: (mode: string) => void }
 let warned = false
