@@ -657,8 +657,22 @@ export function applyRequestedUpdate(client: UpdaterClient, automatic = false): 
     prepare: async (update) => {
       pending = update
       set({ phase: 'installing', version: update.version, notes: update.notes, progress: null, error: null, errorKind: null, announcementOpen: false, unpublished: null, manual: null })
-      try { return await prepareInstall(update, (progress) => set({ progress })) }
-      catch (error) { set({ phase: 'available', progress: null, error: describe(error), errorKind: 'install' }); throw error }
+      let reports = Promise.resolve()
+      let lastPercent: number | null | undefined
+      const report = (params: AppUpdaterReportParams) => client.call('app_updater.report', params).then(() => {}, () => {})
+      try {
+        const apply = await prepareInstall(update, progress => {
+          set({ progress })
+          const percent = progress === null ? null : Math.round(progress * 100)
+          if (percent === lastPercent) return
+          lastPercent = percent
+          reports = reports.then(() => report({ phase: 'installing', version: update.version, message: 'Downloading', ...(percent === null ? {} : { download_percent: percent }) }))
+        })
+        await reports
+        await report({ phase: 'installing', version: update.version })
+        return apply
+      }
+      catch (error) { await reports; set({ phase: 'available', progress: null, error: describe(error), errorKind: 'install' }); throw error }
     },
     idle: async () => { try { return activityIdle(await client.call('daemon.activity', {}), automatic) } catch { return false } },
     report: (params) => client.call('app_updater.report', params).then(() => {}, () => {}),

@@ -3266,8 +3266,17 @@ pub enum HarnessUpdateStatus {
 /// The daemon's own update state. The daemon replaces its binary from the
 /// GitHub release feed and restarts under its service manager; persisted so
 /// clients see the same record after a reconnect or the restart itself.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DaemonUpdate {
+    /// Identity retained across the replacement process and its reconnect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_percent: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub busy_thread: Option<String>,
     pub status: DaemonUpdateStatus,
     pub message: String,
     /// Version of the running daemon.

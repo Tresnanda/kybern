@@ -3719,6 +3719,7 @@ export const NETWORK_FEATURES = {
   secretsStore: "secrets.store.v1",
   loginBroker: "login.broker.v1",
   update: "update.v1",
+  updateProgress: "update.progress.v1",
   /** A desktop app's machine updates the app when asked (ADE-125); older ones answer "Updates with the app". */
   appUpdate: "update.app.v1",
   group: "group.v1",
@@ -3840,6 +3841,7 @@ export interface HarnessSummary {
 
 /** One member as Settings → Machines shows it. */
 export interface MachineCard {
+  update?: DaemonUpdate | null;
   machine_id: MachineId;
   name: string;
   os: string;
@@ -4073,6 +4075,7 @@ export interface MachineInfo {
 export interface PeerOpsSyncParams { digest: string; ids: string[] }
 export interface PeerOpsSyncResult { digest: string; ids: string[]; ops: OpEnvelope[] }
 export interface PeerPresence {
+  update?: DaemonUpdate | null;
   version: string;
   network_protocol: number;
   features: string[];
@@ -5194,6 +5197,10 @@ export type ParamsOf<M extends MethodName> = Methods[M][0];
 export type ResultOf<M extends MethodName> = Methods[M][1];
 
 export interface DaemonUpdate {
+  update_id?: string | null;
+  target_version?: string | null;
+  download_percent?: number | null;
+  busy_thread?: string | null;
   status: "not_checked" | "checking" | "current" | "available" | "waiting" | "updating" | "restarting" | "unsupported" | "failed";
   message: string;
   current_version: string;
@@ -5213,7 +5220,7 @@ export interface AppUpdaterAttachParams {
   reason?: string;
 }
 export type AppUpdatePhase = "installing" | "waiting" | "restarting" | "current" | "failed";
-export interface AppUpdaterReportParams { phase: AppUpdatePhase; version?: string; message?: string }
+export interface AppUpdaterReportParams { download_percent?: number; phase: AppUpdatePhase; version?: string; message?: string }
 export interface AppUpdateRequestedNotification {
   /** The version this machine was asked to reach; the app still installs only what its own track's feed offers. */
   version?: string;

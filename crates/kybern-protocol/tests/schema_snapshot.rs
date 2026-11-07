@@ -483,7 +483,7 @@ fn an_older_daemon_info_and_project_still_parse_and_the_network_defaults_to_off(
         NetworkSettings { configured: true, enabled: true, port: DEFAULT_PORT, keep_reachable: true, keep_network_data: true }
     );
     assert_eq!(NETWORK_PROTOCOL, 1);
-    assert_eq!(features::ALL.len(), 29);
+    assert_eq!(features::ALL.len(), 30);
 }
 
 #[test]

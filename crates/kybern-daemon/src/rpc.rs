@@ -271,7 +271,12 @@ async fn dispatch_part_3(state: &AppState, ctx: &ConnectionCtx, method: &str, sl
                 return Err(RpcError::new(codes::FORBIDDEN, "Only the Kybern app on this machine can update it"));
             }
             let p: AppUpdaterReportParams = parse(params)?;
+            let restarting = matches!(p.phase, AppUpdatePhase::Restarting);
             crate::app_update::report(state, ctx.id, p);
+            if restarting {
+                // The app awaits this reply before closing the process and its peer sockets.
+                state.network.broadcast_update().await;
+            }
             ok(Empty {})
         }
         ProjectsList::NAME => {

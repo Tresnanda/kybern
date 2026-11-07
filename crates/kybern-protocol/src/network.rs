@@ -58,6 +58,7 @@ pub mod features {
     pub const SECRETS_STORE_V1: &str = "secrets.store.v1";
     pub const LOGIN_BROKER_V1: &str = "login.broker.v1";
     /// `peer.update.start`: another member can ask this machine to update itself.
+    pub const UPDATE_PROGRESS_V1: &str = "update.progress.v1";
     pub const UPDATE_V1: &str = "update.v1";
     /// A daemon the desktop app manages answers `peer.update.start` by updating the app: through an open window,
     /// or by itself while the app is closed (ADE-125). Older versions answer "Updates with the app" instead.
@@ -84,7 +85,7 @@ pub mod features {
     pub const REMOVAL_PROOF_V1: &str = "removal.proof.v1";
 
     /// Every feature the network design names, in design order.
-    pub const ALL: [&str; 29] = [
+    pub const ALL: [&str; 30] = [
         NETWORK_V1,
         SPACES_SYNC_V1,
         RELAY_V1,
@@ -107,6 +108,7 @@ pub mod features {
         SECRETS_STORE_V1,
         LOGIN_BROKER_V1,
         UPDATE_V1,
+        UPDATE_PROGRESS_V1,
         APP_UPDATE_V1,
         GROUP_V1,
         PROVISION_V1,
@@ -328,6 +330,9 @@ pub struct HarnessSummary {
 /// One member as Settings → Machines shows it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct MachineCard {
+    /// Live progress, supported by update.progress.v1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<crate::DaemonUpdate>,
     pub machine_id: MachineId,
     pub name: String,
     pub os: String,
@@ -827,6 +832,9 @@ pub struct PeerOpsPushResult {
 // N1: `load` and `battery` are plain optional numbers; the design lists them without a shape.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct PeerPresence {
+    /// Live progress, supported by update.progress.v1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<crate::DaemonUpdate>,
     pub version: String,
     pub network_protocol: u32,
     #[serde(default)]
