@@ -2938,6 +2938,7 @@ mod tests {
                 rewind: None,
                 binary: Some(binary),
                 env: env.iter().map(|(key, value)| (key.to_string(), value.to_string())).collect(),
+                compaction: Default::default(),
             })
             .await
             .unwrap();
