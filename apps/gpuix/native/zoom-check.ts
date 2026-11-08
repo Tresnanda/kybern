@@ -110,7 +110,9 @@ try {
       await send('pop')
       const pop = await settled(() => a.getByTestId('popover').bounds().catch(() => null), (b) => !!b)
       const trigger = await a.getByTestId('pop-trigger').bounds()
-      assert.ok(pop && Math.abs(pop.x - trigger.x) < 1 && Math.abs(pop.y - (trigger.y + trigger.height + 4)) < 1, `popover ${JSON.stringify(pop)} trigger ${JSON.stringify(trigger)}`)
+      // Within one device pixel: GPUI snaps layout to whole device pixels, and at 1× × 80 % one is 1.25 content px.
+      const slack = 1 / Math.min(1, zoom) + 0.01
+      assert.ok(pop && Math.abs(pop.x - trigger.x) <= slack && Math.abs(pop.y - (trigger.y + trigger.height + 4)) <= slack, `popover ${JSON.stringify(pop)} trigger ${JSON.stringify(trigger)}`)
       await send('pop')
     })
 
@@ -134,7 +136,8 @@ try {
       row.devicePerContent = device
       row.borderRows = dark
       if (Number.isInteger(Math.round(device * 100) / 100)) assert.equal(dark, Math.round(device), `a 1 px border is ${dark} device rows at ${device}× (want ${Math.round(device)})`)
-      else assert.ok(dark >= 1 && dark + grey <= Math.ceil(device), `a 1 px border is ${dark} black + ${grey} grey device rows at ${device}×`)
+      // A fractional device size (1× displays at 110 % or 80 %) may blend the border's partial row.
+      else assert.ok(dark + grey >= 1 && dark + grey <= Math.ceil(device), `a 1 px border is ${dark} black + ${grey} grey device rows at ${device}×`)
       if (Number.isInteger(Math.round(device * 100) / 100)) assert.equal(grey, 0, `${grey} grey rows under a 1 px border at ${device}×`)
     })
 
