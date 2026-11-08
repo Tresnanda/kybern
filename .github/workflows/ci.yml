@@ -204,6 +204,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.gpuix == 'true'
     runs-on: ubuntu-24.04
+    # A normal run takes a few minutes. A hang (one did sit for an hour on a test file that never exited) fails here.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-pnpm-apps
@@ -222,7 +224,9 @@ jobs:
         working-directory: apps/gpuix
         run: bun test
       - name: shared client tests
-        run: node --experimental-strip-types --test packages/kybern-client/tests/*.test.mjs
+        # The whole suite runs in seconds; --test-timeout (ms, per test and per file) turns a test file whose
+        # process never exits into a named failure within a minute instead of a stuck job.
+        run: node --experimental-strip-types --test --test-timeout=60000 packages/kybern-client/tests/*.test.mjs
 
   keychain-helper:
     # The committed macOS Keychain helper must be the build of its source

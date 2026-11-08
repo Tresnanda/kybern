@@ -7,6 +7,9 @@ import { PROTOCOL_VERSION } from "../src/types.ts";
 import { INVALID_ADDRESS, normalizeDaemonUrl } from "../src/address.ts";
 import { connectFailureMessage } from "../src/machines.ts";
 import { describeProblem } from "../src/problems.ts";
+import { trackClients } from "./clients.mjs";
+
+const track = trackClients();
 
 const wait = (ms = 15) => new Promise((resolve) => setTimeout(resolve, ms));
 const INFO = { version: "0.19.0", protocol_version: PROTOCOL_VERSION, environment_id: "env-a", hostname: "box", os: "linux", arch: "x64", data_dir: "/d", scopes: [], started_at: "" };
@@ -31,7 +34,7 @@ function socketWith(reply) {
 /** A client over `createSocket`, collecting each status with its detail. */
 function connect(reply, options = {}, endpoint = {}) {
   const socket = socketWith(reply);
-  const client = new KybernClient({ url: "ws://10.0.0.5:4173/ws", token: "tok", ...endpoint }, { createSocket: () => socket, ...options });
+  const client = track(new KybernClient({ url: "ws://10.0.0.5:4173/ws", token: "tok", ...endpoint }, { createSocket: () => socket, ...options }));
   const seen = [];
   client.onStatus((status, detail) => seen.push([status, detail]));
   client.connect();
@@ -40,7 +43,7 @@ function connect(reply, options = {}, endpoint = {}) {
 const detailOf = (seen, status) => seen.find(([s]) => s === status)?.[1];
 
 test("a call on a closed connection says to reconnect to this computer", async () => {
-  const client = new KybernClient({ url: "ws://10.0.0.5:4173/ws", token: "tok" });
+  const client = track(new KybernClient({ url: "ws://10.0.0.5:4173/ws", token: "tok" }));
   await assert.rejects(client.callRaw("threads.list", {}), (error) => {
     assert.ok(error instanceof ConnectionClosedError);
     assert.equal(error.message, "Reconnect to this computer before trying again");
@@ -62,7 +65,7 @@ test("a ticket that is not a ticket asks to update Kybern on the computer", asyn
   const real = globalThis.fetch;
   globalThis.fetch = async () => Response.json({ ticket: 12 });
   try {
-    const client = new KybernClient({ url: "ws://10.0.0.5:4173/ws", token: "tok" });
+    const client = track(new KybernClient({ url: "ws://10.0.0.5:4173/ws", token: "tok" }));
     const seen = [];
     client.onStatus((status, detail) => seen.push([status, detail]));
     client.connect();
@@ -78,7 +81,7 @@ test("a refused credential at the ticket request asks to pair the computer again
   const real = globalThis.fetch;
   globalThis.fetch = async () => new Response("no", { status: 401 });
   try {
-    const client = new KybernClient({ url: "ws://10.0.0.5:4173/ws", token: "old" });
+    const client = track(new KybernClient({ url: "ws://10.0.0.5:4173/ws", token: "old" }));
     const seen = [];
     client.onStatus((status, detail) => seen.push([status, detail]));
     client.connect();
@@ -92,7 +95,7 @@ test("a refused credential at the ticket request asks to pair the computer again
 
 test("a refusal found by the probe says the same", async () => {
   const socket = { readyState: 3, close() {}, send() {} };
-  const client = new KybernClient({ url: "ws://10.0.0.5:4173/ws", token: "old" }, { createSocket: () => socket, probeAuth: async () => "rejected" });
+  const client = track(new KybernClient({ url: "ws://10.0.0.5:4173/ws", token: "old" }, { createSocket: () => socket, probeAuth: async () => "rejected" }));
   const seen = [];
   client.onStatus((status, detail) => seen.push([status, detail]));
   client.connect();
@@ -154,7 +157,7 @@ test("a connection that never opens times out asking whether the computer is on 
   mock.timers.enable({ apis: ["setTimeout"] });
   try {
     const socket = { readyState: 0, close() {}, send() {} };
-    const client = new KybernClient({ url: "ws://10.0.0.5:4173/ws", token: "tok" }, { createSocket: () => socket });
+    const client = track(new KybernClient({ url: "ws://10.0.0.5:4173/ws", token: "tok" }, { createSocket: () => socket }));
     const seen = [];
     client.onStatus((status, detail) => seen.push([status, detail]));
     client.connect();

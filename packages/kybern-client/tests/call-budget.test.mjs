@@ -7,6 +7,9 @@ import { KybernClient, RpcCallError } from "../src/client.ts";
 import { CONTROL_METHODS, FEDERATED_LISTS, SLOW_METHODS, SLOW_PREFIXES, busyDelay, laneFor } from "../src/callLanes.ts";
 import { PROTOCOL_VERSION, codes } from "../src/types.ts";
 import { describeProblem } from "../src/problems.ts";
+import { trackClients } from "./clients.mjs";
+
+const track = trackClients();
 
 const wait = (ms = 15) => new Promise((resolve) => setTimeout(resolve, ms));
 const INFO = { version: "0.24.0", protocol_version: PROTOCOL_VERSION, environment_id: "env-a", hostname: "box", os: "linux", arch: "x64", data_dir: "/d", scopes: [], started_at: "" };
@@ -26,7 +29,7 @@ async function connected(options = {}, auto = () => undefined) {
     },
   };
   queueMicrotask(() => socket.onopen?.());
-  const client = new KybernClient({ url: "ws://10.0.0.5:4173/ws", token: "tok" }, { createSocket: () => socket, ...options });
+  const client = track(new KybernClient({ url: "ws://10.0.0.5:4173/ws", token: "tok" }, { createSocket: () => socket, ...options }));
   client.connect();
   await wait();
   sent.length = 0;
@@ -135,19 +138,23 @@ test("a refusal that keeps coming ends as the busy error, after bounded attempts
 });
 
 test("retries stay inside the call's own deadline", async () => {
-  const { client } = await connected({ requestTimeoutMs: 40, busyRetry: { attempts: 50 } }, (message) => (message.method === "tasks.items.list" ? { error: { ...BUSY, data: { ...BUSY.data, retry_after_ms: 30 } } } : undefined));
-  const started = Date.now();
+  const { client, sent } = await connected({ requestTimeoutMs: 40, busyRetry: { attempts: 50 } }, (message) => (message.method === "tasks.items.list" ? { error: { ...BUSY, data: { ...BUSY.data, retry_after_ms: 30 } } } : undefined));
   await assert.rejects(client.call("tasks.items.list", {}));
-  assert.ok(Date.now() - started < 400);
+  // Counted rather than timed, so a slow machine cannot fail it: a 40 ms deadline leaves room for the first try and
+  // at most one repeat (the next backoff is at least 45 ms), however many attempts are allowed.
+  const tries = sent.filter((m) => m.method === "tasks.items.list").length;
+  assert.ok(tries >= 1 && tries <= 2, `${tries} tries inside a 40 ms deadline`);
   client.close();
 });
 
 test("a call that waits in the queue past its deadline fails without being sent", async () => {
   const { client, sent } = await connected({ callBudget: { standard: 1, slow: 1 }, requestTimeoutMs: 40 });
-  const first = client.call("threads.get", { thread_id: "a" }).catch((e) => e);
+  // The first call holds the only slot well past the second one's deadline, so the second has to expire in the
+  // queue. (With equal deadlines the first one's timeout could free the slot a millisecond before the second's.)
+  const first = client.callRaw("threads.get", { thread_id: "a" }, 300).catch((e) => e);
   const second = client.call("threads.get", { thread_id: "b" }).catch((e) => e);
-  await wait(80);
   assert.match((await second).message, /did not answer/);
+  assert.equal(sent.filter((m) => m.method === "threads.get").length, 1, "the queued call was never sent");
   assert.match((await first).message, /did not answer/);
   assert.equal(sent.filter((m) => m.method === "threads.get").length, 1);
   client.close();

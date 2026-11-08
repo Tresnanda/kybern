@@ -7,6 +7,9 @@ import { KybernClient } from "../src/client.ts";
 import { MachineSet, kybernClientFactory, probeAuth } from "../src/machines.ts";
 import { fakeWorld, manualClock, memoryCacheStorage, memoryCredentials, memoryStore, verifyProof } from "./machine-fakes.mjs";
 import { MachineCache } from "../src/machineCache.ts";
+import { trackClients } from "./clients.mjs";
+
+const track = trackClients();
 
 /** What Bun does for a 401 at the upgrade: close 1002, no open, no status. */
 function refusedSocket() {
@@ -33,10 +36,10 @@ test("a socket refused at the upgrade fails with an auth failure once the machin
   await withFetch(
     () => new Response("invalid token", { status: 401 }),
     async (calls) => {
-      const client = new KybernClient(
+      const client = track(new KybernClient(
         { url: "http://100.64.0.2:4173", token: "old" },
         { createSocket: refusedSocket, probeAuth: () => probeAuth("http://100.64.0.2:4173", "old", undefined, false) },
-      );
+      ));
       const seen = [];
       client.onStatus((status, detail) => seen.push([status, detail]));
       client.connect();
@@ -57,10 +60,10 @@ test("a refused socket on a machine that is just down keeps retrying", async () 
       throw new TypeError("fetch failed");
     },
     async () => {
-      const client = new KybernClient(
+      const client = track(new KybernClient(
         { url: "http://100.64.0.2:4173", token: "tok" },
         { createSocket: refusedSocket, probeAuth: () => probeAuth("http://100.64.0.2:4173", "tok", undefined, false) },
-      );
+      ));
       client.connect();
       await wait();
       assert.equal(client.status, "reconnecting");
