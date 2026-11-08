@@ -106,6 +106,9 @@ pub mod codes {
     pub const THREAD_BUSY: i32 = -32012;
     /// The method exists in the protocol but this build does not implement it yet.
     pub const NOT_AVAILABLE: i32 = -32013;
+    /// The connection has too many calls in flight. The call was not started, so repeating it is always safe;
+    /// the error's `data.retry_after_ms` says when to try.
+    pub const CAPACITY_EXCEEDED: i32 = -32014;
 }
 
 /// What went wrong in terms a person can act on, sent as an RPC error's `data.problem` (and in
@@ -220,7 +223,7 @@ impl ProblemKind {
             codes::METHOD_NOT_FOUND => Self::UpdateNeeded,
             codes::UNAUTHORIZED | codes::FORBIDDEN => Self::Permission,
             codes::NOT_FOUND => Self::NotFound,
-            codes::CONFLICT | codes::THREAD_BUSY => Self::Conflict,
+            codes::CONFLICT | codes::THREAD_BUSY | codes::CAPACITY_EXCEEDED => Self::Conflict,
             _ => Self::Internal,
         }
     }

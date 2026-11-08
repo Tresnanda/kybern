@@ -16,10 +16,10 @@ import { useControls } from '../kit/controls.ts'
 import { useTheme } from '../ui.tsx'
 import { useWindowChrome, windowActions, type ResizeEdge, type WindowButton, type WindowChrome } from '../shell/windowChrome.ts'
 import { TITLEBAR } from './TitleBar.tsx'
+import { TRAFFIC_LIGHTS, useUiZoom } from '../shell/uiZoom.ts'
 
 const MAC = process.platform === 'darwin'
-/** Where the macOS traffic lights end: the leading chrome starts here. */
-const TRAFFIC_LIGHTS_END = 82
+/** Where the macOS traffic lights end, in OS points: the leading chrome starts there (`TRAFFIC_LIGHTS.end` over the zoom). */
 const EDGE = 12
 
 const svg = (body: string, box: number) => `<svg xmlns="http://www.w3.org/2000/svg" width="${box}" height="${box}" viewBox="0 0 ${box} ${box}" fill="none">${body}</svg>`
@@ -57,7 +57,8 @@ const gnomeWidth = (n: number) => (n ? n * GNOME_BUTTON + (n - 1) * GNOME_GAP + 
 /** Room the window buttons take at each end of the title bar: `leading` is where the app's own leading chrome starts. */
 export function useWindowControlsLayout(): { leading: number; trailing: number } {
   const chrome = useWindowChrome()
-  if (MAC) return { leading: TRAFFIC_LIGHTS_END, trailing: 0 }
+  const { zoom } = useUiZoom()
+  if (MAC) return { leading: Math.ceil(TRAFFIC_LIGHTS.end / zoom), trailing: 0 }
   if (chrome?.platform === 'windows' && !chrome.fullscreen) return { leading: EDGE, trailing: 3 * WINDOWS_BUTTON }
   if (linuxDrawn(chrome)) {
     const left = linuxButtons(chrome, 'left').length, right = linuxButtons(chrome, 'right').length

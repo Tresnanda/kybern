@@ -3,6 +3,7 @@
 // ("Context refreshed · 14:02") with a chevron that opens the handoff card: the six sections, what Kybern carried, and, on the
 // latest refresh, "Edit handoff". Motion is §10.4: arrival, the state swap, `Collapse` + `Chevron`, a read ↔ edit cross-fade
 // and the "Edited by you" label. Words and handoff parsing are shared (`packages/kybern-client/src/rotation.ts`).
+import { FencedMarkdown } from './markdown.tsx'
 import { memo, useEffect, useMemo, useState } from 'react'
 import { handoffEditable, handoffMissing, missingHandoffText, parseHandoff, ROTATION_COPY, rotationLabel, rotationMeta, type HandoffSection } from '../../../../packages/kybern-client/src/rotation.ts'
 import { editHandoff, useLatestRotationId, type RotationBlock } from '../coordinator/rotation.ts'
@@ -173,7 +174,7 @@ function Section({ section }: { section: HandoffSection }) {
       {section.label && <Label color={muted(t)} size={11.5} lineHeight={16} weight={600} style={{ marginTop: 10, marginBottom: 2 }}>{section.label}</Label>}
       {section.none
         ? <Para color={t.textTertiary} size={BODY.size} lineHeight={BODY.lineHeight}>None</Para>
-        : <markdown source={section.body} theme={bodyTheme(t)} style={{ color: t.text, userSelect: 'text' }} />}
+        : <FencedMarkdown source={section.body} theme={bodyTheme(t)} style={{ color: t.text, userSelect: 'text' }} />}
     </div>
   )
 }

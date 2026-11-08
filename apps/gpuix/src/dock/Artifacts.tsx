@@ -1,3 +1,4 @@
+import { FencedMarkdown } from '../transcript/markdown.tsx'
 import { useEffect, useRef, useState } from 'react'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { observeElementBounds, type ElementBoundsEvent } from '../native/layout.ts'
@@ -150,7 +151,7 @@ export function ArtifactTab({ threadId, path, url: hosted }: { threadId: string;
         : !file ? <Label color={t.textSecondary} size={14}>Loading preview…</Label>
         : <>
           {source && <div testId="artifact-source-text" style={{ height, overflow: 'scroll' }}><Label color={t.text} size={12} lineHeight={16} font={FONT_CODE} style={{ whiteSpace: 'normal', width: '100%' }}>{file.content}</Label></div>}
-          {markdown ? !source && <div style={{ height, overflow: 'scroll' }}><markdown style={{ userSelect: 'text' }} source={file.content} theme={cachedMarkdownTheme(t)} /></div>
+          {markdown ? !source && <div style={{ height, overflow: 'scroll' }}><FencedMarkdown style={{ userSelect: 'text' }} source={file.content} theme={cachedMarkdownTheme(t)} /></div>
             : !webHost.available ? <ArtifactInBrowser threadId={threadId} path={path} title={path.split('/').pop() || 'This artifact'} hidden={source} />
             : url ? <ArtifactFrame id={`artifact-tab:${threadId}:${path}`} url={url} height={height} hidden={source} onFailed={setError} /> : !source && <Label color={t.textSecondary} size={14}>Loading preview…</Label>}
         </>}
@@ -206,7 +207,7 @@ function ArtifactPreview({ thread, artifact, close }: { thread: Thread; artifact
         : <>
           {/* Desktop `<pre className="text-xs whitespace-pre-wrap">`: the raw file in the mono family, wrapped. */}
           {source && <div testId="artifact-source-text" style={{ height, overflow: 'scroll' }}><Label color={t.text} size={12} lineHeight={16} font={FONT_CODE} style={{ whiteSpace: 'normal', width: '100%' }}>{file.content}</Label></div>}
-          {markdown ? !source && <div style={{ height, overflow: 'scroll' }}><markdown style={{ userSelect: 'text' }} source={file.content} theme={cachedMarkdownTheme(t)} /></div>
+          {markdown ? !source && <div style={{ height, overflow: 'scroll' }}><FencedMarkdown style={{ userSelect: 'text' }} source={file.content} theme={cachedMarkdownTheme(t)} /></div>
             : !webHost.available ? <ArtifactInBrowser threadId={thread.id} path={artifact.path!} title={artifact.title} hidden={source} />
             : url ? <ArtifactFrame id={`artifact:${thread.id}:${artifact.path}`} url={url} height={height} hidden={source} onFailed={setError} /> : !source && <Label color={t.textSecondary} size={14}>Loading preview…</Label>}
         </>}

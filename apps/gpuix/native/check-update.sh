@@ -11,6 +11,8 @@ geometry)
   bun native/capability-check.ts
   bun native/decoration-check.ts
   bun native/rounded-check.ts
+  # Interface zoom (#292): content viewport, AppKit input at window points, crisp scale × zoom, web page zoom, minimum window.
+  bun native/zoom-check.ts
   # Edge fades (native/upstream/packages/native/src/edge_fade.rs, N3): alpha ramps, nesting, insets, scroll and retained translation.
   bun native/edge-fade-check.ts
   # Half-resolution wide backdrops (N2) against an exact Gaussian.
