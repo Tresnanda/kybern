@@ -11,7 +11,8 @@
 //! `<cache dir>/claude-plugin/<hash>/` before a session starts, so an installed
 //! build needs no resource folder beside the binary on any OS. The folder name
 //! holds a hash of the contents, so an upgrade writes a new folder and a running
-//! session keeps the files it loaded.
+//! session keeps the files it loaded; folders an older build wrote are removed
+//! a day later, when a new one is written.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -53,15 +54,52 @@ pub(crate) fn opted_out(value: Option<&str>) -> bool {
 /// folder to pass to `--plugin-dir`.
 pub(crate) fn install(root: &Path) -> std::io::Result<PathBuf> {
     // Claude runs in the session's folder, so a relative data dir would not resolve there.
-    let dir = std::path::absolute(root)?.join(format!("kybern-tool-loading-{}", &contents_hash()[..12]));
+    let root = std::path::absolute(root)?;
+    let dir = root.join(format!("{FOLDER_PREFIX}{}", &contents_hash()[..12]));
+    let mut wrote = false;
     for (relative, contents) in FILES {
         let path = dir.join(relative);
-        if std::fs::read_to_string(&path).is_ok_and(|existing| existing == contents) {
+        if has_contents(&path, contents) {
             continue;
         }
-        write_atomically(&path, contents)?;
+        // Another session starting at the same moment may have put the same file
+        // there first, and Windows refuses to replace a file someone has open.
+        write_atomically(&path, contents).or_else(|error| if has_contents(&path, contents) { Ok(()) } else { Err(error) })?;
+        wrote = true;
+    }
+    if wrote {
+        remove_stale_folders(&root, &dir, STALE_AFTER);
     }
     Ok(dir)
+}
+
+const FOLDER_PREFIX: &str = "kybern-tool-loading-";
+
+/// How long a folder written by an older build is kept: long enough for any
+/// session that loaded it to have started.
+const STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+fn has_contents(path: &Path, contents: &str) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|existing| existing == contents)
+}
+
+/// Remove plugin folders an older build wrote, once this build writes its own.
+/// Best effort: a folder still in use (Windows) stays until the next upgrade.
+fn remove_stale_folders(root: &Path, current: &Path, older_than: std::time::Duration) {
+    let Ok(entries) = std::fs::read_dir(root) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let ours = entry.file_name().to_str().is_some_and(|name| name.starts_with(FOLDER_PREFIX));
+        let old = entry
+            .metadata()
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .and_then(|at| at.elapsed().ok())
+            .is_some_and(|age| age >= older_than);
+        if ours && old && path != current && entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            let _ = std::fs::remove_dir_all(&path);
+        }
+    }
 }
 
 fn contents_hash() -> String {
@@ -143,6 +181,25 @@ mod tests {
             .filter(|entry| entry.as_ref().unwrap().file_name().to_string_lossy().ends_with(".tmp"))
             .count();
         assert_eq!(leftovers, 0);
+    }
+
+    #[test]
+    fn an_upgrade_removes_folders_older_builds_wrote_but_keeps_its_own() {
+        let root = tempfile::tempdir().unwrap();
+        let older = root.path().join(format!("{FOLDER_PREFIX}000000000000"));
+        std::fs::create_dir_all(older.join("hooks")).unwrap();
+        std::fs::write(older.join("hooks/register.ts"), "old").unwrap();
+        let unrelated = root.path().join("something-else");
+        std::fs::create_dir_all(&unrelated).unwrap();
+
+        // A fresh folder from an older build is kept for sessions that may still be starting with it.
+        let dir = install(root.path()).unwrap();
+        assert!(older.is_dir());
+
+        remove_stale_folders(root.path(), &dir, std::time::Duration::ZERO);
+        assert!(!older.exists(), "an older build's folder is removed");
+        assert!(dir.join("hooks/register.ts").is_file(), "the current folder stays");
+        assert!(unrelated.is_dir(), "only the plugin's own folders are touched");
     }
 
     #[test]

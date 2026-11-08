@@ -71,9 +71,6 @@ impl ClaudePreferences {
         if let Some(ttl) = value.get("subagentPromptCacheTtl").and_then(Value::as_str).and_then(cache_ttl) {
             self.subagent_prompt_cache_ttl = Some(ttl.to_string());
         }
-        if let Some(ttl) = value.get("subagentPromptCacheTtl").and_then(Value::as_str).and_then(cache_ttl) {
-            self.subagent_prompt_cache_ttl = Some(ttl.to_string());
-        }
         if let Some(settings) = value.get("modelSettings").and_then(Value::as_object) {
             for (model, settings) in settings {
                 if let Some(effort) = settings.get("effortLevel").and_then(Value::as_str).and_then(valid_effort) {
