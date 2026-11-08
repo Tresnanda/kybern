@@ -1,7 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { applyEvent, emptyThreadState, groupTurns, seedFromGet } from "../src/transcript.ts"
-import { autoCompactLabel, idleCompactionDetail, idleCompactionMeta, idleCompactionRowLabel, tokenSize } from "../src/compaction.ts"
+import { IdleCompactionTurns, autoCompactLabel, idleCompactionDetail, idleCompactionMeta, idleCompactionRowLabel, tokenSize } from "../src/compaction.ts"
 
 const T = "turn-idle"
 const AT = "2026-11-08T14:58:00Z"
@@ -95,4 +95,15 @@ test("compaction words", () => {
   assert.equal(autoCompactLabel(null), "Default")
   assert.equal(autoCompactLabel(150_000), "150K")
   assert.equal(idleCompactionDetail("before_cache_expires"), "Compacts before the cache expires")
+})
+
+test("an idle compaction's turn ends without an unread mark or a notification", () => {
+  const turns = new IdleCompactionTurns()
+  assert.equal(turns.silent({ kind: "turn_started", turn_id: T }), false)
+  assert.equal(turns.silent({ kind: "idle_compaction_started", turn_id: T }), true)
+  assert.equal(turns.silent({ kind: "turn_completed", turn_id: T }), true, "Kybern's compaction finished")
+  assert.equal(turns.silent({ kind: "turn_completed", turn_id: T }), false, "forgotten once it ended")
+  assert.equal(turns.silent({ kind: "turn_completed", turn_id: "turn-user" }), false, "the user's own turns still count")
+  turns.silent({ kind: "idle_compaction_started", turn_id: "turn-failing" })
+  assert.equal(turns.silent({ kind: "turn_failed", turn_id: "turn-failing" }), true)
 })

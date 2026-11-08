@@ -93,7 +93,9 @@ export function StatusGlyph({ provider, running }: { provider: ProviderInstance;
     return () => { stop(); if (timer) clearInterval(timer) }
   }, [remaining > 0, running, window?.expiresAt, pane.frozen])
   const cache: CacheState | null = window ? cacheState(!!running, remaining) : null
-  const compactAtMs = window && !running ? idleCompactionAt(window, idleCompactionFor(settings, { kind, instance }), kind, usage?.context?.used_tokens ?? null, now) : null
+  // The daemon leaves Coordinators (they refresh their context), subagents, inbound and moved threads alone.
+  const compactable = useApp(s => { const thread = s.open.thread; return !thread?.coordinator_project_id && !thread?.subagent && !thread?.inbound && !thread?.moved })
+  const compactAtMs = window && !running && compactable ? idleCompactionAt(window, idleCompactionFor(settings, { kind, instance }), kind, usage?.context?.used_tokens ?? null, now) : null
   const compactAt = compactAtMs === null ? null : clockTime(new Date(compactAtMs).toISOString())
   const context = contextUsage(usage?.context)
   // A project Coordinator refreshes its context at a budget: a tick on the ring and a row in the popover (spec §10.1).

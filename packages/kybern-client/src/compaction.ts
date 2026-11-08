@@ -18,7 +18,7 @@ export const IDLE_COMPACTION_OPTIONS: readonly { value: IdleCompaction; label: s
   {
     value: "never",
     label: "Never",
-    description: "Threads keep their full history, and the agent stops asking when you return.",
+    description: "Threads keep their full history. Claude won’t ask again on this account, even if you change this later.",
   },
 ]
 
@@ -79,4 +79,21 @@ export function idleCompactionMeta(block: Pick<IdleCompactionBlock, "contextToke
   const cache = ttl ? (ttl % 3600 === 0 ? `${ttl / 3600}-hour cache` : `${Math.round(ttl / 60)}-minute cache`) : "cache"
   if (!Number.isFinite(lead)) return size
   return `${size} · ${lead} minute${lead === 1 ? "" : "s"} before the ${cache} expired`
+}
+
+/** Turns Kybern started to compact an idle thread. Their end is not news: no unread
+ * mark, toast or notification, only the thread's notice row. One per follower. */
+export class IdleCompactionTurns {
+  private readonly turns = new Set<string>()
+
+  /** Whether the event belongs to an idle compaction and should pass silently. */
+  silent(event: { kind: string; turn_id?: string | null }): boolean {
+    if (event.kind === "idle_compaction_started") {
+      if (event.turn_id) this.turns.add(event.turn_id)
+      if (this.turns.size > 64) this.turns.delete(this.turns.values().next().value!)
+      return true
+    }
+    if ((event.kind === "turn_completed" || event.kind === "turn_failed") && event.turn_id) return this.turns.delete(event.turn_id)
+    return false
+  }
 }

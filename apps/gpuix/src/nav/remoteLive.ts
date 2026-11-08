@@ -21,6 +21,7 @@
 import { pendingOf } from '../../../../packages/kybern-client/src/threadAttention.ts'
 import { isChildThread } from '../../../../packages/kybern-client/src/subagents.ts'
 import { scopedKey } from '../../../../packages/kybern-client/src/machineMerge.ts'
+import { IdleCompactionTurns } from '../../../../packages/kybern-client/src/compaction.ts'
 import type { MachineHub } from '../machines/hub.ts'
 import type { MachineId, ThreadActivitySummary, ThreadEvent, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 import type { NavState } from './store.ts'
@@ -103,7 +104,11 @@ export class RemoteLive {
     this.childLoads.clear()
   }
 
+  /** Kybern's compactions of idle threads leave no unread mark (the rule in `live.ts`). */
+  private readonly idleCompactions = new IdleCompactionTurns()
+
   private onEvent(machineId: MachineId, event: ThreadEvent) {
+    if (this.idleCompactions.silent(event)) return
     const { set } = this.deps.hub
     switch (event.kind) {
       case 'thread_created':
