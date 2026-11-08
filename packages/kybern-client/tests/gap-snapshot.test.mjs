@@ -5,6 +5,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { KybernClient } from "../src/client.ts";
 import { PROTOCOL_VERSION } from "../src/types.ts";
+import { trackClients, until } from "./clients.mjs";
+
+const track = trackClients();
 
 function fakeDaemon(onCall) {
   const sockets = [];
@@ -31,7 +34,6 @@ function fakeDaemon(onCall) {
   return { sockets, createSocket };
 }
 
-const wait = (ms = 50) => new Promise((resolve) => setTimeout(resolve, ms));
 const page = { thread: { id: "t1", last_seq: 50 }, transcript: [], pending_approvals: [] };
 
 test("a large gap answers with a snapshot, then live events continue it", async () => {
@@ -41,7 +43,7 @@ test("a large gap answers with a snapshot, then live events continue it", async 
     notify("event", { subscription_id: "s1", event: { seq: 51, thread_id: "t1", kind: "x" } });
     notify("events.ready", { subscription_id: "s1", head_seq: 50 });
   });
-  const client = new KybernClient({ url: "ws://127.0.0.1:1/ws", token: "t" }, { createSocket: daemon.createSocket });
+  const client = track(new KybernClient({ url: "ws://127.0.0.1:1/ws", token: "t" }, { createSocket: daemon.createSocket }));
   const order = [];
   const sub = client.subscribeEvents(
     { thread_id: "t1", after_seq: 10, gap_snapshot: { thread_id: "t1", transcript_limit: 60 } },
@@ -51,7 +53,8 @@ test("a large gap answers with a snapshot, then live events continue it", async 
     (snapshot, head) => order.push(["snapshot", snapshot.thread.last_seq, head]),
   );
   client.connect();
-  await wait();
+  // The live event is delivered from a timer after the reply, so wait for it rather than for a fixed time.
+  await until(() => order.length >= 3, "the snapshot, the subscription and the live event");
   const subscribe = daemon.sockets[0].sent.find((frame) => frame.method === "events.subscribe");
   assert.equal(subscribe.params.after_seq, 10);
   assert.deepEqual(subscribe.params.gap_snapshot, { thread_id: "t1", transcript_limit: 60 });
@@ -66,10 +69,10 @@ test("a large gap answers with a snapshot, then live events continue it", async 
 
 test("without a snapshot handler the client never asks for one", async () => {
   const daemon = fakeDaemon((frame, reply) => reply(frame.method === "events.subscribe" ? { subscription_id: "s1", head_seq: 5 } : {}));
-  const client = new KybernClient({ url: "ws://127.0.0.1:1/ws", token: "t" }, { createSocket: daemon.createSocket });
+  const client = track(new KybernClient({ url: "ws://127.0.0.1:1/ws", token: "t" }, { createSocket: daemon.createSocket }));
   client.subscribeEvents({ thread_id: "t1", after_seq: 1, gap_snapshot: { thread_id: "t1" } }, () => {});
   client.connect();
-  await wait();
+  await until(() => daemon.sockets[0]?.sent.some((frame) => frame.method === "events.subscribe"), "the subscribe request");
   const subscribe = daemon.sockets[0].sent.find((frame) => frame.method === "events.subscribe");
   assert.equal("gap_snapshot" in subscribe.params, false);
   client.close();
