@@ -2500,3 +2500,15 @@ The root native wrapper clips all Linux client-decorated content, including popo
 ### Reply link context menus
 
 `<markdown onLinkContextMenu>` emits the hit-tested link URL in `value` and its window coordinates in `x`/`y` on a right click. Ordinary link clicks keep `onLinkClick`; selecting or right-clicking prose does not navigate. The JS bridge patch registers `linkContextMenu`. Reply link icons use existing `linkIcons` entries ordered by full destination length, with one fixed-size slot per link, so cached GitHub colors and favicon updates preserve the label and geometry.
+
+## `diff` and `patch` fences (#294)
+
+`native/diff-fence-check.ts` (lab `diff-fence-lab.tsx`) draws the transcript's code header and body for a `diff` fence
+(unwrapped and wrapped) and a pull request summary through `FencedMarkdown`, dark and light, and samples the window for the
+removed, added and plain rows. Native Markdown has no line tints for a fence, so `transcript/DiffChunk.tsx` cuts the fence
+into runs of neighbouring lines of one kind (`packages/kybern-client/src/diffFence.ts`) and draws each run as one `<code>`
+on its tint; `FencedMarkdown` (`transcript/markdown.tsx`) does the same for Markdown that native `<markdown>` or a worker
+document draws, splitting it only when a top-level diff fence is present. A streaming reply keeps native fences until it is whole.
+
+`native/tasks-load-failure-check.ts` (lab `tasks-load-failure-lab.tsx`, #299) captures the All tasks first-load failure
+(busy and unreachable words, and the button busy after a click) in both appearances.

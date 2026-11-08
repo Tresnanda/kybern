@@ -1,6 +1,7 @@
 // The parts of a request card (Direction B, "Option list"): the header, the wells that show what is being asked, the numbered
 // rows and the hint line. Every request kind, approval or form, is built from these, so they read as one family.
 // Spec and tokens: `.kybern-artifacts/ade-approval-design/` (spec.md, motion.md, src/req.css).
+import { FencedMarkdown } from '../transcript/markdown.tsx'
 import type { StyleDesc } from '@gpuix/react'
 import { useEffect, useMemo, useRef, type ReactNode } from 'react'
 import { useGpuixRequired } from '@gpuix/react'
@@ -340,7 +341,7 @@ export function PlanWell({ plan, expanded, onToggle }: { plan: string; expanded:
   return (
     <Well>
       <div testId="approval-plan" edgeFade={clamped && EDGE_FADE ? { bottom: 30 } : undefined} style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        <markdown source={clamped ? lines.slice(0, PLAN_LINES).join('\n') : lines.slice(0, 60).join('\n')} theme={cachedMarkdownTheme(k.t)} style={{ color: k.t.text, userSelect: 'text' }} />
+        <FencedMarkdown source={clamped ? lines.slice(0, PLAN_LINES).join('\n') : lines.slice(0, 60).join('\n')} theme={cachedMarkdownTheme(k.t)} style={{ color: k.t.text, userSelect: 'text' }} />
       </div>
       {(expanded || clamped) && <ExpandLink testId="approval-expand" expanded={expanded} label="Show full plan" onClick={onToggle} />}
     </Well>

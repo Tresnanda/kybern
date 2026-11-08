@@ -2,6 +2,7 @@
 // card (progress and retry stay in place), the once-per-version release
 // announcement in the bottom-right corner, and the release details dialog.
 // State and actions are `platform/update.ts`; copy and order match the desktop.
+import { FencedMarkdown } from '../transcript/markdown.tsx'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -170,7 +171,7 @@ function UpdateDetails({ version, notes }: { version: string; notes: string | nu
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', paddingLeft: 24, paddingRight: 24, paddingBottom: 16, minHeight: 0, flexShrink: 1, overflowY: 'scroll' }}>
         {release.notes
-          ? <markdown source={release.notes} theme={cachedMarkdownTheme(t)} style={{ color: t.text, userSelect: 'text' }} />
+          ? <FencedMarkdown source={release.notes} theme={cachedMarkdownTheme(t)} style={{ color: t.text, userSelect: 'text' }} />
           : <Label color={muted(t, 1)} size={14} lineHeight={22}>{release.summary}</Label>}
         <Button testId="update-details-notes" variant="ghost" iconAfter={ICON.arrowUpRight} onClick={() => openUrl(release.url)} style={{ alignSelf: 'flex-start', marginTop: 12, marginLeft: -12 }}>Read release notes</Button>
       </div>
