@@ -21,6 +21,8 @@ import { Accounts, Integrations, Computer, Background } from './secondary.tsx'
 import { Appearance } from './Appearance.tsx'
 import { Notifications } from './Notifications.tsx'
 import { About } from './About.tsx'
+import { Storage } from './Storage.tsx'
+import { osLabels } from '../platform/os.ts'
 import { Machines } from './Machines.tsx'
 import { PairedDevices } from './PairedDevices.tsx'
 import { Plugins } from '../plugins/Plugins.tsx'
@@ -39,6 +41,7 @@ export const TABS = [
   ['machines', 'Machines', 'Your network: the machines you code on, and which ones can run agents for you.', N.laptop, 'network tailscale tailnet add code pair remote ssh status version update pause remove glyph'],
   ['devices', 'Paired devices', 'Phones and other devices that reach all your machines.', N.users, 'phone pair qr code ipad iphone android invitation'],
   ['background', 'Background activity', 'Manage idle agents, terminals, and power use.', S.backgroundTray, 'memory warm shells daemon battery'],
+  ['storage', 'Storage', `The space Kybern’s threads and files use ${osLabels().onThisComputer}.`, S.storage, 'storage disk space database size vacuum compact images files reclaim'],
   ['about', 'About', 'App version, updates, and connected machine.', N.info, 'protocol host data folder cli path'],
 ] as const
 export type Tab = typeof TABS[number][0]
@@ -49,7 +52,7 @@ export function openSettingsTab(tab: Tab) {
  for (const listener of tabListeners) listener()
  if (!getNav().settingsOpen) setNav({ settingsOpen: true })
 }
-const GROUPS = [{ label: 'Personal', ids: ['general', 'appearance', 'notifications'] }, { label: 'Coding', ids: ['agents', 'accounts', 'integrations', 'skills', 'plugins', 'computer'] }, { label: 'System', ids: ['machines', 'devices', 'background', 'about'] }]
+const GROUPS = [{ label: 'Personal', ids: ['general', 'appearance', 'notifications'] }, { label: 'Coding', ids: ['agents', 'accounts', 'integrations', 'skills', 'plugins', 'computer'] }, { label: 'System', ids: ['machines', 'devices', 'background', 'storage', 'about'] }]
 
 export function SettingsScreen() {
   const environment = useEnvironment()
@@ -90,7 +93,7 @@ export function SettingsScreen() {
     if ('group' in row) offset += (offset ? 12 : 0) + 33
     else { if (row.item[0] === tab) pillTop = offset; offset += 30 }
   }
-  const content = tab === 'general' ? <General /> : tab === 'appearance' ? <Appearance /> : tab === 'agents' ? <Agents /> : tab === 'about' ? <About /> : tab === 'notifications' ? <Notifications /> : tab === 'background' ? <Background /> : tab === 'accounts' ? <Accounts /> : tab === 'machines' ? <Machines /> : tab === 'devices' ? <PairedDevices /> : tab === 'integrations' ? <Integrations /> : tab === 'plugins' ? <Plugins /> : tab === 'skills' ? <Skills /> : <Computer />
+  const content = tab === 'general' ? <General /> : tab === 'appearance' ? <Appearance /> : tab === 'agents' ? <Agents /> : tab === 'about' ? <About /> : tab === 'notifications' ? <Notifications /> : tab === 'background' ? <Background /> : tab === 'storage' ? <Storage /> : tab === 'accounts' ? <Accounts /> : tab === 'machines' ? <Machines /> : tab === 'devices' ? <PairedDevices /> : tab === 'integrations' ? <Integrations /> : tab === 'plugins' ? <Plugins /> : tab === 'skills' ? <Skills /> : <Computer />
   return <div testId="page-settings" onKeyDown={(e) => { if (e.key === 'tab' && settingsOverlayOwnsEscape()) e.preventDefault() /* Tab navigation is the window default; an open overlay keeps it */; if (e.key === 'escape' && !settingsOverlayOwnsEscape()) { if (query) setQuery(''); else close(true) } }} style={{ display: 'flex', flexGrow: 1, minHeight: 0 }}>
     <div style={{ display: 'flex', flexDirection: 'column', width: 256, flexShrink: 0, paddingLeft: 6, paddingRight: 6, paddingTop: 8, paddingBottom: 12, backgroundColor: fills.sidebar, borderTopLeftRadius: 12, borderBottomLeftRadius: 12 }}>
       <div testId="settings-back" tabIndex={0} autoFocus onClick={() => close()} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') close(true) }} style={{ display: 'flex', alignItems: 'center', height: 28, gap: 8, paddingLeft: 8, borderRadius: 8, hover: { backgroundColor: t.hover } }}><Icon source={N.arrowLeft} size={16} color={t.iconSecondary} /><Label color={t.text} size={14} lineHeight={21}>Back to workspace</Label></div>

@@ -31,7 +31,7 @@ export function tokenSegments(parts: readonly ContentPart[]): Segment[] | null {
   let any = false
   for (const part of parts) {
     if (part.type === 'text') { text += part.text; continue }
-    if (part.type === 'attachment' || part.type === 'image') {
+    if (part.type === 'attachment' || part.type === 'image' || part.type === 'media') {
       // The composer places a mentioned file right after its `@image1`.
       const match = /(?:^|\s)(@(?:image|file)\d+)$/.exec(text)
       if (match) {

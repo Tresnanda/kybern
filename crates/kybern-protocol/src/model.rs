@@ -969,6 +969,45 @@ pub struct SubagentInfo {
     pub completed_at: Option<DateTime<Utc>>,
 }
 
+/// Image or document bytes kept outside the event log, in the data folder's
+/// `assets/<hash>`, named by the SHA-256 of the bytes so a repeat is stored
+/// once. Clients fetch them from the machine that owns the thread with
+/// `GET /assets/{hash}`; the event never carries a URL.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct MediaRef {
+    /// Lowercase hex SHA-256 of the bytes.
+    pub hash: String,
+    pub mime: String,
+    /// Byte length of the file.
+    pub size: u64,
+    /// How the value it replaced was written, so it can be restored exactly.
+    #[serde(default, skip_serializing_if = "MediaEncoding::is_base64")]
+    pub encoding: MediaEncoding,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaEncoding {
+    /// Plain base64 of the bytes.
+    #[default]
+    Base64,
+    /// `data:<mime>;base64,<base64>`.
+    DataUrl,
+}
+
+impl MediaEncoding {
+    pub fn is_base64(&self) -> bool {
+        *self == Self::Base64
+    }
+}
+
+/// The key of the one-entry object that replaces a base64 string inside a
+/// stored tool result: `{"kybern_media": MediaRef}`.
+pub const MEDIA_REF_KEY: &str = "kybern_media";
+
+/// Media at or below this many base64 characters stays inline in the event.
+pub const MEDIA_INLINE_MAX_BASE64: usize = 16 * 1024;
+
 /// One piece of a user message.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -980,6 +1019,12 @@ pub enum ContentPart {
     Image {
         media_type: String,
         data: String,
+    },
+    /// An image stored outside the event log (see [`MediaRef`]). The daemon
+    /// writes this in place of a large `Image` and inlines it again for the
+    /// provider; clients show it from the asset route.
+    Media {
+        media: MediaRef,
     },
     /// Uploaded attachment served by the daemon's HTTP asset route.
     Attachment {
@@ -1303,7 +1348,7 @@ impl UserMessage {
                 }
                 ContentPart::AgentResults { items } => out.push_str(&agent_results_text(items)),
                 ContentPart::SystemRow { text, .. } => out.push_str(text),
-                ContentPart::Image { .. } => out.push_str("[image]"),
+                ContentPart::Image { .. } | ContentPart::Media { .. } => out.push_str("[image]"),
                 ContentPart::Attachment { name, .. } => {
                     out.push('[');
                     out.push_str(name);
@@ -2463,6 +2508,9 @@ pub enum TranscriptEntry {
         at: DateTime<Utc>,
         origin: EventOrigin,
         source: String,
+        /// Set when the image is stored outside the event log; `source` is then empty.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        media: Option<MediaRef>,
     },
     User {
         id: MessageId,

@@ -1,4 +1,5 @@
 import type { ProviderUsage } from "./types.ts"
+import { mediaSource } from "./responseImages.ts"
 // Client-side transcript projection. Seeds from `threads.get`, then folds live
 // `ThreadEvent`s into blocks the views render directly.
 
@@ -239,7 +240,7 @@ export function applyBackgroundEvent(state: ThreadState, event: ThreadEvent): Th
 function entryToBlock(e: TranscriptEntry): Block | null {
   switch (e.role) {
     case "visual": return { kind: "visual", id: e.visual.id, turnId: e.turn_id, at: e.at, seq: e.seq, visual: e.visual, answer: e.answer ?? null }
-    case "image": return e.origin.kind === "root" ? { kind: "image", id: e.id, turnId: e.turn_id, at: e.at, seq: e.seq, source: e.source } : null
+    case "image": return e.origin.kind === "root" ? { kind: "image", id: e.id, turnId: e.turn_id, at: e.at, seq: e.seq, source: e.media ? mediaSource(e.media) : e.source } : null
     case "approval":
       return { kind: "approval", id: `approval:${e.approval.id}`, turnId: e.turn_id, at: e.approval.created_at, seq: e.seq ?? 0, approval: e.approval, decision: e.decision ?? null, ...(e.auto ? { auto: true } : {}), ...(e.answered_by ? { answeredBy: e.answered_by } : {}) }
     case "user":
@@ -387,7 +388,7 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       blocks = [...blocks, { kind: "user", id: ev.message_id, turnId, at, seq: ev.seq, message: ev.message }]
       break
     case "image_received":
-      if (ev.turn_id && ev.origin.kind === "root" && !blocks.some((block) => block.kind === "image" && block.id === ev.id && block.turnId === ev.turn_id)) blocks = [...blocks, { kind: "image", id: ev.id, turnId: ev.turn_id, at, seq: ev.seq, source: ev.source }]
+      if (ev.turn_id && ev.origin.kind === "root" && !blocks.some((block) => block.kind === "image" && block.id === ev.id && block.turnId === ev.turn_id)) blocks = [...blocks, { kind: "image", id: ev.id, turnId: ev.turn_id, at, seq: ev.seq, source: ev.media ? mediaSource(ev.media) : ev.source }]
       break
     case "assistant_text_delta": {
       const origin = ev.origin ?? ROOT_ORIGIN

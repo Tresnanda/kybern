@@ -37,6 +37,49 @@ pub fn activity(a: &DaemonActivity) {
     }
 }
 
+/// Sizes as Finder and Explorer write them (decimal units).
+pub fn bytes(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
+    if bytes < 1000 {
+        return format!("{bytes} bytes");
+    }
+    let mut value = bytes as f64 / 1000.0;
+    let mut unit = 0;
+    while value >= 1000.0 && unit < UNITS.len() - 1 {
+        value /= 1000.0;
+        unit += 1;
+    }
+    if value >= 100.0 { format!("{value:.0} {}", UNITS[unit]) } else { format!("{value:.1} {}", UNITS[unit]) }
+}
+
+pub fn storage(s: &kybern_protocol::methods::StorageStats) {
+    use kybern_protocol::methods::StorageReclaimStatus;
+    println!("database          {}", bytes(s.database_bytes));
+    println!("images and files  {}", bytes(s.files_bytes));
+    println!("reclaimable       {}", bytes(s.reclaimable_bytes));
+    if let Some(free) = s.free_disk_bytes {
+        println!("free disk         {} (compacting needs about {})", bytes(free), bytes(s.needed_disk_bytes));
+    }
+    let rewrite = &s.media_rewrite;
+    if rewrite.done {
+        println!("images            stored outside the database");
+    } else if rewrite.total == 0 {
+        println!("images            counting rows to move");
+    } else {
+        println!("images            moving out of the database: {} of {}", rewrite.processed, rewrite.total);
+    }
+    match &s.reclaim {
+        StorageReclaimStatus::Idle => {}
+        StorageReclaimStatus::Running { written_bytes, total_bytes, finishing } => match (finishing, written_bytes) {
+            (true, _) => println!("reclaim           finishing"),
+            (false, Some(written)) => println!("reclaim           {} of {} written", bytes(*written), bytes(*total_bytes)),
+            (false, None) => println!("reclaim           running"),
+        },
+        StorageReclaimStatus::Done { freed_bytes } => println!("reclaim           freed {}", bytes(*freed_bytes)),
+        StorageReclaimStatus::Failed { message } => println!("reclaim           {message}"),
+    }
+}
+
 pub fn providers(list: &[ProviderStatus]) {
     for p in list {
         let state = if p.available { "available" } else { "unavailable" };

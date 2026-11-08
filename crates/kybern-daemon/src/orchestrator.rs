@@ -2206,7 +2206,7 @@ impl Orchestrator {
         }
         self.resolve_attachments(&mut message);
         if retryable && let Some((stored_thread_id, turn_id, stored_message)) = self.inner.store.turn_started_receipt(message_id)? {
-            if stored_thread_id != thread_id || stored_message != message {
+            if stored_thread_id != thread_id || stored_message != self.stored_shape(&message)? {
                 return Err(anyhow!("message_id already belongs to a different thread or message"));
             }
             return Ok((turn_id, message_id, Admission::Replayed));
@@ -2216,7 +2216,8 @@ impl Orchestrator {
         // the queue drains is the same message: it stays queued, once.
         if !queued && let Some(waiting) = self.inner.store.queue_receipt(message_id)? {
             anyhow::ensure!(
-                waiting.thread_id == thread_id && serde_json::to_value(&waiting.message)? == serde_json::to_value(&message)?,
+                waiting.thread_id == thread_id
+                    && serde_json::to_value(&waiting.message)? == serde_json::to_value(self.stored_shape(&message)?)?,
                 "message_id already belongs to a different thread or message"
             );
             if self.inner.store.queue_is_pending(message_id)? {
@@ -2338,7 +2339,8 @@ impl Orchestrator {
             return Err(anyhow!("This chat is archived. Start a new chat to keep working."));
         }
         if let Some(receipt) = self.inner.store.queue_receipt(message.id)? {
-            if serde_json::to_value(receipt)? != serde_json::to_value(&message)? {
+            let shaped = methods::QueuedMessage { message: self.stored_shape(&message.message)?, ..message.clone() };
+            if serde_json::to_value(receipt)? != serde_json::to_value(&shaped)? {
                 return Err(anyhow!("message id already belongs to another request"));
             }
             return Ok(());
@@ -2393,7 +2395,7 @@ impl Orchestrator {
             else {
                 return Ok(None);
             };
-            if thread != params.thread_id || serde_json::to_value(message)? != serde_json::to_value(&params.message)? {
+            if thread != params.thread_id || serde_json::to_value(message)? != serde_json::to_value(self.stored_shape(&params.message)?)? {
                 return Err(anyhow!("Message id already belongs to another request."));
             }
             Ok(Some(methods::ThreadsSendResult { turn_id, message_id: params.id, queued: false }))
@@ -3503,8 +3505,23 @@ impl Orchestrator {
     }
 
     /// Turn uploaded image attachments into inline images so drivers can send them.
+    /// The message as an event stores it: large images as references (#298).
+    /// A retried request is compared with what was stored in this shape.
+    pub(crate) fn stored_shape(&self, message: &UserMessage) -> Result<UserMessage> {
+        let mut shaped = message.clone();
+        self.inner.store.externalize_message(&mut shaped)?;
+        Ok(shaped)
+    }
+
+    /// Make a message ready for a provider: uploaded images and images stored
+    /// outside the event log are inlined as base64.
     fn resolve_attachments(&self, message: &mut UserMessage) {
         use base64::Engine;
+        if message.parts.iter().any(|part| matches!(part, ContentPart::Media { .. }))
+            && let Err(error) = self.inner.store.inline_message(message)
+        {
+            tracing::warn!(%error, "a stored image could not be read back for the agent");
+        }
         for part in message.parts.iter_mut() {
             if let ContentPart::Attachment { asset_id, media_type, .. } = part
                 && media_type.starts_with("image/")
@@ -4584,7 +4601,7 @@ impl Orchestrator {
             }
             DriverEvent::ImageReceived { id, origin, source } => {
                 if source.len() <= 70_000_000 {
-                    self.emit(thread_id, turn_id, EventPayload::ImageReceived { id, origin, source })?;
+                    self.emit(thread_id, turn_id, EventPayload::ImageReceived { id, origin, source, media: None })?;
                 }
             }
             DriverEvent::TextDelta { message_id, origin, delta } => {
@@ -5054,8 +5071,11 @@ impl Orchestrator {
                 }
                 self.update_thread(thread)?;
             }
+            // Every session start reports its full list (often ~150 KB); store it only when it changed (#298).
             DriverEvent::CommandsUpdated(commands) => {
-                self.emit(thread_id, turn_id, EventPayload::ProviderCommandsUpdated { commands })?;
+                if self.inner.store.provider_commands_changed(thread_id, &commands)? {
+                    self.emit(thread_id, turn_id, EventPayload::ProviderCommandsUpdated { commands })?;
+                }
             }
             DriverEvent::UsageUpdated(usage) => {
                 if let Some(context) = &usage.context {
@@ -6349,7 +6369,12 @@ mod tests {
             let mut initial = settings.get();
             initial.antigravity.kybern_tools = false;
             settings.set(initial).unwrap();
-            let store = if on_disk { Store::open(&root.join("state.sqlite")).unwrap() } else { Store::open_in_memory().unwrap() };
+            // Large media goes to the data folder's `assets/`, as in the daemon (#298).
+            let store = if on_disk {
+                Store::open(&root.join("state.sqlite")).unwrap()
+            } else {
+                Store::open_in_memory().unwrap().with_media_dir(paths.assets.clone())
+            };
             let now = chrono::Utc::now();
             let project = Project {
                 repo: None,
@@ -9234,4 +9259,5 @@ for line in sys.stdin:
     include!("orchestrator/groups_tests.rs");
     include!("orchestrator/project_map_tests.rs");
     include!("orchestrator/rotation_tests.rs");
+    include!("orchestrator/media_tests.rs");
 }

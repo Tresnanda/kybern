@@ -1787,7 +1787,7 @@ fn prompt_text(message: &UserMessage) -> String {
                 out.push('@');
                 out.push_str(name);
             }
-            ContentPart::Image { .. } => out.push_str("[image]"),
+            ContentPart::Image { .. } | ContentPart::Media { .. } => out.push_str("[image]"),
             ContentPart::Attachment { name, .. } => {
                 out.push('[');
                 out.push_str(name);

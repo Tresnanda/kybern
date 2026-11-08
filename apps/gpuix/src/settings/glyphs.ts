@@ -1,5 +1,5 @@
 // Settings-only glyphs, mapped like the desktop's `lib/kit/icons.tsx` (names in the comments).
-import { Alert02Icon, AlertCircleIcon, AppleIcon, BookOpen01Icon, CommandLineIcon, ComputerTerminal01Icon, Copy01Icon, CpuIcon, EyeIcon, GpuIcon, LinkSquare02Icon, PuzzleIcon, RamMemoryIcon, RefreshIcon, SquareArrowDown01Icon, WindowsNewIcon } from '@hugeicons/core-free-icons'
+import { Alert02Icon, AlertCircleIcon, AppleIcon, BookOpen01Icon, CommandLineIcon, ComputerTerminal01Icon, Copy01Icon, CpuIcon, EyeIcon, GpuIcon, HardDriveIcon, LinkSquare02Icon, PuzzleIcon, RamMemoryIcon, RefreshIcon, SquareArrowDown01Icon, WindowsNewIcon } from '@hugeicons/core-free-icons'
 import { glyph } from '../icons.tsx'
 
 /** `VscMcp` (react-icons): the desktop keeps the VS Code MCP mark, which has no Hugeicons equivalent. */
@@ -31,6 +31,8 @@ export const S = {
   terminal: glyph(CommandLineIcon),
   /** `BackgroundTrayIcon` = SquareArrowDown01 (the Background activity tab). */
   backgroundTray: glyph(SquareArrowDown01Icon),
+  /** The Storage tab: the disk Kybern's data takes. */
+  storage: glyph(HardDriveIcon),
   /** The Skills tab: a skill is instructions an agent reads. */
   skills: glyph(BookOpen01Icon),
 } as const

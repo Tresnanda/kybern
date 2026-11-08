@@ -5,6 +5,7 @@
 
 mod broker;
 mod groups;
+mod media;
 mod network;
 mod notes;
 mod outbox;
@@ -13,6 +14,7 @@ mod schema;
 mod secrets;
 mod space_replica;
 mod spaces;
+mod storage;
 mod subagent_messages;
 mod tasks;
 mod thread_history;
@@ -20,6 +22,7 @@ mod transcript_page;
 mod visuals;
 pub use broker::{LoanRole, LoanRow};
 pub use groups::{GROUP_FOLDER_MEMBER, folder_name, member_display_names};
+pub use media::{MediaDir, hex_sha256, inline_message, inline_value, is_hash as is_media_hash, payload_refs};
 pub use network::{NetworkOpRecord, TokenOrigin};
 pub use notes::{
     NOTE_BODY_MAX_BYTES, NOTE_RETENTION_DAYS, NOTE_TITLE_MAX_CHARS, NoteError, NoteTarget, checklist as note_checklist,
@@ -27,6 +30,9 @@ pub use notes::{
 };
 pub use secrets::{SecretMeta, SecretRow};
 pub use spaces::SpaceError;
+pub use storage::{
+    MEDIA_SWEEP_GRACE, MediaRewriteProgress, NOTHING_TO_RECLAIM_BYTES, ReclaimError, ReclaimPhase, StorageStats, SweepReport,
+};
 pub use tasks::{
     GLOBAL_TASK_PREFIX, NewTask, TASK_BODY_MAX_BYTES, TASK_RETENTION_DAYS, TASK_TITLE_MAX_CHARS, TaskError, TaskPatch, TaskRunPatch,
     TaskRunUpdate, TaskStatusChange, derive_task_prefix, task_link_lines, task_link_source_line, task_set_line_checked,
@@ -105,6 +111,7 @@ fn append_event_in_transaction(
     if stamp_runtime_task_sequence(&mut payload, seq) {
         c.execute("UPDATE events SET payload = ?2 WHERE seq = ?1", params![seq, serde_json::to_string(&payload)?])?;
     }
+    storage::record_event_media(c, seq, &payload, &at)?;
     // Stamping `change_seq` here (the list cursor) keeps the change trigger from rewriting the row on every event.
     c.execute(
         "UPDATE threads SET last_seq = ?2, change_seq = ?2, updated_at = ?3 WHERE id = ?1",
@@ -160,6 +167,11 @@ pub struct ProjectRemoval {
 #[derive(Clone)]
 pub struct Store {
     conn: Arc<Mutex<Connection>>,
+    /// `assets/` beside the database; `None` for an in-memory store, which keeps media inline.
+    media: Option<MediaDir>,
+    /// The database file, for storage stats and compaction.
+    path: Option<std::path::PathBuf>,
+    storage: Arc<storage::StorageState>,
 }
 
 /// A row in the auth token table. The raw token is never stored, only its SHA-256.
@@ -184,27 +196,46 @@ pub struct TurnUsageRow {
     pub at: DateTime<Utc>,
 }
 
+fn prepare_connection(conn: &Connection) -> Result<()> {
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    Ok(())
+}
+
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        storage::clear_reclaim_leftovers(path)?;
         let conn = Connection::open(path).with_context(|| format!("open {}", path.display()))?;
-        Self::init(conn)
+        let mut store = Self::init(conn)?;
+        store.media = path.parent().map(|dir| MediaDir::new(dir.join("assets")));
+        store.path = Some(path.to_path_buf());
+        Ok(store)
     }
 
     pub fn open_in_memory() -> Result<Self> {
         Self::init(Connection::open_in_memory()?)
     }
 
+    /// Store large media in `dir` instead of inline (an in-memory store has none by default).
+    pub fn with_media_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
+        self.media = Some(MediaDir::new(dir));
+        self
+    }
+
+    pub fn media_dir(&self) -> Option<&MediaDir> {
+        self.media.as_ref()
+    }
+
     fn init(conn: Connection) -> Result<Self> {
-        conn.pragma_update(None, "journal_mode", "WAL")?;
-        conn.pragma_update(None, "synchronous", "NORMAL")?;
-        conn.pragma_update(None, "foreign_keys", "ON")?;
-        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        prepare_connection(&conn)?;
         schema::migrate(&conn)?;
         tasks::ensure_project_prefixes(&conn)?;
-        Ok(Self { conn: Arc::new(Mutex::new(conn)) })
+        Ok(Self { conn: Arc::new(Mutex::new(conn)), media: None, path: None, storage: Default::default() })
     }
 
     fn with<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
@@ -587,7 +618,10 @@ impl Store {
 
     /// Adopt a native conversation and its history in one transaction. Concurrent
     /// imports return the existing thread, including archived threads.
-    pub fn thread_import(&self, mut thread: Thread, history: Vec<ThreadEvent>) -> Result<(Thread, Vec<ThreadEvent>)> {
+    pub fn thread_import(&self, mut thread: Thread, mut history: Vec<ThreadEvent>) -> Result<(Thread, Vec<ThreadEvent>)> {
+        for event in &mut history {
+            self.externalize(&mut event.payload)?;
+        }
         self.with(|c| {
             let tx = c.unchecked_transaction()?;
             if let Some(existing) = tx
@@ -635,6 +669,7 @@ impl Store {
                     ],
                 )?;
                 event.seq = tx.last_insert_rowid();
+                storage::record_event_media(&tx, event.seq, &event.payload, &event.at)?;
             }
             thread.last_seq = events.last().map_or(0, |event| event.seq);
             write_thread(&tx, &thread)?;
@@ -976,7 +1011,10 @@ impl Store {
     // ---- events ----
 
     /// Append an event, assigning its `seq`. Also bumps the thread's `last_seq`.
-    pub fn event_append(&self, thread_id: ThreadId, turn_id: Option<TurnId>, payload: EventPayload) -> Result<ThreadEvent> {
+    pub fn event_append(&self, thread_id: ThreadId, turn_id: Option<TurnId>, mut payload: EventPayload) -> Result<ThreadEvent> {
+        // Large media goes to `assets/` before the connection is taken: hashing
+        // and flushing a 14 MB PDF must not hold up every other read and write.
+        self.externalize(&mut payload)?;
         self.with(|c| {
             let tx = c.unchecked_transaction()?;
             let event = append_event_in_transaction(&tx, thread_id, turn_id, payload)?;
@@ -1202,23 +1240,29 @@ impl Store {
         max_bytes: usize,
     ) -> Result<Vec<ThreadEvent>> {
         self.with(|c| {
-            let sql = match thread_id {
-                Some(_) => {
-                    "SELECT seq,thread_id,turn_id,at,kind,payload FROM events WHERE seq > ?1 AND thread_id = ?2 ORDER BY seq LIMIT ?3"
-                }
-                None => "SELECT seq,thread_id,turn_id,at,kind,payload FROM events WHERE seq > ?1 ORDER BY seq LIMIT ?3",
+            let filter = if thread_id.is_some() { "AND e.thread_id = ?2" } else { "" };
+            let sql = format!(
+                "SELECT {} FROM {} WHERE e.seq > ?1 {filter} ORDER BY e.seq LIMIT ?3",
+                storage::STUBBED_EVENT_COLUMNS,
+                storage::STUBBED_EVENTS_FROM
+            );
+            let mut st = c.prepare(&sql)?;
+            let mut rows = match thread_id {
+                Some(id) => st.query(params![after, id.to_string(), limit])?,
+                None => st.query(params![after, rusqlite::types::Null, limit])?,
             };
-            let mut st = c.prepare(sql)?;
-            let mut rows = st.query(params![after, thread_id.map(|id| id.to_string()).unwrap_or_default(), limit])?;
             let mut events = Vec::new();
             let mut bytes = 0usize;
             while let Some(row) = rows.next()? {
-                let size = row.get_ref(5)?.as_str()?.len();
+                let size = storage::stubbed_payload_len(row)?;
                 if !events.is_empty() && bytes.saturating_add(size) > max_bytes {
                     break;
                 }
                 bytes = bytes.saturating_add(size);
-                events.push(row_to_compact_event(row)?);
+                events.push(match storage::stubbed_event(row)? {
+                    Some(event) => event,
+                    None => row_to_compact_event(row)?,
+                });
             }
             Ok(events)
         })
@@ -1487,21 +1531,28 @@ impl Store {
                 // Exclude only known no-op events. Unknown/new kinds still
                 // enter the fold. Keep this aligned with its no-op arm. Output
                 // deltas stay in: the fold records which invocations streamed.
-                let mut statement = c.prepare_cached(
-                    "SELECT seq, thread_id, turn_id, at, kind, payload FROM events
-                     WHERE thread_id = ?1 AND seq > ?2 AND seq <= ?3 AND kind NOT IN (
+                // A tool result the fold would leave out anyway is read as its stub,
+                // so a page never loads a multi-megabyte payload (#298).
+                let mut statement = c.prepare_cached(&format!(
+                    "SELECT {} FROM {}
+                     WHERE e.thread_id = ?1 AND e.seq > ?2 AND e.seq <= ?3 AND e.kind NOT IN (
                        'async_questions_requested', 'provider_commands_updated', 'provider_usage_updated',
                        'thread_created', 'thread_updated', 'message_queued', 'message_queue_updated',
                        'thread_notes_updated', 'message_removed', 'thread_archived', 'checkpoint_updated',
                        'thread_message_held', 'thread_message_resolved', 'thread_message_updated'
-                     ) ORDER BY seq LIMIT ?4",
-                )?;
+                     ) ORDER BY e.seq LIMIT ?4",
+                    storage::STUBBED_EVENT_COLUMNS,
+                    storage::STUBBED_EVENTS_FROM
+                ))?;
                 let mut rows = statement.query(params![thread_id.to_string(), after, through_seq, BATCH as u32])?;
                 let mut events = Vec::new();
                 let mut bytes = 0;
                 while let Some(row) = rows.next()? {
-                    bytes += row.get_ref(5)?.as_bytes()?.len();
-                    events.push(row_to_projection_event(row)?);
+                    bytes += storage::stubbed_payload_len(row)?;
+                    events.push(match storage::stubbed_event(row)? {
+                        Some(event) => event,
+                        None => row_to_projection_event(row)?,
+                    });
                     // A single event can exceed the budget, but a batch never
                     // retains several oversized messages before folding them.
                     if bytes >= BATCH_BYTES {
@@ -3142,12 +3193,12 @@ mod tool_output_allocation_tests {
     fn fixture() -> Store {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
-            "CREATE TABLE events (seq INTEGER PRIMARY KEY, thread_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL);
+            "CREATE TABLE event_output_stubs (seq INTEGER PRIMARY KEY, tool_call_id TEXT NOT NULL, is_error INTEGER NOT NULL, output_bytes INTEGER NOT NULL); CREATE TABLE events (seq INTEGER PRIMARY KEY, thread_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL);
              CREATE INDEX tool_completion_lookup ON events(thread_id, json_extract(payload, '$.tool_call_id'))
                WHERE kind = 'tool_call_completed';",
         )
         .unwrap();
-        Store { conn: Arc::new(Mutex::new(conn)) }
+        Store { conn: Arc::new(Mutex::new(conn)), media: None, path: None, storage: Default::default() }
     }
 
     fn complete(store: &Store, thread: ThreadId, id: &str, output: serde_json::Value, is_error: bool) {
@@ -3178,7 +3229,7 @@ mod tool_output_allocation_tests {
     fn interrupted_tool_stream_is_not_marked_recoverable_without_completion() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
-            "CREATE TABLE events (
+            "CREATE TABLE event_output_stubs (seq INTEGER PRIMARY KEY, tool_call_id TEXT NOT NULL, is_error INTEGER NOT NULL, output_bytes INTEGER NOT NULL); CREATE TABLE events (
                 seq INTEGER PRIMARY KEY,
                 thread_id TEXT NOT NULL,
                 turn_id TEXT,
@@ -3188,7 +3239,7 @@ mod tool_output_allocation_tests {
             );",
         )
         .unwrap();
-        let store = Store { conn: Arc::new(Mutex::new(conn)) };
+        let store = Store { conn: Arc::new(Mutex::new(conn)), media: None, path: None, storage: Default::default() };
         let thread = ThreadId::nil();
         let turn = TurnId::nil();
         let at = "2026-09-17T00:00:00Z";
@@ -3342,7 +3393,12 @@ mod tool_output_allocation_tests {
 
     #[test]
     fn empty_hydration_does_not_query_events() {
-        let store = Store { conn: Arc::new(Mutex::new(Connection::open_in_memory().unwrap())) };
+        let store = Store {
+            conn: Arc::new(Mutex::new(Connection::open_in_memory().unwrap())),
+            media: None,
+            path: None,
+            storage: Default::default(),
+        };
         assert!(store.hydrate_tool_outputs_through(ThreadId::nil(), &mut [], i64::MAX).is_ok());
     }
 }
@@ -3354,7 +3410,7 @@ mod transcript_scan_allocation_tests {
     #[test]
     fn quota_evidence_reads_only_relevant_events_since_the_latest_start() {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE events (seq INTEGER PRIMARY KEY, thread_id TEXT NOT NULL, turn_id TEXT, at TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL);
+        conn.execute_batch("CREATE TABLE event_output_stubs (seq INTEGER PRIMARY KEY, tool_call_id TEXT NOT NULL, is_error INTEGER NOT NULL, output_bytes INTEGER NOT NULL); CREATE TABLE events (seq INTEGER PRIMARY KEY, thread_id TEXT NOT NULL, turn_id TEXT, at TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL);
           CREATE INDEX events_thread ON events(thread_id, seq);").unwrap();
         let thread = ThreadId::new_v4();
         let turn = TurnId::new_v4();
@@ -3385,7 +3441,7 @@ mod transcript_scan_allocation_tests {
             )
             .unwrap();
         }
-        let store = Store { conn: Arc::new(Mutex::new(conn)) };
+        let store = Store { conn: Arc::new(Mutex::new(conn)), media: None, path: None, storage: Default::default() };
         assert_eq!(store.latest_turn_quota_events(thread).unwrap().iter().map(|event| event.seq).collect::<Vec<_>>(), vec![3, 5, 6]);
         assert!(store.latest_turn_quota_events(ThreadId::new_v4()).unwrap().is_empty());
     }
@@ -3393,9 +3449,9 @@ mod transcript_scan_allocation_tests {
     #[test]
     fn compact_batches_preserve_cross_batch_updates_snapshot_and_page_boundaries() {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE events (seq INTEGER PRIMARY KEY, thread_id TEXT NOT NULL, turn_id TEXT, at TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL);
+        conn.execute_batch("CREATE TABLE event_output_stubs (seq INTEGER PRIMARY KEY, tool_call_id TEXT NOT NULL, is_error INTEGER NOT NULL, output_bytes INTEGER NOT NULL); CREATE TABLE events (seq INTEGER PRIMARY KEY, thread_id TEXT NOT NULL, turn_id TEXT, at TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL);
           CREATE INDEX events_thread ON events(thread_id, seq);").unwrap();
-        let store = Store { conn: Arc::new(Mutex::new(conn)) };
+        let store = Store { conn: Arc::new(Mutex::new(conn)), media: None, path: None, storage: Default::default() };
         let thread = ThreadId::new_v4();
         let at = Utc::now();
         let mut events = Vec::new();
@@ -3514,8 +3570,8 @@ mod transcript_scan_allocation_tests {
     #[test]
     fn filtered_sql_projection_matches_event_fold_at_every_snapshot() {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE events (seq INTEGER PRIMARY KEY, thread_id TEXT NOT NULL, turn_id TEXT, at TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL);").unwrap();
-        let store = Store { conn: Arc::new(Mutex::new(conn)) };
+        conn.execute_batch("CREATE TABLE event_output_stubs (seq INTEGER PRIMARY KEY, tool_call_id TEXT NOT NULL, is_error INTEGER NOT NULL, output_bytes INTEGER NOT NULL); CREATE TABLE events (seq INTEGER PRIMARY KEY, thread_id TEXT NOT NULL, turn_id TEXT, at TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL);").unwrap();
+        let store = Store { conn: Arc::new(Mutex::new(conn)), media: None, path: None, storage: Default::default() };
         let thread = ThreadId::nil();
         let turn = TurnId::nil();
         let payloads = vec![

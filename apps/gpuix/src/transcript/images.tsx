@@ -17,6 +17,8 @@ import { useFresh } from './motion.tsx'
 import { usePaneAccess } from '../state.ts'
 import { openTabFromPane } from '../tabs/open.ts'
 import { useImageFiles } from './imageFiles.ts'
+import { useAssetSource } from './assetSource.ts'
+import { Label } from '../ui.tsx'
 
 const sizes = new Map<string, { width: number; height: number } | null>()
 
@@ -96,7 +98,26 @@ function srcFor(source: string): string | null {
  */
 /** `tabSource`: what an image tab reloads from (a thread-relative path), when `source` is already the loaded data. */
 /** `maxWidth` / `maxHeight`: the largest box the image is drawn in (280 wide by default; an issue's images are larger). */
-export function ResponseImage({ source, tabSource, label = 'Agent image', compact = false, thumbnail = false, at, maxWidth = 280, maxHeight }: { source: string; tabSource?: string; label?: string; compact?: boolean; thumbnail?: boolean; at?: string; maxWidth?: number; maxHeight?: number }) {
+type ResponseImageProps = { source: string; tabSource?: string; label?: string; compact?: boolean; thumbnail?: boolean; at?: string; maxWidth?: number; maxHeight?: number }
+
+/** An image stored outside the event log (`kybern://asset/<id>`, #298) loads from the thread's machine first. */
+export function ResponseImage(props: ResponseImageProps) {
+  const target = imageSource(props.source)
+  return target?.kind === 'asset' ? <AssetResponseImage {...props} path={target.value} /> : <LoadedResponseImage {...props} />
+}
+
+function AssetResponseImage({ path, ...props }: ResponseImageProps & { path: string }) {
+  const t = useTheme()
+  const image = useAssetSource(path)
+  if (image.source) return <LoadedResponseImage {...props} source={image.source} />
+  if (!props.thumbnail) return <ImageCard label={props.label ?? 'Agent image'} loading={!image.failed} reason={image.failed ? 'This image could not be loaded. Try again when its machine is reachable.' : undefined} />
+  // A 64 px thumbnail keeps its slot while it loads, as an attachment does.
+  return <div testId="response-image-loading" style={{ width: 64, height: 64, borderRadius: 12, backgroundColor: alpha(t.variant === 'dark' ? '#ffffff' : '#000000', 0.04), alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+    {image.failed && <Label color={t.textSecondary} size={12}>Unavailable</Label>}
+  </div>
+}
+
+function LoadedResponseImage({ source, tabSource, label = 'Agent image', compact = false, thumbnail = false, at, maxWidth = 280, maxHeight }: ResponseImageProps) {
   const t = useTheme()
   const fresh = useFresh(at)
   // `t-img` starts when the bitmap has decoded (`<img onLoad>`), not on mount, so the blur resolves over the picture

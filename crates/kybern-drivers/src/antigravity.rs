@@ -757,6 +757,7 @@ fn prompt_text(message: &UserMessage, scratch: &Scratch) -> String {
                 out.push_str(name);
                 out.push(']');
             }
+            ContentPart::Media { .. } => out.push_str("[image]"),
             ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } | ContentPart::SystemRow { .. } => {
                 if let Some(flat) = part.orchestration_text() {
                     out.push_str(&flat);

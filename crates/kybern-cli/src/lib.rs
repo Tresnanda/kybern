@@ -131,6 +131,48 @@ enum VisualsCmd {
 }
 
 #[derive(Subcommand)]
+enum StorageCmd {
+    /// Database and file sizes, free disk space, and background progress.
+    Stats,
+    /// Compact the database to return its unused space to the disk. Kybern keeps working meanwhile.
+    Reclaim {
+        /// Return once it has started instead of waiting for it to finish.
+        #[arg(long)]
+        no_wait: bool,
+    },
+}
+
+async fn storage(client: &Client, cmd: StorageCmd, json: bool) -> Result<()> {
+    match cmd {
+        StorageCmd::Stats => {
+            let stats = client.call::<StorageStatsGet>(Empty {}).await?;
+            if json { println!("{}", serde_json::to_string_pretty(&stats)?) } else { render::storage(&stats) }
+        }
+        StorageCmd::Reclaim { no_wait } => {
+            let mut status = client.call::<StorageReclaim>(Empty {}).await?;
+            while !no_wait && matches!(status, StorageReclaimStatus::Running { .. }) {
+                if !json && let StorageReclaimStatus::Running { written_bytes: Some(written), total_bytes, .. } = &status {
+                    eprintln!("{} of {} written", render::bytes(*written), render::bytes(*total_bytes));
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                status = client.call::<StorageStatsGet>(Empty {}).await?.reclaim;
+            }
+            if json {
+                println!("{}", serde_json::to_string_pretty(&status)?);
+            } else {
+                match status {
+                    StorageReclaimStatus::Done { freed_bytes } => println!("Freed {}.", render::bytes(freed_bytes)),
+                    StorageReclaimStatus::Failed { message } => anyhow::bail!(message),
+                    StorageReclaimStatus::Running { .. } => println!("Compacting the database. Run `kybern storage stats` to follow it."),
+                    StorageReclaimStatus::Idle => println!("Nothing to reclaim."),
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Subcommand)]
 enum Cmd {
     /// Make a bounded display copy without connecting to a daemon (used by the desktop).
     #[command(hide = true)]
@@ -179,6 +221,11 @@ enum Cmd {
     Info,
     /// Show what the daemon is holding open: clients, agent processes, terminals, queued work.
     Activity,
+    /// What Kybern's data takes on disk, and compacting the database.
+    Storage {
+        #[command(subcommand)]
+        cmd: StorageCmd,
+    },
     /// Stop the local daemon gracefully.
     StopDaemon,
     /// List providers and their availability.
@@ -1698,6 +1745,7 @@ pub async fn run() -> Result<()> {
             let activity = client.call::<DaemonActivityMethod>(Empty {}).await?;
             if json { println!("{}", serde_json::to_string_pretty(&activity)?) } else { render::activity(&activity) }
         }
+        Cmd::Storage { cmd } => storage(&client, cmd, json).await?,
         Cmd::StopDaemon => {
             client.call::<DaemonShutdown>(Empty {}).await?;
             if json {
