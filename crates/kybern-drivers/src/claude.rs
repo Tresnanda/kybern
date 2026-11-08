@@ -50,13 +50,73 @@ pub(crate) fn entrypoint(session_value: Option<&String>) -> String {
 #[derive(Default)]
 pub struct ClaudeDriver {
     catalog: Arc<ModelCatalog>,
+    /// Where the Kybern plugin is written for `--plugin-dir`; none, no plugin.
+    plugin_root: Option<PathBuf>,
+    /// `claude --version` per binary, so a spawn does not run it every time.
+    versions: std::sync::Mutex<HashMap<PathBuf, KnownVersion>>,
+}
+
+/// How long a `claude --version` answer is trusted for a binary that has not changed.
+const VERSION_TTL: std::time::Duration = std::time::Duration::from_secs(600);
+
+struct KnownVersion {
+    modified: Option<std::time::SystemTime>,
+    len: u64,
+    checked: std::time::Instant,
+    version: Option<String>,
 }
 
 impl ClaudeDriver {
     /// A driver that keeps Claude Code's model catalog in `file` across
     /// daemon restarts.
     pub fn with_catalog_file(file: PathBuf) -> Self {
-        Self { catalog: Arc::new(ModelCatalog::persistent(file)) }
+        Self { catalog: Arc::new(ModelCatalog::persistent(file)), ..Self::default() }
+    }
+
+    /// Write the plugin that lists rarely used built-in tools behind ToolSearch
+    /// under `root` and start sessions of a Claude Code that supports it with it.
+    pub fn with_plugin_root(mut self, root: PathBuf) -> Self {
+        self.plugin_root = Some(root);
+        self
+    }
+
+    /// The folder for `--plugin-dir`, or none when this session should run as before.
+    async fn tool_loading_plugin(&self, bin: &std::path::Path, env: &HashMap<String, String>) -> Option<PathBuf> {
+        let root = self.plugin_root.as_ref()?;
+        let opt_out = env.get(crate::claude_plugin::OPT_OUT_ENV).cloned().or_else(|| std::env::var(crate::claude_plugin::OPT_OUT_ENV).ok());
+        if crate::claude_plugin::opted_out(opt_out.as_deref()) {
+            return None;
+        }
+        let version = self.cli_version(bin).await;
+        if !crate::claude_plugin::should_load(version.as_deref(), opt_out.as_deref()) {
+            return None;
+        }
+        match crate::claude_plugin::install(root) {
+            Ok(dir) => Some(dir),
+            Err(error) => {
+                tracing::warn!(%error, "could not write the Kybern Claude plugin; starting Claude without it");
+                None
+            }
+        }
+    }
+
+    async fn cli_version(&self, bin: &std::path::Path) -> Option<String> {
+        let metadata = fs::metadata(bin).ok();
+        let (modified, len) = (metadata.as_ref().and_then(|m| m.modified().ok()), metadata.as_ref().map_or(0, |m| m.len()));
+        if let Some(known) = self.versions.lock().ok().and_then(|versions| {
+            versions
+                .get(bin)
+                .filter(|k| k.modified == modified && k.len == len && k.checked.elapsed() < VERSION_TTL)
+                .map(|k| k.version.clone())
+        }) {
+            return known;
+        }
+        let version = version_of(bin, &["--version"]).await;
+        if let Ok(mut versions) = self.versions.lock() {
+            versions
+                .insert(bin.to_path_buf(), KnownVersion { modified, len, checked: std::time::Instant::now(), version: version.clone() });
+        }
+        version
     }
 }
 
@@ -221,6 +281,9 @@ impl AgentDriver for ClaudeDriver {
         }
         if let Some(effort) = &config.effort {
             cmd.args(["--effort", effort]);
+        }
+        if let Some(plugin) = self.tool_loading_plugin(&bin, &config.env).await {
+            cmd.arg("--plugin-dir").arg(plugin);
         }
         cmd.env_remove("NODE_OPTIONS");
         // stream-json makes Claude Code an `sdk-cli` session, where the
@@ -2759,6 +2822,68 @@ mod tests {
             assert_eq!(seen["CLAUDE_CODE_ARTIFACT_AUTO_OPEN"], "0");
             assert_eq!(seen["CLAUDE_CODE_ENTRYPOINT"], "kybern");
         }
+    }
+
+    /// Start the driver with a stand-in `claude` that reports `version` and return the arguments it was started with.
+    async fn launch_arguments(driver: super::ClaudeDriver, version: &str, env: &[(&str, &str)]) -> Vec<String> {
+        use crate::{AgentDriver, SessionConfig};
+        let root = tempfile::tempdir().unwrap();
+        let binary = root.path().join(format!("claude{}", std::env::consts::EXE_SUFFIX));
+        std::fs::copy(crate::test_process::binary(), &binary).unwrap();
+        std::fs::write(binary.with_extension("version"), version).unwrap();
+        let spawned = driver
+            .spawn(SessionConfig {
+                cwd: root.path().into(),
+                model: None,
+                effort: None,
+                permission_mode: kybern_protocol::PermissionMode::FullAccess,
+                native_tool_bridge: None,
+                resume_session_id: None,
+                resume_lacks_instructions: false,
+                fork: false,
+                rewind: None,
+                binary: Some(binary),
+                env: env.iter().map(|(key, value)| (key.to_string(), value.to_string())).collect(),
+            })
+            .await
+            .unwrap();
+        let argv = root.path().join("argv.json");
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !argv.exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let args: Vec<String> = serde_json::from_slice(&std::fs::read(argv).unwrap()).unwrap();
+        spawned.session.close().await.unwrap();
+        args
+    }
+
+    fn plugin_dir(args: &[String]) -> Option<&String> {
+        args.iter().position(|arg| arg == "--plugin-dir").map(|index| &args[index + 1])
+    }
+
+    #[tokio::test]
+    async fn the_tool_loading_plugin_is_passed_only_to_claude_code_releases_that_support_it() {
+        let plugins = tempfile::tempdir().unwrap();
+        let driver = || super::ClaudeDriver::default().with_plugin_root(plugins.path().to_path_buf());
+
+        let args = launch_arguments(driver(), "2.1.319 (Claude Code)", &[]).await;
+        let dir = std::path::PathBuf::from(plugin_dir(&args).expect("a supported release gets --plugin-dir"));
+        assert!(dir.is_absolute() && dir.starts_with(plugins.path()), "{dir:?}");
+        assert!(dir.join("hooks/register.ts").is_file() && dir.join(".claude-plugin/plugin.json").is_file());
+
+        let args = launch_arguments(driver(), "2.1.286 (Claude Code)", &[]).await;
+        assert!(plugin_dir(&args).is_some(), "the first release with plugin hook modules gets it");
+        for old in ["2.1.285 (Claude Code)", "2.0.9", "garbage"] {
+            let args = launch_arguments(driver(), old, &[]).await;
+            assert_eq!(plugin_dir(&args), None, "{old} keeps today's launch");
+        }
+        let args = launch_arguments(driver(), "2.1.319", &[("KYBERN_CLAUDE_TOOL_PLUGIN", "0")]).await;
+        assert_eq!(plugin_dir(&args), None, "the opt-out wins");
+        let args = launch_arguments(super::ClaudeDriver::default(), "2.1.319", &[]).await;
+        assert_eq!(plugin_dir(&args), None, "a driver without a plugin folder never passes one");
     }
 
     #[test]

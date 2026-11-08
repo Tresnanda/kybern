@@ -3775,6 +3775,19 @@ impl Orchestrator {
         if thread.provider.kind == ProviderKind::ClaudeCode && !provider_settings.env.contains_key("MCP_TOOL_TIMEOUT") {
             provider_settings.env.insert("MCP_TOOL_TIMEOUT".into(), "21600000".into());
         }
+        // A delegated child is its own Claude session, so Claude Code would give it the main
+        // conversation's cache length (one hour on a subscription, which costs more to write).
+        // Give it the user's `subagentPromptCacheTtl` instead, as a native subagent would get;
+        // an explicit `CLAUDE_CODE_PROMPT_CACHE_TTL` on the account still wins.
+        if thread.provider.kind == ProviderKind::ClaudeCode
+            && thread.delegation.is_some()
+            && let Some(ttl) = kybern_drivers::claude_context::delegated_child_cache_ttl(
+                &provider_settings.env.iter().map(|(key, value)| (key.clone(), value.clone())).collect(),
+                std::path::Path::new(&thread.cwd),
+            )
+        {
+            provider_settings.env.insert(kybern_drivers::claude_context::CACHE_TTL_ENV.into(), ttl.into());
+        }
         // Commands in the session can ask for a password through a private card.
         // Codex runs commands in a sandbox that can't reach the daemon outside
         // Full access, so it only gets the helper there.
