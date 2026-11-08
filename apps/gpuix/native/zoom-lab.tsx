@@ -10,6 +10,8 @@ import { Label, ThemeProvider } from '../src/ui.tsx'
 import { getUiZoom, getUiZoomState, installUiZoom, setUiZoom, zoomIn, zoomOut } from '../src/shell/uiZoom.ts'
 import { observeElementBounds } from '../src/native/layout.ts'
 import { webHost } from '../src/native/webview.ts'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 
 const TITLE = 'Zoom lab'
 const MOVE = 0, DOWN = 1, UP = 2
@@ -31,7 +33,7 @@ type Bounds = { x: number; y: number; width: number; height: number }
 
 function Lab() {
   const renderer = useGpuixRequired() as ReturnType<typeof useGpuixRequired> & { getElementBounds?: (id: number) => Bounds | null; getSelectedText?: () => string | null }
-  const seen = useRef({ hover: '', click: '', observed: 0 })
+  const seen = useRef<{ hover: string; click: string; observed: number; snap?: unknown }>({ hover: '', click: '', observed: 0 })
   const [hover, setHover] = useState('')
   const [pop, setPop] = useState(false)
   const [result, setResult] = useState('')
@@ -75,6 +77,13 @@ function Lab() {
     if (op === 'reset') { seen.current = { ...seen.current, hover: '', click: '' }; return }
     if (op === 'pop') { setPop((v) => !v); return }
     if (op === 'front') { input?.kybern_zoom_front(title); return }
+    // A PNG of CSS px 80–120 of the page (`webHost.snapshotRect`): half the green box, half past it, at every zoom.
+    if (op === 'snap') {
+      seen.current = { ...seen.current, snap: null }
+      webHost.snapshotRect(WEB, { x: 80, y: 10, width: 40, height: 20 }, path.join(tmpdir(), `zoom-lab-snap-${process.pid}-${arg}.png`))
+        .then((shot) => { seen.current = { ...seen.current, snap: { id: arg, ...shot } } }, (error) => { seen.current = { ...seen.current, snap: { id: arg, error: String(error) } } })
+      return
+    }
     const at = center(arg)
     if (!at || !input) return
     if (op === 'hover') input.kybern_zoom_mouse(title, MOVE, os(at.x), os(at.y), 0)

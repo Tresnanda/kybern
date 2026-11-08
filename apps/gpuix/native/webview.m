@@ -429,7 +429,9 @@ void kybern_web_command(const char *json) {
       [host.web evaluateJavaScript:probe completionHandler:^(id box, NSError *error) {
         NSArray *frame = [box isKindOfClass:NSArray.class] && [box count] == 3 ? box : @[@0, @0, @1];
         double scale = [frame[2] doubleValue] > 0 ? [frame[2] doubleValue] : 1;
-        NSRect wanted = NSMakeRect([frame[0] doubleValue] + rx * scale, [frame[1] doubleValue] + ry * scale, MAX(1, rw * scale), MAX(1, rh * scale));
+        // CSS pixels to the web view's points: the interface zoom is the page's `pageZoom` (#292).
+        double z = host.web.pageZoom > 0 ? host.web.pageZoom : 1;
+        NSRect wanted = NSMakeRect(([frame[0] doubleValue] + rx * scale) * z, ([frame[1] doubleValue] + ry * scale) * z, MAX(1, rw * scale * z), MAX(1, rh * scale * z));
         wanted = NSIntersectionRect(wanted, host.web.bounds);
         if (NSIsEmptyRect(wanted)) { fail(@"The element is not on screen."); return; }
         WKSnapshotConfiguration *config = [WKSnapshotConfiguration new];

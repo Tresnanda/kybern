@@ -1984,6 +1984,7 @@ impl Doc {
         let wanted = (num(command, "x"), num(command, "y"), num(command, "width"), num(command, "height"));
         let probe = "(()=>{const f=document.querySelector('iframe');if(!f)return null;const r=f.getBoundingClientRect();return [r.left,r.top,r.width/(f.offsetWidth||r.width||1)]})()";
         let device = self.scale;
+        let zoom = ui_zoom();
         let shooter = webview.clone();
         exec(&webview, probe, move |result| {
             let frame: Vec<f64> = result
@@ -1996,8 +1997,9 @@ impl Doc {
             let (mut right, mut bottom) = (x + (wanted.2 * scale).max(1.0), y + (wanted.3 * scale).max(1.0));
             x = x.max(0.0);
             y = y.max(0.0);
-            right = right.min(placement.logical.0);
-            bottom = bottom.min(placement.logical.1);
+            // The placement is in window points; the page's CSS pixels are `ZoomFactor` (the interface zoom, #292) larger.
+            right = right.min(placement.logical.0 / zoom);
+            bottom = bottom.min(placement.logical.1 / zoom);
             if right <= x || bottom <= y {
                 fail(event, "The element is not on screen.");
                 return;
@@ -2006,7 +2008,7 @@ impl Doc {
             // macOS asks for min(1200, 2 × width) pixels across; CDP multiplies the clip scale by the device scale.
             let pixels = (width * 2.0).min(1200.0);
             let params = json!({"format": "png", "fromSurface": true, "captureBeyondViewport": false,
-                "clip": {"x": x, "y": y, "width": width, "height": height, "scale": pixels / width / device}});
+                "clip": {"x": x, "y": y, "width": width, "height": height, "scale": pixels / width / device / zoom}});
             cdp(&shooter, "Page.captureScreenshot", &params.to_string(), move |result| {
                 let written = result.ok().and_then(|json| {
                     let data = serde_json::from_str::<Value>(&json).ok()?.get("data")?.as_str()?.to_owned();

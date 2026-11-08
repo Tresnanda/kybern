@@ -418,7 +418,8 @@ scale). Element coordinates are content pixels; the platform's are OS points.
 - **Web views** float over the window in OS points on macOS and Windows: `src/native/webview.ts` multiplies placements
   and occlusions by the zoom, divides `outsidePress` back, and sends `{op: 'zoom'}` so the host zooms the page
   (`WKWebView.pageZoom`, WebView2 `ZoomFactor`): the wrapper's CSS pixels stay content pixels. Linux paints the page in
-  GPUI's scene (`<websurface>`) at the window's scale factor, already zoomed.
+  GPUI's scene (`<websurface>`) at the window's scale factor, already zoomed. `snapshotRect` takes CSS pixels, so the
+  hosts multiply them by the page zoom (WKWebView view points) or divide the placement by it (WebView2's CDP clip).
 - **macOS menu:** a View menu with Zoom in ⌘+, Zoom out ⌘−, Actual size ⌘0 (`app_menu.rs`). Their bindings sit in a
   context no element has, so a key never dispatches them: it reaches JS's window key listener (an open image keeps the
   chords). A pointer choice calls `setMenuCommandCallback`'s callback; a key equivalent AppKit matched after the window
@@ -429,7 +430,8 @@ scale). Element coordinates are content pixels; the platform's are OS points.
 `zoom-check.ts` (`zoom-lab.tsx`, `zoom-input.m`) checks 100 → 150 → 80 %: the content viewport and a layout observer,
 AppKit hover, click, scroll and a text drag at window points, a popover under its trigger, a 1 px border painted as
 exactly scale × zoom device rows, a web page placed over its slot and zoomed with the UI (on a capture of the real
-window), the minimum window, and steps that stop at the largest size that fits the display. Off macOS it runs without
+window), a `snapshotRect` of a page rectangle, the minimum window, and steps that stop at the largest size that fits the
+display. Off macOS it runs without
 the AppKit and web view parts (`--checks zoom`).
 
 ## Window drag regions

@@ -14,7 +14,7 @@ import '../src/native/local-build.ts'
 // Off macOS the AppKit and web view parts are skipped; the rest runs through the addon's automation and screenshots.
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { COMPANION_CFLAGS } from '../scripts/companion-flags.ts'
@@ -35,7 +35,7 @@ const f = await launch(path.join(import.meta.dir, 'zoom-lab.tsx'), {
   ...(mac ? {} : { KYBERN_ZOOM_LAB_NO_INPUT: '1' }),
 })
 const a = f.app
-type Result = { zoom: number; display: { width: number; height: number } | null; sizes: string; hover: string; click: string; observed: number; selected: string }
+type Result = { zoom: number; display: { width: number; height: number } | null; sizes: string; hover: string; click: string; observed: number; selected: string; snap?: { id?: string; path?: string; width?: number; height?: number; error?: string } | null }
 const report: Record<string, unknown>[] = []
 try {
   await a.getByTestId('ready').waitFor({ timeoutMs: 30_000 })
@@ -158,6 +158,20 @@ try {
         const is = (c: number[], want: number[]) => c.every((v, i) => Math.abs(v - want[i]!) <= Math.max(tolerance, 24))
         assert.ok(is(green, [0, 255, 0]), `90 content px into the page should be its 100 CSS px box: ${green}`)
         assert.ok(is(magenta, [255, 0, 255]), `110 content px into the page should be past the box: ${magenta}`)
+      })
+      await step(`${label} a snapshot of a page rectangle takes those CSS pixels`, async () => {
+        // A token per request: the lab's result text may still hold the previous snapshot.
+        const id = `${theme}${Math.round(zoom * 100)}`
+        await send(`snap:${id}`)
+        const r = await settled(read, (r) => r.snap?.id === id)
+        const shot = r.snap!
+        assert.ok(shot.path, `snapshotRect failed: ${JSON.stringify(shot)}`)
+        const png = pngPixels(shot.path!)
+        const left = png.at(png.width * 0.25, png.height / 2), right = png.at(png.width * 0.75, png.height / 2)
+        row.snapshot = { left, right, width: png.width, height: png.height }
+        const is = (c: number[], want: number[]) => c.every((v, i) => Math.abs(v - want[i]!) <= Math.max(tolerance, 24))
+        assert.ok(is(left, [0, 255, 0]) && is(right, [255, 0, 255]), `CSS 80–120 should be half green, half magenta: ${left} | ${right}`)
+        rmSync(shot.path!, { force: true })
       })
     }
   }
