@@ -57,8 +57,11 @@ try {
     report.push(row)
 
     await step(`${label} viewport and layout observer in content pixels`, async () => {
-      r = await settled(read, (r) => mac ? Math.abs(sizes(r).width / zoom - 48 - r.observed) < 1.5 : r.observed > 0)
-      const ready = await a.getByTestId('ready').bounds()
+      // The observer reports after the frame that laid out the new viewport: wait for it to match the viewport.
+      const viewport = async () => ({ r: await read(), ready: await a.getByTestId('ready').bounds() })
+      const seen = await settled(viewport, ({ r, ready }) => Math.abs(r.observed - (ready.width - 48)) < 1.5 && (!mac || Math.abs(sizes(r).width / zoom - ready.width) < 1.5))
+      r = seen.r
+      const ready = seen.ready
       if (mac) {
         const { width, height } = sizes(r)
         assert.ok(Math.abs(ready.width - width / zoom) < 1.5 && Math.abs(ready.height - height / zoom) < 1.5, `viewport ${ready.width}×${ready.height} at ${zoom} in a ${width}×${height} pt window`)
