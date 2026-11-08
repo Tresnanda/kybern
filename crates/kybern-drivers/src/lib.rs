@@ -45,7 +45,9 @@ pub(crate) mod test_support {
 pub mod claude;
 mod claude_catalog;
 mod claude_config;
+pub mod claude_context;
 pub mod claude_integrations;
+mod claude_plugin;
 mod claude_usage;
 pub mod codex;
 pub mod codex_integrations;

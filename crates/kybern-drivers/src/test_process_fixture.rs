@@ -18,6 +18,13 @@ fn json_string(value: &str) -> String {
 }
 
 fn main() {
+    // A stand-in for `claude --version`: the answer is the text of the file beside this binary with the extension `version`.
+    if std::env::args().nth(1).as_deref() == Some("--version") {
+        if let Ok(version) = std::env::current_exe().map(|exe| exe.with_extension("version")).and_then(std::fs::read_to_string) {
+            println!("{}", version.trim());
+        }
+        return;
+    }
     if std::env::var_os("KYBERN_TEST_OMP").is_some() {
         omp();
         return;
