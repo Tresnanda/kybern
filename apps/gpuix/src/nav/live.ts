@@ -19,6 +19,7 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { isChildThread, isRemoteChildThread } from '../../../../packages/kybern-client/src/subagents.ts'
 import { isChildWorking } from '../../../../packages/kybern-client/src/delegations.ts'
+import { IdleCompactionTurns } from '../../../../packages/kybern-client/src/compaction.ts'
 import {
   USAGE_LIMITS_CHANGED_NOTIFICATION,
   type Thread,
@@ -106,8 +107,12 @@ export function onLiveEvent(listener: (event: ThreadEvent) => void): () => void 
   return () => eventTaps.delete(listener)
 }
 
+/** Kybern's compactions of idle threads leave no unread mark: their notice row says it. */
+const idleCompactions = new IdleCompactionTurns()
+
 function onEvent(event: ThreadEvent) {
   for (const tap of eventTaps) tap(event)
+  if (idleCompactions.silent(event)) return
   switch (event.kind) {
     case 'thread_created':
     case 'thread_updated':

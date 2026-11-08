@@ -2659,6 +2659,10 @@ pub struct ProviderSettings {
     /// inherit their project's profile; an empty value selects OMP's default.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub project_profiles: std::collections::BTreeMap<String, String>,
+    /// "Compact idle threads" for one account, keyed by its instance
+    /// (`default` is the harness's own sign-in). Absent: the global choice.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub idle_compaction: std::collections::BTreeMap<String, IdleCompaction>,
 }
 
 /// User settings persisted at `<data_dir>/settings.json`.
@@ -2712,6 +2716,61 @@ pub struct Settings {
     pub preview_allowed_folders: Vec<String>,
     /// Joining and staying joined to the machine network.
     pub network: NetworkSettings,
+    /// When long threads are compacted.
+    pub compaction: CompactionSettings,
+}
+
+/// When Kybern compacts a long thread that sits idle.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum IdleCompaction {
+    /// Leave it to the harness: Claude Code offers to compact when you come back.
+    #[default]
+    WhenYouReturn,
+    /// Send a compaction about two minutes before the prompt cache expires, while
+    /// the history is still cached, on threads above 200 000 tokens.
+    BeforeCacheExpires,
+    /// Never compact an idle thread, and answer Claude Code's offer with "Don't ask again".
+    Never,
+}
+
+/// Compaction settings for every harness. Each value is mapped to the harness's
+/// own setting at launch; a harness without one ignores it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct CompactionSettings {
+    /// What happens to a long thread left idle. Accounts can override it.
+    pub idle: IdleCompaction,
+    /// Context size at which each harness compacts on its own
+    /// (100 000..=1 000 000 tokens). A harness absent here keeps its default.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub auto_compact_tokens: BTreeMap<ProviderKind, u64>,
+}
+
+/// The smallest auto-compact threshold Kybern accepts.
+pub const MIN_AUTO_COMPACT_TOKENS: u64 = 100_000;
+/// The largest auto-compact threshold Kybern accepts.
+pub const MAX_AUTO_COMPACT_TOKENS: u64 = 1_000_000;
+
+impl CompactionSettings {
+    /// Why the settings cannot be saved, if they cannot.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.auto_compact_tokens.values().any(|tokens| !(MIN_AUTO_COMPACT_TOKENS..=MAX_AUTO_COMPACT_TOKENS).contains(tokens)) {
+            return Err("Set the auto-compact threshold between 100 000 and 1 000 000 tokens, or choose Default.".into());
+        }
+        Ok(())
+    }
+}
+
+impl Settings {
+    /// "Compact idle threads" for an account: its own choice, else the global one.
+    pub fn idle_compaction_for(&self, provider: &ProviderInstance) -> IdleCompaction {
+        self.providers
+            .get(&provider.kind)
+            .and_then(|settings| settings.idle_compaction.get(&provider.instance))
+            .copied()
+            .unwrap_or(self.compaction.idle)
+    }
 }
 
 /// The release line updates come from. Every release reaches Dev first as a
@@ -3034,6 +3093,7 @@ impl Default for Settings {
             ask_deadlines: AskDeadlineSettings::default(),
             preview_allowed_folders: Vec::new(),
             network: NetworkSettings::default(),
+            compaction: CompactionSettings::default(),
         }
     }
 }
@@ -3307,6 +3367,37 @@ pub struct ProviderUsage {
     pub context: Option<ContextUsage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limits: Option<Vec<UsageLimit>>,
+    /// The prompt cache the last request of the latest turn left warm. Absent
+    /// for harnesses that report nothing Kybern can estimate from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_cache: Option<PromptCache>,
+}
+
+/// How long the provider keeps a turn's prompt cache, and when it lapses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PromptCache {
+    /// Seconds an entry lives after a request reads or writes it. `None`: unknown
+    /// (Claude served the request fully from cache and the session never said).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_seconds: Option<u64>,
+    /// When the cache written or read by the turn's last request expires.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<DateTime<Utc>>,
+    /// The TTL is the provider's documented default, not read from the response.
+    #[serde(default)]
+    pub estimated: bool,
+}
+
+impl PromptCache {
+    /// A cache of `ttl_seconds` refreshed by a request at `at`.
+    pub fn from_request(ttl_seconds: u64, at: DateTime<Utc>, estimated: bool) -> Self {
+        Self { ttl_seconds: Some(ttl_seconds), expires_at: Some(at + chrono::Duration::seconds(ttl_seconds as i64)), estimated }
+    }
+
+    /// The provider did not say how long the cache lives.
+    pub fn unknown() -> Self {
+        Self { ttl_seconds: None, expires_at: None, estimated: false }
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ContextUsage {
@@ -3767,4 +3858,58 @@ pub struct SubagentMessage {
     pub parent_queued: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[cfg(test)]
+mod compaction_settings_tests {
+    use super::*;
+
+    #[test]
+    fn an_accounts_own_choice_wins_over_the_global_one() {
+        let mut settings = Settings {
+            compaction: CompactionSettings { idle: IdleCompaction::BeforeCacheExpires, ..Default::default() },
+            ..Default::default()
+        };
+        let claude = settings.providers.entry(ProviderKind::ClaudeCode).or_default();
+        claude.idle_compaction.insert("work".into(), IdleCompaction::Never);
+        let work = ProviderInstance { kind: ProviderKind::ClaudeCode, instance: "work".into() };
+        assert_eq!(settings.idle_compaction_for(&work), IdleCompaction::Never);
+        assert_eq!(
+            settings.idle_compaction_for(&ProviderInstance::default_for(ProviderKind::ClaudeCode)),
+            IdleCompaction::BeforeCacheExpires
+        );
+        // Another harness's account of the same name keeps the global choice.
+        assert_eq!(
+            settings.idle_compaction_for(&ProviderInstance { kind: ProviderKind::Codex, instance: "work".into() }),
+            IdleCompaction::BeforeCacheExpires
+        );
+        assert_eq!(Settings::default().idle_compaction_for(&work), IdleCompaction::WhenYouReturn, "the default is When you return");
+    }
+
+    #[test]
+    fn the_threshold_is_empty_or_between_100k_and_1m() {
+        let with = |tokens: Option<u64>| {
+            CompactionSettings {
+                auto_compact_tokens: tokens.map(|tokens| (ProviderKind::ClaudeCode, tokens)).into_iter().collect(),
+                ..Default::default()
+            }
+            .validate()
+        };
+        assert!(with(None).is_ok());
+        assert!(with(Some(100_000)).is_ok() && with(Some(1_000_000)).is_ok());
+        assert!(with(Some(99_999)).unwrap_err().contains("between 100 000 and 1 000 000"));
+        assert!(with(Some(1_000_001)).is_err());
+    }
+
+    #[test]
+    fn old_settings_files_read_as_when_you_return_with_the_harness_threshold() {
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(settings.compaction, CompactionSettings::default());
+        let json = serde_json::to_value(CompactionSettings {
+            idle: IdleCompaction::BeforeCacheExpires,
+            auto_compact_tokens: [(ProviderKind::Codex, 300_000)].into_iter().collect(),
+        })
+        .unwrap();
+        assert_eq!(json, serde_json::json!({ "idle": "before_cache_expires", "auto_compact_tokens": { "codex": 300_000 } }));
+    }
 }

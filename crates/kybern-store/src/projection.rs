@@ -751,6 +751,23 @@ fn apply_transcript_event(
                 let Some(turn_id) = turn_id.or(if fork { last_turn_id_value } else { None }) else { continue };
                 out.push(TranscriptEntry::Notice { turn_id, seq: ev.seq, level: *level, text: text.clone(), at: ev.at, data: data.clone(), problem: problem.clone() });
             }
+            EventPayload::IdleCompactionStarted { context_tokens, cache_expires_at, cache_ttl_seconds } => {
+                let Some(turn_id) = turn_id else { continue };
+                out.push(TranscriptEntry::Notice {
+                    turn_id,
+                    seq: ev.seq,
+                    level: NoticeLevel::Info,
+                    text: "Compacted while you were away".into(),
+                    at: ev.at,
+                    data: Some(serde_json::json!({
+                        "kind": "idle_compaction",
+                        "context_tokens": context_tokens,
+                        "cache_expires_at": cache_expires_at,
+                        "cache_ttl_seconds": cache_ttl_seconds,
+                    })),
+                    problem: None,
+                });
+            }
             EventPayload::WorkspaceReverted { commit, .. } => {
                 let Some(turn_id) = turn_id else { continue };
                 out.push(TranscriptEntry::Reverted { turn_id, seq: ev.seq, commit: commit.clone(), at: ev.at });
@@ -1042,10 +1059,14 @@ pub fn project_provider_usage(events: &[ThreadEvent]) -> ProviderUsage {
         // A failed refresh kept the old session, and its context.
         if matches!(event.payload, EventPayload::ContextRotated { session_kept: false, .. }) {
             result.context = None;
+            result.prompt_cache = None;
         }
         if let EventPayload::ProviderUsageUpdated { usage } = &event.payload {
             if usage.context.is_some() {
                 result.context = usage.context.clone();
+            }
+            if usage.prompt_cache.is_some() {
+                result.prompt_cache = usage.prompt_cache.clone();
             }
             if let Some(limits) = &usage.limits {
                 let current = result.limits.get_or_insert_default();
@@ -2078,6 +2099,7 @@ mod rotation_tests {
         let usage = |used| ProviderUsage {
             context: Some(ContextUsage { used_tokens: used, window_tokens: 1_000 }),
             limits: Some(vec![UsageLimit { name: "5h".into(), used_percent: 10.0, window_minutes: Some(300), resets_at: None }]),
+            prompt_cache: None,
         };
         let rotated = |seq, session_kept| {
             event(
