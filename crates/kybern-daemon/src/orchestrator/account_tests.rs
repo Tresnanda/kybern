@@ -24,6 +24,7 @@ fn quota_recovery_requires_the_latest_interrupted_turn_and_its_own_report() {
                 window_minutes: Some(10080),
                 resets_at: Some(now + 60),
             }]),
+            prompt_cache: None,
         },
     };
     let failed = EventPayload::TurnFailed { error: "Request could not complete".into(), problem: None };
@@ -132,6 +133,7 @@ async fn successful_quota_report_does_not_authorize_switch_continue() {
             usage: ProviderUsage {
                 context: None,
                 limits: Some(vec![UsageLimit { name: "5 hours".into(), used_percent: 100.0, window_minutes: Some(300), resets_at: None }]),
+                prompt_cache: None,
             },
         },
         EventPayload::TurnCompleted {

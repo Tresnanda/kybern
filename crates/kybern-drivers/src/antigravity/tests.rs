@@ -393,6 +393,7 @@ fn config(binary: &Path, cwd: &Path) -> SessionConfig {
         rewind: None,
         binary: Some(binary.into()),
         env: Default::default(),
+        compaction: Default::default(),
     }
 }
 

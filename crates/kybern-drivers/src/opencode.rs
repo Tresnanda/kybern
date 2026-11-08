@@ -397,6 +397,11 @@ impl AgentDriver for OpencodeDriver {
             .as_ref()
             .map(|bridge| opencode_config_content(config.env.get("OPENCODE_CONFIG_CONTENT"), bridge))
             .transpose()?;
+        let native_config = with_compaction(
+            native_config,
+            config.env.get("OPENCODE_CONFIG_CONTENT"),
+            compaction_config(config.model.as_deref(), config.compaction.auto_compact_tokens),
+        )?;
         let mut cmd = crate::binary::command(&bin).no_window();
         cmd.current_dir(&config.cwd)
             .args(["serve", "--port", "0", "--hostname", "127.0.0.1"])
@@ -585,6 +590,45 @@ fn opencode_config_content(base: Option<&String>, bridge: &NativeToolBridge) -> 
         }
     }
     serde_json::to_string(&config).map_err(|error| DriverError::Other(error.into()))
+}
+
+/// Context windows OpenCode reported, by `provider/model`. A later launch turns
+/// Kybern's token threshold into OpenCode's `compaction.buffer` with them.
+static KNOWN_WINDOWS: std::sync::LazyLock<std::sync::Mutex<HashMap<String, u64>>> = std::sync::LazyLock::new(Default::default);
+
+pub(super) fn remember_windows(windows: &HashMap<String, u64>) {
+    if let Ok(mut known) = KNOWN_WINDOWS.lock() {
+        known.extend(windows.iter().map(|(model, window)| (model.clone(), *window)));
+    }
+}
+
+/// OpenCode compacts once the context passes the model's window less
+/// `compaction.buffer`, so a threshold needs the window. A model this daemon
+/// has not seen yet keeps OpenCode's default until the next launch.
+pub(super) fn compaction_config(model: Option<&str>, tokens: Option<u64>) -> Option<Value> {
+    let (model, tokens) = (model?, tokens?);
+    let window = KNOWN_WINDOWS.lock().ok()?.get(model).copied()?;
+    (tokens < window).then(|| json!({ "auto": true, "buffer": window - tokens }))
+}
+
+/// The inline config with `compaction` merged in, over the user's own inline
+/// config when Kybern adds nothing else.
+pub(super) fn with_compaction(native: Option<String>, base: Option<&String>, compaction: Option<Value>) -> Result<Option<String>> {
+    let Some(compaction) = compaction else { return Ok(native) };
+    let mut config = match native.as_ref().or(base) {
+        Some(raw) => serde_json::from_str::<Value>(raw)
+            .map_err(|error| DriverError::Unsupported(format!("OPENCODE_CONFIG_CONTENT is not valid JSON: {error}")))?,
+        None => json!({}),
+    };
+    let Some(object) = config.as_object_mut() else {
+        return Err(DriverError::Unsupported("OpenCode inline config must be a JSON object".into()));
+    };
+    let section = object.entry("compaction").or_insert_with(|| json!({}));
+    let Some(section) = section.as_object_mut() else {
+        return Err(DriverError::Unsupported("OpenCode inline config has a non-object compaction section".into()));
+    };
+    section.extend(compaction.as_object().into_iter().flatten().map(|(key, value)| (key.clone(), value.clone())));
+    serde_json::to_string(&config).map(Some).map_err(|error| DriverError::Other(error.into()))
 }
 
 /// The inline config with the Kybern MCP server added. Both APIs read this
@@ -859,6 +903,7 @@ impl OpencodeSession {
                     }
                 }
             }
+            remember_windows(&windows);
             self.state.lock().await.context_windows = windows;
         }
     }
@@ -1044,6 +1089,7 @@ impl OpencodeSession {
                         self.emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage {
                             context: Some(kybern_protocol::ContextUsage { used_tokens, window_tokens }),
                             limits: None,
+                            prompt_cache: None,
                         }))
                         .await;
                     }
@@ -2425,5 +2471,36 @@ mod orchestration_part_tests {
         let value: Value = serde_json::from_str(&opencode_config_content(Some(&base), &bridge).unwrap()).unwrap();
         assert_eq!(value["tools"]["other_*"], true);
         assert!(value["tools"].get("memory_*").is_none());
+    }
+}
+
+#[cfg(test)]
+mod compaction_tests {
+    use serde_json::{Value, json};
+
+    #[test]
+    fn the_threshold_becomes_opencodes_buffer_below_a_known_window() {
+        super::remember_windows(&[("anthropic/claude-test-window".to_string(), 1_000_000)].into_iter().collect());
+        assert_eq!(
+            super::compaction_config(Some("anthropic/claude-test-window"), Some(300_000)),
+            Some(json!({ "auto": true, "buffer": 700_000 }))
+        );
+        assert_eq!(super::compaction_config(Some("anthropic/claude-test-window"), None), None, "no threshold, OpenCode's default");
+        assert_eq!(super::compaction_config(Some("anthropic/claude-test-window"), Some(1_000_000)), None, "at the window: nothing to set");
+        assert_eq!(super::compaction_config(Some("vendor/never-seen"), Some(300_000)), None, "an unknown window keeps the default");
+        assert_eq!(super::compaction_config(None, Some(300_000)), None);
+    }
+
+    #[test]
+    fn compaction_merges_into_the_inline_config_without_dropping_the_users_keys() {
+        let base = r#"{"model":"anthropic/x","compaction":{"prune":true}}"#.to_string();
+        let compaction = Some(json!({ "auto": true, "buffer": 500 }));
+        let merged: Value = serde_json::from_str(&super::with_compaction(None, Some(&base), compaction.clone()).unwrap().unwrap()).unwrap();
+        assert_eq!(merged, json!({ "model": "anthropic/x", "compaction": { "prune": true, "auto": true, "buffer": 500 } }));
+        // Kybern's own inline config (its MCP server) wins over the user's raw one, which it already contains.
+        let native = r#"{"mcp":{"kybern":{}}}"#.to_string();
+        let merged: Value = serde_json::from_str(&super::with_compaction(Some(native), Some(&base), compaction).unwrap().unwrap()).unwrap();
+        assert_eq!(merged, json!({ "mcp": { "kybern": {} }, "compaction": { "auto": true, "buffer": 500 } }));
+        assert_eq!(super::with_compaction(None, Some(&base), None).unwrap(), None, "nothing to add: the user's env stays as it is");
     }
 }

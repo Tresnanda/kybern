@@ -35,6 +35,7 @@ pub(crate) mod group_git;
 mod group_pr;
 mod group_transfer;
 mod groups;
+mod idle_compaction;
 pub(crate) mod inbound;
 mod lead;
 mod lead_git;
@@ -644,6 +645,8 @@ struct Inner {
     lead_git: crate::lead_git::LeadGitConfig,
     /// Coordinator context rotations in progress, and the handoff deadline.
     rotation: rotation::RotationState,
+    /// Compactions planned for idle threads ("Compact idle threads: Before the cache expires").
+    idle_compactions: idle_compaction::IdleCompactions,
 }
 
 struct LiveSession {
@@ -1035,6 +1038,7 @@ impl Orchestrator {
                 messaging: Default::default(),
                 lead_git: Default::default(),
                 rotation: Default::default(),
+                idle_compactions: Default::default(),
             }),
         }
     }
@@ -2082,6 +2086,7 @@ impl Orchestrator {
             self.inner.previews.revoke_thread(thread_id);
             self.emit(thread_id, None, EventPayload::ThreadArchived)?;
             self.subagents_archive_below(thread_id)?;
+            self.inner.idle_compactions.cancel(thread_id);
         }
         // Machines this thread ran tools on archive their inbound threads for it.
         self.archive_forwarded(thread_id);
@@ -2280,6 +2285,8 @@ impl Orchestrator {
         let thread = self.update_thread(thread)?;
         let startup_started = std::time::Instant::now();
         self.emit(thread.id, Some(turn_id), EventPayload::TurnStarted { message_id, message: message.clone() })?;
+        // The user is back (or Kybern compacts now): a compaction planned for the idle thread is moot.
+        self.inner.idle_compactions.cancel(thread_id);
         if selected_mode.is_some() && self.pending_permission_for(&thread, &thread.provider)? == selected_mode {
             self.inner.store.meta_set_many(&[
                 (&format!("pending_permission:{thread_id}"), ""),
@@ -3829,6 +3836,7 @@ impl Orchestrator {
             binary: provider_settings.binary.map(PathBuf::from),
             env: provider_settings.env.into_iter().collect(),
             native_tool_bridge,
+            compaction: self.compaction_launch(&thread.provider),
         };
         let spawned = driver.spawn(config).await;
         // The drivers resolved the lent login's handle while spawning; nothing needs it afterwards.
@@ -4952,6 +4960,10 @@ impl Orchestrator {
                 } else {
                     self.checkpoint_after_turn(&t, turn_id).await;
                 }
+                if let Some(prompt_cache) = self.estimated_prompt_cache(&t) {
+                    let usage = ProviderUsage { prompt_cache: Some(prompt_cache), ..Default::default() };
+                    self.emit(thread_id, Some(turn_id), EventPayload::ProviderUsageUpdated { usage })?;
+                }
                 self.emit(
                     thread_id,
                     Some(turn_id),
@@ -4977,6 +4989,7 @@ impl Orchestrator {
                 if t.coordinator_project_id.is_some() {
                     self.rotate_if_over_budget(thread_id, live.clone());
                 }
+                self.schedule_idle_compaction(thread_id);
             }
             DriverEvent::TurnFailed { error, problem } => {
                 let Some(turn) = turn_guard.as_mut() else { return Ok(()) };
@@ -9216,6 +9229,7 @@ for line in sys.stdin:
     include!("orchestrator/group_transfer_tests.rs");
     include!("orchestrator/federated_tools_tests.rs");
     include!("orchestrator/child_questions_tests.rs");
+    include!("orchestrator/idle_compaction_flow_tests.rs");
     include!("orchestrator/secret_tests.rs");
     include!("orchestrator/request_tests.rs");
     include!("orchestrator/lead_git_tests.rs");

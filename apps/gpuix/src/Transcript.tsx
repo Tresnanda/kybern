@@ -31,6 +31,7 @@ import { alpha, muted } from './transcript/kit.tsx'
 import { over } from './theme.ts'
 import { AnswerImages, DateSeparator, Turn, TurnFooter, turnTimestamp } from './transcript/Turn.tsx'
 import { RotationRow } from './transcript/Rotation.tsx'
+import { IdleCompactionRow } from './transcript/IdleCompaction.tsx'
 import { useComposerOverlayHeight } from './composer/height.ts'
 import { GlassEdge } from './kit/GlassEdge.tsx'
 import { frostBackdrop, frostFill, frostHoverFill, useGlass } from './platform/glass.ts'
@@ -182,6 +183,13 @@ export function Transcript() {
       keep.add(key)
       const cached = rowCache.get(key)
       if(cached && cached.turn === turn && cached.date === date && cached.isLast === isLast && cached.running === running && cached.code === codeState) return cached.rows
+      // Kybern's compaction of an idle thread is one notice row: no message, work or footer of its own.
+      const idle = turn.work.find((block): block is Extract<typeof block, { kind: 'idle_compaction' }> => block.kind === 'idle_compaction')
+      if (idle) {
+        const rows: RenderRow[] = [{ key, turn, estimate: 34, node: <Row><IdleCompactionRow block={idle} /></Row> }]
+        rowCache.set(key, { turn, date, isLast, running, code: codeState, rows })
+        return rows
+      }
       const result: RenderRow[] = [{ key, turn, estimate: (turn.user ? 52 : 0) + (turn.work.length ? 36 : 0) + (startsDay ? 44 : 0), node: <TurnItem nodes={turnNodes.current} turn={turn} threadId={threadId!} isLast={i === turns.length - 1} threadRunning={i === turns.length - 1 && threadRunning} dateAt={startsDay ? at : null} /> }]
       const remember = () => { rowCache.set(key, {turn, date, isLast, running, code:codeState, rows:result}); return result }
       if (running) return remember()

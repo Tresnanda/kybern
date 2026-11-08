@@ -4,6 +4,7 @@
 // shared through `threadAttention.ts`, `subagents.ts` and `threadRows.ts`.
 import { pendingOf, type AttentionSignals, type ThreadPending } from "../../../../packages/kybern-client/src/threadAttention";
 import { isChildThread } from "../../../../packages/kybern-client/src/subagents";
+import { IdleCompactionTurns } from "../../../../packages/kybern-client/src/compaction";
 import { useSyncExternalStore } from "react";
 import type { Thread, ThreadActivitySummary } from "./protocol";
 import { EMPTY_PREFS, readPrefs, writePrefs, type ListPrefs } from "./prefs";
@@ -71,7 +72,11 @@ onSubscriptionReady(hydrate);
 
 // ---- unread: a turn that completes while its thread isn't on screen ----
 
+// Kybern's compactions of idle threads leave no unread mark: their notice row says it.
+const idleCompactions = new IdleCompactionTurns();
+
 onThreadEvent((event) => {
+  if (idleCompactions.silent(event)) return;
   switch (event.kind) {
     case "turn_completed": {
       if (event.stop_reason !== "completed" || isThreadOpen(event.thread_id)) return;

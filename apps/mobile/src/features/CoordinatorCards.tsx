@@ -4,6 +4,8 @@
 // lines they leave, and Kybern's own "Setup started" row. Words come from
 // `packages/kybern-client/src/coordinatorCards.ts`, shared with desktop.
 import * as Haptics from "expo-haptics";
+import { idleCompactionMeta, idleCompactionRowLabel } from "../../../../packages/kybern-client/src/compaction";
+import type { IdleCompactionBlock } from "../../../../packages/kybern-client/src/transcript";
 import { router } from "expo-router";
 import { useState } from "react";
 import { StyleSheet, Text, TextInput, View } from "react-native";
@@ -278,6 +280,21 @@ export function SystemRowLine({ text, onPress, hint, busy }: { text: string; onP
         label
       )}
       <View style={{ flex: 1, height: 1, backgroundColor: colors.line }} />
+    </View>
+  );
+}
+
+/** Kybern compacted the thread while it sat idle: "Compacted while you were away · 2:58 PM", with the sizes under it. */
+export function IdleCompactionRow({ block }: { block: IdleCompactionBlock }) {
+  const time = rotationTime(block.finishedAt ?? block.at);
+  return (
+    <View>
+      <SystemRowLine text={idleCompactionRowLabel(block, time)} busy={!block.finishedAt} />
+      {block.finishedAt ? (
+        <T variant="caption" tone="muted" style={{ textAlign: "center", marginTop: -8, marginBottom: 8 }}>
+          {idleCompactionMeta(block)}
+        </T>
+      ) : null}
     </View>
   );
 }

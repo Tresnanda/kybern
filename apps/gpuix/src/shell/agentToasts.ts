@@ -13,6 +13,7 @@ import { environmentKey } from './environment.ts'
 // Questions say "Needs your input", approvals "Needs approval: …".
 import type { ApprovalRequest, Problem, ProviderKind, Settings, Thread, ThreadEvent, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 import { describeTurnFailure } from '../../../../packages/kybern-client/src/problems.ts'
+import { IdleCompactionTurns } from '../../../../packages/kybern-client/src/compaction.ts'
 import { openThread } from '../nav/history.ts'
 import { onLiveEvent } from '../nav/live.ts'
 import { getNav, subscribeNav } from '../nav/store.ts'
@@ -117,8 +118,11 @@ export function startAgentToasts() {
   }))
   if (client.status === 'open') load()
 
+  // Kybern's own compactions of idle threads: their notice row in the thread is all they say.
+  const idleCompactions = new IdleCompactionTurns()
   stops.push(onLiveEvent((event: ThreadEvent) => {
     if (getClient() !== client) return
+    if (idleCompactions.silent(event)) return
     if (event.kind === 'approval_resolved') {
       const id = `agent-input:${event.approval_id}`
       forget(event.thread_id, id)

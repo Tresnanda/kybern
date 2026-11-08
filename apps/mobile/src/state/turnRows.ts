@@ -151,6 +151,14 @@ export function createTurnRows(threadId: string) {
         result.push(...previous.rows);
         continue;
       }
+      // Kybern's compaction of an idle thread is one row: no message, work or footer of its own.
+      const idle = grouped.work.find((block) => block.kind === "idle_compaction");
+      if (idle) {
+        const rows: TurnRow[] = [{ kind: "block", key: `${grouped.turnId}:${idle.kind}:${idle.id}`, block: idle, nested: false, thinking: false }];
+        next.set(grouped.turnId, { group: grouped, expanded, rows });
+        result.push(...rows);
+        continue;
+      }
       // A context refresh follows its turn, so it closes the turn's rows instead of folding into its work.
       const rotations = grouped.work.filter((block) => block.kind === "rotation");
       const group = rotations.length ? { ...grouped, work: grouped.work.filter((block) => block.kind !== "rotation") } : grouped;

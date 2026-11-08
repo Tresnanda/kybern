@@ -225,6 +225,13 @@ expression: schema_for!(Settings)
         "keep_reachable": true,
         "keep_network_data": true
       }
+    },
+    "compaction": {
+      "description": "When long threads are compacted.",
+      "$ref": "#/$defs/CompactionSettings",
+      "default": {
+        "idle": "when_you_return"
+      }
     }
   },
   "$defs": {
@@ -317,6 +324,13 @@ expression: schema_for!(Settings)
           "additionalProperties": {
             "type": "string"
           }
+        },
+        "idle_compaction": {
+          "description": "\"Compact idle threads\" for one account, keyed by its instance\n(`default` is the harness's own sign-in). Absent: the global choice.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/IdleCompaction"
+          }
         }
       }
     },
@@ -354,6 +368,26 @@ expression: schema_for!(Settings)
       "required": [
         "name",
         "directory"
+      ]
+    },
+    "IdleCompaction": {
+      "description": "When Kybern compacts a long thread that sits idle.",
+      "oneOf": [
+        {
+          "description": "Leave it to the harness: Claude Code offers to compact when you come back.",
+          "type": "string",
+          "const": "when_you_return"
+        },
+        {
+          "description": "Send a compaction about two minutes before the prompt cache expires, while\nthe history is still cached, on threads above 200 000 tokens.",
+          "type": "string",
+          "const": "before_cache_expires"
+        },
+        {
+          "description": "Never compact an idle thread, and answer Claude Code's offer with \"Don't ask again\".",
+          "type": "string",
+          "const": "never"
+        }
       ]
     },
     "UpdateTrack": {
@@ -695,6 +729,64 @@ expression: schema_for!(Settings)
           "description": "Keep bounded, read-only copies of peer lists on this machine.",
           "type": "boolean",
           "default": true
+        }
+      }
+    },
+    "CompactionSettings": {
+      "description": "Compaction settings for every harness. Each value is mapped to the harness's\nown setting at launch; a harness without one ignores it.",
+      "type": "object",
+      "properties": {
+        "idle": {
+          "description": "What happens to a long thread left idle. Accounts can override it.",
+          "$ref": "#/$defs/IdleCompaction",
+          "default": "when_you_return"
+        },
+        "auto_compact_tokens": {
+          "description": "Context size at which each harness compacts on its own\n(100 000..=1 000 000 tokens). A harness absent here keeps its default.",
+          "type": "object",
+          "properties": {
+            "antigravity": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "claude-code": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "codex": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "cursor": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "grok-build": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "omp": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "opencode": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "pi": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
         }
       }
     }

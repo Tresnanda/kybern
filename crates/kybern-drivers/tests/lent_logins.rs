@@ -109,6 +109,7 @@ fn config(binary: &Path, cwd: &Path, env: HashMap<String, String>) -> SessionCon
         rewind: None,
         binary: Some(binary.to_path_buf()),
         env,
+        compaction: Default::default(),
     }
 }
 
