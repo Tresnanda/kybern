@@ -117,8 +117,16 @@ export function startAgentToasts() {
   }))
   if (client.status === 'open') load()
 
+  // Kybern's own compactions of idle threads: their notice row in the thread is all they say.
+  const idleCompactions = new Set<string>()
   stops.push(onLiveEvent((event: ThreadEvent) => {
     if (getClient() !== client) return
+    if (event.kind === 'idle_compaction_started') {
+      if (event.turn_id) idleCompactions.add(event.turn_id)
+      if (idleCompactions.size > 64) idleCompactions.delete(idleCompactions.values().next().value!)
+      return
+    }
+    if ((event.kind === 'turn_completed' || event.kind === 'turn_failed') && event.turn_id && idleCompactions.delete(event.turn_id)) return
     if (event.kind === 'approval_resolved') {
       const id = `agent-input:${event.approval_id}`
       forget(event.thread_id, id)

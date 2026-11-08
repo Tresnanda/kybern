@@ -38,6 +38,8 @@ import { IconButton } from '../kit/IconButton.tsx'
 import { S } from './glyphs.ts'
 import { openSettingsTab } from './SettingsScreen.tsx'
 import { useSettings } from './store.ts'
+import { AccountIdleCompaction } from './Compaction.tsx'
+import { idleCompactionDetail } from '../../../../packages/kybern-client/src/compaction.ts'
 import { requestAntigravitySignIn } from '../antigravity/notice.ts'
 import { LoginBrokerSection } from './LoginBroker.tsx'
 
@@ -142,7 +144,8 @@ function AccountRow({ account, first, readOnly, onRemove, onAssign }: { account:
   const plan = account.identity?.plan
   const projectCount = account.projects.length
   const through = account.broker ? (account.broker.state === 'borrowing' ? `Signs in through ${account.broker.machine_name}` : account.broker.message ?? `Signs in through ${account.broker.machine_name}`) : null
-  const detail = [through ?? email ?? (withoutSignIn(kind) ? null : 'Email unavailable'), through ? null : plan, projectCount > 0 ? (projectCount === 1 ? '1 project' : `${projectCount} projects`) : null, cli ? 'Same as your terminal' : null].filter(Boolean).join(' · ')
+  const ownCompaction = useSettings().settings?.providers[kind]?.idle_compaction?.[instance]
+  const detail = [through ?? email ?? (withoutSignIn(kind) ? null : 'Email unavailable'), through ? null : plan, projectCount > 0 ? (projectCount === 1 ? '1 project' : `${projectCount} projects`) : null, cli ? 'Same as your terminal' : null, ownCompaction ? idleCompactionDetail(ownCompaction) : null].filter(Boolean).join(' · ')
   return <div testId={`account-row-${kind}-${instance}`} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 12, minHeight: 56, paddingLeft: 18, paddingRight: 18, paddingTop: 12, paddingBottom: 12, borderTopWidth: first ? 0 : 1, borderColor: t.v('--app-settings-card-border') }}>
     {flash && <FlashOverlay />}
     <AccountAvatar kind={kind} color={account.color} instance={instance} size={32} />
@@ -305,6 +308,7 @@ function AccountMenu({ account, onRename, onRemove, onAssign }: { account: Accou
     {!cli && <MenuSeparator />}
     {!account.is_default && <MenuItem id="default" testId={`account-actions-${id}-default`} label="Make default" onSelect={() => void makeDefaultAccount(account)} />}
     <MenuItem id="projects" testId={`account-actions-${id}-projects`} label="Use for projects…" onSelect={() => onAssign(account)} />
+    <AccountIdleCompaction kind={kind} instance={instance} testId={`account-actions-${id}-idle-compaction`} />
     {!cli && <MenuSub id="color" testId={`account-actions-${id}-color`} label="Color">
       {ACCOUNT_COLORS.map((color) => <MenuItem key={color} id={`color-${color}`} testId={`account-actions-${id}-color-${color}`} label={ACCOUNT_COLOR_LABELS[color]} checked={isAccountColor(account.color) && account.color === color} iconNode={<AccountDot color={color} size={8} />} onSelect={() => void setColor(color)} />)}
     </MenuSub>}

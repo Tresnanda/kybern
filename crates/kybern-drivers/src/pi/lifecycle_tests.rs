@@ -37,6 +37,7 @@ impl Harness {
             initialized,
             command_gate: Mutex::new(()),
             extension: None,
+            _compaction_overlay: None,
             pending_app_tools: Mutex::new(HashMap::new()),
             app_tool_names: extension::DEFAULT_APP_TOOL_NAMES.iter().map(|name| (*name).to_string()).collect(),
         });

@@ -7,7 +7,8 @@ import { contextUsage, bindingLimit, limitLabel, limitLeftLabel, limitPace, limi
 import { accountsOfKind, cacheState, cacheDotOpacity, cacheValue, glyphAriaLabel, glyphTone, type CacheState } from '@/lib/accountUi'
 import { CLI_ACCOUNT_NAME, CLI_INSTANCE, isCliInstance } from '@/lib/accounts'
 import { getAppTypographyScale } from '@/lib/kit/appTypography'
-import { promptCacheWindow, promptCacheRemainingMinutes } from '@/lib/promptCache'
+import { idleCompactionAt, idleCompactionFor, promptCacheCaption, promptCacheRemainingMinutes, promptCacheWindow, type PromptCacheWindow } from '@/lib/promptCache'
+import { clockTime } from '@/lib/format'
 import type { ProviderInstance, ProviderUsage } from '../../../../packages/kybern-client/src/types.ts'
 import { HoverScopeProvider, useHover } from '../kit/hover.tsx'
 import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
@@ -53,7 +54,8 @@ export function StatusGlyph({ provider, running }: { provider: ProviderInstance;
     for (let i = s.open.blocks.length - 1; i >= 0; i--) if (s.open.blocks[i]?.kind === 'turn_end') return s.open.blocks[i]!.at
     return undefined
   })
-  const env = useComposer(s => s.settings?.providers[provider.kind]?.env)
+  const settings = useComposer(s => s.settings)
+  const env = settings?.providers[provider.kind]?.env
   const kind = provider.kind
   const instance = provider.instance ?? CLI_INSTANCE
   const accounts = useAccounts(kind)
@@ -74,9 +76,10 @@ export function StatusGlyph({ provider, running }: { provider: ProviderInstance;
   const entry = entries.find(item => item.provider === kind && item.instance === instance) ?? (!multi || account?.is_default ? global : undefined)
   const limits: Limits | undefined = entry?.limits.length ? entry.limits : multi ? undefined : usage?.limits
 
-  const window = promptCacheWindow(kind, env)
+  // The cache the daemon recorded for the latest turn; threads from an older daemon estimate from the turn's end.
+  const window = promptCacheWindow(kind, usage?.prompt_cache, activity, env)
   const [now, setNow] = useState(Date.now)
-  const remaining = activity && window ? promptCacheRemainingMinutes(activity, window.ttlMinutes, now) : 0
+  const remaining = window ? promptCacheRemainingMinutes(window, now) : 0
   // One 15 s clock, only while a warm cache has a minute count to keep right, and only while the window is visible.
   useEffect(() => {
     if (!remaining || running || pane.frozen) return
@@ -88,8 +91,10 @@ export function StatusGlyph({ provider, running }: { provider: ProviderInstance;
     const stop = onWindowVisibility(sync)
     sync()
     return () => { stop(); if (timer) clearInterval(timer) }
-  }, [remaining > 0, running, activity, pane.frozen])
-  const cache: CacheState | null = activity && window ? cacheState(!!running, remaining) : null
+  }, [remaining > 0, running, window?.expiresAt, pane.frozen])
+  const cache: CacheState | null = window ? cacheState(!!running, remaining) : null
+  const compactAtMs = window && !running ? idleCompactionAt(window, idleCompactionFor(settings, { kind, instance }), kind, usage?.context?.used_tokens ?? null, now) : null
+  const compactAt = compactAtMs === null ? null : clockTime(new Date(compactAtMs).toISOString())
   const context = contextUsage(usage?.context)
   // A project Coordinator refreshes its context at a budget: a tick on the ring and a row in the popover (spec §10.1).
   const thread = useApp(s => s.open.thread)
@@ -152,7 +157,7 @@ export function StatusGlyph({ provider, running }: { provider: ProviderInstance;
           style={{ ...popoverStyle(t), borderRadius: RADIUS, boxShadow: shadowXl(t), width: WIDTH, maxWidth: Math.max(WIDTH / 2, windowWidth - 32), padding: PAD, display: 'flex', flexDirection: 'column' }}
         >
           <HoverScopeProvider ctl={ctl as never}>
-            <UsagePopover usage={usage} kind={kind} promptProvider={window?.providerLabel ?? null} ttl={window?.ttlMinutes ?? 0} cache={cache} remaining={remaining} limits={limits} accountName={multi ? accountName : null} accountColor={account?.color ?? null} refresh={thread && refreshAt !== null ? { point: refreshAt, tick, disabled: !!running || rotating, onRefresh: () => void refreshContext(thread.id) } : undefined} />
+            <UsagePopover usage={usage} kind={kind} window={window} compactAt={compactAt} cache={cache} remaining={remaining} limits={limits} accountName={multi ? accountName : null} accountColor={account?.color ?? null} refresh={thread && refreshAt !== null ? { point: refreshAt, tick, disabled: !!running || rotating, onRefresh: () => void refreshContext(thread.id) } : undefined} />
           </HoverScopeProvider>
         </PopupLayer>
       )}
@@ -178,8 +183,8 @@ function useOpenClock(): number {
 function UsagePopover({
   usage,
   kind,
-  promptProvider,
-  ttl,
+  window,
+  compactAt,
   cache,
   remaining,
   limits,
@@ -189,8 +194,9 @@ function UsagePopover({
 }: {
   usage?: ProviderUsage
   kind: ProviderInstance['kind']
-  promptProvider: string | null
-  ttl: number
+  window: PromptCacheWindow | null
+  /** When Kybern compacts this thread if it stays idle (a local time), or `null`. */
+  compactAt: string | null
   cache: CacheState | null
   remaining: number
   limits?: Limits
@@ -203,13 +209,7 @@ function UsagePopover({
   const now = useOpenClock()
   const context = usage ? contextUsage(usage.context) : null
   const ctxTone = context && context.percent >= 95 ? 'critical' : context && context.percent >= 80 ? 'warning' : 'normal'
-  const detail = !promptProvider || !cache
-    ? null
-    : cache.state === 'active'
-      ? `${promptProvider} is actively using this conversation.`
-      : cache.state === 'warm'
-        ? `About ${remaining} minute${remaining === 1 ? '' : 's'} remain in the documented ${ttl}-minute warm window.`
-        : `The documented ${ttl}-minute warm window has elapsed.`
+  const detail = !window || !cache ? null : promptCacheCaption(window, cache.state, remaining, cache.state === 'warm' ? compactAt : null)
   const muted = ink(t, t.variant === 'dark' ? 0.58 : 0.598)
   return (
     <div testId="composer-status-content" style={{ display: 'flex', flexDirection: 'column', width: '100%', minWidth: 0 }}>
@@ -219,7 +219,7 @@ function UsagePopover({
           <Heading label="Prompt cache" muted={muted} style={{ marginBottom: 8 }}>
             <Label color={t.text} size={UI} lineHeight={UI * 1.5} weight={500}>{cacheValue(cache)}</Label>
           </Heading>
-          <Caption color={muted}>{`${detail} Actual retention may be longer.`}</Caption>
+          <Caption color={muted}>{detail}</Caption>
         </div>
       )}
       <div style={{ display: 'flex', flexDirection: 'column' }}>

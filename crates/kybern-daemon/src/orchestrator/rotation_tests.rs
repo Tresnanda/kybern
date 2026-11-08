@@ -68,7 +68,7 @@ impl Lead {
     async fn turn(&self, text: &str, used: u64, window: u64) -> ScriptedChild {
         self.fixture.orchestrator.send(self.thread.id, UserMessage::text(text)).await.unwrap();
         let child = self.session_with(text).await;
-        let usage = ProviderUsage { context: Some(ContextUsage { used_tokens: used, window_tokens: window }), limits: None };
+        let usage = ProviderUsage { context: Some(ContextUsage { used_tokens: used, window_tokens: window }), limits: None, prompt_cache: None };
         child.tx.send(DriverEvent::UsageUpdated(usage)).await.unwrap();
         child.finish(&format!("Answer to {text}")).await;
         eventually(|| async { (self.current().status == ThreadStatus::Idle).then_some(()) }).await;

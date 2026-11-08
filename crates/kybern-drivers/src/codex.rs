@@ -142,6 +142,15 @@ async fn codex_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<Prov
     models
 }
 
+/// `-c` overrides for this process only, ahead of the user's `config.toml`:
+/// Kybern's auto-compact threshold is Codex's `model_auto_compact_token_limit`.
+fn config_overrides(compaction: &crate::CompactionLaunch) -> Vec<String> {
+    compaction
+        .auto_compact_tokens
+        .map(|tokens| vec!["-c".to_string(), format!("model_auto_compact_token_limit={tokens}")])
+        .unwrap_or_default()
+}
+
 /// Read the account's current rate limits straight from the Codex app-server,
 /// without starting a thread. Lets the Usage page show live plan limits on
 /// demand instead of the last value a running turn happened to report.
@@ -461,7 +470,7 @@ impl AgentDriver for CodexDriver {
         }
         let bin = resolve(ProviderKind::Codex, config.binary.as_ref())?;
         let mut cmd = crate::binary::command(&bin).no_window();
-        cmd.current_dir(&config.cwd).arg("app-server");
+        cmd.current_dir(&config.cwd).args(config_overrides(&config.compaction)).arg("app-server");
         for (k, v) in config.env.iter().filter(|(k, _)| k.as_str() != crate::login_lend::BORROW_ENV) {
             cmd.env(k, v);
         }
@@ -590,7 +599,13 @@ impl AgentDriver for CodexDriver {
             if let Ok(value) = usage_session.call("account/rateLimits/read", json!({})).await
                 && let Some(limits) = parse_rate_limits(&value["rateLimits"])
             {
-                usage_session.emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage { context: None, limits: Some(limits) })).await;
+                usage_session
+                    .emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage {
+                        context: None,
+                        limits: Some(limits),
+                        prompt_cache: None,
+                    }))
+                    .await;
             }
         }));
         let monitor = session.clone();
@@ -1294,7 +1309,12 @@ impl CodexSession {
         match method {
             "account/rateLimits/updated" => {
                 if let Some(limits) = parse_rate_limits(&p["rateLimits"]) {
-                    self.emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage { context: None, limits: Some(limits) })).await;
+                    self.emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage {
+                        context: None,
+                        limits: Some(limits),
+                        prompt_cache: None,
+                    }))
+                    .await;
                 }
             }
             "turn/started" => {
@@ -1343,6 +1363,7 @@ impl CodexSession {
                     self.emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage {
                         context: Some(kybern_protocol::ContextUsage { used_tokens, window_tokens }),
                         limits: None,
+                        prompt_cache: None,
                     }))
                     .await;
                 }
@@ -2609,6 +2630,7 @@ wait
                 rewind: None,
                 binary: Some(binary),
                 env: HashMap::from([("REQUESTS".into(), requests.to_string_lossy().into_owned())]),
+                compaction: Default::default(),
             })
             .await
             .unwrap();
@@ -2659,6 +2681,7 @@ wait
             rewind: None,
             binary: Some(binary),
             env: HashMap::new(),
+            compaction: Default::default(),
         })
         .await;
         let error = match result {
@@ -3140,5 +3163,15 @@ mod orchestration_part_tests {
     fn thread_messages_and_agent_results_flatten_to_text_items() {
         let items = input_items(&orchestration_message());
         assert_flattened(&items.iter().filter_map(|i| i["text"].as_str()).collect::<Vec<_>>().join("\n"));
+    }
+}
+
+#[cfg(test)]
+mod compaction_tests {
+    #[test]
+    fn the_auto_compact_threshold_is_codexs_token_limit_for_this_process_only() {
+        let launch = |tokens| crate::CompactionLaunch { auto_compact_tokens: tokens, decline_resume_prompt: false };
+        assert!(super::config_overrides(&launch(None)).is_empty(), "no threshold keeps the user's config.toml");
+        assert_eq!(super::config_overrides(&launch(Some(400_000))), ["-c", "model_auto_compact_token_limit=400000"]);
     }
 }

@@ -357,6 +357,7 @@ for line in sys.stdin:
                     ("KYBERN_CURSOR_NODE".into(), host.display().to_string()),
                     ("KYBERN_CURSOR_SDK_DIR".into(), root.path().display().to_string()),
                 ]),
+                compaction: Default::default(),
             };
             // Other concurrently forked tests can briefly inherit an open script
             // descriptor on Linux, producing ETXTBSY until their child execs.

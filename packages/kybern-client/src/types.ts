@@ -1413,6 +1413,8 @@ export type EventPayload =
   | { kind: "session_imported"; provider: ProviderKind; session_id: string }
   | { kind: "provider_commands_updated"; commands: ProviderCommand[] }
   | { kind: "provider_usage_updated"; usage: ProviderUsage }
+  /** Kybern started this turn's compaction because the thread sat idle above 200K tokens and its cache was about to expire. */
+  | { kind: "idle_compaction_started"; context_tokens: number; cache_expires_at: DateTime; cache_ttl_seconds?: number | null }
   /** `problem` says what the failure means (signed out, rate limited, offline, ...) when Kybern could tell; events from before it existed have none. */
   | { kind: "turn_failed"; error: string; problem?: Problem | null }
   | {
@@ -2649,6 +2651,19 @@ export interface ProviderSettings {
   env: Record<string, string>;
   /** OMP profile overrides keyed by registered project path. */
   project_profiles?: Record<string, string>;
+  /** "Compact idle threads" per account, keyed by instance (`default` is the harness's own sign-in). Absent: the global choice. */
+  idle_compaction?: Record<string, IdleCompaction>;
+}
+
+/** When Kybern compacts a long thread left idle. */
+export type IdleCompaction = "when_you_return" | "before_cache_expires" | "never";
+
+/** Compaction for every harness, mapped to each harness's own setting at launch. */
+export interface CompactionSettings {
+  /** What happens to a long idle thread. Accounts can override it. */
+  idle: IdleCompaction;
+  /** Context size at which each agent compacts on its own (100 000-1 000 000). An agent absent here keeps its default. */
+  auto_compact_tokens?: Partial<Record<ProviderKind, number>>;
 }
 
 /** Limits on what the daemon keeps alive after work finishes. Minutes; 0 turns a limit off. */
@@ -2699,6 +2714,8 @@ export interface Settings {
   preview_allowed_folders?: string[];
   /** Joining and staying joined to the machine network. Absent from a daemon older than the network. */
   network?: NetworkSettings;
+  /** When long threads are compacted. Absent from a daemon older than 0.24 (When you return, harness thresholds). */
+  compaction?: CompactionSettings;
 }
 
 /** Limits for `kybern_agent_delegate`, read each time an agent delegates. */
@@ -5242,6 +5259,18 @@ export interface ProviderCommand { name: string; description: string; aliases?: 
 export interface ProviderUsage {
   context?: { used_tokens: number; window_tokens: number };
   limits?: { name: string; used_percent: number; window_minutes: number | null; resets_at: number | null }[];
+  /** The prompt cache the latest turn's last request left. Absent when the harness reports nothing to estimate from. */
+  prompt_cache?: PromptCache;
+}
+
+/** How long the provider keeps a turn's prompt cache, and when it lapses. */
+export interface PromptCache {
+  /** Seconds an entry lives after a request. Absent: unknown. */
+  ttl_seconds?: number | null;
+  /** When the cache of the turn's last request expires. Absent: unknown. */
+  expires_at?: DateTime | null;
+  /** The provider's documented default rather than a value read from the response. */
+  estimated?: boolean;
 }
 
 export type IntegrationKind = "plugin" | "connector";

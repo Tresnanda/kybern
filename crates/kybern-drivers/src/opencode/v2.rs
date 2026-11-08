@@ -274,6 +274,11 @@ pub(super) async fn spawn(bin: &Path, config: SessionConfig) -> Result<SpawnedSe
         }
         None => None,
     };
+    let native_config = super::with_compaction(
+        native_config,
+        config.env.get("OPENCODE_CONFIG_CONTENT"),
+        super::compaction_config(config.model.as_deref(), config.compaction.auto_compact_tokens),
+    )?;
     if let Some(native_config) = native_config.as_deref() {
         extra.push(("OPENCODE_CONFIG_CONTENT", native_config));
     }
@@ -675,6 +680,7 @@ impl OpencodeSession {
                     Some((format!("{}/{}", model["providerID"].as_str()?, model["id"].as_str()?), window))
                 })
                 .collect();
+            super::remember_windows(&windows);
             self.state.lock().await.context_windows = windows;
         }
     }
@@ -862,6 +868,7 @@ impl OpencodeSession {
                     self.emit(DriverEvent::UsageUpdated(ProviderUsage {
                         context: Some(ContextUsage { used_tokens, window_tokens }),
                         limits: None,
+                        prompt_cache: None,
                     }))
                     .await;
                 }

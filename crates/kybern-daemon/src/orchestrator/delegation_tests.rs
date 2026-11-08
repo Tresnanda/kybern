@@ -45,6 +45,11 @@ impl AgentSession for ScriptedSession {
         Ok(())
     }
 
+    async fn compact(&self) -> kybern_drivers::Result<()> {
+        self.messages.lock().await.push(UserMessage::text("/compact"));
+        Ok(())
+    }
+
     async fn steer(&self, _message_id: &str, message: &UserMessage) -> kybern_drivers::Result<()> {
         self.messages.lock().await.push(message.clone());
         Ok(())

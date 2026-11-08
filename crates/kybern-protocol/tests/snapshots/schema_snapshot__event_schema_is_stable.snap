@@ -988,6 +988,41 @@ expression: schema_for!(ThreadEvent)
       ]
     },
     {
+      "description": "Kybern started this turn's compaction itself: the thread sat idle above\n200 000 tokens and its prompt cache was about to expire (\"Compact idle\nthreads: Before the cache expires\"). Clients show a notice row instead of\nthe `/compact` message and send no notification for the turn.",
+      "type": "object",
+      "properties": {
+        "context_tokens": {
+          "description": "Context size when Kybern decided to compact.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cache_expires_at": {
+          "description": "When the prompt cache would have expired.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "cache_ttl_seconds": {
+          "description": "How long that cache lives after a request, when known.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "kind": {
+          "type": "string",
+          "const": "idle_compaction_started"
+        }
+      },
+      "required": [
+        "kind",
+        "context_tokens",
+        "cache_expires_at"
+      ]
+    },
+    {
       "description": "Provider emitted an informational notice (compaction, status, warnings).",
       "type": "object",
       "properties": {
@@ -3713,6 +3748,17 @@ expression: schema_for!(ThreadEvent)
           "items": {
             "$ref": "#/$defs/UsageLimit"
           }
+        },
+        "prompt_cache": {
+          "description": "The prompt cache the last request of the latest turn left warm. Absent\nfor harnesses that report nothing Kybern can estimate from.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PromptCache"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },
@@ -3765,6 +3811,34 @@ expression: schema_for!(ThreadEvent)
         "name",
         "used_percent"
       ]
+    },
+    "PromptCache": {
+      "description": "How long the provider keeps a turn's prompt cache, and when it lapses.",
+      "type": "object",
+      "properties": {
+        "ttl_seconds": {
+          "description": "Seconds an entry lives after a request reads or writes it. `None`: unknown\n(Claude served the request fully from cache and the session never said).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "expires_at": {
+          "description": "When the cache written or read by the turn's last request expires.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "estimated": {
+          "description": "The TTL is the provider's documented default, not read from the response.",
+          "type": "boolean",
+          "default": false
+        }
+      }
     },
     "NoticeLevel": {
       "type": "string",

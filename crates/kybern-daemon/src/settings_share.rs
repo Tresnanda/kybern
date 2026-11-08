@@ -87,6 +87,7 @@ classify!(SETTINGS_FIELDS, every_settings_field_is_classified, Settings, {
     ask_deadlines => Shared,
     preview_allowed_folders => PerMachine,
     network => PerMachine,
+    compaction => Shared,
 });
 
 classify!(PROVIDER_FIELDS, every_provider_field_is_classified, ProviderSettings, {
@@ -97,6 +98,7 @@ classify!(PROVIDER_FIELDS, every_provider_field_is_classified, ProviderSettings,
     model => Shared,
     env => PerMachine,
     project_profiles => PerMachine,
+    idle_compaction => PerMachine,
 });
 
 /// The path of a provider's shared default model.

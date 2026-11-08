@@ -283,6 +283,8 @@ async fn serve() -> Result<()> {
     // Keep the port reserved while it runs, but do not serve requests or publish
     // daemon.port to general clients until the state is consistent.
     state.orchestrator.recover_after_restart().await?;
+    // Compactions planned before the restart: plan again from each thread's recorded cache expiry.
+    state.orchestrator.resume_idle_compactions().await?;
 
     let orphans = account_login::orphaned_staging(&state);
     if !orphans.is_empty() {

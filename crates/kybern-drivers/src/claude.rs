@@ -38,6 +38,8 @@ const MIN_VERSION: (u64, u64, u64) = (2, 1, 0);
 /// show those labels drawing the 5-hour window about 1.8× faster per token than any other label.
 /// Anthropic has not confirmed this, so the fix is only to name Kybern honestly.
 pub(crate) const ENTRYPOINT_ENV: &str = "CLAUDE_CODE_ENTRYPOINT";
+/// Claude Code's auto-compact window (100k..=1M tokens), ahead of its `autoCompactWindow` setting.
+pub(crate) const AUTO_COMPACT_WINDOW_ENV: &str = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
 pub(crate) const KYBERN_ENTRYPOINT: &str = "kybern";
 
 /// The label for a Claude process: a value set in the session's own environment wins; anything
@@ -228,6 +230,11 @@ impl AgentDriver for ClaudeDriver {
         // still turn them off.
         cmd.env("CLAUDE_CODE_ARTIFACT", "1");
         cmd.env("CLAUDE_CODE_ARTIFACT_AUTO_OPEN", "0");
+        // Kybern's auto-compact threshold. Claude reads it before its own
+        // `autoCompactWindow` setting; a value in the account's env still wins.
+        if let Some(tokens) = config.compaction.auto_compact_tokens {
+            cmd.env(AUTO_COMPACT_WINDOW_ENV, tokens.to_string());
+        }
         for (k, v) in config.env.iter().filter(|(k, _)| k.as_str() != crate::login_lend::BORROW_ENV) {
             cmd.env(k, v);
         }
@@ -279,6 +286,7 @@ impl AgentDriver for ClaudeDriver {
             child_inbox: Mutex::new(ChildInbox::default()),
             session_id: Mutex::new(session_id.clone()),
             catalog,
+            decline_resume_prompt: config.compaction.decline_resume_prompt,
             _native_mcp_config: native_mcp_config,
         });
 
@@ -845,6 +853,11 @@ struct TurnState {
     /// failure the daemon can recover from (it borrows again, resumes and sends the message once more).
     lent_login: bool,
     last_context: Option<(String, u64)>,
+    /// The prompt-cache TTL this session's requests last reported. The TTL is the
+    /// account's, so it covers a later request served fully from cache.
+    cache_ttl: Option<u64>,
+    /// The latest root API request: its message id, when it started, and the TTL it reported.
+    last_request: Option<(String, chrono::DateTime<chrono::Utc>, Option<u64>)>,
     /// Accumulated final text per API message id, so multi-block messages coalesce.
     text: HashMap<String, String>,
     thinking: HashMap<String, String>,
@@ -876,6 +889,31 @@ struct TurnState {
 const MAX_AGENT_ROLES: usize = 256;
 
 impl TurnState {
+    /// A root API request: the first sighting of a message id dates it.
+    fn note_request(&mut self, message_id: &str, at: chrono::DateTime<chrono::Utc>, ttl: Option<u64>) {
+        if ttl.is_some() {
+            self.cache_ttl = ttl;
+        }
+        match self.last_request.as_mut() {
+            Some((id, _, known)) if id == message_id => {
+                if ttl.is_some() {
+                    *known = ttl;
+                }
+            }
+            _ => self.last_request = Some((message_id.to_string(), at, ttl)),
+        }
+    }
+
+    /// The prompt cache the latest request left: its own TTL, else the one this
+    /// session reported before, else unknown. `None` before any request.
+    fn prompt_cache(&self) -> Option<PromptCache> {
+        let (_, at, ttl) = self.last_request.as_ref()?;
+        Some(match ttl.or(self.cache_ttl) {
+            Some(ttl) => PromptCache::from_request(ttl, *at, false),
+            None => PromptCache::unknown(),
+        })
+    }
+
     fn remember_agent_role(&mut self, tool_call_id: &str, role: &str) {
         self.agent_roles.retain(|(id, _)| id != tool_call_id);
         if self.agent_roles.len() >= MAX_AGENT_ROLES {
@@ -984,6 +1022,7 @@ mod child_message_tests {
             child_inbox: Mutex::new(ChildInbox::default()),
             session_id: Mutex::new("native-session".into()),
             catalog: None,
+            decline_resume_prompt: false,
             _native_mcp_config: None,
         });
         let handle = SessionHandle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
@@ -1035,6 +1074,7 @@ mod child_message_tests {
             child_inbox: Mutex::new(ChildInbox::default()),
             session_id: Mutex::new("test".into()),
             catalog: None,
+            decline_resume_prompt: false,
             _native_mcp_config: None,
         };
         session.child_inbox.lock().await.active.insert("child".into());
@@ -1080,6 +1120,8 @@ struct ClaudeSession {
     /// Where this session's `initialize` catalog is recorded, keeping the
     /// probe's cached catalog fresh without a separate process.
     catalog: Option<(Arc<ModelCatalog>, CatalogKey)>,
+    /// Answer the resume offer with "Don't ask again" ("Compact idle threads: Never").
+    decline_resume_prompt: bool,
     _native_mcp_config: Option<NativeMcpConfig>,
 }
 
@@ -1200,6 +1242,7 @@ impl ClaudeSession {
                             window_minutes,
                             resets_at: info.get("resetsAt").and_then(Value::as_i64),
                         }]),
+                        prompt_cache: None,
                     }))
                     .await;
                 }
@@ -1258,6 +1301,11 @@ impl ClaudeSession {
                         data: None,
                     })
                     .await;
+                    return;
+                }
+                if self.decline_resume_prompt {
+                    // "Compact idle threads: Never": keep the history and stop asking.
+                    let _ = self.respond_control(&request_id, Ok(json!({ "behavior": "completed", "result": "never" }))).await;
                     return;
                 }
                 self.pending_permissions.lock().await.insert(request_id.clone(), (json!({ "_kybern_dialog": req }), vec![]));
@@ -1367,6 +1415,12 @@ impl ClaudeSession {
             }
             "compact_boundary" => {
                 let meta = &v["compact_metadata"];
+                // The conversation now starts from the summary: report that size, not the history's.
+                if let Some(after) = meta.get("post_tokens").and_then(Value::as_u64)
+                    && let Some((_, used)) = self.state.lock().await.last_context.as_mut()
+                {
+                    *used = after;
+                }
                 self.emit(DriverEvent::Notice {
                     level: NoticeLevel::Info,
                     text: match meta.get("post_tokens").and_then(Value::as_u64) {
@@ -1469,6 +1523,10 @@ impl ClaudeSession {
             "message_start" => {
                 if parent.is_none() {
                     self.emit(DriverEvent::ResponseStarted).await;
+                    if let Some(id) = ev.pointer("/message/id").and_then(Value::as_str) {
+                        let ttl = ev.pointer("/message/usage").and_then(cache_ttl_seconds);
+                        self.state.lock().await.note_request(id, chrono::Utc::now(), ttl);
+                    }
                 }
                 if let Some(id) = ev.pointer("/message/id").and_then(|i| i.as_str()) {
                     let mut st = self.state.lock().await;
@@ -1537,7 +1595,11 @@ impl ClaudeSession {
                 .iter()
                 .map(|key| usage.get(*key).and_then(Value::as_u64).unwrap_or(0))
                 .sum();
-            self.state.lock().await.last_context = Some((model.into(), used));
+            let mut st = self.state.lock().await;
+            st.last_context = Some((model.into(), used));
+            if let Some(id) = msg.get("id").and_then(Value::as_str) {
+                st.note_request(id, chrono::Utc::now(), cache_ttl_seconds(usage));
+            }
         }
 
         let message_id = msg.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
@@ -1633,19 +1695,20 @@ impl ClaudeSession {
     }
 
     async fn handle_result(&self, v: &Value) {
-        let context = self.state.lock().await.last_context.clone();
-        if let Some((model, used_tokens)) = context
-            && let Some(window_tokens) = v
+        let (context, prompt_cache) = {
+            let st = self.state.lock().await;
+            (st.last_context.clone(), st.prompt_cache())
+        };
+        let context = context.and_then(|(model, used_tokens)| {
+            let window_tokens = v
                 .get("modelUsage")
                 .and_then(|models| models.get(&model))
                 .and_then(|model| model.get("contextWindow"))
-                .and_then(Value::as_u64)
-        {
-            self.emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage {
-                context: Some(kybern_protocol::ContextUsage { used_tokens, window_tokens }),
-                limits: None,
-            }))
-            .await;
+                .and_then(Value::as_u64)?;
+            Some(kybern_protocol::ContextUsage { used_tokens, window_tokens })
+        });
+        if context.is_some() || prompt_cache.is_some() {
+            self.emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage { context, limits: None, prompt_cache })).await;
         }
 
         let subtype = v.get("subtype").and_then(|s| s.as_str()).unwrap_or("");
@@ -1707,6 +1770,19 @@ impl ClaudeSession {
             _ => DriverEvent::turn_failed(ProviderKind::ClaudeCode, if errors.is_empty() { format!("claude: {subtype}") } else { errors }),
         };
         self.emit(ev).await;
+    }
+}
+
+/// The prompt-cache TTL an API usage block reports: the tier its request wrote.
+/// A request served fully from cache writes nothing and says nothing.
+fn cache_ttl_seconds(usage: &Value) -> Option<u64> {
+    let written = |key: &str| usage.pointer(&format!("/cache_creation/{key}")).and_then(Value::as_u64).unwrap_or(0) > 0;
+    if written("ephemeral_1h_input_tokens") {
+        Some(60 * 60)
+    } else if written("ephemeral_5m_input_tokens") {
+        Some(5 * 60)
+    } else {
+        None
     }
 }
 
@@ -2154,6 +2230,7 @@ mod tests {
             child_inbox: Mutex::new(ChildInbox::default()),
             session_id: Mutex::new("test".into()),
             catalog: None,
+            decline_resume_prompt: false,
             _native_mcp_config: None,
         });
         let handle = SessionHandle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
@@ -2189,6 +2266,7 @@ mod tests {
             child_inbox: Mutex::new(ChildInbox::default()),
             session_id: Mutex::new("test".into()),
             catalog: None,
+            decline_resume_prompt: false,
             _native_mcp_config: None,
         });
         let handle = SessionHandle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
@@ -2276,6 +2354,7 @@ mod tests {
             child_inbox: Mutex::new(ChildInbox::default()),
             session_id: Mutex::new("test".into()),
             catalog: None,
+            decline_resume_prompt: false,
             _native_mcp_config: None,
         });
         for line in include_str!("../tests/fixtures/claude-subagent-frames.ndjson").lines() {
@@ -2338,6 +2417,7 @@ mod tests {
             child_inbox: Mutex::new(ChildInbox::default()),
             session_id: Mutex::new("test".into()),
             catalog: None,
+            decline_resume_prompt: false,
             _native_mcp_config: None,
         });
         let frame = |parent: Option<&str>, event: Value| json!({"type":"stream_event", "parent_tool_use_id":parent, "event":event});
@@ -2380,6 +2460,7 @@ mod tests {
             child_inbox: Mutex::new(ChildInbox::default()),
             session_id: Mutex::new("test".into()),
             catalog: None,
+            decline_resume_prompt: false,
             _native_mcp_config: None,
         });
         let handle = SessionHandle(session.clone(), crate::ndjson::SessionLifetime::new(session.child.clone()));
@@ -2548,6 +2629,7 @@ mod tests {
                     rewind: None,
                     binary: Some(binary),
                     env: Default::default(),
+                    compaction: Default::default(),
                 })
                 .await
                 .unwrap();
@@ -2617,6 +2699,7 @@ mod tests {
                     rewind: None,
                     binary: Some(binary),
                     env: Default::default(),
+                    compaction: Default::default(),
                 })
                 .await
                 .unwrap();
@@ -2661,6 +2744,7 @@ mod tests {
                     rewind: None,
                     binary: Some(binary.clone()),
                     env: Default::default(),
+                    compaction: Default::default(),
                 })
                 .await
                 .unwrap();
@@ -2699,6 +2783,7 @@ mod tests {
             child_inbox: Mutex::new(ChildInbox::default()),
             session_id: Mutex::new("test".into()),
             catalog: None,
+            decline_resume_prompt: false,
             _native_mcp_config: None,
         };
         let command = "for d in a; do rm -f $P/$d/*-[0-9].png; done";
@@ -2742,6 +2827,7 @@ mod tests {
                     rewind: None,
                     binary: Some(binary),
                     env: env.map(|value| ("CLAUDE_CODE_ARTIFACT".to_string(), value.to_string())).into_iter().collect(),
+                    compaction: Default::default(),
                 })
                 .await
                 .unwrap();
@@ -2806,6 +2892,7 @@ mod tests {
             child_inbox: Mutex::new(ChildInbox::default()),
             session_id: Mutex::new("test".into()),
             catalog: None,
+            decline_resume_prompt: false,
             _native_mcp_config: None,
         });
         let launch = |id: &str, role: Option<&str>| {
@@ -2962,6 +3049,166 @@ mod orchestration_part_tests {
             assert_eq!(value["mcpServers"].as_object().unwrap().len(), if enforced { 2 } else { 1 });
             assert_eq!(value["mcpServers"].get("memory").is_some(), enforced);
             assert!(value["mcpServers"].get("other").is_none());
+        }
+    }
+}
+
+#[cfg(test)]
+mod compaction_tests {
+    use super::*;
+
+    fn session(decline_resume_prompt: bool) -> (Arc<ClaudeSession>, Arc<NdjsonChild>, mpsc::Receiver<DriverEvent>) {
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
+        let (events, rx) = mpsc::channel(32);
+        let session = Arc::new(ClaudeSession {
+            child: child.clone(),
+            events,
+            pending_control: Mutex::new(HashMap::new()),
+            pending_permissions: Mutex::new(HashMap::new()),
+            state: Mutex::new(TurnState::default()),
+            child_inbox: Mutex::new(ChildInbox::default()),
+            session_id: Mutex::new("test".into()),
+            catalog: None,
+            decline_resume_prompt,
+            _native_mcp_config: None,
+        });
+        (session, child, rx)
+    }
+
+    fn usage(one_hour: u64, five_minutes: u64) -> Value {
+        json!({ "input_tokens": 3, "cache_read_input_tokens": 90_000, "cache_creation_input_tokens": one_hour + five_minutes,
+            "cache_creation": { "ephemeral_1h_input_tokens": one_hour, "ephemeral_5m_input_tokens": five_minutes } })
+    }
+
+    /// One root request, then the turn's result; returns the prompt cache the result reported.
+    async fn turn(session: &ClaudeSession, rx: &mut mpsc::Receiver<DriverEvent>, id: &str, usage: Value) -> Option<PromptCache> {
+        session.handle_frame(json!({"type":"stream_event", "event":{"type":"message_start", "message":{"id": id, "usage": usage}}})).await;
+        session
+            .handle_frame(json!({"type":"assistant", "message":{"id": id, "model":"claude-opus-5-5", "usage": usage,
+                "content":[{"type":"text","text":"done"}]}}))
+            .await;
+        session.handle_frame(json!({"type":"result", "subtype":"success", "total_cost_usd":0, "duration_ms":1, "usage":{}})).await;
+        let mut cache = None;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                DriverEvent::UsageUpdated(usage) => cache = usage.prompt_cache.or(cache),
+                DriverEvent::TurnCompleted { .. } => return cache,
+                _ => {}
+            }
+        }
+        panic!("the turn did not complete")
+    }
+
+    #[test]
+    fn the_cache_ttl_is_the_tier_the_request_wrote() {
+        assert_eq!(cache_ttl_seconds(&usage(1200, 0)), Some(3600));
+        assert_eq!(cache_ttl_seconds(&usage(0, 1200)), Some(300));
+        assert_eq!(cache_ttl_seconds(&usage(10, 1200)), Some(3600), "a request that wrote 1 h entries keeps them for 1 h");
+        assert_eq!(cache_ttl_seconds(&usage(0, 0)), None, "a fully cached request says nothing");
+        assert_eq!(cache_ttl_seconds(&json!({ "cache_creation_input_tokens": 50 })), None, "no breakdown, no TTL");
+    }
+
+    #[tokio::test]
+    async fn turns_record_the_expiry_of_their_last_request() {
+        let (claude, child, mut rx) = session(false);
+        let before = chrono::Utc::now();
+        // A subscription session writes 1 h entries.
+        let cache = turn(&claude, &mut rx, "m1", usage(4_000, 0)).await.expect("a cache");
+        assert_eq!((cache.ttl_seconds, cache.estimated), (Some(3600), false));
+        let expires = cache.expires_at.unwrap();
+        assert!(expires >= before + chrono::Duration::seconds(3600) && expires <= chrono::Utc::now() + chrono::Duration::seconds(3600));
+        // The next turn is served fully from cache: the session's TTL still applies, from this request.
+        let cache = turn(&claude, &mut rx, "m2", usage(0, 0)).await.expect("a cache");
+        assert_eq!(cache.ttl_seconds, Some(3600));
+        assert!(cache.expires_at.unwrap() >= expires);
+        child.close().await;
+
+        // An API key writes 5 min entries.
+        let (claude, child, mut rx) = session(false);
+        assert_eq!(turn(&claude, &mut rx, "k1", usage(0, 900)).await.unwrap().ttl_seconds, Some(300));
+        child.close().await;
+
+        // A session whose every request was fully cached never said: unknown, not a guess.
+        let (claude, child, mut rx) = session(false);
+        assert_eq!(turn(&claude, &mut rx, "c1", usage(0, 0)).await, Some(PromptCache::unknown()));
+        child.close().await;
+    }
+
+    #[tokio::test]
+    async fn compaction_reports_the_summarys_size_as_the_context() {
+        let (claude, child, mut rx) = session(false);
+        let _ = turn(&claude, &mut rx, "m1", usage(4_000, 0)).await;
+        claude
+            .handle_frame(json!({"type":"system", "subtype":"compact_boundary",
+                "compact_metadata":{"trigger":"manual","pre_tokens":312_000,"post_tokens":38_000}}))
+            .await;
+        claude
+            .handle_frame(json!({"type":"result", "subtype":"success", "total_cost_usd":0, "duration_ms":1, "usage":{},
+                "modelUsage":{"claude-opus-5-5":{"contextWindow":1_000_000}}}))
+            .await;
+        let mut context = None;
+        while let Ok(event) = rx.try_recv() {
+            if let DriverEvent::UsageUpdated(usage) = event {
+                context = usage.context.or(context);
+            }
+        }
+        assert_eq!(context.map(|context| context.used_tokens), Some(38_000));
+        child.close().await;
+    }
+
+    #[tokio::test]
+    async fn never_answers_the_resume_offer_with_dont_ask_again_without_asking() {
+        let (claude, child, mut rx) = session(true);
+        claude
+            .handle_control_request(&json!({ "request_id": "resume", "request": { "subtype": "request_user_dialog",
+                "dialog_kind": "resume_return",
+                "payload": { "sessionAgeMinutes": 90, "estimatedTokens": 240_000, "hasPrecomputedSummary": false } } }))
+            .await;
+        let response = tokio::time::timeout(std::time::Duration::from_secs(1), async { child.lines.lock().await.recv().await.unwrap() })
+            .await
+            .unwrap();
+        assert_eq!(response["response"]["request_id"], "resume");
+        assert_eq!(response["response"]["response"], json!({ "behavior": "completed", "result": "never" }));
+        assert!(rx.try_recv().is_err(), "the user is not asked");
+        assert!(claude.pending_permissions.lock().await.is_empty());
+        child.close().await;
+    }
+
+    #[tokio::test]
+    async fn the_auto_compact_threshold_reaches_claude_unless_the_account_sets_its_own() {
+        use crate::{AgentDriver, CompactionLaunch, SessionConfig};
+        for (threshold, account, expected) in
+            [(None, None, ""), (Some(300_000), None, "300000"), (Some(300_000), Some("500k"), "500k"), (None, Some("500k"), "500k")]
+        {
+            let root = tempfile::tempdir().unwrap();
+            let spawned = ClaudeDriver::default()
+                .spawn(SessionConfig {
+                    cwd: root.path().into(),
+                    model: None,
+                    effort: None,
+                    permission_mode: PermissionMode::FullAccess,
+                    native_tool_bridge: None,
+                    resume_session_id: None,
+                    resume_lacks_instructions: false,
+                    fork: false,
+                    rewind: None,
+                    binary: Some(crate::test_process::binary().to_path_buf()),
+                    env: account.map(|value| (AUTO_COMPACT_WINDOW_ENV.to_string(), value.to_string())).into_iter().collect(),
+                    compaction: CompactionLaunch { auto_compact_tokens: threshold, decline_resume_prompt: false },
+                })
+                .await
+                .unwrap();
+            let env_path = root.path().join("env.json");
+            tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                while !env_path.exists() {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let seen: Value = serde_json::from_slice(&std::fs::read(env_path).unwrap()).unwrap();
+            spawned.session.close().await.unwrap();
+            assert_eq!(seen[AUTO_COMPACT_WINDOW_ENV], expected, "threshold {threshold:?}, account {account:?}");
         }
     }
 }

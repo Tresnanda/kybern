@@ -459,7 +459,7 @@ async fn run_connection(
                         let _ = ev.send(DriverEvent::CommandsUpdated(commands)).await;
                     }
                     SessionUpdate::UsageUpdate(u) => {
-                        let _ = ev.send(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage { context: Some(kybern_protocol::ContextUsage { used_tokens: u.used, window_tokens: u.size }), limits: None })).await;
+                        let _ = ev.send(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage { context: Some(kybern_protocol::ContextUsage { used_tokens: u.used, window_tokens: u.size }), limits: None, prompt_cache: None })).await;
                     }
                     _ => {}
                 }
