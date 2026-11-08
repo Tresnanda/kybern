@@ -146,3 +146,58 @@ async fn codex_turns_record_the_estimated_cache_and_claude_turns_keep_their_own(
     let grok = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::GrokBuild);
     assert_eq!(fixture.orchestrator.estimated_prompt_cache(&grok), None);
 }
+
+#[tokio::test]
+async fn a_new_turn_or_archiving_cancels_the_planned_compaction() {
+    let (fixture, spawned) = idle_fixture(IdleCompaction::BeforeCacheExpires);
+    let thread = fixture.thread(ThreadStatus::Idle);
+    finished_turn(&fixture, &thread, "first", 250_000, Some(chrono::Utc::now() + chrono::Duration::minutes(30)));
+    fixture.orchestrator.resume_idle_compactions().await.unwrap();
+    eventually(|| async { fixture.orchestrator.inner.idle_compactions.planned(thread.id).then_some(()) }).await;
+
+    // The user came back first: their turn wins and the plan is gone.
+    fixture.orchestrator.send(thread.id, UserMessage::text("back again")).await.unwrap();
+    assert!(!fixture.orchestrator.inner.idle_compactions.planned(thread.id));
+    // A plan that was already due finds the user's turn running and stands aside.
+    let facts = fixture.orchestrator.idle_compaction_facts(thread.id).await.unwrap();
+    assert_eq!(super::idle_compaction::plan(&facts, chrono::Utc::now()).map(|_| ()), Err(super::idle_compaction::Skip::Busy));
+    let child = eventually(|| async { spawned.lock().unwrap().first().cloned() }).await;
+    child.tx.send(completed_response(StopReason::Completed)).await.unwrap();
+    eventually(|| async { (fixture.store.thread_get(thread.id).unwrap().unwrap().status == ThreadStatus::Idle).then_some(()) }).await;
+
+    let other = fixture.thread(ThreadStatus::Idle);
+    finished_turn(&fixture, &other, "other", 250_000, Some(chrono::Utc::now() + chrono::Duration::minutes(30)));
+    fixture.orchestrator.resume_idle_compactions().await.unwrap();
+    eventually(|| async { fixture.orchestrator.inner.idle_compactions.planned(other.id).then_some(()) }).await;
+    fixture.orchestrator.archive_thread(other.id).await.unwrap();
+    assert!(!fixture.orchestrator.inner.idle_compactions.planned(other.id));
+}
+
+#[tokio::test]
+async fn a_due_timer_sends_once_and_its_own_turn_start_does_not_stop_it() {
+    let (fixture, spawned) = idle_fixture(IdleCompaction::BeforeCacheExpires);
+    let thread = fixture.thread(ThreadStatus::Idle);
+    // Less than the lead time left: the compaction is due at once.
+    finished_turn(&fixture, &thread, "first", 250_000, Some(chrono::Utc::now() + chrono::Duration::seconds(100)));
+    fixture.orchestrator.resume_idle_compactions().await.unwrap();
+    let marked = || {
+        fixture
+            .store
+            .events_for_thread(thread.id)
+            .unwrap()
+            .iter()
+            .filter(|event| matches!(event.payload, EventPayload::IdleCompactionStarted { .. }))
+            .count()
+    };
+    eventually(|| async { (marked() == 1).then_some(()) }).await;
+    assert!(!fixture.orchestrator.inner.idle_compactions.planned(thread.id), "the fired timer left the map");
+    let child = eventually(|| async { spawned.lock().unwrap().first().cloned() }).await;
+    eventually(|| async { child.messages.lock().await.last().is_some_and(|m| m.plain_text() == "/compact").then_some(()) }).await;
+    child.tx.send(completed_response(StopReason::Completed)).await.unwrap();
+    eventually(|| async { (fixture.store.thread_get(thread.id).unwrap().unwrap().status == ThreadStatus::Idle).then_some(()) }).await;
+    // A restart right after plans nothing: the latest turn was the compaction.
+    fixture.orchestrator.resume_idle_compactions().await.unwrap();
+    tokio::task::yield_now().await;
+    assert_eq!(marked(), 1);
+    assert!(!fixture.orchestrator.inner.idle_compactions.planned(thread.id));
+}

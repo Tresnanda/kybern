@@ -40,7 +40,7 @@ pub(super) struct Facts {
     pub mode: IdleCompaction,
     pub kind: ProviderKind,
     pub status: ThreadStatus,
-    /// A provider subagent's or a Coordinator's thread (Coordinators refresh their context instead).
+    /// A provider subagent's, inbound proxy's, moved or Coordinator thread.
     pub excluded: bool,
     /// The latest turn and whether it was a compaction.
     pub latest_turn: Option<(TurnId, bool)>,
@@ -177,27 +177,53 @@ pub(super) fn estimated_ttl_seconds(kind: ProviderKind, model: Option<&str>, env
     }
 }
 
-/// Planned compactions by thread. A new plan replaces the old one's timer.
+/// Planned compactions by thread: at most one timer each. A new plan replaces
+/// the old one's timer; a new turn or archiving the thread cancels it; a timer
+/// that fires takes itself out before it sends.
 #[derive(Default)]
 pub(super) struct IdleCompactions {
-    timers: Mutex<HashMap<ThreadId, tokio::task::JoinHandle<()>>>,
+    timers: Mutex<HashMap<ThreadId, (u64, tokio::task::JoinHandle<()>)>>,
+    generation: std::sync::atomic::AtomicU64,
 }
 
 impl IdleCompactions {
-    fn replace(&self, thread_id: ThreadId, timer: Option<tokio::task::JoinHandle<()>>) {
-        let mut timers = self.timers.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<ThreadId, (u64, tokio::task::JoinHandle<()>)>> {
+        self.timers.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// A number for the next timer, so a firing timer removes only itself.
+    fn next_generation(&self) -> u64 {
+        self.generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn replace(&self, thread_id: ThreadId, timer: Option<(u64, tokio::task::JoinHandle<()>)>) {
         let old = match timer {
-            Some(timer) => timers.insert(thread_id, timer),
-            None => timers.remove(&thread_id),
+            Some(timer) => self.lock().insert(thread_id, timer),
+            None => self.lock().remove(&thread_id),
         };
-        if let Some(old) = old {
+        if let Some((_, old)) = old {
             old.abort();
         }
     }
 
+    /// Drop the thread's planned compaction: a turn started, or the thread was archived.
+    pub(super) fn cancel(&self, thread_id: ThreadId) {
+        self.replace(thread_id, None);
+    }
+
+    /// A due timer leaves the map without aborting itself; a newer plan stays.
+    fn take_due(&self, thread_id: ThreadId, generation: u64) -> bool {
+        let mut timers = self.lock();
+        if timers.get(&thread_id).is_some_and(|(current, _)| *current == generation) {
+            timers.remove(&thread_id);
+            return true;
+        }
+        false
+    }
+
     #[cfg(test)]
     pub(super) fn planned(&self, thread_id: ThreadId) -> bool {
-        self.timers.lock().unwrap().get(&thread_id).is_some_and(|timer| !timer.is_finished())
+        self.lock().get(&thread_id).is_some_and(|(_, timer)| !timer.is_finished())
     }
 }
 
@@ -237,7 +263,12 @@ impl Orchestrator {
             mode,
             kind: thread.provider.kind,
             status: thread.status,
-            excluded: thread.subagent.is_some() || thread.coordinator_project_id.is_some(),
+            // Subagents and inbound proxies take no messages here, a moved thread lives on
+            // elsewhere, and Coordinators refresh their context instead.
+            excluded: thread.subagent.is_some()
+                || thread.coordinator_project_id.is_some()
+                || thread.inbound.is_some()
+                || thread.moved.is_some(),
             latest_turn: None,
             waiting_on_user: false,
             background_work: false,
@@ -286,14 +317,26 @@ impl Orchestrator {
                 Ok(planned) => {
                     tracing::debug!(%thread_id, fire_at = %planned.fire_at, "planned an idle compaction");
                     let runner = this.clone();
+                    let generation = this.inner.idle_compactions.next_generation();
+                    // Hold the timer until it is in the map, so it can always find itself there.
+                    let (registered, ready) = tokio::sync::oneshot::channel::<()>();
                     let timer = tokio::spawn(async move {
+                        if ready.await.is_err() {
+                            return;
+                        }
                         let wait = (planned.fire_at - Utc::now()).to_std().unwrap_or_default();
                         tokio::time::sleep(wait).await;
+                        // Out of the map before sending: the send's own turn start cancels
+                        // planned compactions and must not abort this task mid-way.
+                        if !runner.inner.idle_compactions.take_due(thread_id, generation) {
+                            return;
+                        }
                         if let Err(error) = runner.run_idle_compaction(thread_id, &planned, Utc::now()).await {
                             tracing::warn!(%thread_id, %error, "the idle compaction did not start");
                         }
                     });
-                    this.inner.idle_compactions.replace(thread_id, Some(timer));
+                    this.inner.idle_compactions.replace(thread_id, Some((generation, timer)));
+                    let _ = registered.send(());
                 }
                 Err(_) => this.inner.idle_compactions.replace(thread_id, None),
             }

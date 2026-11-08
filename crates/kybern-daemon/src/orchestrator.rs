@@ -2086,6 +2086,7 @@ impl Orchestrator {
             self.inner.previews.revoke_thread(thread_id);
             self.emit(thread_id, None, EventPayload::ThreadArchived)?;
             self.subagents_archive_below(thread_id)?;
+            self.inner.idle_compactions.cancel(thread_id);
         }
         // Machines this thread ran tools on archive their inbound threads for it.
         self.archive_forwarded(thread_id);
@@ -2284,6 +2285,8 @@ impl Orchestrator {
         let thread = self.update_thread(thread)?;
         let startup_started = std::time::Instant::now();
         self.emit(thread.id, Some(turn_id), EventPayload::TurnStarted { message_id, message: message.clone() })?;
+        // The user is back (or Kybern compacts now): a compaction planned for the idle thread is moot.
+        self.inner.idle_compactions.cancel(thread_id);
         if selected_mode.is_some() && self.pending_permission_for(&thread, &thread.provider)? == selected_mode {
             self.inner.store.meta_set_many(&[
                 (&format!("pending_permission:{thread_id}"), ""),

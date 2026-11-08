@@ -285,7 +285,10 @@ async fn serve() -> Result<()> {
     // daemon.port to general clients until the state is consistent.
     state.orchestrator.recover_after_restart().await?;
     // Compactions planned before the restart: plan again from each thread's recorded cache expiry.
-    state.orchestrator.resume_idle_compactions().await?;
+    // Optional work: a failure leaves those threads to "When you return" and the daemon serves on.
+    if let Err(error) = state.orchestrator.resume_idle_compactions().await {
+        tracing::warn!(%error, "could not plan idle compactions after the restart");
+    }
 
     let orphans = account_login::orphaned_staging(&state);
     if !orphans.is_empty() {
