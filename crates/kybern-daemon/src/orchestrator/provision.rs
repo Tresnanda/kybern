@@ -565,6 +565,11 @@ impl Orchestrator {
             plan.blocked = Some(format!("{} needs a newer Kybern to add projects. Update it from Settings → Machines.", target.name));
             return Ok(plan);
         }
+        // The copy is matched to this project by repository identity. One registered before its first commit has none
+        // stored yet, so the clients would never pair the two machines' projects: store it before the copy is made.
+        if crate::network::repo_identity::refresh(&self.inner.store, &project).await {
+            self.publish_projects();
+        }
         if plan.target.online {
             let probe = PeerProvisionProbeParams {
                 repos: repos.iter().map(|repo| repo.identity.clone()).collect(),
@@ -619,6 +624,10 @@ impl Orchestrator {
                 return Err(conflict("operation_id already belongs to other work. Use a fresh one."));
             }
             return Ok(existing);
+        }
+        // Agents provision without a plan, so the identity the clients pair the copy by is stored here too.
+        if crate::network::repo_identity::refresh(&self.inner.store, project).await {
+            self.publish_projects();
         }
         let env_files = match choice.env_files {
             Some(files) => {
