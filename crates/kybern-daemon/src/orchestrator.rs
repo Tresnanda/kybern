@@ -1509,6 +1509,11 @@ impl Orchestrator {
                 }
             }
         }
+        // A repository added before its first commit (or remote) has no identity yet, so other machines cannot match it.
+        // Look again on every list instead of waiting for the periodic pass; projects that have one are not touched.
+        for project in projects.iter().filter(|project| project.is_git && project.repo.is_none()) {
+            self.spawn_repo_identity(project.id);
+        }
         if changed {
             self.publish_projects();
         }
@@ -5719,6 +5724,46 @@ mod tests {
         let stored = store.project_get(first.id).unwrap().unwrap();
         assert!(stored.is_git, "corrected flag is persisted to the store");
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn listing_projects_reads_the_identity_a_repository_gained_after_it_was_added() {
+        let root = std::env::temp_dir().join(format!("kybern-identity-test-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&root).unwrap();
+        let paths = Paths::resolve(Some(root.join(".kyb"))).unwrap();
+        let settings = SettingsStore::load(&paths.settings).unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let (events_tx, _) = crate::bounded_broadcast::channel(32, 8 * 1024 * 1024);
+        let orchestrator = Orchestrator::new(store.clone(), DriverRegistry::default(), events_tx, paths, settings);
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&workspace)
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        git(&["init", "-q", "-b", "main"]);
+
+        // Added before the first commit: a repository without an identity.
+        let project = orchestrator.add_project(workspace.to_string_lossy().into_owned(), None, None).unwrap();
+        assert!(project.is_git);
+        std::fs::write(workspace.join("file.txt"), "one").unwrap();
+        git(&["add", "file.txt"]);
+        git(&["commit", "-q", "-m", "one"]);
+        store.project_set_repo_identity(project.id, None).unwrap();
+
+        orchestrator.refresh_projects_git().await.unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while store.project_get(project.id).unwrap().unwrap().repo.is_none() {
+            assert!(std::time::Instant::now() < deadline, "the list never read the new identity");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 
