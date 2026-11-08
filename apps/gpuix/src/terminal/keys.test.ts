@@ -58,3 +58,12 @@ test('macOS: ⌃⌥ with a composed character is not AltGr', () => {
     expect(terminalKey({ ...key('2', { ctrl: true, alt: true }), keyChar: '@' })).toBe('\0')
   } finally { restore() }
 })
+
+test('Ctrl+= Ctrl+− Ctrl+0 send nothing to the shell: they zoom the interface (#292, `nav/keys.ts`)', () => {
+  for (const platform of ['win32', 'linux'] as const) {
+    const restore = setKeyPlatform(platform)
+    try {
+      for (const k of ['=', '-', '0']) expect(terminalKey({ ...key(k, { ctrl: true }), keyChar: k })).toBeNull()
+    } finally { restore() }
+  }
+})
