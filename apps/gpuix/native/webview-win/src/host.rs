@@ -114,7 +114,21 @@ const SHORTCUT_KEYS: &[(u32, &str)] = &[
     (0xBC, ","),
     (0xDC, "\\"),
     (0x50, "p"),
+    // The interface zoom (#292): Ctrl+= (and Ctrl++, Shift held), Ctrl+− and Ctrl+0, on the main row and the keypad.
+    (0xBB, "="),
+    (0x6B, "="),
+    (0xBD, "-"),
+    (0x6D, "-"),
+    (0x30, "0"),
+    (0x60, "0"),
 ];
+
+/// Interface zoom (#292), as `f64` bits: every page is zoomed like a browser page (`ZoomFactor`); placements arrive in
+/// window points already, so `scale` stays the window's DPI.
+static UI_ZOOM: AtomicU64 = AtomicU64::new(0x3FF0_0000_0000_0000);
+fn ui_zoom() -> f64 {
+    f64::from_bits(UI_ZOOM.load(Ordering::Relaxed))
+}
 
 // ---- Bun's thread → the UI thread ----
 
@@ -624,6 +638,16 @@ impl Host {
             }
             "create" => {
                 self.create(&id, &command);
+                return;
+            }
+            "zoom" => {
+                let zoom = num(&command, "zoom");
+                UI_ZOOM.store((if zoom > 0.0 { zoom } else { 1.0 }).to_bits(), Ordering::Relaxed);
+                for doc in &self.docs {
+                    if let Some(controller) = doc.controller.as_ref().and_then(|c| c.cast::<ICoreWebView2Controller>().ok()) {
+                        let _ = unsafe { controller.SetZoomFactor(ui_zoom()) };
+                    }
+                }
                 return;
             }
             _ => {}
@@ -1323,6 +1347,7 @@ impl Doc {
             scaled.SetBoundsMode(COREWEBVIEW2_BOUNDS_MODE_USE_RAW_PIXELS)?;
             scaled.SetShouldDetectMonitorScaleChanges(false)?;
             scaled.SetRasterizationScale(self.scale)?;
+            base.SetZoomFactor(ui_zoom())?;
             if self.category == "visual" {
                 let background: ICoreWebView2Controller2 = controller.cast()?;
                 background.SetDefaultBackgroundColor(COREWEBVIEW2_COLOR { A: 0, R: 0, G: 0, B: 0 })?;
@@ -1959,6 +1984,7 @@ impl Doc {
         let wanted = (num(command, "x"), num(command, "y"), num(command, "width"), num(command, "height"));
         let probe = "(()=>{const f=document.querySelector('iframe');if(!f)return null;const r=f.getBoundingClientRect();return [r.left,r.top,r.width/(f.offsetWidth||r.width||1)]})()";
         let device = self.scale;
+        let zoom = ui_zoom();
         let shooter = webview.clone();
         exec(&webview, probe, move |result| {
             let frame: Vec<f64> = result
@@ -1971,17 +1997,19 @@ impl Doc {
             let (mut right, mut bottom) = (x + (wanted.2 * scale).max(1.0), y + (wanted.3 * scale).max(1.0));
             x = x.max(0.0);
             y = y.max(0.0);
-            right = right.min(placement.logical.0);
-            bottom = bottom.min(placement.logical.1);
+            // The placement is in window points, CSS pixels times `ZoomFactor` (the interface zoom, #292).
+            right = right.min(placement.logical.0 / zoom);
+            bottom = bottom.min(placement.logical.1 / zoom);
             if right <= x || bottom <= y {
                 fail(event, "The element is not on screen.");
                 return;
             }
             let (width, height) = (right - x, bottom - y);
-            // macOS asks for min(1200, 2 × width) pixels across; CDP multiplies the clip scale by the device scale.
+            // macOS asks for min(1200, 2 × width) pixels across; CDP multiplies the clip scale by the device scale. The
+            // clip is in the page's zoomed pixels: CSS pixels times `ZoomFactor`.
             let pixels = (width * 2.0).min(1200.0);
             let params = json!({"format": "png", "fromSurface": true, "captureBeyondViewport": false,
-                "clip": {"x": x, "y": y, "width": width, "height": height, "scale": pixels / width / device}});
+                "clip": {"x": x * zoom, "y": y * zoom, "width": width * zoom, "height": height * zoom, "scale": pixels / (width * zoom) / device}});
             cdp(&shooter, "Page.captureScreenshot", &params.to_string(), move |result| {
                 let written = result.ok().and_then(|json| {
                     let data = serde_json::from_str::<Value>(&json).ok()?.get("data")?.as_str()?.to_owned();

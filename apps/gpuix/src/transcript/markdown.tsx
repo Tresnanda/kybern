@@ -14,7 +14,7 @@ import { useTranscriptRowLease } from './Window.tsx'
 // Native GFM keeps prose, tables and syntax highlighting in single bounded
 // nodes. Code expansion contributes rows to the OUTER transcript virtual list.
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { useGpuix, type PublicInstance } from '@gpuix/react'
+import { useGpuix, type MarkdownProps, type PublicInstance } from '@gpuix/react'
 import { chatLink } from '../../../../packages/kybern-client/src/chatLinks.ts'
 import { fileRefCandidates, linkifyFileRefs } from '../../../../packages/kybern-client/src/fileRefs.ts'
 import { absoluteFileLinks, unlinkFileLinks } from '../../../../packages/kybern-client/src/outsideLinks.ts'
@@ -28,7 +28,7 @@ import { CopyAction } from './bubble.tsx'
 import { Button } from '../kit/Button.tsx'
 import { IconButton } from '../kit/IconButton.tsx'
 import { T } from './glyphs.ts'
-import { reportError } from './store.ts'
+import { reportError, useRowState } from './store.ts'
 import { chipifyKybernRefs } from './refs.ts'
 import { useFileRefs } from './fileRefs.ts'
 import { useNotes, openNote } from '../notes/store.ts'
@@ -37,6 +37,9 @@ import { goPage, openThread } from '../nav/history.ts'
 import type { NoteSummary, TaskItem } from '../../../../packages/kybern-client/src/types.ts'
 import type { MarkdownStream } from '../native/markdown.ts'
 import { StreamMarkdown } from './StreamMarkdown.tsx'
+import { DiffChunk } from './DiffChunk.tsx'
+import { hasDiffFence, isDiffLanguage, splitDiffFences } from './diffFence.ts'
+import { DocumentMarkdown } from '../native/markdownDocument.tsx'
 import { ThreadImage, ThreadImagePreview } from './ThreadImage.tsx'
 import { localImageLink } from '../../../../packages/kybern-client/src/responseImages.ts'
 import { observeElementBounds, type ElementBoundsEvent } from '../native/layout.ts'
@@ -230,6 +233,8 @@ export const CodeHeader = memo(function CodeHeader({ part, expanded, wrap, onExp
 /** `pre` is padded .5rem .6rem; the body continues the header's surface. */
 export const CodeChunk = memo(function CodeChunk({ text, language, wrap, first = true, last = true }: { text: string; language?: string; wrap: boolean; first?: boolean; last?: boolean }) {
   const t = useTheme()
+  // `diff` and `patch` fences get the diff view's line styling (#294).
+  if (isDiffLanguage(language)) return <DiffChunk text={text} wrap={wrap} first={first} last={last} />
   return <div testId="code-body" style={{ display: 'flex', flexDirection: 'column', paddingLeft: 9.6, paddingRight: 9.6, paddingTop: first ? 8 : 0, paddingBottom: last ? 8 : 0, backgroundColor: t.codeSurface, minWidth: 0, borderBottomLeftRadius: last ? CODE.radius : 0, borderBottomRightRadius: last ? CODE.radius : 0, overflow: 'hidden' }}>
     <code softWrap={wrap} code={text.replace(/\n$/, '')} language={language} theme={cachedCodeTheme(t, language)} style={{ minWidth: 0, userSelect: 'text' }} />
   </div>
@@ -378,6 +383,66 @@ const OVERSCAN = Number(process.env.KYBERN_REPLY_OVERSCAN ?? 600)
 type Piece = { kind: 'text'; text: string } | { kind: 'image'; source: string; alt: string }
 type Measured = { piece: Piece; width: number; height: number }
 
+/**
+ * A `diff` or `patch` fence drawn as a diff (#294) inside Markdown that native `<markdown>` or a worker-parsed document
+ * draws: the header with its Copy and wrap buttons, then `DiffChunk`s of at most one chunk of lines each. Wrap starts on
+ * (diff lines are long and the pieces sit in a column of prose); the reader can switch it off. Wrap and Show more are row
+ * state (`useRowState`) keyed by the fence's content, so a reply piece culled offscreen, or a transcript row scrolled out of
+ * the virtual list, comes back as the reader left it. Copy reads the fence's raw body (`raw`, CRLF kept).
+ */
+const DiffFence = memo(function DiffFence({ text, raw = text, language }: { text: string; raw?: string; language: string }) {
+  const key = useMemo(() => `diff-fence:${language}:${text.length}:${contentHash(text)}`, [text, language])
+  const [wrap, setWrap] = useRowState(`${key}:wrap`, true)
+  const [expanded, setExpanded] = useRowState(`${key}:expanded`, false)
+  const part = useMemo<MarkdownPart>(() => ({ kind: 'code', text: raw, language, key: 'diff' }), [raw, language])
+  const chunks = useMemo(() => lineChunks(text), [text])
+  const shown = expanded ? chunks : chunks.slice(0, 1)
+  return <div testId="diff-fence" style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+    <CodeHeader part={part} expanded={expanded} wrap={wrap} onWrap={() => setWrap(!wrap)} onExpand={chunks.length > 1 ? () => setExpanded(!expanded) : undefined} />
+    {shown.map((chunk, i) => <CodeChunk key={i} text={chunk} language={language} wrap={wrap} first={i === 0} last={i === shown.length - 1} />)}
+  </div>
+})
+
+/** 32-bit FNV-1a of `text`: an identity for a diff fence's row state that survives remounts. */
+function contentHash(text: string): string {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193)
+  return (hash >>> 0).toString(36)
+}
+
+/**
+ * Drop-in for `<markdown>` (and, with `document`, a worker-parsed `DocumentMarkdown`) that also draws the `diff` / `patch`
+ * fences it contains as diffs. Markdown without one is the same single element as before. With one, the document is cut at
+ * the fence: prose pieces stay native Markdown (same props, so links, themes and selection are unchanged) and the fence is a
+ * `DiffFence`, separated by the margin native blocks keep between each other. A streaming reply uses `StreamMarkdown`
+ * instead and keeps native fences until it is whole.
+ */
+export const FencedMarkdown = memo(function FencedMarkdown({ document = false, ...props }: MarkdownProps & { document?: boolean }) {
+  const source = props.source ?? ''
+  const segments = useMemo(() => (hasDiffFence(source) ? splitDiffFences(source) : null), [source])
+  const Prose = document ? DocumentMarkdown : 'markdown'
+  if (!segments || !segments.some(segment => segment.kind === 'diff')) return <Prose {...props} />
+  // The caller's box (a capped height that scrolls, margins, size) belongs to the whole document; the pieces keep the
+  // text style (colour, selection), or each prose piece would be capped and scroll on its own.
+  const [box, text] = splitBoxStyle(props.style)
+  const { ref: _ref, ...rest } = props as MarkdownProps & { ref?: unknown }
+  const firstProse = segments.findIndex(segment => segment.kind === 'markdown')
+  return <div style={{ display: 'flex', flexDirection: 'column', gap: BLOCK_MARGIN, minWidth: 0, ...box }}>
+    {segments.map((segment, i) => segment.kind === 'diff'
+      ? <DiffFence key={i} text={segment.text} raw={segment.raw} language={segment.language} />
+      : <div key={i} style={{ display: 'flex', flexDirection: 'column' }}><Prose {...(i === firstProse ? props : rest)} style={text} source={segment.text} /></div>)}
+  </div>
+})
+
+const BOX_STYLE = new Set(['height', 'minHeight', 'maxHeight', 'width', 'minWidth', 'maxWidth', 'overflow', 'overflowX', 'overflowY', 'flexGrow', 'flexShrink', 'flexBasis', 'alignSelf', 'margin', 'marginTop', 'marginBottom', 'marginLeft', 'marginRight', 'padding', 'paddingTop', 'paddingBottom', 'paddingLeft', 'paddingRight'])
+/** `style` as the layout of the box around a split document and the text style its pieces keep. */
+function splitBoxStyle(style: MarkdownProps['style']): [Record<string, unknown>, MarkdownProps['style']] {
+  const box: Record<string, unknown> = {}
+  const text: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(style ?? {})) (BOX_STYLE.has(key) ? box : text)[key] = value
+  return [box, text as MarkdownProps['style']]
+}
+
 /** An agent's reply, always whole: `textChunks` pieces (whole blocks each) stacked with the margin the blocks would have
  *  between them in one document. Only the last piece streams, so a live reply re-parses its tail only. GPUIX lays out
  *  every mounted element each frame and native Markdown builds an element per block, so a long reply that grows (or
@@ -443,7 +508,7 @@ export const BoundedMarkdown = memo(function BoundedMarkdown({ text, tone = 'bri
       if (spacer) return <div key={i} style={{ height: spacer.height, flexShrink: 0, ...(gap ? { marginTop: gap } : {}) }} />
       const body = piece.kind === 'image'
         ? <ThreadImage threadId={threadId} source={piece.source} alt={piece.alt} at={at} />
-        : (() => { const Markdown = stream && last ? StreamMarkdown : 'markdown'; return <Markdown source={piece.text} theme={last ? withStream(theme, stream) : theme} style={style} /> })()
+        : (stream && last ? <StreamMarkdown source={piece.text} theme={withStream(theme, stream)} style={style} /> : <FencedMarkdown source={piece.text} theme={last ? withStream(theme, stream) : theme} style={style} />)
       const flex = piece.kind === 'image' ? { display: 'flex' as const } : { display: 'flex' as const, flexDirection: 'column' as const }
       if (!cull || last) return <div key={i} style={{ ...flex, ...(gap ? { marginTop: gap } : {}) }}>{body}</div>
       return <MeasuredPiece key={i} index={i} piece={piece} gap={gap} flex={flex} onMeasure={measure}>{body}</MeasuredPiece>

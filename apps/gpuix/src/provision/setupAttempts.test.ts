@@ -17,3 +17,15 @@ test('reopened setup retains the exact queued operation, folder, consent and sou
   attempts.forget(key)
   expect(attempts.get(key)).toBeUndefined()
 })
+
+test('a finished setup is forgotten so a machine whose copy was removed can be set up again; unfinished ones are kept', () => {
+  const attempts = new SetupAttempts()
+  const attempt = (phase: string): SetupAttempt => ({ request: { project_id: 'p', machine: 'pc', operation_id: phase }, plan: {} as ProvisionPlan, status: { operation_id: phase, phase } as ProvisionStatus, error: '' })
+  attempts.remember('done', attempt('done'))
+  attempts.remember('queued', attempt('queued'))
+  attempts.remember('failed', attempt('failed'))
+  for (const key of ['done', 'queued', 'failed', 'unknown']) attempts.forgetFinished(key)
+  expect(attempts.get('done')).toBeUndefined()
+  expect(attempts.get('queued')?.status?.phase).toBe('queued')
+  expect(attempts.get('failed')?.status?.phase).toBe('failed')
+})

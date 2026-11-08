@@ -14,6 +14,10 @@ import { paneRects } from '../split/Workspace.tsx'
 // belong to its shell (Ctrl+C, Ctrl+K, Ctrl+W, Alt+← word left…), so no window shortcut or handler takes them; Ctrl+Tab,
 // Alt+Shift+arrows and the Ctrl+Shift shortcuts still work there.
 //
+// Interface size (#292, `shell/uiZoom.ts`): ⌘+ (⌘= and ⌘⇧=), ⌘−, ⌘0 zoom in, out and to actual size, everywhere, also
+// with a focused terminal off macOS (Ctrl+= Ctrl+− Ctrl+0 are the window's there, as in Windows Terminal). An open image
+// takes the same chords for its own zoom first (`ImageMorph.tsx`, `motion/zoomController.ts`).
+//
 // `main.tsx` passes `onWindowKeyDown` to `render()`. Other surfaces can add
 // their own window shortcuts with `addWindowKeyHandler`; a handler that returns
 // true has consumed the event.
@@ -24,6 +28,7 @@ import { goBack, goForward, newThread, openThread } from './history.ts'
 import { getNav, setNav } from './store.ts'
 import { isAltOnly, isBackKey, isFocusGroupModifier, isForwardKey, isMacKeys, isOpenParentKey, isOtherCommand, isPrimary, isPrimaryChord } from '../platform/keys.ts'
 import { terminalHasFocus } from '../terminal/focus.ts'
+import { resetZoom, zoomIn, zoomKey, zoomOut } from '../shell/uiZoom.ts'
 
 type Handler = (event: EventPayload) => boolean | void
 const handlers = new Set<Handler>()
@@ -69,11 +74,19 @@ function historyShortcut(event: EventPayload): boolean {
   return false
 }
 
-/** Off macOS, while a terminal has focus: Ctrl+key without Shift (but not Ctrl+Tab) and Alt+key are the shell's. */
+function zoomShortcut(event: EventPayload): boolean {
+  const key = zoomKey(event)
+  if (key === 'in') zoomIn()
+  else if (key === 'out') zoomOut()
+  else if (key === 'reset') resetZoom()
+  return key !== null
+}
+
+/** Off macOS, while a terminal has focus: Ctrl+key without Shift (but not Ctrl+Tab or a zoom chord) and Alt+key are the shell's. */
 function terminalOwns(event: EventPayload): boolean {
   if (isMacKeys() || !terminalHasFocus()) return false
   const m = event.modifiers
-  return (isPrimaryChord(m) && event.key !== 'tab') || isAltOnly(m)
+  return (isPrimaryChord(m) && event.key !== 'tab' && !zoomKey(event)) || isAltOnly(m)
 }
 
 function shortcut(event: EventPayload): boolean {
@@ -121,7 +134,7 @@ export function onWindowKeyDown(event: EventPayload) {
   // Mark the change as keyboard-driven before it lands, so nothing it opens animates.
   const before = getNav().keyboardNav
   if (isShortcut(event)) setNav({ keyboardNav: true })
-  if (!shortcut(event) && !historyShortcut(event) && !tabShortcut(event) && !before) setNav({ keyboardNav: false })
+  if (!shortcut(event) && !historyShortcut(event) && !tabShortcut(event) && !zoomShortcut(event) && !before) setNav({ keyboardNav: false })
 }
 
 const isShortcut = (event: EventPayload) => {
@@ -129,5 +142,6 @@ const isShortcut = (event: EventPayload) => {
   if (m?.ctrl && !m.cmd && !m.alt && event.key === 'tab') return true
   if (isFocusGroupModifier(m, 'any') && ARROWS.has(event.key ?? '')) return true
   if (isBackKey(event) || isForwardKey(event) || isOpenParentKey(event)) return true
+  if (zoomKey(event)) return true
   return isPrimaryChord(m, { shift: 'any' }) && (!m?.shift || event.key === '\\' || event.key === 't' || event.key === 'w')
 }

@@ -25,6 +25,7 @@ import { taskLinkId } from "../state/tasksModel";
 import { TaskRef } from "./TaskRef";
 import { NoteRef } from "./NoteRef";
 import { AuthedImage } from "./AuthedImage";
+import { diffRuns, isDiffLanguage } from "../../../../packages/kybern-client/src/diffFence";
 
 export function openLink(url: string) {
   if (/^(https?:|mailto:)/i.test(url))
@@ -162,6 +163,41 @@ function ScrollContent({ style, children }: { style?: ViewStyle; children: React
     </View>
   );
 }
+/**
+ * A diff drawn like the desktop's diff rows (#294): removed lines on the removed tint in the removed colour, added lines
+ * the same in green, hunk headers muted, context plain. Neighbouring lines of one kind share a row, so a long diff is a
+ * few views; the tint runs the full width of the scroll content. Copy reads the exact source from `Code`.
+ */
+function DiffLines({ text }: { text: string }) {
+  const { colors, dark } = useTheme();
+  const { textScale } = useTextScale();
+  const runs = useMemo(() => diffRuns(text), [text]);
+  const wash = dark ? "29" : "1F";
+  const ink = { add: colors.positive, del: colors.negative, hunk: colors.secondary, plain: colors.ink };
+  const fill = { add: colors.positive + wash, del: colors.negative + wash, hunk: undefined, plain: undefined };
+  return (
+    <View style={{ flexGrow: 1 }}>
+      {runs.map((run, i) => (
+        <View
+          key={i}
+          style={{ paddingHorizontal: 16, flexGrow: 1, backgroundColor: fill[run.kind] }}
+        >
+          <Text
+            selectable
+            style={{
+              fontFamily: MONO,
+              fontSize: scaleFont(13, textScale),
+              lineHeight: scaleLine(21, textScale),
+              color: ink[run.kind],
+            }}
+          >
+            {run.text || " "}
+          </Text>
+        </View>
+      ))}
+    </View>
+  );
+}
 export const Code = memo(function Code({
   text,
   language = "",
@@ -173,6 +209,12 @@ export const Code = memo(function Code({
 }) {
   const { colors } = useTheme();
   const { textScale } = useTextScale();
+  const codeStyle = {
+    fontFamily: MONO,
+    fontSize: scaleFont(13, textScale),
+    lineHeight: scaleLine(21, textScale),
+    color: colors.ink,
+  };
   return (
     <View
       style={{
@@ -194,38 +236,19 @@ export const Code = memo(function Code({
       </View>
       <ScrollView
         horizontal
-        contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 18 }}
+        contentContainerStyle={{
+          paddingBottom: 18,
+          ...(diff ? { flexGrow: 1 } : { paddingHorizontal: 16 }),
+        }}
       >
-        <ScrollContent>
-          <Text
-            selectable
-            style={{
-              fontFamily: MONO,
-              fontSize: scaleFont(13, textScale),
-              lineHeight: scaleLine(21, textScale),
-              color: colors.ink,
-            }}
-          >
-            {diff
-              ? text.split("\n").map((line, i) => (
-                  <Text
-                    key={i}
-                    style={{
-                      color: line.startsWith("+")
-                        ? colors.positive
-                        : line.startsWith("-")
-                          ? colors.negative
-                          : line.startsWith("@@")
-                            ? colors.accent
-                            : colors.ink,
-                    }}
-                  >
-                    {line}
-                    {"\n"}
-                  </Text>
-                ))
-              : text}
-          </Text>
+        <ScrollContent style={diff ? { flexGrow: 1 } : undefined}>
+          {diff ? (
+            <DiffLines text={text} />
+          ) : (
+            <Text selectable style={codeStyle}>
+              {text}
+            </Text>
+          )}
         </ScrollContent>
       </ScrollView>
     </View>
@@ -256,6 +279,7 @@ export const Markdown = memo(function Markdown({
               <Code
                 key={`code:${s}`}
                 language={language}
+                diff={isDiffLanguage(language)}
                 text={
                   first < 0
                     ? ""

@@ -24,6 +24,9 @@ import { installFrameSource } from './native/frame.ts'
 import { handbackOnFocus, installFocusHandback } from './native/focusHandback.ts'
 import { hasSavedFrame, installWindowFrame, startWindowShell } from './shell/window.ts'
 import { savedFrameOptions, startWindowChrome } from './shell/windowChrome.ts'
+import { BASE_MIN_SIZE, installUiZoom, launchWindowOptions } from './shell/uiZoom.ts'
+import { onSiblingUiZoom, tellOtherWindowsUiZoom } from './windows/registry.ts'
+import { onWindowStateChange } from './native/windowState.ts'
 import { startEnvironmentWindow } from './windows/window.ts'
 import { installRuntimeSafetyNet } from './shell/errors.ts'
 import { startMemoryLog } from './perf/memoryLog.ts'
@@ -64,6 +67,8 @@ function Fonts({ children }: { children: ReactNode }) {
     setReady(true)
     startPerfProbe(renderer)
     startWindowShell(renderer)
+    // Interface size (#292): the display it must fit, the View menu, and a size another window saved (`shell/uiZoom.ts`).
+    installUiZoom(renderer, onWindowStateChange, { tell: tellOtherWindowsUiZoom, listen: onSiblingUiZoom })
     // Windows and Linux: the title bar's window state, the OS theme and motion, the saved frame (`shell/windowChrome.ts`).
     startWindowChrome(renderer)
     // One window per environment across processes; the title names the environment (`windows/`).
@@ -141,13 +146,12 @@ render(
     // transparent window with the adjustable desktop blur behind it (`shell/windowMaterial.ts`). Windows 11: Mica or
     // Acrylic; Linux uses the compositor capability, and Windows 10 stays opaque.
     windowBackground: nativeBackground(launchBacking),
-    trafficLightX: 16,
-    trafficLightY: 16,
     ...(process.env.KYBERN_PERF_PROBE === '1' ? { debugFrameOverlay: 'minimal' as const } : {}),
-    minWidth: 900,
-    minHeight: 600,
+    // The window opens already zoomed with the 100 % minimum (900×600); `installUiZoom` grows it to the size that fits the
+    // display (`shell/uiZoom.ts`). The traffic lights stay centred on the zoomed title bar.
+    ...launchWindowOptions(),
     // Windows and Linux reopen the saved frame here (macOS restores AppKit's frame after the window opens).
-    ...(process.env.KYBERN_WINDOW_SIZE ? {} : savedFrameOptions({ width: 900, height: 600 })),
+    ...(process.env.KYBERN_WINDOW_SIZE ? {} : savedFrameOptions(BASE_MIN_SIZE)),
     // Linux: Kybern draws the title bar, its buttons and the resize edges (`nav/WindowControls.tsx`). X11 without a
     // compositing manager falls back to the window manager's frame.
     ...(process.platform === 'linux' && process.env.KYBERN_WINDOW_DECORATIONS !== 'server' ? { windowDecorations: 'client' } : {}),
