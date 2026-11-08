@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { EventPayload } from '@gpuix/react'
 import { setKeyPlatform } from '../platform/keys.ts'
-import { reloadPrefs } from '../platform/prefs.ts'
+import { reloadPrefs, writePref } from '../platform/prefs.ts'
 import { noteTerminalFocus, terminalHasFocus } from '../terminal/focus.ts'
 import { onWindowKeyDown } from '../nav/keys.ts'
 import {
-  availableSteps, fittingZoom, zoomKey, formatZoom, getUiZoom, installUiZoom, minWindowSize, nextStep, onZoomAnnounce, resetUiZoomForTests, setUiZoom, snapToStep, stepFits,
+  availableSteps, fittingZoom, zoomKey, formatZoom, getUiZoom, installUiZoom, launchWindowOptions, minWindowSize, nextStep, onZoomAnnounce, resetUiZoomForTests, setUiZoom, snapToStep, stepFits,
   type UiZoomReport, type ZoomAnnouncement,
 } from './uiZoom.ts'
 
@@ -28,6 +28,11 @@ function fakeRenderer(display = { width: 1512, height: 945 }) {
       setMenuCommandCallback: () => {},
     },
   }
+}
+
+/** Another window's save of the size, straight to app.json. */
+function writeSaved(zoom: number) {
+  writePref('ui.zoom', zoom)
 }
 
 let config: string
@@ -85,6 +90,44 @@ describe('applying', () => {
     const fake = fakeRenderer({ width: 1280, height: 800 })
     installUiZoom(fake.renderer)
     expect(getUiZoom()).toBe(1.25)
+  })
+  test('a window opens zoomed with the 100 % minimum, and grows once it knows the display', () => {
+    setUiZoom(2)
+    resetUiZoomForTests({ zoom: 2 })
+    // A display smaller than 200 %'s minimum (1800×1200) must not get a window that large before the zoom drops.
+    expect(launchWindowOptions()).toMatchObject({ uiZoom: 2, minWidth: 900, minHeight: 600 })
+    const fake = fakeRenderer({ width: 1512, height: 945 })
+    installUiZoom(fake.renderer)
+    expect(fake.calls.at(-1)).toEqual([1.5, 1350, 900])
+  })
+  test('another window hears a size change at once and applies it', () => {
+    let told = 0
+    let heard: (() => void) | null = null
+    const first = fakeRenderer()
+    installUiZoom(first.renderer, undefined, { tell: () => { told++ }, listen: () => {} })
+    setUiZoom(1.25)
+    expect(told).toBe(1)
+    // The other process: its own module state, the same app.json.
+    resetUiZoomForTests()
+    const second = fakeRenderer()
+    installUiZoom(second.renderer, undefined, { tell: () => { told++ }, listen: (listener) => { heard = listener } })
+    expect(getUiZoom()).toBe(1.25)
+    setUiZoom(1.5)
+    expect(told).toBe(2)
+    resetUiZoomForTests()
+    const third = fakeRenderer()
+    installUiZoom(third.renderer, undefined, { tell: () => { told++ }, listen: (listener) => { heard = listener } })
+    expect(getUiZoom()).toBe(1.5)
+    // The first window's message: re-read and apply, without telling the others again.
+    setUiZoom(1)
+    resetUiZoomForTests({ zoom: 1.5 })
+    const fourth = fakeRenderer()
+    installUiZoom(fourth.renderer, undefined, { tell: () => { told++ }, listen: (listener) => { heard = listener } })
+    const before = told
+    writeSaved(1.1)
+    heard!()
+    expect(getUiZoom()).toBe(1.1)
+    expect(told).toBe(before)
   })
   test('zooming in at the largest size that fits says so', () => {
     const fake = fakeRenderer()

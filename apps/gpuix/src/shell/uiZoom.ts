@@ -144,7 +144,7 @@ export function setUiZoom(zoom: number, options: { announce?: boolean } = {}): n
   const wanted = snapToStep(zoom)
   const applied = fittingZoom(wanted, readDisplay())
   apply(applied)
-  try { writePref(PREF, wanted) } catch { /* A read-only config folder: this window still zooms. */ }
+  try { writePref(PREF, wanted); siblings?.tell() } catch { /* A read-only config folder: this window still zooms. */ }
   if (options.announce) announce({ zoom: applied, limit: false })
   return applied
 }
@@ -177,18 +177,27 @@ export function zoomKey(event: { key?: string | null; modifiers?: KeyMods }): 'i
   return null
 }
 
-/** Window options for `render`: open at the saved zoom with the minimum size it needs. */
+/**
+ * Window options for `render`: open at the saved zoom. The minimum stays 900×600 (100 %) until `installUiZoom` knows the
+ * display: a saved size may not fit the display the window opens on (a laptop off its external monitor), and a launch
+ * minimum larger than the display would leave the window larger than it after the zoom drops to a size that fits.
+ */
 export function launchWindowOptions(): { uiZoom: number; minWidth: number; minHeight: number; trafficLightX: number; trafficLightY: number } {
-  const zoom = state.zoom, min = minWindowSize(zoom)
-  return { uiZoom: zoom, minWidth: min.width, minHeight: min.height, trafficLightX: TRAFFIC_LIGHTS.x, trafficLightY: trafficLightY(zoom) }
+  const zoom = state.zoom
+  return { uiZoom: zoom, minWidth: BASE_MIN_SIZE.width, minHeight: BASE_MIN_SIZE.height, trafficLightX: TRAFFIC_LIGHTS.x, trafficLightY: trafficLightY(zoom) }
 }
+
+/** The other window processes (`windows/registry.ts`): told when this one changes the size, and telling it in turn. */
+export type ZoomSiblings = { tell: () => void; listen: (listener: () => void) => void }
+let siblings: ZoomSiblings | null = null
 
 let installed = false
 /**
  * Follow this window after `render`: read the display, drop to a step that fits it, route the View menu's zoom items,
- * and pick up a zoom another window saved when this one becomes active (`onActive`, from the window-state events).
+ * and pick up a zoom another window saved: at once when that window says so (`siblings`), and when this one's state
+ * changes (`onActive`, from the window-state events: it may have moved to a smaller display, or missed the message).
  */
-export function installUiZoom(renderer: object, onActive?: (listener: () => void) => () => void) {
+export function installUiZoom(renderer: object, onActive?: (listener: () => void) => () => void, others?: ZoomSiblings) {
   if (installed) return
   installed = true
   native = renderer as ZoomRenderer
@@ -198,7 +207,7 @@ export function installUiZoom(renderer: object, onActive?: (listener: () => void
   const display = displayOf(report)
   const fitting = fittingZoom(savedUiZoom(), display)
   publish({ ...state, display })
-  // Always: the window may have opened (or been restored) smaller than this zoom's minimum, and grows to it here.
+  // Always: the window opened with the 100 % minimum (`launchWindowOptions`) and grows to this zoom's here.
   apply(fitting)
   syncMenu()
   try {
@@ -209,18 +218,21 @@ export function installUiZoom(renderer: object, onActive?: (listener: () => void
       else if (command === 'actualSize') resetZoom()
     })
   } catch { /* An addon without the View menu. */ }
-  onActive?.(() => {
+  const follow = () => {
     let saved: number
     try { saved = snapToStep(reloadPrefs()[PREF] ?? 1) } catch { return }
     const next = fittingZoom(saved, readDisplay())
     if (Math.abs(next - state.zoom) > 1e-3) apply(next)
-  })
+  }
+  onActive?.(follow)
+  if (others) { siblings = others; others.listen(follow) }
 }
 
 /** Tests only: forget the window and the state. */
 export function resetUiZoomForTests(next: Partial<State> = {}) {
   installed = false
   native = null
+  siblings = null
   state = { zoom: 1, display: null, ...next }
   listeners.clear()
   announcers.clear()
