@@ -42,7 +42,7 @@ describe('splitDiffFences', () => {
     const source = 'Before\n\n```diff\n-a\n+b\n```\n\nAfter'
     expect(splitDiffFences(source)).toEqual([
       { kind: 'markdown', text: 'Before\n' },
-      { kind: 'diff', text: '-a\n+b', language: 'diff' },
+      { kind: 'diff', text: '-a\n+b', raw: '-a\n+b', language: 'diff' },
       { kind: 'markdown', text: '\nAfter' },
     ])
   })
@@ -59,7 +59,7 @@ describe('splitDiffFences', () => {
   test('an unfinished fence (a reply still streaming) runs to the end', () => {
     expect(splitDiffFences('Text\n```diff\n-a\n+b')).toEqual([
       { kind: 'markdown', text: 'Text' },
-      { kind: 'diff', text: '-a\n+b', language: 'diff' },
+      { kind: 'diff', text: '-a\n+b', raw: '-a\n+b', language: 'diff' },
     ])
   })
   test('every other character is kept, in order', () => {
@@ -70,6 +70,10 @@ describe('splitDiffFences', () => {
   test('CRLF sources split like LF ones', () => {
     const source = ['a', '```diff', '-x', '+y', '```', 'b'].join('\r\n')
     expect(splitDiffFences(source).map(s => s.kind)).toEqual(['markdown', 'diff', 'markdown'])
+  })
+  test('a CRLF fence draws LF lines and copies its body exactly', () => {
+    const fence = splitDiffFences(['a', '```diff', '-x', '', '+y', '```', 'b'].join('\r\n')).find(s => s.kind === 'diff')
+    expect(fence).toEqual({ kind: 'diff', text: '-x\n\n+y', raw: '-x\r\n\r\n+y', language: 'diff' })
   })
   test('two diff fences in a row', () => {
     expect(splitDiffFences('```diff\n-a\n```\n```diff\n+b\n```').map(s => s.kind)).toEqual(['diff', 'diff'])

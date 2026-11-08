@@ -637,20 +637,32 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
                         let placed = ws_lanes::place(text.as_str());
                         let Some(first) = requests.try_acquire(placed.as_ref().unwrap_or(&ws_lanes::Placed::unreadable())) else {
                             // A frame that is not a request has nobody to answer; drop it when there is no room.
-                            if let Some(placed) = placed {
-                                let requests = requests.clone();
-                                tokio::spawn(async move {
-                                    match requests.acquire(&placed, ws_lanes::PERMIT_WAIT).await {
-                                        Ok(permit) => {
-                                            let _permit = permit;
-                                            handle_text(&state, &ctx, text.as_str(), order).await;
-                                        }
-                                        Err(error) => {
-                                            let _ = ctx.out.send(ServerFrame::Response(RpcResponse::err(placed.id, error.ensure_problem()))).await;
-                                        }
+                            let Some(placed) = placed else { continue };
+                            // Waiting tasks are bounded too. Past the bound the request is refused here, without a
+                            // task; only a client that floods a full lane and stops reading its answers waits on this.
+                            let Some(slot) = requests.reserve_wait() else {
+                                let error = requests.refuse(&placed).ensure_problem();
+                                let _ = ctx.out.send(ServerFrame::Response(RpcResponse::err(placed.id, error))).await;
+                                continue;
+                            };
+                            let requests = requests.clone();
+                            let closed = closed.clone();
+                            tokio::spawn(async move {
+                                // A request still waiting when the client leaves never starts.
+                                let acquired = tokio::select! {
+                                    _ = closed.cancelled() => return,
+                                    acquired = requests.acquire(&placed, slot, ws_lanes::PERMIT_WAIT) => acquired,
+                                };
+                                match acquired {
+                                    Ok(permit) => {
+                                        let _permit = permit;
+                                        handle_text(&state, &ctx, text.as_str(), order).await;
                                     }
-                                });
-                            }
+                                    Err(error) => {
+                                        let _ = ctx.out.send(ServerFrame::Response(RpcResponse::err(placed.id, error.ensure_problem()))).await;
+                                    }
+                                }
+                            });
                             continue;
                         };
                         tokio::spawn(async move {

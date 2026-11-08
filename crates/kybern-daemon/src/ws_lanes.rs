@@ -16,11 +16,14 @@
 //! records which methods hold permits and for how long, so a rejection names its cause in the log.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use kybern_protocol::{Problem, ProblemKind, RpcError, RpcId, codes};
 use serde::Deserialize;
+use serde::de::IgnoredAny;
+use serde_json::value::RawValue;
 use serde_json::{Value, json};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
@@ -52,15 +55,25 @@ impl Lane {
     }
 }
 
-/// The parts of a request the lane decision reads. Borrowed from the frame text, so `params` is skipped, not copied.
+/// The parts of a request the lane decision reads. Borrowed from the frame text: `params` is a slice of it, so a large
+/// call (a file write, a message with images) is not parsed into a value a second time.
 #[derive(Deserialize)]
 struct Peek<'a> {
     #[serde(borrow, default)]
     method: Option<std::borrow::Cow<'a, str>>,
     #[serde(default)]
     id: Option<RpcId>,
+    #[serde(borrow, default)]
+    params: Option<&'a RawValue>,
+}
+
+/// The two parameters that move a call to another lane; everything else in `params` is skipped.
+#[derive(Deserialize, Default)]
+struct PeekParams {
     #[serde(default)]
-    params: Option<Value>,
+    machine: Option<IgnoredAny>,
+    #[serde(default)]
+    cached: Option<Value>,
 }
 
 /// A request frame, read just far enough to place it: its method and lane. `None` for notifications and anything
@@ -84,9 +97,9 @@ pub fn place(text: &str) -> Option<Placed> {
     let id = peek.id?;
     let method = peek.method?.into_owned();
     // Parameters of any shape place the call; `handle_text` is what rejects bad ones.
-    let params = peek.params.unwrap_or(Value::Null);
-    let names_machine = params.get("machine").is_some_and(|machine| !machine.is_null());
-    let cached = params.get("cached").and_then(Value::as_bool) == Some(true);
+    let params: PeekParams = peek.params.and_then(|raw| serde_json::from_str(raw.get()).ok()).unwrap_or_default();
+    let names_machine = params.machine.is_some();
+    let cached = params.cached.as_ref().and_then(Value::as_bool) == Some(true);
     let lane = lane_for(&method, names_machine, cached);
     Some(Placed { id, method, lane })
 }
@@ -148,6 +161,10 @@ const SLOW: &[&str] = &[
     "network.rejoin",
     "network.merge",
     "skills.list",
+    "projects.members.status",
+    "threads.fork_to_machine",
+    "threads.move_to_machine",
+    "threads.move_abandon",
 ];
 
 /// Prefixes where every method is slow: `gh` and git subprocesses, other machines, sign-in, installs.
@@ -163,6 +180,7 @@ const SLOW_PREFIXES: &[&str] = &[
     "daemon_update.",
     "sessions.",
     "projects.provision",
+    "login.broker.",
 ];
 
 /// Methods that fan out to other machines when the call names one (`machine`).
@@ -197,27 +215,26 @@ pub struct RequestBudget {
     standard: Arc<Semaphore>,
     slow: Arc<Semaphore>,
     held: Mutex<HashMap<u64, Held>>,
-    next: std::sync::atomic::AtomicU64,
-    /// Requests parked in `acquire`. Bounded, so a client that floods a full lane cannot pile up tasks.
-    waiting: std::sync::atomic::AtomicUsize,
+    next: AtomicU64,
+    /// Requests waiting for a permit. Bounded, and taken by the socket reader before it spawns a waiting task, so a
+    /// client that floods a full lane cannot pile up tasks.
+    waiting: Arc<AtomicUsize>,
+    /// When a refusal last logged at `warn`, in ms since `born`: a flood logs its cause once a second, not per request.
+    last_warn: AtomicU64,
+    born: Instant,
 }
 
 /// How many requests may wait for a permit at once, across the lanes of one connection.
 const MAX_WAITING: usize = 128;
+/// At most one `warn` line per connection this often; other refusals log at `debug`.
+const REFUSAL_WARN_EVERY: Duration = Duration::from_secs(1);
 
-struct Waiting<'a>(&'a std::sync::atomic::AtomicUsize);
+/// A request's place among those waiting for a permit (`RequestBudget::reserve_wait`). Dropping it frees the place.
+pub struct WaitSlot(Arc<AtomicUsize>);
 
-impl<'a> Waiting<'a> {
-    fn enter(counter: &'a std::sync::atomic::AtomicUsize) -> Option<Self> {
-        let before = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let guard = Self(counter);
-        (before < MAX_WAITING).then_some(guard)
-    }
-}
-
-impl Drop for Waiting<'_> {
+impl Drop for WaitSlot {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        self.0.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -254,8 +271,10 @@ impl RequestBudget {
             standard: Arc::new(Semaphore::new(standard)),
             slow: Arc::new(Semaphore::new(slow)),
             held: Mutex::new(HashMap::new()),
-            next: std::sync::atomic::AtomicU64::new(0),
-            waiting: std::sync::atomic::AtomicUsize::new(0),
+            next: AtomicU64::new(0),
+            waiting: Arc::new(AtomicUsize::new(0)),
+            last_warn: AtomicU64::new(u64::MAX),
+            born: Instant::now(),
         })
     }
 
@@ -268,7 +287,7 @@ impl RequestBudget {
     }
 
     fn record(self: &Arc<Self>, permit: OwnedSemaphorePermit, placed: &Placed) -> RequestPermit {
-        let key = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let key = self.next.fetch_add(1, Ordering::Relaxed);
         self.held
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -282,29 +301,43 @@ impl RequestBudget {
         Some(self.record(permit, placed))
     }
 
-    /// Waits up to `wait` for a permit (first come, first served). On a timeout the refusal is logged with the methods
-    /// that held the lane, and returned as the error to answer with.
-    pub async fn acquire(self: &Arc<Self>, placed: &Placed, wait: Duration) -> Result<RequestPermit, RpcError> {
+    /// A place among the requests waiting for a permit, or `None` when `MAX_WAITING` already wait: the socket reader
+    /// then refuses the request at once (`refuse`) instead of spawning a task for it.
+    pub fn reserve_wait(&self) -> Option<WaitSlot> {
+        let before = self.waiting.fetch_add(1, Ordering::SeqCst);
+        let slot = WaitSlot(self.waiting.clone());
+        (before < MAX_WAITING).then_some(slot)
+    }
+
+    /// Waits up to `wait` for a permit (first come, first served), holding `slot` meanwhile. On a timeout the refusal
+    /// is logged with the methods that held the lane, and returned as the error to answer with.
+    pub async fn acquire(self: &Arc<Self>, placed: &Placed, slot: WaitSlot, wait: Duration) -> Result<RequestPermit, RpcError> {
         let semaphore = self.semaphore(placed.lane).clone();
-        let waiting = Waiting::enter(&self.waiting);
-        let acquired = match &waiting {
-            Some(_) => tokio::time::timeout(wait, semaphore.acquire_owned()).await.ok().and_then(Result::ok),
-            None => None,
-        };
-        drop(waiting);
+        let acquired = tokio::time::timeout(wait, semaphore.acquire_owned()).await.ok().and_then(Result::ok);
+        drop(slot);
         match acquired {
             Some(permit) => Ok(self.record(permit, placed)),
-            None => {
-                tracing::warn!(
-                    conn = %self.conn,
-                    method = %placed.method,
-                    lane = placed.lane.name(),
-                    holders = %self.holders(placed.lane),
-                    "rpc refused: lane is full"
-                );
-                Err(capacity_error(&placed.method))
-            }
+            None => Err(self.refuse(placed)),
         }
+    }
+
+    /// The refusal for `placed`, logged with the methods holding its lane (at `warn` at most once a second).
+    pub fn refuse(&self, placed: &Placed) -> RpcError {
+        let now = self.born.elapsed().as_millis() as u64;
+        let last = self.last_warn.load(Ordering::Relaxed);
+        let due = last == u64::MAX || now.saturating_sub(last) >= REFUSAL_WARN_EVERY.as_millis() as u64;
+        if due && self.last_warn.compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+            tracing::warn!(
+                conn = %self.conn,
+                method = %placed.method,
+                lane = placed.lane.name(),
+                holders = %self.holders(placed.lane),
+                "rpc refused: lane is full"
+            );
+        } else {
+            tracing::debug!(conn = %self.conn, method = %placed.method, lane = placed.lane.name(), "rpc refused: lane is full");
+        }
+        capacity_error(&placed.method)
     }
 
     /// `method (elapsed)` for every call holding `lane`, longest first.
@@ -392,6 +425,32 @@ mod tests {
     }
 
     #[test]
+    fn calls_that_wait_on_other_machines_are_slow() {
+        for method in
+            ["projects.members.status", "threads.fork_to_machine", "threads.move_to_machine", "threads.move_abandon", "login.broker.status"]
+        {
+            assert_eq!(place(&request(method, json!({}))).unwrap().lane, Lane::Slow, "{method}");
+        }
+    }
+
+    #[test]
+    fn a_large_call_is_placed_from_its_two_lane_parameters() {
+        let big = "x".repeat(1 << 20);
+        assert_eq!(place(&request("files.write", json!({ "path": "a", "content": big }))).unwrap().lane, Lane::Standard);
+        assert_eq!(place(&request("threads.list", json!({ "query": big, "machine": "m" }))).unwrap().lane, Lane::Slow);
+        assert_eq!(place(&request("threads.list", json!({ "query": big, "machine": null }))).unwrap().lane, Lane::Standard);
+    }
+
+    #[test]
+    fn waiting_is_bounded_and_a_slot_frees_on_drop() {
+        let budget = RequestBudget::with_sizes("test", 1, 1, 1);
+        let slots: Vec<_> = (0..MAX_WAITING).map(|_| budget.reserve_wait().expect("room")).collect();
+        assert!(budget.reserve_wait().is_none());
+        drop(slots);
+        assert!(budget.reserve_wait().is_some());
+    }
+
+    #[test]
     fn notifications_and_garbage_are_not_requests() {
         assert!(place(r#"{"jsonrpc":"2.0","method":"git.status"}"#).is_none());
         assert!(place("not json").is_none());
@@ -430,7 +489,10 @@ mod tests {
         let waiter = tokio::spawn({
             let budget = budget.clone();
             let read = read.clone();
-            async move { budget.acquire(&read, Duration::from_secs(5)).await.map(|_| ()) }
+            async move {
+                let slot = budget.reserve_wait().expect("room to wait");
+                budget.acquire(&read, slot, Duration::from_secs(5)).await.map(|_| ())
+            }
         });
         tokio::time::sleep(Duration::from_millis(30)).await;
         drop(first);
@@ -442,7 +504,8 @@ mod tests {
         let budget = RequestBudget::with_sizes("test", 1, 1, 1);
         let slow = place(&request("github.pr.list", json!({}))).unwrap();
         let _held = budget.try_acquire(&slow).unwrap();
-        let refused = budget.acquire(&slow, Duration::from_millis(40)).await.err().expect("refused");
+        let slot = budget.reserve_wait().expect("room to wait");
+        let refused = budget.acquire(&slow, slot, Duration::from_millis(40)).await.err().expect("refused");
         assert_eq!(refused.code, codes::CAPACITY_EXCEEDED);
         assert!(budget.holders(Lane::Slow).starts_with("github.pr.list ("));
     }

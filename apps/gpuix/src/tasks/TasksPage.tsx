@@ -225,9 +225,11 @@ export function TasksPage() {
     const owner = foreignOwner('tasks', task.id)
     return owner ? `${owner.name} · ${name}` : name
   }
-  // The board that follows a failed first load fades in (`RECOVER_ENTER`); the ordinary first load does not.
+  // The board that follows a failed first load fades in (`RECOVER_ENTER`); the ordinary first load does not, and neither
+  // does the board a task page goes back to (it remounts, and going back has no motion).
   const recovered = useRef(false)
   if (s.error && !s.loaded) recovered.current = true
+  else if (task) recovered.current = false
   return (
     <div testId="page-tasks" style={{ position: 'relative', display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, width: '100%' }}>
       {task ? (

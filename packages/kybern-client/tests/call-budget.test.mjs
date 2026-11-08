@@ -164,6 +164,20 @@ test("queued calls fail with the connection when it closes", async () => {
   assert.equal(sent.length, 1);
 });
 
+test("a call backing off after a busy refusal fails with the connection, not on a later socket", async () => {
+  const { client, sent } = await connected({ busyRetry: { windowMs: 60_000, attempts: 5 } }, (message) =>
+    message.method === "tasks.items.list" ? { error: { ...BUSY, data: { ...BUSY.data, retry_after_ms: 10_000 } } } : undefined,
+  );
+  const call = client.call("tasks.items.list", {}).catch((e) => e);
+  await wait();
+  assert.equal(sent.filter((m) => m.method === "tasks.items.list").length, 1, "refused once, now backing off");
+  const started = Date.now();
+  client.close("gone");
+  assert.equal((await call).message, "gone");
+  assert.ok(Date.now() - started < 1_000, "failed at once, not when the backoff ends");
+  assert.equal(sent.filter((m) => m.method === "tasks.items.list").length, 1, "never sent again");
+});
+
 test("busy delay doubles from the daemon's hint, is capped and jittered", () => {
   const mid = () => 0.5;
   assert.equal(busyDelay(0, 400, mid), 400);

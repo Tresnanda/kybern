@@ -65,6 +65,10 @@ export const SLOW_METHODS: readonly string[] = [
   "network.rejoin",
   "network.merge",
   "skills.list",
+  "projects.members.status",
+  "threads.fork_to_machine",
+  "threads.move_to_machine",
+  "threads.move_abandon",
 ];
 
 /** Every method with one of these prefixes is slow. */
@@ -80,6 +84,7 @@ export const SLOW_PREFIXES: readonly string[] = [
   "daemon_update.",
   "sessions.",
   "projects.provision",
+  "login.broker.",
 ];
 
 /** Lists that also ask other machines when the call names one. */

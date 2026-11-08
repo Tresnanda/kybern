@@ -182,6 +182,8 @@ export class KybernClient {
   // recent results across pickers and sends, scoped to this verified endpoint.
   private skills = new Map<string, { expires: number; value: Promise<unknown> }>();
   private readonly scheduler: CallScheduler;
+  /** Busy refusals waiting out their backoff, failed with the queue when the socket drops. */
+  private readonly busyRetries = new Map<ReturnType<typeof setTimeout>, (error: Error) => void>();
 
   constructor(endpoint: Endpoint, options: ClientOptions = {}) {
     this.endpoint = endpoint;
@@ -342,8 +344,15 @@ export class KybernClient {
                 const delay = isBusyRefusal(error)
                   ? busyDelay(n, (error.data as { retry_after_ms?: number } | undefined)?.retry_after_ms)
                   : undefined;
-                if (delay === undefined || n + 1 >= attempts || Date.now() + delay >= retryUntil) reject(error);
-                else setTimeout(() => attempt(n + 1), delay);
+                if (delay === undefined || n + 1 >= attempts || Date.now() + delay >= retryUntil) {
+                  reject(error);
+                  return;
+                }
+                const timer = setTimeout(() => {
+                  this.busyRetries.delete(timer);
+                  attempt(n + 1);
+                }, delay);
+                this.busyRetries.set(timer, reject);
               },
             );
           },
@@ -592,6 +601,12 @@ export class KybernClient {
     }
     this.pending.clear();
     this.scheduler.abortAll(error);
+    // A call backing off after a busy refusal was never started; it fails with the queue, not on a later socket.
+    for (const [timer, reject] of this.busyRetries) {
+      clearTimeout(timer);
+      reject(error);
+    }
+    this.busyRetries.clear();
     this.byRemoteId.clear();
     for (const sub of this.subscriptions) {
       sub.remoteId = undefined;

@@ -28,7 +28,7 @@ import { CopyAction } from './bubble.tsx'
 import { Button } from '../kit/Button.tsx'
 import { IconButton } from '../kit/IconButton.tsx'
 import { T } from './glyphs.ts'
-import { reportError } from './store.ts'
+import { reportError, useRowState } from './store.ts'
 import { chipifyKybernRefs } from './refs.ts'
 import { useFileRefs } from './fileRefs.ts'
 import { useNotes, openNote } from '../notes/store.ts'
@@ -386,19 +386,29 @@ type Measured = { piece: Piece; width: number; height: number }
 /**
  * A `diff` or `patch` fence drawn as a diff (#294) inside Markdown that native `<markdown>` or a worker-parsed document
  * draws: the header with its Copy and wrap buttons, then `DiffChunk`s of at most one chunk of lines each. Wrap starts on
- * (diff lines are long and the pieces sit in a column of prose); the reader can switch it off.
+ * (diff lines are long and the pieces sit in a column of prose); the reader can switch it off. Wrap and Show more are row
+ * state (`useRowState`) keyed by the fence's content, so a reply piece culled offscreen, or a transcript row scrolled out of
+ * the virtual list, comes back as the reader left it. Copy reads the fence's raw body (`raw`, CRLF kept).
  */
-const DiffFence = memo(function DiffFence({ text, language }: { text: string; language: string }) {
-  const [wrap, setWrap] = useState(true)
-  const [expanded, setExpanded] = useState(false)
-  const part = useMemo<MarkdownPart>(() => ({ kind: 'code', text, language, key: 'diff' }), [text, language])
+const DiffFence = memo(function DiffFence({ text, raw = text, language }: { text: string; raw?: string; language: string }) {
+  const key = useMemo(() => `diff-fence:${language}:${text.length}:${contentHash(text)}`, [text, language])
+  const [wrap, setWrap] = useRowState(`${key}:wrap`, true)
+  const [expanded, setExpanded] = useRowState(`${key}:expanded`, false)
+  const part = useMemo<MarkdownPart>(() => ({ kind: 'code', text: raw, language, key: 'diff' }), [raw, language])
   const chunks = useMemo(() => lineChunks(text), [text])
   const shown = expanded ? chunks : chunks.slice(0, 1)
   return <div testId="diff-fence" style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-    <CodeHeader part={part} expanded={expanded} wrap={wrap} onWrap={() => setWrap(value => !value)} onExpand={chunks.length > 1 ? () => setExpanded(value => !value) : undefined} />
+    <CodeHeader part={part} expanded={expanded} wrap={wrap} onWrap={() => setWrap(!wrap)} onExpand={chunks.length > 1 ? () => setExpanded(!expanded) : undefined} />
     {shown.map((chunk, i) => <CodeChunk key={i} text={chunk} language={language} wrap={wrap} first={i === 0} last={i === shown.length - 1} />)}
   </div>
 })
+
+/** 32-bit FNV-1a of `text`: an identity for a diff fence's row state that survives remounts. */
+function contentHash(text: string): string {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193)
+  return (hash >>> 0).toString(36)
+}
 
 /**
  * Drop-in for `<markdown>` (and, with `document`, a worker-parsed `DocumentMarkdown`) that also draws the `diff` / `patch`
@@ -412,14 +422,26 @@ export const FencedMarkdown = memo(function FencedMarkdown({ document = false, .
   const segments = useMemo(() => (hasDiffFence(source) ? splitDiffFences(source) : null), [source])
   const Prose = document ? DocumentMarkdown : 'markdown'
   if (!segments || !segments.some(segment => segment.kind === 'diff')) return <Prose {...props} />
+  // The caller's box (a capped height that scrolls, margins, size) belongs to the whole document; the pieces keep the
+  // text style (colour, selection), or each prose piece would be capped and scroll on its own.
+  const [box, text] = splitBoxStyle(props.style)
   const { ref: _ref, ...rest } = props as MarkdownProps & { ref?: unknown }
   const firstProse = segments.findIndex(segment => segment.kind === 'markdown')
-  return <div style={{ display: 'flex', flexDirection: 'column', gap: BLOCK_MARGIN, minWidth: 0 }}>
+  return <div style={{ display: 'flex', flexDirection: 'column', gap: BLOCK_MARGIN, minWidth: 0, ...box }}>
     {segments.map((segment, i) => segment.kind === 'diff'
-      ? <DiffFence key={i} text={segment.text} language={segment.language} />
-      : <div key={i} style={{ display: 'flex', flexDirection: 'column' }}><Prose {...(i === firstProse ? props : rest)} source={segment.text} /></div>)}
+      ? <DiffFence key={i} text={segment.text} raw={segment.raw} language={segment.language} />
+      : <div key={i} style={{ display: 'flex', flexDirection: 'column' }}><Prose {...(i === firstProse ? props : rest)} style={text} source={segment.text} /></div>)}
   </div>
 })
+
+const BOX_STYLE = new Set(['height', 'minHeight', 'maxHeight', 'width', 'minWidth', 'maxWidth', 'overflow', 'overflowX', 'overflowY', 'flexGrow', 'flexShrink', 'flexBasis', 'alignSelf', 'margin', 'marginTop', 'marginBottom', 'marginLeft', 'marginRight', 'padding', 'paddingTop', 'paddingBottom', 'paddingLeft', 'paddingRight'])
+/** `style` as the layout of the box around a split document and the text style its pieces keep. */
+function splitBoxStyle(style: MarkdownProps['style']): [Record<string, unknown>, MarkdownProps['style']] {
+  const box: Record<string, unknown> = {}
+  const text: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(style ?? {})) (BOX_STYLE.has(key) ? box : text)[key] = value
+  return [box, text as MarkdownProps['style']]
+}
 
 /** An agent's reply, always whole: `textChunks` pieces (whole blocks each) stacked with the margin the blocks would have
  *  between them in one document. Only the last piece streams, so a live reply re-parses its tail only. GPUIX lays out

@@ -48,8 +48,11 @@ export function diffRuns(text: string): DiffRun[] {
   return runs
 }
 
-/** A piece of a Markdown document: prose to draw as Markdown, or a diff fence to draw as a diff. */
-export type FenceSegment = { kind: 'markdown'; text: string } | { kind: 'diff'; text: string; language: string }
+/**
+ * A piece of a Markdown document: prose to draw as Markdown, or a diff fence to draw as a diff. A diff's `text` has `\n`
+ * line ends (what is drawn); `raw` is the fence body exactly as the source has it, CRLF included (what Copy reads).
+ */
+export type FenceSegment = { kind: 'markdown'; text: string } | { kind: 'diff'; text: string; raw: string; language: string }
 
 const DIFF_OPEN = /^(?:`{3,}|~{3,})[ \t]*(?:diff|patch)\b/im
 /** Any fence marker at any indentation: indent, marker, info string. */
@@ -66,8 +69,11 @@ export function hasDiffFence(source: string): boolean {
  * (a reply still streaming) runs to the end. Every other character stays in the `markdown` segments, in order.
  */
 export function splitDiffFences(source: string): FenceSegment[] {
-  // GitHub sends CRLF; a stray carriage return would keep every fence line from matching.
-  const lines = source.split(/\r?\n/)
+  // GitHub sends CRLF; a stray carriage return would keep every fence line from matching. The line ends are kept apart
+  // (`ends[i]` follows `lines[i]`) so a fence's raw body can be put back together exactly.
+  const lines: string[] = []
+  const ends: string[] = []
+  for (const [i, part] of source.split(/(\r?\n)/).entries()) (i % 2 ? ends : lines).push(part)
   const segments: FenceSegment[] = []
   let prose: string[] = []
   const flush = () => {
@@ -96,7 +102,9 @@ export function splitDiffFences(source: string): FenceSegment[] {
       continue
     }
     flush()
-    segments.push({ kind: 'diff', text: lines.slice(i + 1, close).join('\n'), language: info.split(/\s+/)[0]!.toLowerCase() })
+    const body = lines.slice(i + 1, close)
+    const raw = body.map((line, k) => (k < body.length - 1 ? line + ends[i + 1 + k]! : line)).join('')
+    segments.push({ kind: 'diff', text: body.join('\n'), raw, language: info.split(/\s+/)[0]!.toLowerCase() })
     i = close
   }
   flush()
