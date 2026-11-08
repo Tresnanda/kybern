@@ -277,7 +277,9 @@ pub(super) async fn spawn(bin: &Path, config: SessionConfig) -> Result<SpawnedSe
     if let Some(native_config) = native_config.as_deref() {
         extra.push(("OPENCODE_CONFIG_CONTENT", native_config));
     }
-    let server = Server::start(bin, Some(&config.cwd), &config.env, &extra).await?;
+    let agent = config.env.get("KYBERN_OPENCODE_AGENT").map(String::as_str).filter(|agent| *agent == "build" || *agent == "plan");
+    let server =
+        Server::start(bin, Some(&config.cwd), config.env.iter().filter(|(key, _)| key.as_str() != "KYBERN_OPENCODE_AGENT"), &extra).await?;
     let dir = config.cwd.to_string_lossy().to_string();
     let restrictions = restriction_rules(bridge);
     let permissions = |mode| ruleset(mode).into_iter().chain(restrictions.iter().cloned()).collect::<Vec<_>>();
@@ -318,6 +320,9 @@ pub(super) async fn spawn(bin: &Path, config: SessionConfig) -> Result<SpawnedSe
             if let Some(model) = config.model.as_deref().and_then(|model| model_ref(model, config.effort.as_deref())) {
                 body["model"] = model;
             }
+            if let Some(agent) = agent {
+                body["agent"] = json!(agent);
+            }
             let value = server.call(Method::POST, "/api/session", Some(body)).await?;
             value
                 .pointer("/data/id")
@@ -334,6 +339,10 @@ pub(super) async fn spawn(bin: &Path, config: SessionConfig) -> Result<SpawnedSe
             .await?;
         if let Some(model) = config.model.as_deref().and_then(|model| model_ref(model, config.effort.as_deref())) {
             server.call(Method::POST, &format!("/api/session/{session_id}/model"), Some(json!({ "model": model }))).await?;
+        }
+        // Agent rules refine the session rules, so select Plan after the permission patch.
+        if let Some(agent) = agent {
+            server.call(Method::POST, &format!("/api/session/{session_id}/agent"), Some(json!({ "agent": agent }))).await?;
         }
     }
     // The guide and coordinator role are session instructions; a PUT replaces
@@ -358,6 +367,7 @@ pub(super) async fn spawn(bin: &Path, config: SessionConfig) -> Result<SpawnedSe
             let mut state = State::new(session_id.clone(), restrictions);
             state.model = config.model.clone().filter(|model| split_model(model).is_some());
             state.effort = config.effort.clone();
+            state.agent = agent.map(str::to_string);
             Mutex::new(state)
         },
     });
@@ -412,6 +422,8 @@ struct State {
     /// The model the session runs (`provider/model`), for effort switches.
     model: Option<String>,
     effort: Option<String>,
+    /// OpenCode primary agent (`build` or `plan`) selected for this session.
+    agent: Option<String>,
     active: bool,
     turn_usage: Usage,
     turn_cost: f64,
@@ -436,6 +448,7 @@ impl State {
             step_model: None,
             model: None,
             effort: None,
+            agent: None,
             active: false,
             turn_usage: Usage::default(),
             turn_cost: 0.0,
@@ -1201,7 +1214,23 @@ impl AgentSession for Handle {
             let state = s.state.lock().await;
             (state.session_id.clone(), ruleset(mode).into_iter().chain(state.restrictions.iter().cloned()).collect::<Vec<_>>())
         };
-        s.call(Method::PATCH, &format!("/api/session/{session_id}"), Some(json!({ "permissions": rules }))).await.map(|_| ())
+        s.call(Method::PATCH, &format!("/api/session/{session_id}"), Some(json!({ "permissions": rules }))).await?;
+        // Re-select the agent so its later rules still refine the replaced session rules.
+        if let Some(agent) = s.state.lock().await.agent.clone() {
+            s.call(Method::POST, &format!("/api/session/{session_id}/agent"), Some(json!({ "agent": agent }))).await?;
+        }
+        Ok(())
+    }
+
+    async fn set_agent(&self, agent: &str) -> Result<()> {
+        if agent != "build" && agent != "plan" {
+            return Err(DriverError::Unsupported("OpenCode agents here are Build or Plan.".into()));
+        }
+        let s = &self.0;
+        let session_id = s.state.lock().await.session_id.clone();
+        s.call(Method::POST, &format!("/api/session/{session_id}/agent"), Some(json!({ "agent": agent }))).await?;
+        s.state.lock().await.agent = Some(agent.to_string());
+        Ok(())
     }
 
     async fn set_model(&self, model: &str) -> Result<()> {

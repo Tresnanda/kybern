@@ -189,6 +189,7 @@ impl Orchestrator {
         let created = self
             .create_thread_with_id(
                 methods::ThreadsCreateParams {
+                    opencode_agent: None,
                     pin_account: false,
                     project_id: Some(project.id),
                     provider: params.provider.clone(),

@@ -1931,6 +1931,11 @@ impl Orchestrator {
         if params.pin_account || thread.provider.instance != "default" {
             self.inner.store.meta_set(&format!("account_override:{}", thread.id), &thread.provider.instance)?;
         }
+        if thread.provider.kind == ProviderKind::Opencode
+            && let Some(agent) = params.opencode_agent.as_deref()
+        {
+            self.set_opencode_agent(thread.id, agent).await?;
+        }
 
         let ev = self.emit(thread.id, None, EventPayload::ThreadCreated { thread: thread.clone() })?;
         let mut thread = Thread { last_seq: ev.seq, ..thread };
@@ -3789,6 +3794,11 @@ impl Orchestrator {
             && native_tool_bridge.as_ref().is_some_and(|bridge| bridge.provider_instructions().is_some());
         // Cursor's account host reuses the daemon catalog; old entries lacking
         // native max-mode metadata deliberately fall back to one SDK discovery.
+        if thread.provider.kind == ProviderKind::Opencode
+            && let Some(agent) = self.opencode_agent(thread.id)?
+        {
+            provider_settings.env.insert("KYBERN_OPENCODE_AGENT".into(), agent);
+        }
         if thread.provider.kind == ProviderKind::Cursor
             && let Some((statuses, _)) = self.inner.provider_catalogs.last_known(&thread.project_id.to_string())
             && let Some(status) = statuses.iter().find(|status| status.kind == ProviderKind::Cursor)
@@ -5733,6 +5743,7 @@ mod tests {
 
         let thread = orchestrator
             .create_thread(methods::ThreadsCreateParams {
+                opencode_agent: None,
                 pin_account: false,
                 project_id: None,
                 provider: ProviderInstance::default_for(ProviderKind::Codex),
@@ -5760,6 +5771,7 @@ mod tests {
 
         let rejected = orchestrator
             .create_thread(methods::ThreadsCreateParams {
+                opencode_agent: None,
                 pin_account: false,
                 project_id: None,
                 provider: ProviderInstance::default_for(ProviderKind::Codex),
@@ -5787,6 +5799,7 @@ mod tests {
 
     fn client_create(fixture: &Fixture, thread_id: ThreadId, message_id: Option<MessageId>, text: &str) -> methods::ThreadsCreateParams {
         methods::ThreadsCreateParams {
+            opencode_agent: None,
             pin_account: false,
             project_id: Some(fixture.project.id),
             provider: ProviderInstance::default_for(ProviderKind::Codex),
@@ -8904,6 +8917,7 @@ for line in sys.stdin:
         assert!(rejected.contains("read-only"), "{rejected}");
         assert!(
             o.update_thread_fields(methods::ThreadsUpdateParams {
+                opencode_agent: None,
                 thread_id: child.id,
                 title: Some("x".into()),
                 pinned: None,

@@ -9,6 +9,8 @@ export interface DraftOptions extends GroupDraft {
   model: string;
   effort: string;
   permission: PermissionMode;
+  /** OpenCode Build or Plan. Absent means Build. */
+  opencodeAgent?: "build" | "plan";
   worktree: boolean;
   baseBranch: string;
 }

@@ -183,6 +183,8 @@ export interface ThreadTargetState {
   effective_permission_mode: PermissionMode;
   pending_permission_mode?: PermissionMode | null;
   quota_limited?: boolean;
+  /** OpenCode primary agent. Absent means Build. */
+  opencode_agent?: "build" | "plan" | null;
 }
 
 export interface ProviderModel {
@@ -2041,6 +2043,8 @@ export interface ThreadsCreateParams {
   members?: string[];
   /** Group projects: base branch per member path (worktree fork point, or the branch a local checkout switches to). */
   base_branches?: Record<string, string>;
+  /** OpenCode only: `build` or `plan`. */
+  opencode_agent?: "build" | "plan";
 }
 
 export interface ThreadsGetParams {
@@ -2381,6 +2385,8 @@ export interface TaskItemsSendParams {
   thread_id?: ThreadId;
   /** The client's id for the first message. */
   message_id?: MessageId;
+  /** OpenCode only: `build` or `plan`. */
+  opencode_agent?: "build" | "plan";
 }
 
 /** One run per task (`separate`, started in parallel), or one thread that every task records a run for (`combined`). */
@@ -2452,6 +2458,8 @@ export interface ThreadsUpdateParams {
   permission_mode?: PermissionMode;
   model?: string;
   effort?: string;
+  /** OpenCode only: `build` or `plan`. */
+  opencode_agent?: "build" | "plan";
 }
 
 export interface ThreadsArchiveParams {

@@ -90,6 +90,7 @@ import { useThreadCommands } from './composer/commands.ts'
 import { tokenIcon } from './composer/token-icons.ts'
 import { accountLead, ModelPicker, ModelTriggerLabel } from './composer/ModelPicker.tsx'
 import { PermissionPicker } from './composer/PermissionPicker.tsx'
+import { OpenCodeAgentPicker, type OpenCodeAgent } from './composer/OpenCodeAgentPicker.tsx'
 import { onlyFullAccess } from '../../../packages/kybern-client/src/permissionModes.ts'
 import { MachinePicker } from './composer/MachinePicker.tsx'
 import { chooseMachine, useMachineLists, useMachineTarget } from './composer/machineTarget.ts'
@@ -240,6 +241,12 @@ function ThreadComposer({ thread, placeholderEnter }: { thread: StateThread; pla
       canSteer={handoffSelected || canSteer(thread.provider)}
       mode={mode}
       onModeChange={(m) => void setThreadMode(threadId, m, thread.machineId).catch((e) => toastProblem(e, { action: 'change the permission mode', retry: () => void setThreadMode(threadId, m, thread.machineId).catch(() => {}) }))}
+      opencodeAgent={provider.kind === 'opencode' ? (target?.opencode_agent === 'plan' ? 'plan' : 'build') : undefined}
+      onOpenCodeAgentChange={provider.kind === 'opencode' ? (agent) => {
+        void requireThreadClient(threadId, thread.machineId).call('threads.update', { thread_id: threadId, opencode_agent: agent })
+          .then(() => loadTarget(threadId, thread.machineId))
+          .catch((e) => toastProblem(e, { action: 'change the OpenCode agent' }))
+      } : undefined}
       provider={provider}
       providers={composerProviders}
       accounts={accounts}
@@ -342,6 +349,8 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
       focusRef={extras.focusRef}
       mode={mode}
       onModeChange={(m) => patchDraft({ mode: m }, pane.id)}
+      opencodeAgent={provider?.kind === 'opencode' ? draft.opencodeAgent ?? 'build' : undefined}
+      onOpenCodeAgentChange={provider?.kind === 'opencode' ? (agent) => patchDraft({ opencodeAgent: agent }, pane.id) : undefined}
       provider={provider}
       providers={providers}
       accounts={accounts}
@@ -417,6 +426,7 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
               model: choice?.model,
               effort: choice?.effort,
               permission_mode: mode,
+              ...(provider.kind === 'opencode' ? { opencode_agent: draft.opencodeAgent ?? 'build' } : {}),
               use_worktree: useWorktree,
               base_branch: useWorktree ? draft.baseBranch ?? null : null,
               project_id: projectId,
@@ -480,6 +490,7 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
             permission_mode: mode,
             model: choice?.model,
             effort: choice?.effort,
+            ...(provider.kind === 'opencode' ? { opencode_agent: draft.opencodeAgent ?? 'build' } : {}),
             use_worktree: useWorktree && !freeChat,
             ...(draft.baseBranch ? { base_branch: draft.baseBranch } : {}),
             ...(project && isGroupProject(project) ? groupCreateParams(project, mappedGroupChoice(draft.group, projectId!, draft.groupPaths?.[groupPathsKey(machine.key, projectId!, target.machineId)]), useWorktree) : {}),
@@ -497,6 +508,7 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
             permission_mode: mode,
             model: choice?.model,
             effort: choice?.effort,
+            ...(provider.kind === 'opencode' ? { opencode_agent: draft.opencodeAgent ?? 'build' } : {}),
             use_worktree: useWorktree,
             base_branch: draft.baseBranch ?? undefined,
             // A group project: the repositories this chat gets and their branches (`groups/tray.ts`), next to the client ids.
@@ -562,6 +574,8 @@ export interface ComposerViewProps {
   lockMode?: boolean
   mode: PermissionMode
   onModeChange: (mode: PermissionMode) => void
+  opencodeAgent?: OpenCodeAgent
+  onOpenCodeAgentChange?: (agent: OpenCodeAgent) => void
   provider: ProviderInstance | null
   providers: ProviderStatus[]
   accounts: import('../../../packages/kybern-client/src/types.ts').AccountSummary[]
@@ -1168,6 +1182,9 @@ export function ComposerView(input: ComposerViewProps) {
               </>}
             </PickerMenu>
             <PermissionPicker locked={props.lockMode} mode={mode} kind={provider?.kind} status={status} onChange={props.onModeChange} />
+            {props.opencodeAgent && props.onOpenCodeAgentChange && (
+              <OpenCodeAgentPicker agent={props.opencodeAgent} onChange={props.onOpenCodeAgentChange} />
+            )}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4, flexGrow: 1, minWidth: 0 }}>
             {props.machinePicker}

@@ -111,6 +111,13 @@ expression: schema_for!(ThreadsCreateParams)
       "additionalProperties": {
         "type": "string"
       }
+    },
+    "opencode_agent": {
+      "description": "OpenCode only: `build` or `plan`. Other providers ignore it.",
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "required": [

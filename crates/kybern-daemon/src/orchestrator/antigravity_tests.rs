@@ -5,6 +5,7 @@ const ONLY_FULL_ACCESS: &str = "Antigravity only runs in Full access. Choose Ful
 
 fn antigravity_create(project: &Project, mode: Option<PermissionMode>) -> methods::ThreadsCreateParams {
     methods::ThreadsCreateParams {
+        opencode_agent: None,
         pin_account: false,
         project_id: Some(project.id),
         provider: ProviderInstance::default_for(ProviderKind::Antigravity),
@@ -146,7 +147,9 @@ async fn antigravity_sessions_get_a_tool_free_guide_and_no_gateway_session() {
 #[test]
 fn antigravity_has_one_account_per_machine() {
     let mut provider = ProviderSettings::default();
-    provider.accounts.insert("second".into(), ProviderAccount { name: "Second".into(), directory: "/tmp/second".into(), ..Default::default() });
+    provider
+        .accounts
+        .insert("second".into(), ProviderAccount { name: "Second".into(), directory: "/tmp/second".into(), ..Default::default() });
     let error = crate::provider_accounts::environment(&provider, ProviderKind::Antigravity, "second").unwrap_err();
     assert!(error.to_string().contains("one account per machine"), "{error}");
     // The default account is the machine's own login, with the key variable it may carry.

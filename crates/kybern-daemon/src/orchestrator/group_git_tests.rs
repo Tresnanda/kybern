@@ -79,6 +79,7 @@ impl Group {
 
     fn params(&self, worktree: bool, members: Option<&[&str]>) -> methods::ThreadsCreateParams {
         methods::ThreadsCreateParams {
+            opencode_agent: None,
             pin_account: false,
             project_id: Some(self.project.id),
             provider: ProviderInstance::default_for(ProviderKind::Codex),

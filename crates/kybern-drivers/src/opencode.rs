@@ -405,6 +405,9 @@ impl AgentDriver for OpencodeDriver {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         for (k, v) in &config.env {
+            if k == "KYBERN_OPENCODE_AGENT" {
+                continue;
+            }
             cmd.env(k, v);
         }
         if let Some(native_config) = native_config {

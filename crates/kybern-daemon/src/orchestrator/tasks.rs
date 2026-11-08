@@ -294,6 +294,7 @@ impl Orchestrator {
                         message_id: None,
                         members: None,
                         base_branches: None,
+                        opencode_agent: params.opencode_agent,
                     },
                     client_thread.unwrap_or_else(Uuid::now_v7),
                 )
@@ -412,6 +413,7 @@ impl Orchestrator {
             .map(|(index, task)| {
                 let this = self.clone();
                 let send = TaskItemsSendParams {
+                    opencode_agent: None,
                     id: task.id,
                     provider: params.provider.clone(),
                     model: params.model.clone(),
@@ -543,6 +545,7 @@ impl Orchestrator {
         let thread = self
             .create_thread_with_id(
                 methods::ThreadsCreateParams {
+                    opencode_agent: None,
                     pin_account: false,
                     project_id: Some(project_id),
                     provider: params.provider.clone(),
@@ -1367,6 +1370,7 @@ mod tests {
 
         fn send_params(&self, task: &TaskItem, note_ids: Vec<NoteId>) -> TaskItemsSendParams {
             TaskItemsSendParams {
+                opencode_agent: None,
                 id: task.id,
                 provider: ProviderInstance::default_for(ProviderKind::ClaudeCode),
                 model: None,
@@ -1534,8 +1538,12 @@ mod tests {
         let fixture = Fixture::new();
         let task = fixture.task("Fix login");
         let thread_id = Uuid::now_v7();
-        let params =
-            TaskItemsSendParams { thread_id: Some(thread_id), message_id: Some(Uuid::now_v7()), ..fixture.send_params(&task, vec![]) };
+        let params = TaskItemsSendParams {
+            opencode_agent: None,
+            thread_id: Some(thread_id),
+            message_id: Some(Uuid::now_v7()),
+            ..fixture.send_params(&task, vec![])
+        };
 
         // The first message cannot go out (the harness is updating): the run is undone, but the
         // thread the client named stays for the retry.
@@ -2020,6 +2028,7 @@ mod tests {
                 .expect("the first turn started")
         };
         let with_message = |task: &TaskItem, text: &str| TaskItemsSendParams {
+            opencode_agent: None,
             prompt: None,
             message: Some(UserMessage::text(text)),
             ..fixture.send_params(task, vec![])
