@@ -1997,7 +1997,7 @@ impl Doc {
             let (mut right, mut bottom) = (x + (wanted.2 * scale).max(1.0), y + (wanted.3 * scale).max(1.0));
             x = x.max(0.0);
             y = y.max(0.0);
-            // The placement is in window points; the page's CSS pixels are `ZoomFactor` (the interface zoom, #292) larger.
+            // The placement is in window points, CSS pixels times `ZoomFactor` (the interface zoom, #292).
             right = right.min(placement.logical.0 / zoom);
             bottom = bottom.min(placement.logical.1 / zoom);
             if right <= x || bottom <= y {
@@ -2005,10 +2005,11 @@ impl Doc {
                 return;
             }
             let (width, height) = (right - x, bottom - y);
-            // macOS asks for min(1200, 2 × width) pixels across; CDP multiplies the clip scale by the device scale.
+            // macOS asks for min(1200, 2 × width) pixels across; CDP multiplies the clip scale by the device scale. The
+            // clip is in the page's zoomed pixels: CSS pixels times `ZoomFactor`.
             let pixels = (width * 2.0).min(1200.0);
             let params = json!({"format": "png", "fromSurface": true, "captureBeyondViewport": false,
-                "clip": {"x": x, "y": y, "width": width, "height": height, "scale": pixels / width / device / zoom}});
+                "clip": {"x": x * zoom, "y": y * zoom, "width": width * zoom, "height": height * zoom, "scale": pixels / (width * zoom) / device}});
             cdp(&shooter, "Page.captureScreenshot", &params.to_string(), move |result| {
                 let written = result.ok().and_then(|json| {
                     let data = serde_json::from_str::<Value>(&json).ok()?.get("data")?.as_str()?.to_owned();

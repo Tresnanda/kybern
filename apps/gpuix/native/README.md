@@ -418,8 +418,8 @@ scale). Element coordinates are content pixels; the platform's are OS points.
 - **Web views** float over the window in OS points on macOS and Windows: `src/native/webview.ts` multiplies placements
   and occlusions by the zoom, divides `outsidePress` back, and sends `{op: 'zoom'}` so the host zooms the page
   (`WKWebView.pageZoom`, WebView2 `ZoomFactor`): the wrapper's CSS pixels stay content pixels. Linux paints the page in
-  GPUI's scene (`<websurface>`) at the window's scale factor, already zoomed. `snapshotRect` takes CSS pixels, so the
-  hosts multiply them by the page zoom (WKWebView view points) or divide the placement by it (WebView2's CDP clip).
+  GPUI's scene (`<websurface>`) at the window's scale factor, already zoomed. `snapshotRect` takes CSS pixels, which the
+  hosts multiply by the page zoom: WKWebView's snapshot rect is in view points, WebView2's CDP clip in zoomed pixels.
 - **macOS menu:** a View menu with Zoom in ⌘+, Zoom out ⌘−, Actual size ⌘0 (`app_menu.rs`). Their bindings sit in a
   context no element has, so a key never dispatches them: it reaches JS's window key listener (an open image keeps the
   chords). A pointer choice calls `setMenuCommandCallback`'s callback; a key equivalent AppKit matched after the window
