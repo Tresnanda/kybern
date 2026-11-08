@@ -10,9 +10,13 @@
 // Hover and press feedback are instant and the thumb has no motion: this is a control used a hundred times a
 // day (PORTING.md § Motion). Keys: ←/↓ −1, →/↑ +1, Shift ±10, Home/End min/max. Each key shows its value at once and goes
 // through `onChange`; a run of keys (a held arrow) commits once, 250 ms after the last, or when focus leaves.
+//
+// `detents`: every integer from `min` to `max` is a stop with a 2 × 4 tick under the rail (Interface size's eight
+// steps). `limit`: the largest value that can be chosen; the rail past it is dashed and its ticks faint, and the thumb
+// stops there (sizes that do not fit the display).
 import { useGpuix, type PublicInstance } from '@gpuix/react'
 import { useEffect, useRef, useState } from 'react'
-import { Label, useTheme } from '../ui.tsx'
+import { Label, ink, useTheme } from '../ui.tsx'
 import { useFocusRing } from './Switch.tsx'
 import { useControls } from './controls.ts'
 
@@ -20,8 +24,14 @@ const TRACK = 160
 const THUMB = 16
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
 
-export function Slider({ value, min, max, onChange, onCommit, valueLabel, muted = false, 'aria-label': label, ariaValueText, disabled = false, testId }: {
+const DASH = 4, GAP = 3
+
+export function Slider({ value, min, max, onChange, onCommit, valueLabel, muted = false, 'aria-label': label, ariaValueText, disabled = false, testId, detents = false, limit }: {
   value: number; min: number; max: number
+  /** A tick under the rail at each integer stop. */
+  detents?: boolean
+  /** The largest value that can be chosen (default `max`); the rest of the rail reads as unavailable. */
+  limit?: number
   /** Live, on every move; the caller throttles it. */
   onChange: (value: number) => void
   /** Release, or the end of a run of key presses. */
@@ -37,6 +47,8 @@ export function Slider({ value, min, max, onChange, onCommit, valueLabel, muted 
   const t = useTheme()
   const c = useControls()
   const { renderer } = useGpuix()
+  const top = Math.min(max, Math.max(min, limit ?? max))
+  const x = (v: number) => THUMB / 2 + ((v - min) / (max - min)) * (TRACK - THUMB)
   const track = useRef<PublicInstance | null>(null)
   const focus = useFocusRing()
   // A press and its release can arrive in one tick, before the drag state re-renders.
@@ -63,7 +75,7 @@ export function Slider({ value, min, max, onChange, onCommit, valueLabel, muted 
   const at = (x: number | undefined) => {
     const bounds = track.current ? renderer?.getElementBounds?.(track.current.id) : null
     if (!bounds || x === undefined) return dragging.current ?? value
-    return Math.round(min + clamp((x - bounds.x - THUMB / 2) / (bounds.width - THUMB), 0, 1) * (max - min))
+    return Math.min(top, Math.round(min + clamp((x - bounds.x - THUMB / 2) / (bounds.width - THUMB), 0, 1) * (max - min)))
   }
   const move = (next: number) => {
     if (next === dragging.current) return
@@ -100,7 +112,7 @@ export function Slider({ value, min, max, onChange, onCommit, valueLabel, muted 
           if (disabled) return
           const step = (e.modifiers?.shift ? 10 : 1) * (e.key === 'right' || e.key === 'up' ? 1 : e.key === 'left' || e.key === 'down' ? -1 : 0)
           const from = keyed.current ?? value
-          const next = e.key === 'home' ? min : e.key === 'end' ? max : step ? clamp(from + step, min, max) : null
+          const next = e.key === 'home' ? min : e.key === 'end' ? top : step ? clamp(from + step, min, top) : null
           if (next === null) return
           e.preventDefault()
           focus.keyed()
@@ -114,7 +126,12 @@ export function Slider({ value, min, max, onChange, onCommit, valueLabel, muted 
         style={{ position: 'relative', width: TRACK, height: 28, flexShrink: 0, borderRadius: 8, cursor: disabled ? 'default' : 'pointer', ...(disabled ? {} : { focusVisible: { outlineWidth: 2, outlineColor: c.focus, outlineOffset: 0 } }) }}
       >
         {/* The parts paint fills, which would take the press from the track. */}
-        <div style={{ position: 'absolute', left: 0, top: 12, width: TRACK, height: 4, borderRadius: 2, backgroundColor: c.slider.track, pointerEvents: 'none' }} />
+        <div style={{ position: 'absolute', left: 0, top: 12, width: top < max ? x(top) : TRACK, height: 4, borderRadius: 2, backgroundColor: c.slider.track, pointerEvents: 'none' }} />
+        {top < max && Array.from({ length: Math.ceil((TRACK - x(top) - GAP) / (DASH + GAP)) }, (_, i) => {
+          const left = x(top) + GAP + i * (DASH + GAP)
+          return <div key={`dash${i}`} style={{ position: 'absolute', left, top: 12, width: Math.min(DASH, TRACK - left), height: 4, borderRadius: 1, backgroundColor: ink(t, 0.12), pointerEvents: 'none' }} />
+        })}
+        {detents && Array.from({ length: max - min + 1 }, (_, i) => <div key={`tick${i}`} style={{ position: 'absolute', left: x(min + i) - 1, top: 18, width: 2, height: 4, borderRadius: 1, backgroundColor: ink(t, min + i > top ? 0.08 : 0.25), pointerEvents: 'none' }} />)}
         <div style={{ position: 'absolute', left: 0, top: 12, width: THUMB / 2 + ratio * (TRACK - THUMB), height: 4, borderRadius: 2, backgroundColor: fill, pointerEvents: 'none' }} />
         <div style={{ position: 'absolute', left: ratio * (TRACK - THUMB), top: 6, width: THUMB, height: THUMB, borderRadius: THUMB / 2, backgroundColor: '#ffffff', boxShadow: [{ offsetX: 0, offsetY: 0, blurRadius: 0, spreadRadius: 0.5, color: 'rgba(0, 0, 0, 0.25)' }, { offsetX: 0, offsetY: 1, blurRadius: 3, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.3)' }], pointerEvents: 'none' }} />
       </div>

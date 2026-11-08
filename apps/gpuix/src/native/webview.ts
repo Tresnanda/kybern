@@ -5,6 +5,7 @@ import path from 'node:path'
 import type { LayoutRect, RoundedLayoutClip } from './layout.ts'
 import { spawnSync } from 'node:child_process'
 import { linuxSandboxProbe, noteWebViewUnavailable, webViewSupport, type LinuxWebViewProbe, type WindowsHostState } from './webview-support.ts'
+import { getUiZoom, subscribeUiZoom } from '../shell/uiZoom.ts'
 
 export type WebEvent = { id: string; generation?: number; type: string; message?: string; url?: string; visible?: boolean; key?: string; modifiers?: { cmd: boolean; ctrl: boolean; alt: boolean; shift: boolean }; data?: Record<string, unknown>
   /** `outsidePress`: window points; `snapshot`: the PNG's pixel size. */
@@ -51,6 +52,19 @@ let pointerCaptures = 0
 const live = new Set<string>()
 const listeners = new Set<(event: WebEvent) => void>()
 const occlusions = new Map<number, { rect: LayoutRect; radius: number; dim: number; order: number; inputOnly: boolean }>()
+/**
+ * Interface zoom (#292): Kybern's layout is in content pixels, one OS point being `zoom` of them. macOS and Windows float
+ * the page over the window in OS points, so what is sent there is multiplied by the zoom, a press position coming back is
+ * divided by it, and the host zooms the page itself (WKWebView `pageZoom`, WebView2 `ZoomFactor`), so the wrapper's CSS
+ * pixels stay content pixels. Linux paints the page inside GPUI's scene (`<websurface>`), already zoomed.
+ */
+const IN_OS_POINTS = process.platform !== 'linux'
+const zoomFactor = () => (IN_OS_POINTS ? getUiZoom() : 1)
+const zoomRect = (rect: LayoutRect, z: number): LayoutRect => (z === 1 ? rect : { x: rect.x * z, y: rect.y * z, width: rect.width * z, height: rect.height * z })
+type PlaceArgs = Parameters<typeof webHost.place>
+/** Each placed document's last placement, sent again when the zoom changes. */
+const placements = new Map<string, PlaceArgs>()
+let sentZoom = 1
 function load(file: string) {
   return dlopen(file, {
     kybern_web_init: { args: [FFIType.ptr], returns: FFIType.void },
@@ -87,14 +101,30 @@ function initialize() {
       const raw = loaded.symbols.kybern_web_next()
       if (!raw) break
       const event = JSON.parse(String(raw)) as WebEvent
+      if (event.type === 'outsidePress' && IN_OS_POINTS) { const z = getUiZoom(); if (event.x !== undefined) event.x /= z; if (event.y !== undefined) event.y /= z }
       if (event.type === 'frameResult' || event.type === 'snapshotRect') settle(event)
       for (const listener of listeners) { try { listener(event) } catch (e) { console.error('[webview]', e) } }
     }
   }, { args: [], returns: FFIType.void, threadsafe: true })
   loaded.symbols.kybern_web_init(wake.ptr); bridge = loaded
-  for (const [layer, value] of occlusions) command({ op: 'occlusion', id: '', layer, ...value })
+  sentZoom = zoomFactor()
+  if (sentZoom !== 1) command({ op: 'zoom', id: '', zoom: sentZoom })
+  for (const [layer, value] of occlusions) sendOcclusion(layer, value)
   if (pointerCaptures) command({ op: 'capture', id: '', active: true })
 }
+function sendOcclusion(layer: number, value: { rect: LayoutRect; radius: number; dim: number; order: number; inputOnly: boolean }) {
+  const z = zoomFactor()
+  command({ op: 'occlusion', id: '', layer, ...value, rect: zoomRect(value.rect, z), radius: value.radius * z })
+}
+// A zoom change moves every page: the host zooms them, then each placement and occlusion is sent again in OS points.
+subscribeUiZoom(() => {
+  const z = zoomFactor()
+  if (!bridge || z === sentZoom) return
+  sentZoom = z
+  command({ op: 'zoom', id: '', zoom: z })
+  for (const args of [...placements.values()]) webHost.place(...args)
+  for (const [layer, value] of occlusions) sendOcclusion(layer, value)
+})
 function command(fields: Record<string, unknown>) {
   if (!SUPPORT.available) return
   initialize()
@@ -164,12 +194,15 @@ export const webHost = {
   place(id: string, rect: LayoutRect, clip: LayoutRect, logical: { width: number; height: number; scale: number; left: number; top: number; radius?: number; roundedClips?: RoundedLayoutClip[] | null; slot?: string; slotRect?: LayoutRect }, visible = true, layer = 0) {
     if (!bridge) return
     placed.set(id, rect)
+    placements.set(id, [id, rect, clip, logical, visible, layer])
     const slot = logical.slotRect ?? rect
-    command({ op: 'place', id, x: clip.x, y: clip.y, width: clip.width, height: clip.height, offsetX: rect.x - clip.x, offsetY: rect.y - clip.y, logicalWidth: rect.width, logicalHeight: rect.height, visible,
-      layer, radius: logical.radius ?? 0, roundedClips: logical.roundedClips ?? [], layout: `window.kybernLayout?.(${[logical.width, logical.height, logical.scale, logical.left, logical.top].join(',')})`,
+    // OS points on macOS and Windows (`zoomFactor`); the layout script and the Linux slot offsets stay in content pixels.
+    const z = zoomFactor()
+    command({ op: 'place', id, x: clip.x * z, y: clip.y * z, width: clip.width * z, height: clip.height * z, offsetX: (rect.x - clip.x) * z, offsetY: (rect.y - clip.y) * z, logicalWidth: rect.width * z, logicalHeight: rect.height * z, visible,
+      layer, radius: (logical.radius ?? 0) * z, roundedClips: z === 1 ? logical.roundedClips ?? [] : (logical.roundedClips ?? []).map(shape => shape.map(value => value * z)), layout: `window.kybernLayout?.(${[logical.width, logical.height, logical.scale, logical.left, logical.top].join(',')})`,
       slot: logical.slot ?? '', frameX: rect.x - slot.x, frameY: rect.y - slot.y })
   },
-  hide(id: string) { if (bridge) command({ op: 'hide', id }) },
+  hide(id: string) { const last = placements.get(id); if (last) last[4] = false; if (bridge) command({ op: 'hide', id }) },
   /** Give the keyboard back to GPUI if a document holds it (`native/webview.m` `releaseFocus`); otherwise nothing. */
   releaseFocus() { if (bridge) command({ op: 'release', id: '' }) },
   /** Test seam: the document layer's presented opacity and scale, as a `probe` event. */
@@ -191,7 +224,7 @@ export const webHost = {
   theme(id: string, theme: unknown) { command({ op: 'post', id, script: `window.kybernTheme?.(${JSON.stringify(theme)})` }) },
   navigate(id: string, url: string) { command({ op: 'navigate', id, url }) },
   action(id: string, action: 'reload' | 'back' | 'forward' | 'stop') { command({ op: 'action', id, action }) },
-  destroy(id: string) { live.delete(id); placed.delete(id); if (bridge) command({ op: 'destroy', id }) },
+  destroy(id: string) { live.delete(id); placed.delete(id); placements.delete(id); if (bridge) command({ op: 'destroy', id }) },
   /** Linux: answer a page's `<select>` (`optionMenu` event) with an item index, or -1 to dismiss. */
   optionMenu(id: string, index: number) { if (bridge) command({ op: 'optionMenu', id, index }) },
   /** Linux: run a context menu item (`contextMenu` event) by its `index`, or -1 to dismiss. */
@@ -220,7 +253,7 @@ export const webHost = {
   },
   occlusion(layer: number, rect: LayoutRect | null, radius = 0, dim = 0, order = layer, inputOnly = false) {
     if (rect) occlusions.set(layer, { rect, radius, dim, order, inputOnly }); else occlusions.delete(layer)
-    if (bridge) command({ op: 'occlusion', id: '', layer, rect, radius, dim, order, inputOnly })
+    if (bridge) { const z = zoomFactor(); command({ op: 'occlusion', id: '', layer, rect: rect ? zoomRect(rect, z) : rect, radius: radius * z, dim, order, inputOnly }) }
   },
   subscribe(listener: (event: WebEvent) => void) { listeners.add(listener); return () => { listeners.delete(listener) } },
 }

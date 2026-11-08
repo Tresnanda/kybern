@@ -12,6 +12,8 @@ import { Icon } from './icons.tsx'
 import { SpinIcon } from './kit/Spin.tsx'
 import { loadProviders } from './nav/live.ts'
 import { N } from './nav/glyphs.ts'
+import { UI_ZOOM_STEPS, availableSteps, resetZoom, useUiZoom, zoomIn, zoomOut } from './shell/uiZoom.ts'
+import { isMacKeys } from './platform/keys.ts'
 import { newThread } from './nav/history.ts'
 import { ContextMenu, Menu, MenuItem, MenuLabel, MenuSeparator, muted } from './nav/overlay.tsx'
 import { Kbd } from './kit/Kbd.tsx'
@@ -318,6 +320,18 @@ function BrandRow() {
   )
 }
 
+/** Interface size (#292): Zoom in / Zoom out / Actual size, open while stepping, disabled at either end. */
+function ZoomMenuItems() {
+  const { zoom, display } = useUiZoom()
+  const steps = availableSteps(display)
+  return <>
+    <MenuSeparator />
+    <MenuItem id="zoom-in" icon={N.zoomIn} label="Zoom in" shortcut="⌘+" keepOpen disabled={zoom >= steps[steps.length - 1]} onSelect={zoomIn} />
+    <MenuItem id="zoom-out" icon={N.zoomOut} label="Zoom out" shortcut="⌘−" keepOpen disabled={zoom <= UI_ZOOM_STEPS[0]} onSelect={zoomOut} />
+    <MenuItem id="actual-size" icon={N.actualSize} label="Actual size" shortcut="⌘0" disabled={zoom === 1} onSelect={resetZoom} />
+  </>
+}
+
 /** The "kybern" menu: projects, settings, help and agents (`AppMenu`). */
 function AppMenu() {
   const t = useTheme()
@@ -357,6 +371,8 @@ function AppMenu() {
       <MenuItem id="add" icon={N.folderOpen} label="Add project" onSelect={() => void addProject()} />
       <MenuItem id="settings" icon={N.settings} label="Settings" shortcut="⌘," onSelect={() => setNav({ settingsOpen: true })} />
       <MenuItem id="commands" icon={N.command} label="Commands and shortcuts" shortcut="⌘K" onSelect={() => setNav({ paletteOpen: true })} />
+      {/* macOS has these in the View menu of the menu bar (`ui_zoom.rs`). */}
+      {!isMacKeys() && <ZoomMenuItems />}
       <MenuSeparator />
       <MenuItem
         id="reload"

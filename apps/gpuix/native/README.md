@@ -392,6 +392,46 @@ move a second time behind the modal; the terminal stops the default for every
 key it forwards to the shell. Tab navigation is otherwise left on: a Tab the
 composer's `interceptKeys` consumes never reaches the window handler.
 
+## Interface zoom (#292)
+
+```ts
+renderer.setUiZoom(1.25, 1125, 750)   // zoom, then the minimum content size in OS points (a smaller window grows)
+renderer.getUiZoom()                  // { zoom, scale, displayWidth, displayHeight }
+render(<App />, { uiZoom: 1.25, minWidth: 1125, minHeight: 750 })   // open already zoomed
+```
+
+A per-window zoom in GPUI (zed `Window::set_ui_zoom`), like a browser's page zoom. The window renders at the display
+scale × zoom (`Window::scale_factor`) in a viewport of the platform content size ÷ zoom, so every px value in the tree
+scales, the layout reflows, and text, SVGs and images rasterize at the new device resolution (the glyph atlas is keyed by
+scale). Element coordinates are content pixels; the platform's are OS points.
+
+- **In:** the platform input callback divides positions (mouse, scroll, pinch, touch, file drop) and trackpad pixel
+  deltas by the zoom before `dispatch_event` (`platform_input_to_content`); line deltas are content lines. Windows'
+  caption hit test and the IME's `character_index_for_point` are converted the same way. Automation (`mouse.*`,
+  `simulateClick`) calls `dispatch_event` directly in content pixels.
+- **Out:** IME candidate bounds (`bounds_for_range`, `update_ime_position`), the window menu position, Wayland input
+  regions and client insets are multiplied by it. Window bounds, sizes, saved frames and the minimum size stay in OS
+  points (`set_window_min_size`, a new `PlatformWindow::set_min_size` on every platform).
+- **Caches:** a zoom change runs `bounds_changed` (scale, viewport and pointer re-read through the zoom, `refresh()`,
+  bounds observers), the path a display-scale change already takes, so cached views and islands re-render once and
+  layout observers report the new content size.
+- **Web views** float over the window in OS points on macOS and Windows: `src/native/webview.ts` multiplies placements
+  and occlusions by the zoom, divides `outsidePress` back, and sends `{op: 'zoom'}` so the host zooms the page
+  (`WKWebView.pageZoom`, WebView2 `ZoomFactor`): the wrapper's CSS pixels stay content pixels. Linux paints the page in
+  GPUI's scene (`<websurface>`) at the window's scale factor, already zoomed.
+- **macOS menu:** a View menu with Zoom in ⌘+, Zoom out ⌘−, Actual size ⌘0 (`app_menu.rs`). Their bindings sit in a
+  context no element has, so a key never dispatches them: it reaches JS's window key listener (an open image keeps the
+  chords). A pointer choice calls `setMenuCommandCallback`'s callback; a key equivalent AppKit matched after the window
+  passed the key is dropped (`NSApp.currentEvent` is a key down). `setZoomMenuState` enables the items: AppKit validates
+  a menu item by its action being available, so the root registers only the enabled ones. `setTrafficLightPosition`
+  keeps the traffic lights centred on a zoomed title bar.
+
+`zoom-check.ts` (`zoom-lab.tsx`, `zoom-input.m`) checks 100 → 150 → 80 %: the content viewport and a layout observer,
+AppKit hover, click, scroll and a text drag at window points, a popover under its trigger, a 1 px border painted as
+exactly scale × zoom device rows, a web page placed over its slot and zoomed with the UI (on a capture of the real
+window), the minimum window, and steps that stop at the largest size that fits the display. Off macOS it runs without
+the AppKit and web view parts (`--checks zoom`).
+
 ## Window drag regions
 
 `<div windowDrag>` marks an empty chrome area. The native hook uses

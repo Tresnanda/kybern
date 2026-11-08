@@ -114,7 +114,21 @@ const SHORTCUT_KEYS: &[(u32, &str)] = &[
     (0xBC, ","),
     (0xDC, "\\"),
     (0x50, "p"),
+    // The interface zoom (#292): Ctrl+= (and Ctrl++, Shift held), Ctrl+− and Ctrl+0, on the main row and the keypad.
+    (0xBB, "="),
+    (0x6B, "="),
+    (0xBD, "-"),
+    (0x6D, "-"),
+    (0x30, "0"),
+    (0x60, "0"),
 ];
+
+/// Interface zoom (#292), as `f64` bits: every page is zoomed like a browser page (`ZoomFactor`); placements arrive in
+/// window points already, so `scale` stays the window's DPI.
+static UI_ZOOM: AtomicU64 = AtomicU64::new(0x3FF0_0000_0000_0000);
+fn ui_zoom() -> f64 {
+    f64::from_bits(UI_ZOOM.load(Ordering::Relaxed))
+}
 
 // ---- Bun's thread → the UI thread ----
 
@@ -624,6 +638,16 @@ impl Host {
             }
             "create" => {
                 self.create(&id, &command);
+                return;
+            }
+            "zoom" => {
+                let zoom = num(&command, "zoom");
+                UI_ZOOM.store((if zoom > 0.0 { zoom } else { 1.0 }).to_bits(), Ordering::Relaxed);
+                for doc in &self.docs {
+                    if let Some(controller) = doc.controller.as_ref().and_then(|c| c.cast::<ICoreWebView2Controller>().ok()) {
+                        let _ = unsafe { controller.SetZoomFactor(ui_zoom()) };
+                    }
+                }
                 return;
             }
             _ => {}
@@ -1323,6 +1347,7 @@ impl Doc {
             scaled.SetBoundsMode(COREWEBVIEW2_BOUNDS_MODE_USE_RAW_PIXELS)?;
             scaled.SetShouldDetectMonitorScaleChanges(false)?;
             scaled.SetRasterizationScale(self.scale)?;
+            base.SetZoomFactor(ui_zoom())?;
             if self.category == "visual" {
                 let background: ICoreWebView2Controller2 = controller.cast()?;
                 background.SetDefaultBackgroundColor(COREWEBVIEW2_COLOR { A: 0, R: 0, G: 0, B: 0 })?;
