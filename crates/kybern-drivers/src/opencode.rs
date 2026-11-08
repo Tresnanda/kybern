@@ -1529,6 +1529,7 @@ fn parts(message: &UserMessage) -> Vec<Value> {
                 json!({ "type": "file", "mime": media_type, "url": format!("data:{media_type};base64,{data}"), "filename": "image" }),
             ),
             ContentPart::Attachment { name, .. } => out.push(json!({ "type": "text", "text": format!("[attached file: {name}]") })),
+            ContentPart::Media { .. } => out.push(json!({ "type": "text", "text": "[image]" })),
             ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } | ContentPart::SystemRow { .. } => {
                 if let Some(text) = part.orchestration_text() {
                     out.push(json!({ "type": "text", "text": text }));
@@ -1580,6 +1581,7 @@ fn skill_command(message: &UserMessage) -> Option<SkillCommand> {
                 json!({ "type": "file", "mime": media_type, "url": format!("data:{media_type};base64,{data}"), "filename": "image" }),
             ),
             ContentPart::Attachment { name, .. } => arguments.push_str(&format!("[attached file: {name}]")),
+            ContentPart::Media { .. } => arguments.push_str("[image]"),
             ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } | ContentPart::SystemRow { .. } => {
                 if let Some(text) = part.orchestration_text() {
                     arguments.push('\n');

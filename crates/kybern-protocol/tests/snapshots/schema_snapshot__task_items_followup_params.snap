@@ -89,6 +89,23 @@ expression: schema_for!(TaskItemsFollowupParams)
           ]
         },
         {
+          "description": "An image stored outside the event log (see [`MediaRef`]). The daemon\nwrites this in place of a large `Image` and inlines it again for the\nprovider; clients show it from the asset route.",
+          "type": "object",
+          "properties": {
+            "media": {
+              "$ref": "#/$defs/MediaRef"
+            },
+            "type": {
+              "type": "string",
+              "const": "media"
+            }
+          },
+          "required": [
+            "type",
+            "media"
+          ]
+        },
+        {
           "description": "Uploaded attachment served by the daemon's HTTP asset route.",
           "type": "object",
           "properties": {
@@ -300,6 +317,48 @@ expression: schema_for!(TaskItemsFollowupParams)
             "kind",
             "text"
           ]
+        }
+      ]
+    },
+    "MediaRef": {
+      "description": "Image or document bytes kept outside the event log, in the data folder's\n`assets/<hash>`, named by the SHA-256 of the bytes so a repeat is stored\nonce. Clients fetch them from the machine that owns the thread with\n`GET /assets/{hash}`; the event never carries a URL.",
+      "type": "object",
+      "properties": {
+        "hash": {
+          "description": "Lowercase hex SHA-256 of the bytes.",
+          "type": "string"
+        },
+        "mime": {
+          "type": "string"
+        },
+        "size": {
+          "description": "Byte length of the file.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "encoding": {
+          "description": "How the value it replaced was written, so it can be restored exactly.",
+          "$ref": "#/$defs/MediaEncoding"
+        }
+      },
+      "required": [
+        "hash",
+        "mime",
+        "size"
+      ]
+    },
+    "MediaEncoding": {
+      "oneOf": [
+        {
+          "description": "Plain base64 of the bytes.",
+          "type": "string",
+          "const": "base64"
+        },
+        {
+          "description": "`data:<mime>;base64,<base64>`.",
+          "type": "string",
+          "const": "data_url"
         }
       ]
     },

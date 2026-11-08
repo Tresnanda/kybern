@@ -63,6 +63,7 @@ mod settings_share;
 mod skill_frame;
 mod skills;
 mod state;
+mod storage;
 mod terminal;
 mod thread_image;
 mod thread_projection;
@@ -301,6 +302,7 @@ async fn serve() -> Result<()> {
     });
     let maintenance_worker = tokio::spawn(maintenance::run(state.clone(), !args.pair));
     let notes_worker = tokio::spawn(purge_expired_notes(state.clone()));
+    let storage_worker = tokio::spawn(storage::run(state.clone()));
     let queue_state = state.clone();
     let queue_worker = tokio::spawn(async move {
         // Follow-ups dispatch when their thread goes idle. The orchestrator
@@ -403,6 +405,7 @@ async fn serve() -> Result<()> {
     axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(shutdown).await?;
     queue_worker.abort();
     notes_worker.abort();
+    storage_worker.abort();
     let _ = network_worker.await;
     outbox_worker.abort();
     repo_identity_worker.abort();

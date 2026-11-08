@@ -626,6 +626,7 @@ fn prompt(message: &UserMessage) -> Prompt {
                 files.push(json!({ "uri": format!("data:{media_type};base64,{data}"), "name": "image" }))
             }
             ContentPart::Attachment { name, .. } => text.push_str(&format!("[attached file: {name}]")),
+            ContentPart::Media { .. } => text.push_str("[image]"),
             ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } | ContentPart::SystemRow { .. } => {
                 if let Some(value) = part.orchestration_text() {
                     if !text.is_empty() {

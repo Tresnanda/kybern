@@ -439,10 +439,10 @@ fn apply_transcript_event(
                 unscoped_assistant_message_value = None;
                 out.retain(|entry| !matches!(entry, TranscriptEntry::TurnSummary { turn_id: id, .. } if *id == turn_id));
             }
-            EventPayload::ImageReceived { id, origin, source } => {
+            EventPayload::ImageReceived { id, origin, source, media } => {
                 if let Some(turn_id) = turn_id.filter(|_| origin.is_root())
                     && !out.iter().any(|entry| matches!(entry, TranscriptEntry::Image { id: previous, turn_id: previous_turn, .. } if previous == id && *previous_turn == turn_id)) {
-                        out.push(TranscriptEntry::Image { id: id.clone(), turn_id, seq: ev.seq, at: ev.at, origin: origin.clone(), source: source.clone() });
+                        out.push(TranscriptEntry::Image { id: id.clone(), turn_id, seq: ev.seq, at: ev.at, origin: origin.clone(), source: source.clone(), media: media.clone() });
                 }
             }
             EventPayload::AssistantTextDelta { message_id, origin, delta } => {
@@ -1287,8 +1287,12 @@ mod tests {
     fn native_images_reload_once_per_turn_and_keep_the_original_source() {
         let thread_id = Uuid::new_v4();
         let turn_id = Uuid::new_v4();
-        let image =
-            EventPayload::ImageReceived { id: "image".into(), origin: EventOrigin::Root, source: "data:image/png;base64,YQ==".into() };
+        let image = EventPayload::ImageReceived {
+            id: "image".into(),
+            origin: EventOrigin::Root,
+            source: "data:image/png;base64,YQ==".into(),
+            media: None,
+        };
         let events = [1, 2].map(|seq| ThreadEvent { seq, thread_id, turn_id: Some(turn_id), at: Utc::now(), payload: image.clone() });
         let serialized = serde_json::to_string(&events).unwrap();
         let reloaded: Vec<ThreadEvent> = serde_json::from_str(&serialized).unwrap();

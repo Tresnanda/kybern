@@ -5,6 +5,8 @@ expression: names
 - daemon.info
 - daemon.shutdown
 - daemon.activity
+- storage.stats
+- storage.reclaim
 - sessions.list
 - sessions.resume
 - sessions.scan_projects

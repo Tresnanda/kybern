@@ -245,7 +245,7 @@ fn with_asset_cors(mut response: Response, origin: Option<HeaderValue>) -> Respo
     response
 }
 
-async fn get_asset(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<Uuid>) -> Response {
+async fn get_asset(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>) -> Response {
     let origin = allowed_asset_origin(&headers);
     let mut response = get_asset_inner(state, headers, id).await;
     if let Some(origin) = origin {
@@ -255,13 +255,19 @@ async fn get_asset(State(state): State<AppState>, headers: HeaderMap, Path(id): 
     response
 }
 
-async fn get_asset_inner(state: AppState, headers: HeaderMap, id: Uuid) -> Response {
+/// An upload (`/assets/<uuid>`) or media stored outside the event log
+/// (`/assets/<sha256>`, issue #298), for any authenticated client.
+async fn get_asset_inner(state: AppState, headers: HeaderMap, id: String) -> Response {
     let Some(raw) = bearer(&headers).or_else(|| headers.get("x-kybern-token").and_then(|v| v.to_str().ok()).map(str::to_string)) else {
         return (StatusCode::UNAUTHORIZED, "missing token").into_response();
     };
     if !matches!(authenticate(&state.store, &raw), Ok(Some(_))) {
         return (StatusCode::UNAUTHORIZED, "invalid token").into_response();
     }
+    if kybern_store::is_media_hash(&id) {
+        return get_media(&state, &id).await;
+    }
+    let Ok(id) = id.parse::<Uuid>() else { return (StatusCode::NOT_FOUND, "no such asset").into_response() };
     let Ok(Some(info)) = state.store.asset_get(id) else { return (StatusCode::NOT_FOUND, "no such asset").into_response() };
     match tokio::fs::read(state.paths.assets.join(id.to_string())).await {
         Ok(bytes) => (
@@ -273,6 +279,23 @@ async fn get_asset_inner(state: AppState, headers: HeaderMap, id: Uuid) -> Respo
         )
             .into_response(),
         Err(_) => (StatusCode::NOT_FOUND, "asset file missing").into_response(),
+    }
+}
+
+async fn get_media(state: &AppState, hash: &str) -> Response {
+    let Ok(Some((mime, _))) = state.store.media_get(hash) else { return (StatusCode::NOT_FOUND, "no such media").into_response() };
+    match tokio::fs::read(state.paths.assets.join(hash)).await {
+        Ok(bytes) => (
+            [
+                (header::CONTENT_TYPE, mime),
+                (header::CONTENT_DISPOSITION, "inline".to_string()),
+                // Named by its content: it never changes.
+                (header::CACHE_CONTROL, "private, max-age=31536000, immutable".to_string()),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, "media file missing").into_response(),
     }
 }
 

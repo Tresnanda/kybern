@@ -26,7 +26,7 @@ import { sendFollowUp } from "../state/followUp";
 import { createNote } from "../state/notes";
 import { type ApprovalDecision, type ApprovalRequest } from "../state/protocol";
 import { getState, problemFor } from "../state/runtime";
-import { threadImageSource } from "../state/machineRequests";
+import { agentImageSource } from "../state/machineRequests";
 import { type Block } from "../state/transcript";
 import type { TurnRow } from "../state/turnRows";
 import { turnFooterText } from "../state/format";
@@ -332,7 +332,7 @@ function answerMenu(text: string, threadId: string, turnId: string | null): Menu
 function AgentImage({ block, threadId }: { block: Extract<Block, { kind: "image" }>; threadId: string }) {
   const { colors } = useTheme();
   const [open, setOpen] = useState(false);
-  const source = threadImageSource(threadId, block.source);
+  const source = agentImageSource(threadId, block.source);
   return (
     <>
       <Tap label="Image from the agent. Open full screen" onPress={() => setOpen(true)} feedback="none">

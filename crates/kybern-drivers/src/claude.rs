@@ -1897,6 +1897,8 @@ fn content_blocks(message: &UserMessage) -> Vec<Value> {
             ContentPart::Attachment { name, .. } => {
                 trailing.push_str(&format!("\n[attached file: {name}]"));
             }
+            // The daemon inlines stored images before a send; one that reaches a driver is gone.
+            ContentPart::Media { .. } => trailing.push_str("\n[image]"),
             ContentPart::Mention { name, .. } => {
                 trailing.push('@');
                 trailing.push_str(name);
@@ -1940,6 +1942,7 @@ fn claude_block(part: &ContentPart) -> Option<Value> {
                 .then(|| json!({ "type": "image", "source": { "type": "base64", "media_type": media_type, "data": data } }))
         }
         ContentPart::Attachment { name, .. } => Some(json!({ "type": "text", "text": format!("[attached file: {name}]") })),
+        ContentPart::Media { .. } => Some(json!({ "type": "text", "text": "[image]" })),
         ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } | ContentPart::SystemRow { .. } => {
             part.orchestration_text().map(|text| json!({ "type": "text", "text": text }))
         }

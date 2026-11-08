@@ -72,6 +72,8 @@ fn main() {
     add::<ThreadsWorkspaceProgress>(&mut types, "ThreadsWorkspaceProgress");
     add::<SessionsScanChanged>(&mut types, "SessionsScanChanged");
     add::<SessionsImportProgress>(&mut types, "SessionsImportProgress");
+    add::<StorageReclaimStatus>(&mut types, "StorageReclaimStatus");
+    add::<MediaRef>(&mut types, "MediaRef");
     add::<SessionsImportFinished>(&mut types, "SessionsImportFinished");
     add::<OpEnvelope>(&mut types, "OpEnvelope");
     add::<OpBody>(&mut types, "OpBody");
@@ -95,6 +97,8 @@ fn main() {
     method::<DaemonInfoMethod>(&mut methods);
     method::<DaemonShutdown>(&mut methods);
     method::<DaemonActivityMethod>(&mut methods);
+    method::<StorageStatsGet>(&mut methods);
+    method::<StorageReclaim>(&mut methods);
     method::<SessionsList>(&mut methods);
     method::<SessionsResume>(&mut methods);
     method::<SessionsScanProjects>(&mut methods);

@@ -125,7 +125,9 @@ impl Orchestrator {
         if !login_lend::is_login_failure(kind, error) || live.is_released() || !broker.take_recovery(turn_id) {
             return false;
         }
-        let Ok(Some((message_id, message))) = self.inner.store.turn_started_message(thread_id, turn_id) else { return false };
+        let Ok(Some((message_id, mut message))) = self.inner.store.turn_started_message(thread_id, turn_id) else { return false };
+        // The stored prompt holds large images as references (#298); the agent gets them inline again.
+        self.resolve_attachments(&mut message);
         {
             let mut sessions = self.inner.sessions.lock().await;
             if sessions.get(&thread_id).is_some_and(|current| Arc::ptr_eq(current, live)) {

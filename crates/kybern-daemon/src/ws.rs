@@ -570,6 +570,7 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     let mut settings = ctx.principal.has(Scope::OrchestrationRead).then(|| state.settings.subscribe());
     let mut account_logins = ctx.principal.has(Scope::OrchestrationRead).then(|| state.account_logins.subscribe());
     let mut session_imports = ctx.principal.has(Scope::OrchestrationRead).then(|| state.session_imports.subscribe());
+    let mut storage_progress = ctx.principal.has(Scope::OrchestrationRead).then(|| state.storage.subscribe());
     let mut projects = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_projects());
     let mut outbox = ctx.principal.has(Scope::OrchestrationRead).then(|| state.network.subscribe_outbox());
     let mut utility = ctx.principal.has(Scope::OrchestrationRead).then(|| state.network.subscribe_utility());
@@ -841,6 +842,19 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
                     // Clients also read `sessions.scan_get` / `sessions.import_get`, so a missed step is recovered.
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     Err(_) => session_imports = None,
+                }
+            }
+            reclaim = async {
+                match storage_progress.as_mut() {
+                    Some(updates) => updates.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match reclaim {
+                    Ok(status) => { let _ = ctx.out.notify(crate::storage::NOTIFICATION, status).await; }
+                    // Clients also read `storage.stats`, so a missed step is recovered.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => storage_progress = None,
                 }
             }
             child = async {

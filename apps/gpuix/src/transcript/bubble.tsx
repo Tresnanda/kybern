@@ -22,6 +22,7 @@ import { IconButton } from '../kit/IconButton.tsx'
 import { raisedFill, useGlass } from '../platform/glass.ts'
 import { T } from './glyphs.ts'
 import { ResponseImage } from './images.tsx'
+import { mediaSource } from '../../../../packages/kybern-client/src/responseImages.ts'
 import { AttachmentImage } from '../composer/AttachmentImage.tsx'
 import { cachedMarkdownTheme, CODE, fg, META, muted, TEXT } from './kit.tsx'
 import { FONT_MONO, FONT_UI } from '../theme.ts'
@@ -67,11 +68,14 @@ export function SaveToNoteAction({ text, testId }: { text: string; testId?: stri
   return <IconButton testId={testId} label="Save to note" icon={T.note} glyph={13.5} size="sm" disabled={!enabled} onClick={() => openSaveToNote({ text, threadTitle: title, threadId: threadId! })} />
 }
 
+/** An inline image part (older messages) or one stored outside the event log (#298). */
+const partImageSource = (p: Extract<ContentPart, { type: 'image' | 'media' }>) => p.type === 'media' ? mediaSource(p.media) : `data:${p.media_type};base64,${p.data}`
+
 export function messageText(parts: ContentPart[]): string {
   let text = ''
   for (const p of parts) {
     if (p.type === 'text') text += p.text
-    else if (p.type === 'image' || p.type === 'attachment' || p.type === 'system_row' || p.type === 'thread_message' || p.type === 'agent_results') continue
+    else if (p.type === 'image' || p.type === 'media' || p.type === 'attachment' || p.type === 'system_row' || p.type === 'thread_message' || p.type === 'agent_results') continue
     else {
       const token = partToken(p)
       if (token) text += token
@@ -135,7 +139,7 @@ export const UserBubble = memo(function UserBubble({ parts, at, id, pending = fa
   const systemRow = parts.find((p): p is Extract<ContentPart, { type: 'system_row' }> => p.type === 'system_row')
   if (inbound) return <InboundMessage part={inbound} at={at} />
   if (results) return <DelegatedResults items={results} at={at} />
-  const files = parts.filter((p): p is Extract<ContentPart, { type: 'image' | 'attachment' }> => p.type === 'image' || p.type === 'attachment')
+  const files = parts.filter((p): p is Extract<ContentPart, { type: 'image' | 'media' | 'attachment' }> => p.type === 'image' || p.type === 'media' || p.type === 'attachment')
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       {systemRow && (
@@ -159,14 +163,14 @@ export const UserBubble = memo(function UserBubble({ parts, at, id, pending = fa
               <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8, maxWidth: 240, marginBottom: 4 }}>
                 {files.map((p, i) => flight ? (
                   // Only on the flight's row: a box per file, so its rect can be reported (the structure never changes after mount).
-                  <div key={p.type === 'attachment' ? p.asset_id : i} ref={p.type === 'image' || p.media_type.startsWith('image/') ? (node) => { fileNodes.current[i] = node } : undefined} style={{ display: 'flex' }}>
-                    {p.type === 'image' ? <ResponseImage source={`data:${p.media_type};base64,${p.data}`} label={`Attached image ${i + 1}`} thumbnail at={at} />
+                  <div key={p.type === 'attachment' ? p.asset_id : i} ref={p.type !== 'attachment' || p.media_type.startsWith('image/') ? (node) => { fileNodes.current[i] = node } : undefined} style={{ display: 'flex' }}>
+                    {p.type !== 'attachment' ? <ResponseImage source={partImageSource(p)} label={`Attached image ${i + 1}`} thumbnail at={at} />
                       : p.media_type.startsWith('image/') ? <AttachmentImage assetId={p.asset_id} name={p.name} />
                       : <FileChip name={p.name} />}
                   </div>
                 ) :
-                  p.type === 'image' ? (
-                    <ResponseImage key={i} source={`data:${p.media_type};base64,${p.data}`} label={`Attached image ${i + 1}`} thumbnail at={at} />
+                  p.type !== 'attachment' ? (
+                    <ResponseImage key={i} source={partImageSource(p)} label={`Attached image ${i + 1}`} thumbnail at={at} />
                   ) : p.media_type.startsWith('image/') ? (
                     <AttachmentImage key={p.asset_id} assetId={p.asset_id} name={p.name} />
                   ) : (
