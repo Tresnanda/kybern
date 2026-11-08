@@ -1304,7 +1304,10 @@ impl ClaudeSession {
                     return;
                 }
                 if self.decline_resume_prompt {
-                    // "Compact idle threads: Never": keep the history and stop asking.
+                    // "Compact idle threads: Never": keep the history and stop asking. Claude
+                    // keeps this as `resumeReturnDismissed` in the account's `.claude.json`,
+                    // which running Claude processes rewrite, so Kybern never undoes it; the
+                    // setting's copy says the choice sticks for Claude.
                     let _ = self.respond_control(&request_id, Ok(json!({ "behavior": "completed", "result": "never" }))).await;
                     return;
                 }
@@ -1398,6 +1401,11 @@ impl ClaudeSession {
                 let mut st = self.state.lock().await;
                 let bound = (session_id.clone(), model.clone());
                 if st.last_bound.as_ref() != Some(&bound) {
+                    if st.last_bound.as_ref().is_some_and(|(previous, _)| *previous != session_id) {
+                        // Another Claude session: its cache, and what it reported about it, start over.
+                        st.cache_ttl = None;
+                        st.last_request = None;
+                    }
                     st.last_bound = Some(bound);
                     *self.session_id.lock().await = session_id.clone();
                     drop(st);
@@ -3131,6 +3139,21 @@ mod compaction_tests {
         // A session whose every request was fully cached never said: unknown, not a guess.
         let (claude, child, mut rx) = session(false);
         assert_eq!(turn(&claude, &mut rx, "c1", usage(0, 0)).await, Some(PromptCache::unknown()));
+        child.close().await;
+    }
+
+    #[tokio::test]
+    async fn another_claude_session_forgets_the_ttl_the_last_one_reported() {
+        let (claude, child, mut rx) = session(false);
+        let init = |id: &str| json!({"type":"system", "subtype":"init", "session_id": id, "model":"claude-opus-5-5"});
+        claude.handle_frame(init("first")).await;
+        assert_eq!(turn(&claude, &mut rx, "m1", usage(4_000, 0)).await.unwrap().ttl_seconds, Some(3600));
+        // The same session again (a model change re-announces it): the TTL holds.
+        claude.handle_frame(json!({"type":"system", "subtype":"init", "session_id":"first", "model":"claude-sonnet-5-5"})).await;
+        assert_eq!(turn(&claude, &mut rx, "m2", usage(0, 0)).await.unwrap().ttl_seconds, Some(3600));
+        // A new session served fully from cache has not said yet: unknown.
+        claude.handle_frame(init("second")).await;
+        assert_eq!(turn(&claude, &mut rx, "m3", usage(0, 0)).await, Some(PromptCache::unknown()));
         child.close().await;
     }
 
