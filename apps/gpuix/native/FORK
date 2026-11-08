@@ -45,7 +45,8 @@ repo=https://github.com/Tresnanda/gpuix.git
 # `ui-zoom` (#292): both forks' `ui-zoom` branches on 8b5e5cb / 2b32e43: a per-window interface zoom in GPUI
 # (Window::set_ui_zoom, input and OS-facing geometry converted, PlatformWindow::set_min_size on every platform) and
 # setUiZoom/getUiZoom, the uiZoom window option, setTrafficLightPosition and the macOS View menu in gpuix. No shader
-# change. Built and checked on macOS (README.md, "Interface zoom"); the integrating agent merges it into `next`/`kybern`.
+# change. Built and checked on macOS (README.md, "Interface zoom"), then fast-forwarded into the forks' `next` and
+# `kybern` (gpuix 4c7d369, zed e568d32, 2026-11-08).
 commit=4c7d369e710815fbc74847f9843592128bab4eba
 # The zed submodule commit `commit` records; update.sh refuses a checkout that differs.
 zed=e568d32acb2baa59f4e75ef7b1ed594a57e48fbb
