@@ -26,6 +26,8 @@ import {
 import { useBlurUnavailable } from '../shell/windowMaterial.ts'
 import { BLUR_STRENGTH, DESKTOP_MATERIAL, WINDOW_MATERIAL_DESCRIPTION } from '../platform/desktopMaterial.ts'
 import { previewWindowMaterial, setAppearance, setWindowMaterial, useAppearance } from './appearance.ts'
+import { UI_ZOOM_STEPS, availableSteps, formatZoom, setUiZoom, useUiZoom } from '../shell/uiZoom.ts'
+import { osLabels } from '../platform/os.ts'
 
 const WINDOW_OPTIONS = [{ value: 'solid', label: 'Solid' }, { value: 'translucent', label: 'Translucent' }] as const
 /** Windows 11: the system backdrop instead of a blur radius (Windows sets the strength); Acrylic keeps a numeric blur in the prefs. */
@@ -148,6 +150,27 @@ function VariantSection({ variant, active, save }: { variant: ThemeVariant; acti
   </Section>
 }
 
+/**
+ * Interface size (#292): the whole window zooms, like a browser page (`shell/uiZoom.ts`). Eight detents; the steps whose
+ * minimum window does not fit this display are dashed and out of reach. Applies on release or after a run of arrow keys;
+ * the value label follows the thumb.
+ */
+function InterfaceSize() {
+  const { zoom, display } = useUiZoom()
+  const [live, setLive] = useState<number | null>(null)
+  const index = Math.max(0, UI_ZOOM_STEPS.findIndex((step) => Math.abs(step - zoom) < 1e-6))
+  const largest = availableSteps(display).length - 1
+  const shown = live ?? index
+  const tooSmall = largest < UI_ZOOM_STEPS.length - 1
+  return <Section title="Size">
+    <Row title="Interface size" description={`Scales text and controls in every Kybern window ${osLabels().onThisComputer}.`} status={tooSmall ? 'Larger sizes don’t fit this display.' : undefined}>
+      {zoom !== 1 && <Button variant="ghost" size="sm" testId="settings-ui-zoom-reset" onClick={() => setUiZoom(1)}>Actual size</Button>}
+      <Slider testId="settings-ui-zoom" aria-label="Interface size" ariaValueText={`${Math.round(UI_ZOOM_STEPS[shown] * 100)} percent`} value={index} min={0} max={UI_ZOOM_STEPS.length - 1} limit={largest} detents
+        valueLabel={formatZoom(UI_ZOOM_STEPS[shown])} onChange={setLive} onCommit={(next) => { setLive(null); setUiZoom(UI_ZOOM_STEPS[next]) }} />
+    </Row>
+  </Section>
+}
+
 export function Appearance() {
   const t = useTheme()
   const c = useControls()
@@ -158,7 +181,7 @@ export function Appearance() {
   const save = (patch: Parameters<typeof setAppearance>[0]) => run(() => setAppearance(patch))
   const order: ThemeVariant[] = t.variant === 'dark' ? ['dark', 'light'] : ['light', 'dark']
   return <>
-    <PageBlock><div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 30 }}><Label color={t.text} size={14} lineHeight={19.6} weight={600}>Theme</Label>
+    <PageBlock><div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 30 }}><Label color={t.text} size={14} lineHeight={19.6} weight={600} style={{ paddingLeft: 2 }}>Theme</Label>
       <div style={{ display: 'flex', gap: 14 }}>{(['light', 'dark', 'system'] as const).map((value) => {
         const preview = { frame: value === 'dark' ? '#202023' : '#f7f7f8', text: value === 'system' ? '#929299' : value === 'dark' ? '#ededf0' : '#27272a' }
         return <div key={value} testId={`settings-theme-${value}`} tabIndex={0} aria-label={`${value} theme`} aria-pressed={prefs.theme === value} onClick={() => save({ theme: value })} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') save({ theme: value }) }} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, flexBasis: 0, minWidth: 0, cursor: 'pointer' }}>
@@ -175,6 +198,7 @@ export function Appearance() {
       })}</div>
       <Label color={t.textSecondary} size={12} lineHeight={19.2}>System follows your device’s light and dark appearance.</Label>
     </div></PageBlock>
+    <InterfaceSize />
     {order.map((variant) => <VariantSection key={variant} variant={variant} active={variant === t.variant} save={run} />)}
     {error && <Label color={t.red}>{error}</Label>}
   </>
