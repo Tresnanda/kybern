@@ -1,3 +1,4 @@
+import { FencedMarkdown } from '../transcript/markdown.tsx'
 import { useEffect, useRef, useState } from 'react'
 import { useWindowSize } from '@gpuix/react'
 import { relativeTime } from '@/lib/format'
@@ -138,7 +139,7 @@ export function TaskDetail({ task, sequence, width }: { task: TaskItem; sequence
                 <Button testId={`task-detach-${note.id}`} variant="ghost" size="sm" onClick={() => void updateTask(task.id, { note_ids: task.note_ids.filter((id) => id !== note.id) }).catch(() => {})}>Remove link</Button>
               </div>
               {expandedNote === note.id && (
-                <markdown theme={cachedMarkdownTheme(t)} source={note.body} style={{ color: t.text, userSelect: 'text' }} />
+                <FencedMarkdown theme={cachedMarkdownTheme(t)} source={note.body} style={{ color: t.text, userSelect: 'text' }} />
               )}
             </div>
           ))}

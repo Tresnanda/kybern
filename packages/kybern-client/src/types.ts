@@ -125,6 +125,8 @@ export const codes = {
   PROVIDER_ERROR: -32011,
   THREAD_BUSY: -32012,
   NOT_AVAILABLE: -32013,
+  /** The connection had too many calls in flight. The call did not start, so repeating it is safe. */
+  CAPACITY_EXCEEDED: -32014,
 } as const;
 
 // ---- auth ----

@@ -1,3 +1,4 @@
+import { FencedMarkdown } from '../transcript/markdown.tsx'
 import { useEffect, useState } from 'react'
 import { problemSentence } from '../problems/sentence.ts'
 import { AiMagicIcon } from '@hugeicons/core-free-icons'
@@ -89,7 +90,7 @@ export function CoordinatorCard({ approval, count }: { approval: ApprovalRequest
         })}
       </div>
     </>}
-    {git?.op === 'open_pr' && <div style={{ marginTop: 10 }}><Para color={t.text} size={13} weight={500}>{git.title}</Para><markdown source={git.body} theme={cachedMarkdownTheme(t)} style={{ userSelect: 'text', color: t.text, maxHeight: 220, overflowY: 'scroll' }} /></div>}
+    {git?.op === 'open_pr' && <div style={{ marginTop: 10 }}><Para color={t.text} size={13} weight={500}>{git.title}</Para><FencedMarkdown source={git.body} theme={cachedMarkdownTheme(t)} style={{ userSelect: 'text', color: t.text, maxHeight: 220, overflowY: 'scroll' }} /></div>}
     {git?.op === 'merge_pr' && <Para color={checks?.tone === 'bad' ? t.red : muted(t)} size={12}>{`${checks?.text ?? 'No checks reported'} · ${mergeMethodLabel(git.method)}`}</Para>}
     {error && <Para color={t.red} size={12} style={{ marginTop: 6 }}>{error}</Para>}
     <Hints

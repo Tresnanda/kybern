@@ -1,3 +1,4 @@
+import { FencedMarkdown } from '../transcript/markdown.tsx'
 import { relativeTime } from '@/lib/format'
 import { muted } from '../nav/overlay.tsx'
 import { goPage } from '../nav/history.ts'
@@ -196,7 +197,7 @@ function Brief({ threadId, projectId, summary, onSave }: { threadId: string; pro
     {editing ? <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 8, paddingRight: 8 }}>
       <TextArea label="Brief" testId="dock-brief-editor" value={body} onChange={(text) => { setBody(text); briefDrafts.set(projectId, { body: text, base }) }} placeholder={PROJECT_SPACE_COPY.briefPlaceholder} minRows={8} maxRows={12} />
       <Button variant="primary" size="sm" busy={busy} testId="dock-brief-save" style={{ alignSelf: 'flex-end' }} onClick={() => void save()}>{busy ? 'Saving…' : 'Save brief'}</Button>
-    </div> : note?.body ? <div style={{ paddingLeft: 8, paddingRight: 8, maxHeight: 180, overflow: 'hidden' }}><markdown style={{ userSelect: 'text' }} source={note.body} theme={cachedMarkdownTheme(t)} /></div> : <Hint>{summary?.preview || PROJECT_SPACE_COPY.briefEmpty}</Hint>}
+    </div> : note?.body ? <div style={{ paddingLeft: 8, paddingRight: 8, maxHeight: 180, overflow: 'hidden' }}><FencedMarkdown style={{ userSelect: 'text' }} source={note.body} theme={cachedMarkdownTheme(t)} /></div> : <Hint>{summary?.preview || PROJECT_SPACE_COPY.briefEmpty}</Hint>}
     <div style={{ paddingTop: 6, paddingBottom: 6, paddingLeft: 8, paddingRight: 8 }}><Label color={t.textTertiary} size={13} lineHeight={16}>{PROJECT_SPACE_COPY.briefOwner}</Label></div>
     </div>
     <div style={{ height: 8 }} />
@@ -216,7 +217,7 @@ function NoteDialog({ threadId, summary, onClose }: { threadId: string; summary:
     <DialogHeader title={summary.title} onClose={onClose} />
     <ErrorLine error={error?.error} action={error?.action} />
     <div style={{ height: 420, overflow: 'scroll', padding: 16 }}>
-      {body !== null ? <markdown style={{ userSelect: 'text' }} source={body} theme={cachedMarkdownTheme(t)} /> : !error && <Label color={t.textSecondary} size={12}>Loading note…</Label>}
+      {body !== null ? <FencedMarkdown style={{ userSelect: 'text' }} source={body} theme={cachedMarkdownTheme(t)} /> : !error && <Label color={t.textSecondary} size={12}>Loading note…</Label>}
     </div>
   </Dialog>
 }

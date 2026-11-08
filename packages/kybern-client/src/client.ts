@@ -23,6 +23,14 @@ import {
 } from "./types.ts";
 import { httpBase } from "./address.ts";
 import { problemOf } from "./problem.ts";
+import {
+  BUSY_RETRY_ATTEMPTS,
+  BUSY_RETRY_WINDOW_MS,
+  CallScheduler,
+  busyDelay,
+  laneFor,
+  type CallBudget,
+} from "./callLanes.ts";
 
 export interface Endpoint {
   url: string;
@@ -49,6 +57,13 @@ export class RpcCallError extends Error {
     return this.message;
   }
 }
+/** The daemon refused the call because the connection was full. The call never started, so repeating it is safe. */
+export function isBusyRefusal(error: unknown): error is RpcCallError {
+  if (!(error instanceof RpcCallError)) return false;
+  if (error.code === codes.CAPACITY_EXCEEDED) return true;
+  // A daemon from before the distinct code refused the same way, as an internal error with this text.
+  return error.code === codes.INTERNAL_ERROR && /^Too many concurrent requests/.test(error.message);
+}
 export class ConnectionClosedError extends Error {
   constructor(message = "Connection closed") {
     super(message);
@@ -73,6 +88,13 @@ export interface ClientOptions {
   probeAuth?: () => Promise<"rejected" | "accepted" | "unknown">;
   requestTimeoutMs?: number;
   heartbeatMs?: number;
+  /**
+   * Calls this client keeps in flight at once, below what the daemon allows a connection. The rest wait their
+   * turn; control calls (subscribe, interrupt, answer, approve, cancel) never wait.
+   */
+  callBudget?: CallBudget;
+  /** How long and how often a call the daemon refused for being busy is tried again. */
+  busyRetry?: { windowMs?: number; attempts?: number };
   /**
    * Where `fetch` sends HTTP requests, when it is not the socket address's own base: a relay route
    * reaches the target under the member's `/relay/<id>/http`, and needs the member's own `headers`.
@@ -159,10 +181,14 @@ export class KybernClient {
   // Discovery starts provider processes. Share concurrent requests and reuse
   // recent results across pickers and sends, scoped to this verified endpoint.
   private skills = new Map<string, { expires: number; value: Promise<unknown> }>();
+  private readonly scheduler: CallScheduler;
+  /** Busy refusals waiting out their backoff, failed with the queue when the socket drops. */
+  private readonly busyRetries = new Map<ReturnType<typeof setTimeout>, (error: Error) => void>();
 
   constructor(endpoint: Endpoint, options: ClientOptions = {}) {
     this.endpoint = endpoint;
     this.options = options;
+    this.scheduler = new CallScheduler(options.callBudget);
   }
   get status() {
     return this._status;
@@ -295,28 +321,75 @@ export class KybernClient {
     params: unknown,
     timeoutMs = this.options.requestTimeoutMs ?? 120_000,
   ): Promise<unknown> {
+    if (!this.canSend(method)) return Promise.reject(this.notConnected());
+    const lane = laneFor(method, params);
+    const started = Date.now();
+    const deadline = started + timeoutMs;
+    const retryUntil = Math.min(deadline, started + (this.options.busyRetry?.windowMs ?? BUSY_RETRY_WINDOW_MS));
+    const attempts = this.options.busyRetry?.attempts ?? BUSY_RETRY_ATTEMPTS;
+    return new Promise((resolve, reject) => {
+      const attempt = (n: number) => {
+        this.scheduler.admit(
+          lane,
+          deadline,
+          (release) => {
+            this.send(method, params, deadline - Date.now()).then(
+              (value) => {
+                release();
+                resolve(value);
+              },
+              (error) => {
+                release();
+                // Only a refusal that says the call never started is repeated; any other failure may have run.
+                const delay = isBusyRefusal(error)
+                  ? busyDelay(n, (error.data as { retry_after_ms?: number } | undefined)?.retry_after_ms)
+                  : undefined;
+                if (delay === undefined || n + 1 >= attempts || Date.now() + delay >= retryUntil) {
+                  reject(error);
+                  return;
+                }
+                const timer = setTimeout(() => {
+                  this.busyRetries.delete(timer);
+                  attempt(n + 1);
+                }, delay);
+                this.busyRetries.set(timer, reject);
+              },
+            );
+          },
+          reject,
+          () => this.unanswered(),
+        );
+      };
+      attempt(0);
+    });
+  }
+
+  private canSend(method: string): boolean {
     const socket = this.ws;
-    if (
-      !socket ||
-      socket.readyState !== 1 ||
-      (this._status !== "open" && method !== "daemon.info")
-    ) {
-      return Promise.reject(
-        new ConnectionClosedError(
-          "Reconnect to this computer before trying again",
-        ),
-      );
-    }
+    return !!socket && socket.readyState === 1 && (this._status === "open" || method === "daemon.info");
+  }
+  private notConnected() {
+    return new ConnectionClosedError("Reconnect to this computer before trying again");
+  }
+  private unanswered() {
+    return new ConnectionClosedError(
+      "This computer did not answer this request. Reconnect and check its state before retrying",
+    );
+  }
+
+  /** Writes one request to the socket and waits for its answer, at most `timeoutMs`. */
+  private send(method: string, params: unknown, timeoutMs: number): Promise<unknown> {
+    if (!this.canSend(method)) return Promise.reject(this.notConnected());
+    const socket = this.ws!;
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(
-          new ConnectionClosedError(
-            "This computer did not answer this request. Reconnect and check its state before retrying",
-          ),
-        );
-      }, timeoutMs);
+      const timer = setTimeout(
+        () => {
+          this.pending.delete(id);
+          reject(this.unanswered());
+        },
+        Math.max(1, timeoutMs),
+      );
       this.pending.set(id, { resolve, reject, timer });
       try {
         socket.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
@@ -527,6 +600,13 @@ export class KybernClient {
       pending.reject(error);
     }
     this.pending.clear();
+    this.scheduler.abortAll(error);
+    // A call backing off after a busy refusal was never started; it fails with the queue, not on a later socket.
+    for (const [timer, reject] of this.busyRetries) {
+      clearTimeout(timer);
+      reject(error);
+    }
+    this.busyRetries.clear();
     this.byRemoteId.clear();
     for (const sub of this.subscriptions) {
       sub.remoteId = undefined;

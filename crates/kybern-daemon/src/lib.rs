@@ -71,6 +71,7 @@ mod usage;
 mod visuals;
 mod windows_path;
 mod ws;
+mod ws_lanes;
 
 use std::fs::OpenOptions;
 use std::io::Write;

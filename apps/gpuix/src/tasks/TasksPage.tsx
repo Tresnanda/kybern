@@ -1,6 +1,6 @@
 import { SelectionBar } from './SelectionBar.tsx'
 import { ProblemLine } from '../problems/Line.tsx'
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   boardColumns,
   filterLabel,
@@ -38,6 +38,7 @@ import { TaskMenus } from './TaskMenus.tsx'
 import { footVisible } from './batch.ts'
 import { DockShell, dockRoom } from './DockShell.tsx'
 import { RunComposer } from './RunComposer.tsx'
+import { LoadFailure } from './LoadFailure.tsx'
 import {
   deleteTasks,
   dockEscapedJustNow,
@@ -224,22 +225,31 @@ export function TasksPage() {
     const owner = foreignOwner('tasks', task.id)
     return owner ? `${owner.name} · ${name}` : name
   }
+  // The board that follows a failed first load fades in (`RECOVER_ENTER`); the ordinary first load does not, and neither
+  // does the board a task page goes back to (it remounts, and going back has no motion).
+  const recovered = useRef(false)
+  if (s.error && !s.loaded) recovered.current = true
+  else if (task) recovered.current = false
   return (
     <div testId="page-tasks" style={{ position: 'relative', display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, width: '100%' }}>
       {task ? (
         <DetailEnter key={task.id}><TaskDetail task={task} sequence={sequence} /></DetailEnter>
       ) : (
         <>
-          {s.error && (
+          {s.error && s.loaded && (
             <div style={{ padding: 20 }}>
               <ProblemLine error={s.error.error} action={s.error.action} retry={() => void refreshTasks()} testId="tasks-problem" />
             </div>
           )}
           {s.allMachines && footerOf(s.federation, 'tasks') && <div testId="tasks-federation-footer" style={{ paddingLeft: 20, paddingRight: 20, paddingTop: 8, paddingBottom: 8 }}><Label color={t.textTertiary} size={12} lineHeight={18}>{footerOf(s.federation, 'tasks')!}</Label></div>}
           {!s.loaded ? (
-            <div style={{ padding: 32 }}>
-              <Label color={t.textSecondary}>Loading tasks…</Label>
-            </div>
+            s.error ? (
+              <LoadFailure error={s.error.error} retry={refreshTasks} />
+            ) : (
+              <div style={{ padding: 32 }}>
+                <Label color={t.textSecondary}>Loading tasks…</Label>
+              </div>
+            )
           ) : !visible.length && !s.quick ? (
             <div style={{ display: 'flex', flexGrow: 1, alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12 }}>
               <Label color={t.text} size={17}>
@@ -252,7 +262,7 @@ export function TasksPage() {
             </div>
           ) : (
             // While the batch composer floats over the foot of the page the list leaves room for it (`dockRoom`).
-            <div edgeFade={docked && g.on && EDGE_FADE ? { bottom: 24 } : undefined} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, width: '100%', marginBottom: docked ? room.inset : 0, overflow: 'hidden' }}>
+            <div edgeFade={docked && g.on && EDGE_FADE ? { bottom: 24 } : undefined} paintTransform={recovered.current ? RECOVER_ENTER : undefined} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, width: '100%', marginBottom: docked ? room.inset : 0, overflow: 'hidden' }}>
               {s.prefs.view === 'board' ? (
                 <TaskBoard columns={columns} sequence={sequence} projectName={projectName} footer={docked ? room.spacer : 0} />
               ) : (
@@ -274,6 +284,13 @@ export function TasksPage() {
     </div>
   )
 }
+
+/** The board after "Try again" worked: 200 ms from 6 px low on (0.2, 0, 0, 1); Reduce Motion fades only. */
+const RECOVER_ENTER = PATCHED_NATIVE
+  ? REDUCED_MOTION
+    ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: 0.2, ease: [0.2, 0, 0, 1] as [number, number, number, number] } }
+    : { initial: { opacity: 0, translateY: 6 }, animate: { opacity: 1, translateY: 0 }, transition: { duration: 0.2, ease: [0.2, 0, 0, 1] as [number, number, number, number] } }
+  : undefined
 
 /**
  * A task page that a click opened rises in (`t-section-enter`: 250 ms from 6 px with a 2 px blur); Enter, j/k and the arrow keys show it
