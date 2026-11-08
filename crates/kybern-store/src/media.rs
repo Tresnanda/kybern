@@ -54,12 +54,14 @@ impl MediaDir {
     }
 
     /// Store `bytes` under their hash. A file that is already there with the
-    /// same length is reused. The bytes are flushed to disk before this
+    /// same length is reused, and touched so the sweep, which spares files
+    /// changed within its grace period, cannot delete it before the event that
+    /// now refers to it is written. The bytes are flushed to disk before this
     /// returns, so a reference written afterwards never points at a partial file.
     pub fn write(&self, bytes: &[u8]) -> Result<String> {
         let hash = hex_sha256(bytes);
         let path = self.0.join(&hash);
-        if std::fs::metadata(&path).is_ok_and(|meta| meta.len() == bytes.len() as u64) {
+        if std::fs::metadata(&path).is_ok_and(|meta| meta.len() == bytes.len() as u64) && touch(&path) {
             return Ok(hash);
         }
         std::fs::create_dir_all(&self.0).with_context(|| format!("create {}", self.0.display()))?;
@@ -83,6 +85,11 @@ impl MediaDir {
         sync_dir(&self.0);
         Ok(hash)
     }
+}
+
+/// Mark a reused file as just written. False when it is gone (the sweep took it), so it is written again.
+fn touch(path: &Path) -> bool {
+    std::fs::OpenOptions::new().write(true).open(path).and_then(|file| file.set_modified(std::time::SystemTime::now())).is_ok()
 }
 
 #[cfg(unix)]

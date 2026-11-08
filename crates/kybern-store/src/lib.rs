@@ -209,6 +209,7 @@ impl Store {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        storage::clear_reclaim_leftovers(path)?;
         let conn = Connection::open(path).with_context(|| format!("open {}", path.display()))?;
         let mut store = Self::init(conn)?;
         store.media = path.parent().map(|dir| MediaDir::new(dir.join("assets")));

@@ -153,6 +153,8 @@ pub async fn reclaim(state: &AppState) -> Result<StorageReclaimStatus, RpcError>
                 StorageReclaimStatus::Done { freed_bytes: freed }
             }
             Err(ReclaimError::NothingToReclaim) => StorageReclaimStatus::Done { freed_bytes: 0 },
+            // Another request started first; its run reports the outcome.
+            Err(ReclaimError::Busy) => return,
             Err(error) => {
                 tracing::warn!(%error, "compacting the database stopped");
                 StorageReclaimStatus::Failed { message: plain(&error) }

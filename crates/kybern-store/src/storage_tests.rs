@@ -489,3 +489,79 @@ fn generate_legacy_database() {
         .unwrap();
     println!("heavy thread {}; {} threads; {:.2} GB", heavy.id, threads + 1, file_bytes(&path) as f64 / 1e9);
 }
+
+#[test]
+fn a_reused_file_is_not_swept_before_its_event_is_written() {
+    let (dir, store) = on_disk();
+    let thread = fixture(&store);
+    let bytes = B64.decode(png(30_000, 3)).unwrap();
+    let media = store.media_dir().unwrap().clone();
+    let hash = media.write(&bytes).unwrap();
+    let file = dir.path().join("assets").join(&hash);
+    let aged = |path: &std::path::Path| {
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 60 * 60);
+        std::fs::OpenOptions::new().write(true).open(path).unwrap().set_modified(old).unwrap();
+    };
+    // No event refers to the file and it is old: the sweep takes it.
+    aged(&file);
+    assert_eq!(store.media_sweep(MEDIA_SWEEP_GRACE).unwrap().removed_files, 1);
+    assert!(!file.exists());
+    // The same bytes again, from a write whose event is not stored yet: the reused file is touched,
+    // so a sweep in between leaves it for the event about to refer to it.
+    media.write(&bytes).unwrap();
+    aged(&file);
+    assert_eq!(media.write(&bytes).unwrap(), hash);
+    assert_eq!(store.media_sweep(MEDIA_SWEEP_GRACE).unwrap().removed_files, 0);
+    call(&store, thread.id, "a", image_result(&B64.encode(&bytes)));
+    let (mut output, _) = store.tool_call_output_through(thread.id, "a", None, i64::MAX).unwrap().unwrap();
+    crate::inline_value(&mut output, &media).unwrap();
+    assert_eq!(output, image_result(&B64.encode(&bytes)));
+}
+
+#[test]
+fn a_compaction_stopped_at_any_point_leaves_a_whole_database() {
+    let (dir, store) = on_disk();
+    let thread = fixture(&store);
+    for i in 0..3u8 {
+        call(&store, thread.id, &format!("c{i}"), json!({ "text": i }));
+    }
+    let events = store.events_for_thread(thread.id).unwrap().len();
+    drop(store);
+    let path = dir.path().join("state.sqlite");
+    let side = |suffix: &str| std::path::PathBuf::from(format!("{}{suffix}", path.display()));
+    // Stopped while the copy was written: the partial copy goes.
+    std::fs::write(side(".compact"), b"partial").unwrap();
+    // Stopped after the copy moved in, before the old file was removed.
+    std::fs::hard_link(&path, side(".before-reclaim")).unwrap();
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.events_for_thread(thread.id).unwrap().len(), events);
+    assert!(!side(".compact").exists() && !side(".before-reclaim").exists());
+    drop(store);
+    // The old file moved aside and the new one not yet in: the old one comes back, not an empty database.
+    std::fs::rename(&path, side(".before-reclaim")).unwrap();
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.events_for_thread(thread.id).unwrap().len(), events);
+}
+
+#[test]
+fn a_compacted_copy_that_went_missing_never_replaces_the_database() {
+    let (dir, store) = on_disk();
+    let thread = fixture(&store);
+    for i in 0..100u8 {
+        legacy(&store, thread.id, &completed(&format!("c{i}"), image_result(&png(300_000, i)), false));
+    }
+    while !store.media_rewrite_step(8, 1 << 30).unwrap().done {}
+    let compact = dir.path().join("state.sqlite.compact");
+    let result = store.reclaim(u64::MAX, &|phase| {
+        if matches!(phase, ReclaimPhase::Finishing) {
+            std::fs::remove_file(&compact).unwrap();
+        }
+    });
+    assert!(matches!(result, Err(ReclaimError::Failed(_))), "{result:?}");
+    assert!(!compact.exists());
+    assert_eq!(store.events_for_thread(thread.id).unwrap().len(), 100);
+    store.event_append(thread.id, None, EventPayload::ThreadArchived).unwrap();
+    // A later run still works.
+    store.reclaim(u64::MAX, &|_| {}).unwrap();
+    assert_eq!(store.events_for_thread(thread.id).unwrap().len(), 101);
+}

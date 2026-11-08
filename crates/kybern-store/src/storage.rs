@@ -407,6 +407,16 @@ impl Store {
                     if c.query_row("SELECT EXISTS(SELECT 1 FROM media_refs WHERE hash = ?1)", [&hash], |r| r.get::<_, bool>(0))? {
                         return Ok(false);
                     }
+                    // A write that reuses a stored file touches it before its event is written
+                    // (`MediaDir::write`); a file touched since the listing may be about to be used.
+                    let aged = std::fs::metadata(&path)
+                        .and_then(|meta| meta.modified())
+                        .ok()
+                        .and_then(|at| std::time::SystemTime::now().duration_since(at).ok())
+                        .is_some_and(|age| age >= grace);
+                    if !aged {
+                        return Ok(false);
+                    }
                     match std::fs::remove_file(&path) {
                         Ok(()) => {}
                         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -506,7 +516,7 @@ impl Store {
         if free_disk < need {
             return Err(ReclaimError::LowDisk { need, free: free_disk });
         }
-        let compact = sidecar(&path, ".compact");
+        let compact = sidecar(&path, COMPACT_SUFFIX);
         remove_if_exists(&compact)?;
         let result = self.reclaim_into(&path, &compact, stats.compacted_bytes, progress);
         if result.is_err() {
@@ -537,7 +547,8 @@ impl Store {
         drop(source);
         progress(ReclaimPhase::Writing { written: file_len(compact), total: file_len(compact) });
         progress(ReclaimPhase::Finishing);
-        let copy = Connection::open(compact)?;
+        // Never create a file here: a copy that is missing must fail, not become an empty database.
+        let copy = Connection::open_with_flags(compact, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
         let check: String = copy.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
         if check != "ok" {
             return Err(ReclaimError::Failed(format!("the compacted copy failed its check: {check}")));
@@ -547,41 +558,130 @@ impl Store {
         if guard.total_changes() != changes {
             catch_up(&copy, path)?;
         }
+        // The copy replaces the database only if it holds the same history.
+        let (live, copied) = (fingerprint(&guard)?, fingerprint(&copy)?);
+        if live != copied {
+            return Err(ReclaimError::Failed(format!("the compacted copy does not match the database ({copied:?}, expected {live:?})")));
+        }
         copy.close().map_err(|(_, error)| error)?;
-        guard.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+        // SQLite does not flush a `VACUUM INTO` file; it must be on disk before it replaces the database.
+        sync_file(compact)?;
+        // Everything must be in the main file: the log is removed before the copy moves in, so a
+        // stale log is never replayed into it.
+        let (busy, log, done): (i64, i64, i64) =
+            guard.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        if busy != 0 || log != done {
+            return Err(ReclaimError::Failed("the write-ahead log could not be checkpointed".into()));
+        }
         let old = std::mem::replace(&mut *guard, Connection::open_in_memory()?);
         if let Err((old, error)) = old.close() {
             *guard = old;
             return Err(error.into());
         }
-        let backup = sidecar(path, ".before-reclaim");
-        let swapped = (|| -> Result<()> {
-            remove_if_exists(&backup)?;
-            std::fs::rename(path, &backup).context("move the old database aside")?;
-            for suffix in ["-wal", "-shm"] {
-                remove_if_exists(&sidecar(path, suffix))?;
+        let backup = sidecar(path, BACKUP_SUFFIX);
+        let swapped = swap_in(path, compact, &backup);
+        // Whatever happened, the daemon gets a working connection back: the new file, or the old one.
+        let reopened = match (&swapped, open_live(path)) {
+            (_, Ok(conn)) => Ok(conn),
+            (Ok(true), Err(error)) => {
+                tracing::warn!(%error, "the compacted database did not open; putting the old one back");
+                let restored = std::fs::rename(&backup, path)
+                    .context("put the old database back")
+                    .and_then(|()| remove_sidecars(path))
+                    .and_then(|()| open_live(path));
+                match restored {
+                    Ok(conn) => {
+                        *guard = conn;
+                        return Err(ReclaimError::Failed(format!("the compacted database did not open: {error:#}")));
+                    }
+                    Err(restore) => Err(anyhow!("{error:#}; {restore:#}")),
+                }
             }
-            if let Err(error) = std::fs::rename(compact, path) {
-                std::fs::rename(&backup, path).context("put the old database back")?;
-                return Err(error).context("move the compacted database in place");
-            }
-            Ok(())
-        })();
-        // Whatever happened, the daemon gets a working connection back.
-        let reopened = Connection::open(path).map_err(anyhow::Error::from).and_then(|conn| {
-            prepare_connection(&conn)?;
-            schema::migrate(&conn)?;
-            Ok(conn)
-        });
+            (_, Err(error)) => Err(error),
+        };
         match reopened {
             Ok(conn) => *guard = conn,
             Err(error) => return Err(ReclaimError::Failed(format!("{error:#}"))),
         }
         drop(guard);
-        swapped?;
         let _ = std::fs::remove_file(&backup);
+        swapped?;
         Ok(())
     }
+}
+
+const BACKUP_SUFFIX: &str = ".before-reclaim";
+const COMPACT_SUFFIX: &str = ".compact";
+
+/// What a compacted copy must agree on with the live database before it replaces it. Cheap on a
+/// multi-gigabyte log (it runs while writers wait): the last event, and every thread's head.
+fn fingerprint(c: &Connection) -> rusqlite::Result<(i64, i64, i64)> {
+    c.query_row("SELECT (SELECT COALESCE(MAX(seq), 0) FROM events), COUNT(*), COALESCE(SUM(last_seq), 0) FROM threads", [], |r| {
+        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+    })
+}
+
+fn open_live(path: &Path) -> Result<Connection> {
+    // Without CREATE: a missing database must not come back as an empty one.
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+    prepare_connection(&conn)?;
+    schema::migrate(&conn)?;
+    Ok(conn)
+}
+
+/// Put `compact` in place of `path` with one rename, so there is a database at `path` at every
+/// moment. The old file stays reachable as `backup` (a hard link: no extra space) until the new
+/// one has opened. Returns whether that backup exists.
+fn swap_in(path: &Path, compact: &Path, backup: &Path) -> Result<bool> {
+    // The connection checkpointed and closed: its log must be empty. A log with frames belongs to the
+    // old file and stays with it.
+    anyhow::ensure!(file_len(&sidecar(path, "-wal")) == 0, "the write-ahead log still holds writes");
+    remove_if_exists(backup)?;
+    let backed_up = std::fs::hard_link(path, backup).is_ok();
+    remove_sidecars(path)?;
+    std::fs::rename(compact, path).context("move the compacted database in place")?;
+    sync_dir(path);
+    Ok(backed_up)
+}
+
+fn remove_sidecars(path: &Path) -> Result<()> {
+    for suffix in ["-wal", "-shm"] {
+        remove_if_exists(&sidecar(path, suffix))?;
+    }
+    Ok(())
+}
+
+fn sync_file(path: &Path) -> Result<()> {
+    // `sync_all` is `F_FULLFSYNC` on macOS and `FlushFileBuffers` on Windows.
+    std::fs::OpenOptions::new().read(true).write(true).open(path)?.sync_all().with_context(|| format!("flush {}", path.display()))
+}
+
+#[cfg(unix)]
+fn sync_dir(path: &Path) {
+    if let Some(dir) = path.parent()
+        && let Ok(dir) = std::fs::File::open(dir)
+    {
+        let _ = dir.sync_all();
+    }
+}
+
+#[cfg(not(unix))]
+fn sync_dir(_path: &Path) {}
+
+/// Files a compaction leaves when the daemon stops in the middle: the partial copy, and the old
+/// database kept until the new one opened. Runs before the database opens.
+pub(crate) fn clear_reclaim_leftovers(path: &Path) -> Result<()> {
+    let backup = sidecar(path, BACKUP_SUFFIX);
+    if !path.exists() && backup.exists() {
+        // Stopped between moving the old file aside and the new one in: the old one is whole.
+        std::fs::rename(&backup, path).context("restore the database a compaction moved aside")?;
+    }
+    remove_if_exists(&backup)?;
+    let compact = sidecar(path, COMPACT_SUFFIX);
+    for suffix in ["", "-journal", "-wal", "-shm"] {
+        remove_if_exists(&sidecar(&compact, suffix))?;
+    }
+    Ok(())
 }
 
 /// Bring what was written during `VACUUM INTO` into the copy. Events only

@@ -289,6 +289,8 @@ async fn get_media(state: &AppState, hash: &str) -> Response {
             [
                 (header::CONTENT_TYPE, mime),
                 (header::CONTENT_DISPOSITION, "inline".to_string()),
+                // The type comes from the agent's output; never let a client guess another one.
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
                 // Named by its content: it never changes.
                 (header::CACHE_CONTROL, "private, max-age=31536000, immutable".to_string()),
             ],
