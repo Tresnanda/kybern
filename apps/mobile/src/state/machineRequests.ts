@@ -2,6 +2,7 @@
 // and pages. A thread, an attachment or a space logo lives on one machine, which is not always the
 // computer the phone is at, so the address, the token and (on a relay route) the relay member's
 // header all come from that machine's client. This is the one place that builds such a request.
+import { assetPath } from "../../../../packages/kybern-client/src/responseImages";
 import { fetch as expoFetch } from "expo/fetch";
 import type { KybernClient } from "../../../../packages/kybern-client/src/client";
 import type { MachinePage } from "../machines/hub";
@@ -62,6 +63,16 @@ export function machineSource(path: string, owner: RequestOwner = {}): RequestSo
 /** `/assets/<id>` on the owner's machine. */
 export function assetSource(assetId: string, owner: RequestOwner = {}): RequestSource | undefined {
   return machineSource(`/assets/${encodeURIComponent(assetId)}`, owner);
+}
+
+/**
+ * Where an agent image loads from: an image stored outside the event log (`kybern://asset/<hash>`, #298) from the
+ * thread's machine's asset route; anything else through that machine's thread image route, as before.
+ */
+export function agentImageSource(threadId: string, source: string, machineId?: MachineId): RequestSource | undefined {
+  const asset = assetPath(source);
+  if (asset) return machineSource(asset, { threadId, ...(machineId ? { machineId } : {}) });
+  return threadImageSource(threadId, source, machineId);
 }
 
 /** An image a thread's agent mentions, resolved by that thread's machine against its folder. */

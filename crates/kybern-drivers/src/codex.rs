@@ -1909,6 +1909,7 @@ fn input_items(message: &UserMessage) -> Vec<Value> {
             ContentPart::Attachment { name, .. } => {
                 items.push(json!({ "type": "text", "text": format!("[attached file: {name}]"), "text_elements": [] }))
             }
+            ContentPart::Media { .. } => items.push(json!({ "type": "text", "text": "[image]", "text_elements": [] })),
             ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } | ContentPart::SystemRow { .. } => {
                 if let Some(text) = part.orchestration_text() {
                     items.push(json!({ "type": "text", "text": text, "text_elements": [] }));

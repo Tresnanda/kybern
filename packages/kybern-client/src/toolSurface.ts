@@ -7,7 +7,7 @@
 // harness that exposes the same shape renders the same way.
 
 import type { JsonValue, ToolCall } from "./types.ts"
-import { imageSource } from "./responseImages.ts"
+import { imageSource, mediaRef, mediaSource } from "./responseImages.ts"
 
 export type ToolSurfaceKind = "computer" | "browser"
 
@@ -96,8 +96,10 @@ function screenshotsFrom(output: JsonValue | null): string[] {
     // MCP puts data on the block; Claude's tool results nest it under `source`.
     const raw = block.source && typeof block.source === "object" ? record(block.source) : block
     const mime = string(raw.mimeType ?? raw.media_type ?? raw.mime)
-    if (block.type !== "image" || typeof raw.data !== "string" || !mime.startsWith("image/")) continue
-    const source = `data:${mime};base64,${raw.data}`
+    // A screenshot stored outside the event log (#298) stands as `{ kybern_media }` where its base64 was.
+    const stored = mediaRef(raw.data)
+    if (block.type !== "image" || !mime.startsWith("image/") || (typeof raw.data !== "string" && !stored)) continue
+    const source = stored ? mediaSource(stored) : `data:${mime};base64,${raw.data}`
     if (imageSource(source)) out.push(source)
   }
   return out

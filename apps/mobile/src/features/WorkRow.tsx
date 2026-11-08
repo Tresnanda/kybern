@@ -10,6 +10,9 @@ import { View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import { displayCommand } from "../../../../packages/kybern-client/src/displayCommand";
 import { commandOf, printedText } from "../../../../packages/kybern-client/src/signIn";
+import { responseImages } from "../../../../packages/kybern-client/src/responseImages";
+import { agentImageSource } from "../state/machineRequests";
+import { AuthedImage } from "../ui/AuthedImage";
 import { signInRequestMessage, type LoginRecipe } from "../../../../packages/kybern-client/src/loginRecipes";
 import { toolLine, toolLineCounts, unwrapShellCommand } from "../../../../packages/kybern-client/src/toolActivity";
 import { runtimeTaskStatusWord } from "../../../../packages/kybern-client/src/statusWords";
@@ -29,7 +32,7 @@ import { Button, Icon, T, Tap } from "../ui/primitives";
 import { ProviderMark } from "../ui/ProviderMark";
 import { StatusGlyph } from "../ui/TaskGlyphs";
 import { showToast } from "../ui/Toast";
-import { space, useTheme } from "../ui/theme";
+import { radius, space, useTheme } from "../ui/theme";
 import { openAgents } from "./AgentsSheet";
 import { CSS_EASE_OUT } from "../components/liquid/motion";
 
@@ -196,6 +199,8 @@ export const ToolWorkRow = memo(function ToolWorkRow({
     };
   }, [expanded, deferred, fetched, threadId, block.call.id]);
   const output = fetched ? printedText(fetched.output, fetched.stream) : printedText(block.output, block.stream);
+  // Screenshots and images the tool returned: inline in older threads, stored on the thread's machine since 0.24.
+  const images = expanded ? responseImages(fetched ? fetched.output : block.output).slice(0, 4) : [];
   const command = activity.kind === "command" ? unwrapShellCommand(commandOf(block.call.input)) : "";
   const diff = activity.kind === "edit" || activity.kind === "write" ? editPreview(block.call.input) : null;
   const status = block.isError ? "failed" : block.complete ? "done" : "running";
@@ -245,6 +250,15 @@ export const ToolWorkRow = memo(function ToolWorkRow({
       {expanded && (
         <Animated.View entering={FadeIn.duration(160)} style={{ paddingStart: 22, gap: space.xs }}>
           {!!command && <Code text={command} language="Command" />}
+          {images.map((image) => (
+            <AuthedImage
+              key={image.source}
+              source={image.source.startsWith("data:") ? { uri: image.source } : agentImageSource(threadId, image.source)}
+              accessibilityLabel={image.label}
+              style={{ width: "100%", height: 200, borderRadius: radius.md, backgroundColor: colors.card }}
+              resizeMode="contain"
+            />
+          ))}
           {diff ? (
             (() => {
               const shown = head(diff);

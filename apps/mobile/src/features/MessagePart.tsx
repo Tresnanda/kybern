@@ -14,6 +14,8 @@ export function imageSource(part: ContentPart, localUri?: string, owner?: Reques
   if (localUri) return { uri: localUri };
   if (part.type === "image")
     return { uri: `data:${part.media_type};base64,${part.data}` };
+  // A large image stored outside the event log (#298): fetched from the thread's machine.
+  if (part.type === "media" && part.media.mime.startsWith("image/")) return assetSource(part.media.hash, owner);
   if (part.type === "attachment" && part.media_type.startsWith("image/")) {
     const source = assetSource(part.asset_id, owner);
     if (source) return source;
@@ -51,7 +53,7 @@ export function MessagePart({
       />
     );
   if (part.type === "text") return <T selectable={selectable}>{part.text}</T>;
-  if (part.type === "image") return null;
+  if (part.type === "image" || part.type === "media") return null;
   if (part.type === "thread_message") return <ThreadMessageCard part={part} />;
   if (part.type === "agent_results") return <AgentResultsList items={part.items} />;
   if (part.type === "system_row") return <SystemRowLine text={part.text} />;

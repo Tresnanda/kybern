@@ -563,7 +563,7 @@ impl Orchestrator {
             }
             DriverEvent::ImageReceived { id, source, .. } => {
                 if source.len() <= 70_000_000 {
-                    self.emit(child_id, turn, EventPayload::ImageReceived { id, origin: EventOrigin::Root, source })?;
+                    self.emit(child_id, turn, EventPayload::ImageReceived { id, origin: EventOrigin::Root, source, media: None })?;
                 }
             }
             DriverEvent::ToolStarted(mut call) => {

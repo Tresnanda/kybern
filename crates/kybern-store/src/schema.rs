@@ -772,6 +772,32 @@ const MIGRATIONS: &[&str] = &[
     END;
     COMMIT;
     ",
+    // Media moved out of the event log (#298): `media` lists the files in
+    // `assets/<hash>`, `media_refs` says which events use them (a file nothing
+    // refers to is swept), and `event_output_stubs` marks tool results large
+    // enough that history pages leave them out, so a page read never loads them.
+    "
+    BEGIN;
+    CREATE TABLE media (
+        hash TEXT PRIMARY KEY,
+        mime TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+    ) WITHOUT ROWID;
+    CREATE TABLE media_refs (
+        seq INTEGER NOT NULL REFERENCES events(seq) ON DELETE CASCADE,
+        hash TEXT NOT NULL,
+        PRIMARY KEY (seq, hash)
+    ) WITHOUT ROWID;
+    CREATE INDEX media_refs_hash ON media_refs(hash);
+    CREATE TABLE event_output_stubs (
+        seq INTEGER PRIMARY KEY REFERENCES events(seq) ON DELETE CASCADE,
+        tool_call_id TEXT NOT NULL,
+        is_error INTEGER NOT NULL,
+        output_bytes INTEGER NOT NULL
+    );
+    COMMIT;
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

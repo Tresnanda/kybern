@@ -104,7 +104,11 @@ pub enum EventPayload {
     ImageReceived {
         id: String,
         origin: EventOrigin,
+        /// A URL, a path or an inline `data:` URL. Empty when `media` holds the image.
         source: String,
+        /// The image, stored outside the event log (events since 0.24.0).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        media: Option<MediaRef>,
     },
     AssistantThinkingDelta {
         message_id: MessageId,

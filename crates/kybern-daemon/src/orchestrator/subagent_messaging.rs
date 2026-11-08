@@ -109,7 +109,7 @@ impl Orchestrator {
         anyhow::ensure!(!text.trim().is_empty(), "Write a message or attach a file.");
         anyhow::ensure!(text.len() <= 64 * 1024, "Subagent message exceeds 64 KiB.");
         anyhow::ensure!(
-            !input.message.parts.iter().any(|part| matches!(part, ContentPart::Image { .. })),
+            !input.message.parts.iter().any(|part| matches!(part, ContentPart::Image { .. } | ContentPart::Media { .. })),
             "Attach an image file so the subagent can read its path. Native hooks deliver file references, not inline images."
         );
         let info = child.subagent.as_ref().ok_or_else(|| anyhow!("This is not a native subagent thread."))?;
