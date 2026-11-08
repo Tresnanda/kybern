@@ -548,6 +548,7 @@ mod tests {
         provider.model = Some("m".into());
         provider.env.insert("K".into(), "v".into());
         provider.project_profiles.insert("/p".into(), "x".into());
+        provider.idle_compaction.insert("work".into(), IdleCompaction::Never);
         let keys = |value: Value| -> BTreeSet<String> { value.as_object().unwrap().keys().cloned().collect() };
         let table = |table: &[(&str, Sharing)]| -> BTreeSet<String> { table.iter().map(|(name, _)| (*name).to_string()).collect() };
         assert_eq!(keys(serde_json::to_value(&settings).unwrap()), table(SETTINGS_FIELDS));
@@ -573,6 +574,7 @@ mod tests {
             "orchestration",
             "tell_agents_about_kybern",
             "ask_deadlines",
+            "compaction",
         ] {
             assert_eq!(class(shared), Sharing::Shared, "{shared}");
         }
@@ -583,7 +585,7 @@ mod tests {
         assert_eq!(class("providers"), Sharing::PerProvider);
         let provider = |name: &str| PROVIDER_FIELDS.iter().find(|(field, _)| *field == name).unwrap().1;
         assert_eq!(provider("model"), Sharing::Shared);
-        for own in ["accounts", "default_account", "project_accounts", "binary", "env", "project_profiles"] {
+        for own in ["accounts", "default_account", "project_accounts", "binary", "env", "project_profiles", "idle_compaction"] {
             assert_eq!(provider(own), Sharing::PerMachine, "{own}");
         }
         let paths = shared_paths();
