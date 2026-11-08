@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.24.0
+
+<!-- kybern-release-title: Interface size, smaller databases, and fewer tokens per Claude request -->
+<!-- kybern-release-summary: Zoom the whole window from 80 to 200 percent, images and PDFs no longer fill the database, busy daemons retry on their own, idle threads can compact before the prompt cache expires, and Claude sessions send about 17K fewer tokens per request. -->
+
+- **Interface size** zooms the whole window like a browser page, from 80 % to 200 %: text, icons, spacing, images and click targets all scale, and the layout reflows. Use ⌘+, ⌘− and ⌘0 (Ctrl elsewhere), the **View** menu (in the kybern menu off macOS), or **Settings → Appearance → Size**. Sizes that don't fit your display are dimmed, with **Actual size** next to the slider. The choice is saved per device, applies to every window and survives a restart. Web previews zoom with the window.
+- Images and PDFs from agents, pasted images and generated pictures are stored as files next to the database instead of inside it, so the database stays small and threads open faster. Existing installs move them in the background after the update. **Settings → Storage** shows the sizes and has **Reclaim space**, which compacts the database; it says so when there is nothing to reclaim or the disk is too full to try. After upgrading, older Kybern versions refuse to open this data with an "upgraded by a newer Kybern" message, so update every computer and CLI that shares the data folder.
+- "Too many concurrent requests" no longer appears on **All tasks** and other busy pages. Slow calls (Git, GitHub, other machines) have their own lanes so they can't crowd out everyday ones, and a busy daemon is retried automatically. When a page still can't load, it says in plain words whether the daemon is busy or a machine can't be reached, with **Try again**.
+- Code blocks tagged `diff` or `patch` are coloured like the diff view: removed lines red, added lines green and headers muted. Copy still gives the exact text. This works in replies, pull requests, issues, notes and the mobile app.
+- The composer's prompt-cache countdown uses the real cache length: 1 hour on Claude subscriptions and 5 minutes on API keys, instead of a fixed estimate.
+- **Compact idle threads** in **Settings → Agent providers → Compaction** chooses when a long, idle thread is compacted: **When you return** (the default and the old behaviour), **Before the cache expires** (compacts about 2 minutes ahead, so your next message doesn't re-read the whole thread uncached) or **Never**. Each account can use its own choice. A compaction done while you were away shows as one row in the thread. **Auto-compact at** sets the size, from 100K to 1M tokens, at which Claude Code, Codex, OpenCode and Oh My Pi compact on their own.
+- Claude sessions load seven rarely used tools (Artifact and its data and comments tools, Workflow, ScheduleWakeup, ReportFindings and ListAgents) only when a turn needs them. That sends about 17K fewer tokens with every request on Claude Code 2.1.286 and newer. An existing thread reads its context uncached once on its next turn. Agents you delegate to Claude use your `subagentPromptCacheTtl` setting for their cache length.
+- Pull request rows keep their actions inside the row: the number turns into a small action button when you point at, focus or select the row, so titles get the full width.
+- Setting up a project on another machine works for a project you added before its first commit, and starts again if the machine's copy was removed after a finished setup, instead of failing with "The project list has not refreshed yet".
+
 ## 0.23.0
 
 <!-- kybern-release-title: Agents' own commands, live machine updates, and glass on Linux -->
