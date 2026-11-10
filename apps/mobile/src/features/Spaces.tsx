@@ -13,7 +13,7 @@ import {
   SPACE_COPY,
   useSpaces,
 } from "../state/spaces";
-import { useProjects } from "../state/runtime";
+import { useLists } from "../state/useLists";
 import { MenuButton } from "../ui/ActionMenu";
 import type { MenuItem } from "../ui/menuModel";
 import { Icon, T } from "../ui/primitives";
@@ -32,7 +32,8 @@ function spaceSymbol(name: string): SFSymbol {
 /** "Personal ✓ / Work / New space… / Manage spaces…" as one inline menu section, or nothing without spaces. */
 export function useSpaceMenuItems(): MenuItem[] {
   const s = useSpaces();
-  const projects = useProjects();
+  // Every machine's projects: the computer the phone is at may be away (#245).
+  const { projects } = useLists(null);
   if (s.supported !== true) return [];
   const active = currentSpaceId(s);
   const projectCount = (id: string) => projects.filter((p) => p.space_id === id).length;
