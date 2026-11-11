@@ -3,7 +3,9 @@
 import { router } from "expo-router";
 import { useEffect, useState } from "react";
 import type { HarnessUpdate } from "../../state/protocol";
-import { errorText, rpc, useApp } from "../../state/runtime";
+import { errorText } from "../../state/runtime";
+import { settingsRpc, useSettingsChoice, useSettingsLive } from "../../state/machineChoice";
+import { useSettingsProviders } from "../../state/machineProviders";
 import { saveSettings, useSettings } from "../../state/settings";
 import { ListRow } from "../../ui/List";
 import { ErrorBanner } from "../../ui/primitives";
@@ -13,19 +15,20 @@ import { harnessUpdateLabel } from "./labels";
 
 /** The harness update list, read once per page. */
 export function useHarnessUpdates() {
-  const app = useApp();
+  const online = useSettingsLive();
+  const machine = useSettingsChoice()?.machineId;
   const [updates, setUpdates] = useState<HarnessUpdate[]>([]);
   const [error, setError] = useState("");
   useEffect(() => {
-    if (app.status !== "open") return;
+    if (!online) return;
     let live = true;
-    rpc("harness_updates.list", {})
+    settingsRpc("harness_updates.list", {})
       .then((result) => live && setUpdates(result.updates))
       .catch((e) => live && setError(errorText(e, "load the agent updates")));
     return () => {
       live = false;
     };
-  }, [app.status, app.activeId]);
+  }, [online, machine]);
   return { updates, setUpdates, error };
 }
 
@@ -38,13 +41,13 @@ export function AgentsSettings() {
 }
 
 function AgentsBody() {
-  const app = useApp();
+  const providers = useSettingsProviders();
   const { settings: current } = useSettings();
   const settings = current!;
   const { updates, error } = useHarnessUpdates();
-  const installed = app.providers.filter((p) => p.available);
-  const missing = app.providers.filter((p) => !p.available);
-  const row = (provider: (typeof app.providers)[number]) => {
+  const installed = providers.filter((p) => p.available);
+  const missing = providers.filter((p) => !p.available);
+  const row = (provider: (typeof providers)[number]) => {
     const update = updates.find((u) => u.kind === provider.kind);
     return (
       <ListRow

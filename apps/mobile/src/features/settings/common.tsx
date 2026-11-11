@@ -1,6 +1,7 @@
 // Building blocks every Settings page shares: a titled InsetGroup with its
 // footer, a toggle row, and the "connect first" state. Pages render only their
 // groups; the host (phone route or iPad detail) owns the scroll view.
+import { useSettingsLive } from "../../state/machineChoice";
 import { router } from "expo-router";
 import { Children, type PropsWithChildren, type ReactNode } from "react";
 import { View } from "react-native";
@@ -78,9 +79,11 @@ export function ToggleRow({
 export function WithSettings({ children }: { children: ReactNode }) {
   const app = useApp();
   const { settings, error } = useSettings();
+  // Another machine of the network answers for Settings while the computer the phone is at is away (#245).
+  const live = useSettingsLive();
   // A reconnect in progress keeps the page quiet; only a lost connection offers the way back.
-  if (app.status === "connecting" || app.status === "reconnecting") return null;
-  if (app.status !== "open")
+  if (!live && (app.status === "connecting" || app.status === "reconnecting")) return null;
+  if (!live)
     return (
       <Section first footer="Reconnect to change these settings.">
         <ListRow

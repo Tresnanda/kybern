@@ -4,7 +4,8 @@ import type { ProviderLimits, UsageSummaryResult } from "../../state/protocol";
 import { PROVIDER_DISPLAY_NAME } from "../../state/protocol";
 import { useAccounts, loadAccounts } from "../../state/accounts";
 import { count } from "../../state/format";
-import { errorText, rpc, useApp } from "../../state/runtime";
+import { errorText } from "../../state/runtime";
+import { settingsRpc, useSettingsChoice, useSettingsLive } from "../../state/machineChoice";
 import { limitCards, loadUsageLimits, useUsageLimits } from "../../state/usage";
 import { ListRow, SectionHeader } from "../../ui/List";
 import { Empty, ErrorBanner } from "../../ui/primitives";
@@ -19,14 +20,15 @@ import { UsageRing } from "./UsageRing";
 type Group = "provider" | "model" | "day";
 
 export function UsageSettings() {
-  const app = useApp();
+  const online = useSettingsLive();
+  const machine = useSettingsChoice()?.machineId;
   const { limits, error, loading } = useUsageLimits();
   const { accounts } = useAccounts();
   useEffect(() => {
-    if (app.status !== "open") return;
+    if (!online) return;
     void loadUsageLimits(true);
     void loadAccounts();
-  }, [app.status, app.activeId]);
+  }, [online, machine]);
   const cards = limitCards(limits).filter((card) => card.limits.length);
   const now = Date.now();
   const title = (card: ProviderLimits) => {
@@ -48,7 +50,7 @@ export function UsageSettings() {
           <SectionHeader title="Plan limits" inset first />
           <Empty
             variant="inline"
-            title={app.status !== "open" ? "Connect your computer to see plan limits." : loading ? "Reading plan limits…" : "No agent has reported plan limits yet."}
+            title={!online ? "Connect your computer to see plan limits." : loading ? "Reading plan limits…" : "No agent has reported plan limits yet."}
           />
         </>
       ) : (
@@ -76,14 +78,15 @@ export function UsageSettings() {
 }
 
 function Cost() {
-  const app = useApp();
+  const online = useSettingsLive();
+  const machine = useSettingsChoice()?.machineId;
   const [group, setGroup] = useState<Group>("provider");
   const [usage, setUsage] = useState<UsageSummaryResult>();
   const [error, setError] = useState("");
   useEffect(() => {
-    if (app.status !== "open") return;
+    if (!online) return;
     let live = true;
-    rpc("usage.summary", { group_by: group })
+    settingsRpc("usage.summary", { group_by: group })
       .then((value) => {
         if (!live) return;
         setUsage(value);
@@ -93,8 +96,8 @@ function Cost() {
     return () => {
       live = false;
     };
-  }, [app.status, app.activeId, group]);
-  if (app.status !== "open") return null;
+  }, [online, machine, group]);
+  if (!online) return null;
   const tokens = (row: UsageSummaryResult["total"]) =>
     count(row.usage.input_tokens + row.usage.output_tokens, "token");
   const rowTitle = (key: string) =>

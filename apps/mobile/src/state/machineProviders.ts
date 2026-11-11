@@ -9,6 +9,7 @@ import { useMachineTarget } from "./machineTarget";
 import { providerMachine, standInMachine, threadProviderMachine, type ProviderMachine } from "./providerSource";
 import { machineHub, useApp, useMachineView, useThreadConnection } from "./runtime";
 import { useLists } from "./useLists";
+import { useSettingsChoice } from "./machineChoice";
 
 const lists = new Map<MachineId, ProviderStatus[]>();
 const loading = new Map<MachineId, Promise<void>>();
@@ -86,4 +87,10 @@ export function useComposerProviders(thread?: Thread | null): ProviderStatus[] {
   const connection = useThreadConnection(thread?.id);
   const machine: ProviderMachine | undefined = thread ? threadProviderMachine(connection) : providerMachine(target);
   return useProviders(machine);
+}
+
+/** The agents of the machine Settings shows (`machineChoice.ts`). */
+export function useSettingsProviders(): ProviderStatus[] {
+  const choice = useSettingsChoice();
+  return useProviders(choice && !choice.primary ? { machineId: choice.machineId, reachable: choice.live } : undefined);
 }

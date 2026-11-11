@@ -5,7 +5,10 @@ import { View } from "react-native";
 import { Section } from "../src/features/settings/common";
 import { type ProviderKind, type SavedSession } from "../src/state/protocol";
 import { homeOf, shortPath } from "../src/state/projectList";
-import { currentClient, errorText, refresh, rpc, useApp } from "../src/state/runtime";
+import { errorText, refresh, rpc } from "../src/state/runtime";
+import { choiceMenu, choiceTarget, useMachineChoice } from "../src/state/machineChoice";
+import { useProviders } from "../src/state/machineProviders";
+import { machineClient } from "../src/state/machineRequests";
 import { relativeTime } from "../src/state/threadList";
 import { ListRow } from "../src/ui/List";
 import { Button, Empty, ErrorBanner, Page } from "../src/ui/primitives";
@@ -15,17 +18,20 @@ import { space, useTheme } from "../src/ui/theme";
 import { Working } from "../src/ui/Working";
 
 export default function Sessions() {
-  const app = useApp();
   const { colors } = useTheme();
+  // The machine whose saved sessions are listed: the computer the phone is at, or another live one while it is away.
+  const { choice, pick } = useMachineChoice();
+  const target = choiceTarget(choice);
+  const providers = useProviders(choice && !choice.primary ? { machineId: choice.machineId, reachable: choice.live } : undefined);
   const [provider, setProvider] = useState<ProviderKind>(
-    () => app.providers.find((p) => p.available)?.kind ?? "claude-code",
+    () => providers.find((p) => p.available)?.kind ?? "claude-code",
   );
   const [query, setQuery] = useState("");
   const [sessions, setSessions] = useState<SavedSession[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const agent = app.providers.find((p) => p.kind === provider);
+  const agent = providers.find((p) => p.kind === provider);
   const unavailable = agent && !agent.available;
   useEffect(() => {
     if (unavailable) {
@@ -36,7 +42,7 @@ export default function Sessions() {
     let alive = true;
     setBusy(true);
     const timer = setTimeout(() => {
-      rpc("sessions.list", { provider, query: query || undefined })
+      rpc("sessions.list", { provider, query: query || undefined }, target)
         .then((r) => {
           if (!alive) return;
           setSessions(r.sessions);
@@ -50,12 +56,12 @@ export default function Sessions() {
       alive = false;
       clearTimeout(timer);
     };
-  }, [provider, query, unavailable]);
+  }, [provider, query, unavailable, target]);
   async function resume(session: SavedSession) {
     setBusy(true);
     try {
-      const t = await rpc("sessions.resume", { provider: session.provider, session_id: session.id });
-      await refresh();
+      const t = await rpc("sessions.resume", { provider: session.provider, session_id: session.id }, target);
+      await refresh(target);
       router.replace({ pathname: "/thread/[id]", params: { id: t.id } });
     } catch (e) {
       setError(errorText(e, "resume that session"));
@@ -66,7 +72,7 @@ export default function Sessions() {
   const more = () => {
     if (!cursor) return;
     setBusy(true);
-    rpc("sessions.list", { provider, query: query || undefined, cursor })
+    rpc("sessions.list", { provider, query: query || undefined, cursor }, target)
       .then((r) => {
         setSessions((s) => [...s, ...r.sessions]);
         setCursor(r.next_cursor);
@@ -79,11 +85,14 @@ export default function Sessions() {
       <Stack.Screen options={{ headerStyle: { backgroundColor: colors.grouped } }} />
       <ListSearch value={query} onChangeText={setQuery} placeholder="Search title or project" />
       <Section first footer="Continue work you started in another coding agent.">
+        {choice ? (
+          <ListRow title="Machine" leading="laptopcomputer" value={choice.name} valueMenu={choiceMenu(choice, pick)} />
+        ) : null}
         <ListRow
           title="Agent"
           leading={<ProviderMark kind={provider} size={20} />}
           value={agent?.display_name ?? provider}
-          valueMenu={app.providers.map((p) => ({
+          valueMenu={providers.map((p) => ({
             title: p.display_name,
             subtitle: p.available ? undefined : (p.unavailable_reason ?? "Not set up on your computer"),
             checked: p.kind === provider,
@@ -114,7 +123,7 @@ export default function Sessions() {
             <ListRow
               key={s.id}
               title={s.title || "Untitled session"}
-              subtitle={shortPath(s.cwd, homeOf(currentClient()?.info?.data_dir))}
+              subtitle={shortPath(s.cwd, homeOf(machineClient(target)?.info?.data_dir))}
               subtitleLines={1}
               meta={Number.isFinite(Date.parse(s.updated_at)) ? relativeTime(s.updated_at) : undefined}
               disabled={busy}

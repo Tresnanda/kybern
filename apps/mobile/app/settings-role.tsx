@@ -10,7 +10,7 @@ import {
 } from "../../../packages/kybern-client/src/coordinatorSettings";
 import { findModel, modelChoices } from "../../../packages/kybern-client/src/models";
 import type { ProviderKind, RoleDefault } from "../src/state/protocol";
-import { useApp } from "../src/state/runtime";
+import { useSettingsProviders } from "../src/state/machineProviders";
 import { saveSettings, useSettings } from "../src/state/settings";
 import { Section } from "../src/features/settings/common";
 import { ListRow } from "../src/ui/List";
@@ -22,20 +22,20 @@ import { space } from "../src/ui/theme";
 
 export default function SettingsRoleScreen() {
   const { role } = useLocalSearchParams<{ role?: string }>();
-  const app = useApp();
+  const providers = useSettingsProviders();
   const { settings, error } = useSettings();
   const known = COORDINATOR_ROLES.find((item) => item.role === role);
   const current = known && settings ? cleanRoleDefault(settings.orchestration.role_defaults?.[known.role]) : null;
-  const available = app.providers.filter((provider) => provider.available);
+  const available = providers.filter((provider) => provider.available);
   const [kind, setKind] = useState<ProviderKind | undefined>(current?.provider?.kind);
   const [query, setQuery] = useState("");
-  const provider = app.providers.find((item) => item.kind === kind);
+  const provider = providers.find((item) => item.kind === kind);
   const sameAgent = !!kind && current?.provider?.kind === kind;
   const { models, customId } = modelChoices(provider?.models ?? [], sameAgent ? current?.model : null, query);
   const selectedModel = sameAgent ? (current?.model ? findModel(provider?.models ?? [], current.model)?.id ?? current.model : "") : null;
   const efforts = (sameAgent && current?.model ? findModel(provider?.models ?? [], current.model)?.efforts : provider?.supported_efforts) ?? [];
   const instance = (k: ProviderKind) => {
-    const instances = app.providers.find((item) => item.kind === k)?.instances ?? [];
+    const instances = providers.find((item) => item.kind === k)?.instances ?? [];
     return instances.includes("default") ? "default" : instances[0] ?? "default";
   };
   const save = (value: RoleDefault | null) => {
