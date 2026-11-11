@@ -523,6 +523,10 @@ pub trait AgentSession: Send + Sync {
     }
     async fn interrupt(&self) -> Result<()>;
     async fn set_permission_mode(&self, mode: PermissionMode) -> Result<()>;
+    /// Switch a provider's primary agent. OpenCode uses `build` or `plan`.
+    async fn set_agent(&self, _agent: &str) -> Result<()> {
+        Err(DriverError::Unsupported("This harness does not have Build and Plan agents.".into()))
+    }
     async fn set_model(&self, model: &str) -> Result<()>;
     async fn set_effort(&self, effort: &str) -> Result<()>;
     async fn respond_permission(&self, request_id: &str, decision: &ApprovalDecision) -> Result<()>;

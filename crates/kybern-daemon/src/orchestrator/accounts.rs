@@ -111,7 +111,35 @@ impl Orchestrator {
             effective_permission_mode: thread.permission_mode,
             pending_permission_mode,
             quota_limited: self.thread_quota_limited(&thread)?,
+            opencode_agent: self.opencode_agent(thread.id)?,
         })
+    }
+
+    /// OpenCode's selected primary agent. Absent means Build.
+    pub(super) fn opencode_agent(&self, thread_id: ThreadId) -> Result<Option<String>> {
+        Ok(self.inner.store.meta_get(&format!("opencode_agent:{thread_id}"))?.filter(|agent| agent == "plan").map(|_| "plan".to_string()))
+    }
+
+    /// Persist and, when an OpenCode session is already open, switch Build or Plan.
+    pub(super) async fn set_opencode_agent(&self, thread_id: ThreadId, raw: &str) -> Result<()> {
+        self.ensure_not_subagent(thread_id)?;
+        let agent = match raw.trim() {
+            "" | "build" => "build",
+            "plan" => "plan",
+            _ => return Err(anyhow!("Choose Build or Plan.")),
+        };
+        let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
+        let selected = self.thread_target(thread_id)?.target.provider;
+        if thread.provider.kind != ProviderKind::Opencode && selected.kind != ProviderKind::Opencode {
+            return Err(anyhow!("Build and Plan are only available for OpenCode."));
+        }
+        if let Some(live) = self.inner.sessions.lock().await.get(&thread_id).cloned()
+            && thread.provider.kind == ProviderKind::Opencode
+        {
+            live.session.set_agent(agent).await.map_err(|error| anyhow!("{error}"))?;
+        }
+        self.inner.store.meta_set(&format!("opencode_agent:{thread_id}"), if agent == "plan" { "plan" } else { "" })?;
+        Ok(())
     }
 
     fn thread_quota_limited(&self, thread: &Thread) -> Result<bool> {
@@ -544,6 +572,9 @@ impl Orchestrator {
         }
         if mode_requested == Some(PermissionMode::FullAccess) {
             self.allow_waiting_permissions(thread.id).await;
+        }
+        if let Some(agent) = params.opencode_agent.take() {
+            self.set_opencode_agent(thread.id, &agent).await?;
         }
         self.update_thread_fields(params)
     }

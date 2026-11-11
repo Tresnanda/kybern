@@ -171,6 +171,7 @@ export default function Configure() {
           project_id: options.projectId,
           provider,
           permission_mode: options.permission,
+          ...(options.provider === "opencode" ? { opencode_agent: options.opencodeAgent ?? "build" } : {}),
           model: options.model || undefined,
           effort: options.effort || undefined,
         };

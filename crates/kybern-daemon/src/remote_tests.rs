@@ -275,6 +275,7 @@ async fn ordinary_worktree_cleanup_rpc_retains_thread_and_source_association() {
     let client = host.client().await;
     let thread = client
         .call::<ThreadsCreate>(ThreadsCreateParams {
+            opencode_agent: None,
             pin_account: false,
             project_id: Some(project.id),
             provider: ProviderInstance::default_for(ProviderKind::Codex),
@@ -1056,6 +1057,7 @@ async fn tasks_round_trip_over_rpc_with_notifications_and_error_codes() {
 
     // Sending validates before starting anything; a follow-up with no run is saved for the next one.
     let empty_prompt = TaskItemsSendParams {
+        opencode_agent: None,
         id: created.id,
         provider: ProviderInstance::default_for(ProviderKind::ClaudeCode),
         model: None,

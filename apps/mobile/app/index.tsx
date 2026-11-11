@@ -216,6 +216,7 @@ function HomeScreen() {
       project_id: chosen.id,
       provider,
       permission_mode: draft.permission,
+      ...(draft.provider === "opencode" ? { opencode_agent: draft.opencodeAgent ?? "build" } : {}),
       use_worktree: worktree,
       ...(draft.model ? { model: draft.model } : {}),
       ...(draft.effort ? { effort: draft.effort } : {}),

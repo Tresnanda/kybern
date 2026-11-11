@@ -2152,6 +2152,7 @@ pub async fn run() -> Result<()> {
             };
             let thread = client
                 .call::<ThreadsCreate>(ThreadsCreateParams {
+                    opencode_agent: None,
                     pin_account: false,
                     project_id: Some(project_id),
                     provider: ProviderInstance::default_for(provider.parse().map_err(|e: String| anyhow!(e))?),
@@ -3664,6 +3665,7 @@ async fn task_command(client: &Client, cmd: TaskCmd, json: bool) -> Result<()> {
             };
             let sent = client
                 .call::<TaskItemsSend>(TaskItemsSendParams {
+                    opencode_agent: None,
                     id: task.id,
                     provider: ProviderInstance::default_for(provider),
                     model,

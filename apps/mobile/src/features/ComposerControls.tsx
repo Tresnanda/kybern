@@ -1,11 +1,10 @@
-import { useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Keyboard, Pressable, ScrollView, View } from "react-native";
 import Animated, { useReducedMotion } from "react-native-reanimated";
 import { CSS_EASE_OUT, DURATION } from "../components/liquid/motion";
 import type { IconName } from "../ui/icons";
 import Svg, { Circle } from "react-native-svg";
-import { router } from "expo-router";
-import { useComposerProviders } from "../state/machineProviders";
+import { router, useFocusEffect } from "expo-router";
 import { setDraft, useDraft } from "../state/draft";
 import type { CoordinatorSwitchHarnessParams, PermissionMode, ProviderStatus, Thread } from "../state/protocol";
 import { coordinatorEditsEnforced } from "../../../../packages/kybern-client/src/coordinator";
@@ -108,6 +107,36 @@ export function ComposerControls({
   const compactModel = modelLabel.replace(/^GPT[- ]?/i, "");
   const permissionLabel =
     permissionChoices(kind, thread?.provider_session_id).find((item) => item.value === mode)?.label ?? mode;
+  const [openCodeAgent, setOpenCodeAgent] = useState<"build" | "plan">(draft.opencodeAgent ?? "build");
+  useEffect(() => {
+    if (kind !== "opencode") return;
+    if (!thread) {
+      setOpenCodeAgent(draft.opencodeAgent ?? "build");
+      return;
+    }
+    let live = true;
+    rpc("threads.target.get", { thread_id: thread.id })
+      .then((state) => {
+        if (live) setOpenCodeAgent(state.opencode_agent === "plan" ? "plan" : "build");
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [kind, thread?.id, draft.opencodeAgent]);
+  useFocusEffect(useCallback(() => {
+    if (kind !== "opencode" || !thread) return;
+    let live = true;
+    rpc("threads.target.get", { thread_id: thread.id })
+      .then((state) => {
+        if (live) setOpenCodeAgent(state.opencode_agent === "plan" ? "plan" : "build");
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [kind, thread?.id]));
+  const agentLabel = openCodeAgent === "plan" ? "Plan" : "Build";
   const { regular } = useLayout();
   function openOptions(section: "model" | "permissions" | "usage") {
     router.push({
@@ -130,6 +159,11 @@ export function ComposerControls({
           color={mode === "full-access" ? colors.warning : colors.secondary}
         />
       </Tap>
+      {kind === "opencode" && (
+        <Tap label={`OpenCode agent: ${agentLabel}`} disabled={disabled} onPress={() => openOptions("model")}>
+          <T variant="footnote" tone="secondary">{agentLabel}</T>
+        </Tap>
+      )}
       {/* Context only when it matters (≥ 50 %), with its number: a bare ring at low
           usage read as an activity spinner (ux-thread H10). */}
       {thread && fraction >= 0.5 && (
@@ -233,6 +267,7 @@ export function ComposerOptions({
     context && context.window_tokens > 0
       ? Math.min(1, context.used_tokens / context.window_tokens)
       : 0;
+  const [openCodeAgent, setOpenCodeAgent] = useState<"build" | "plan">(draft.opencodeAgent ?? "build");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [modelQuery, setModelQuery] = useState("");
@@ -345,6 +380,36 @@ export function ComposerOptions({
     }));
   const accounts = provider?.instances ?? [];
   const selectedModelId = selectedModel?.id ?? model ?? "";
+  useEffect(() => {
+    if (kind !== "opencode") return;
+    if (!thread) {
+      setOpenCodeAgent(draft.opencodeAgent ?? "build");
+      return;
+    }
+    let live = true;
+    rpc("threads.target.get", { thread_id: thread.id })
+      .then((state) => {
+        if (live) setOpenCodeAgent(state.opencode_agent === "plan" ? "plan" : "build");
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [kind, thread?.id, draft.opencodeAgent]);
+  async function chooseOpenCodeAgent(next: "build" | "plan") {
+    if (!thread) {
+      setDraft({ opencodeAgent: next });
+      return;
+    }
+    const saved = await act(async () => {
+      await rpc("threads.update", { thread_id: thread.id, opencode_agent: next });
+      await Promise.all([refresh(), loadThread(thread.id)]);
+    });
+    if (saved) {
+      setOpenCodeAgent(next);
+      showToast(next === "plan" ? "Using Plan" : "Using Build");
+    }
+  }
 
   if (open === "permissions")
     return (
@@ -423,6 +488,20 @@ export function ComposerOptions({
   return (
     <Sheet top={top}>
       <ErrorBanner error={error} />
+      {kind === "opencode" && (
+        <InsetGroup>
+          {(["build", "plan"] as const).map((id) => (
+            <ListRow
+              key={id}
+              title={id === "plan" ? "Plan" : "Build"}
+              subtitle={id === "plan" ? "Explore and plan without editing project files" : "Implement changes in this conversation"}
+              checked={openCodeAgent === id}
+              disabled={busy}
+              onPress={() => void chooseOpenCodeAgent(id)}
+            />
+          ))}
+        </InsetGroup>
+      )}
       <InsetGroup>
         <ListRow
           title="Agent"

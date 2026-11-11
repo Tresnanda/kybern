@@ -47,6 +47,8 @@ import { gpuixCacheDir } from '../platform/os.ts'
 export interface DraftChoices {
   /** `null` follows `settings.default_permission_mode`. */
   mode: PermissionMode | null
+  /** OpenCode Build or Plan for the next chat. Absent means Build. */
+  opencodeAgent?: 'build' | 'plan'
   provider: (ProviderInstance & { pinAccount?: boolean }) | null
   models: Partial<Record<ProviderKind, { model?: string; effort?: string }>>
   /** `undefined` is the most recently active project; `null` is Free chat. */

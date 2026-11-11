@@ -2,9 +2,10 @@
 fn add_test_account(fixture: &Fixture, kind: ProviderKind, id: &str) {
     let mut settings = fixture.orchestrator.inner.settings.get();
     let provider = settings.providers.entry(kind).or_default();
-    provider
-        .accounts
-        .insert(id.into(), ProviderAccount { name: id.into(), directory: fixture.root.join(id).to_string_lossy().into_owned(), ..Default::default() });
+    provider.accounts.insert(
+        id.into(),
+        ProviderAccount { name: id.into(), directory: fixture.root.join(id).to_string_lossy().into_owned(), ..Default::default() },
+    );
     fixture.orchestrator.inner.settings.set(settings).unwrap();
 }
 
@@ -104,20 +105,31 @@ fn target_quota_evidence_matches_full_history_after_each_transition() {
     for (owner, payload) in [
         (turn, start()),
         (turn, EventPayload::TurnFailed { error: "5-hour usage limit reached".into(), problem: None }),
-        (other_turn, EventPayload::ProviderNotice { level: NoticeLevel::Info, text: "unrelated".repeat(10_000), data: None, problem: None }),
+        (
+            other_turn,
+            EventPayload::ProviderNotice { level: NoticeLevel::Info, text: "unrelated".repeat(10_000), data: None, problem: None },
+        ),
         (turn, EventPayload::TurnResumed),
         (turn, EventPayload::TurnFailed { error: "weekly quota".into(), problem: None }),
         (other_turn, start()),
         (turn, EventPayload::TurnFailed { error: "weekly quota".into(), problem: None }),
         (other_turn, EventPayload::TurnFailed { error: "weekly quota".into(), problem: None }),
-        (turn, EventPayload::SessionTransitioned {
-            from: thread.provider.clone(), to: thread.provider.clone(), native_resume: false, text: "transition".into(),
-        }),
+        (
+            turn,
+            EventPayload::SessionTransitioned {
+                from: thread.provider.clone(),
+                to: thread.provider.clone(),
+                native_resume: false,
+                text: "transition".into(),
+            },
+        ),
     ] {
         fixture.orchestrator.emit(thread.id, Some(owner), payload).unwrap();
         let all = fixture.orchestrator.inner.store.events_for_thread(thread.id).unwrap();
-        assert_eq!(fixture.orchestrator.thread_target(thread.id).unwrap().quota_limited,
-            crate::orchestrator::accounts::quota_limited_turn(thread.status, &all, chrono::Utc::now().timestamp()));
+        assert_eq!(
+            fixture.orchestrator.thread_target(thread.id).unwrap().quota_limited,
+            crate::orchestrator::accounts::quota_limited_turn(thread.status, &all, chrono::Utc::now().timestamp())
+        );
     }
 }
 
@@ -206,10 +218,8 @@ async fn removing_an_account_resets_thread_overrides_and_signed_out_accounts_fai
     assert!(fixture.orchestrator.thread_target(thread.id).unwrap().account_override);
 
     fixture.orchestrator.mark_account_signed_out(&work, true).unwrap();
-    let error = fixture
-        .orchestrator
-        .admit_target(&mut thread, SessionTarget { provider: work.clone(), model: None, effort: None })
-        .unwrap_err();
+    let error =
+        fixture.orchestrator.admit_target(&mut thread, SessionTarget { provider: work.clone(), model: None, effort: None }).unwrap_err();
     assert_eq!(error.to_string(), "work is signed out. Sign in again in Settings › Accounts.");
 
     assert_eq!(fixture.orchestrator.clear_account_overrides(&work).unwrap(), 1);
@@ -291,6 +301,7 @@ async fn permission_request_is_pending_during_active_turn_and_applies_at_idle() 
     let result = fixture
         .orchestrator
         .update_session_fields(methods::ThreadsUpdateParams {
+            opencode_agent: None,
             thread_id: thread.id,
             title: None,
             pinned: None,
@@ -374,7 +385,9 @@ async fn a_plain_send_is_not_held_back_by_another_threads_workspace_operation() 
     let sent = tokio::time::timeout(Duration::from_secs(2), fixture.orchestrator.send(thread.id, UserMessage::text("hello"))).await;
     drop(workspace);
     sent.expect("a send outside managed worktrees must not wait for the workspace lock").unwrap();
-    assert!(fixture.store.events_for_thread(thread.id).unwrap().iter().any(|event| matches!(event.payload, EventPayload::TurnStarted { .. })));
+    assert!(
+        fixture.store.events_for_thread(thread.id).unwrap().iter().any(|event| matches!(event.payload, EventPayload::TurnStarted { .. }))
+    );
 }
 
 #[tokio::test]
@@ -457,6 +470,7 @@ async fn rejected_native_permissions_do_not_persist_or_display_requested_authori
     let rejected = fixture
         .orchestrator
         .update_session_fields(methods::ThreadsUpdateParams {
+            opencode_agent: None,
             thread_id: thread.id,
             title: None,
             pinned: None,
@@ -577,6 +591,7 @@ async fn receiving_modes_are_explicit_target_bound_and_queued_without_reconfigur
             fixture
                 .orchestrator
                 .update_session_fields(methods::ThreadsUpdateParams {
+                    opencode_agent: None,
                     thread_id: thread.id,
                     title: None,
                     pinned: None,
@@ -695,6 +710,7 @@ async fn returning_cursor_account_exposes_compatible_legacy_id_and_accepts_its_e
     fixture
         .orchestrator
         .update_session_fields(methods::ThreadsUpdateParams {
+            opencode_agent: None,
             thread_id: thread.id,
             title: None,
             pinned: None,
@@ -896,7 +912,8 @@ async fn new_thread_can_pin_cli_account_when_named_account_is_default() {
             "project_id": fixture.project.id,
             "provider": {"kind":"claude-code", "instance":"default"},
             "pin_account": pin,
-        })).unwrap();
+        }))
+        .unwrap();
         let thread = fixture.orchestrator.create_thread(params).await.unwrap();
         let target = fixture.orchestrator.thread_target(thread.id).unwrap();
         assert_eq!(target.target.provider.instance, expected);

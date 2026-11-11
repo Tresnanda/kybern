@@ -700,6 +700,9 @@ pub struct ThreadTargetState {
     /// The latest settled turn was interrupted by a confirmed account limit.
     #[serde(default)]
     pub quota_limited: bool,
+    /// OpenCode primary agent for the next turn: `build` or `plan`. Absent means Build.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opencode_agent: Option<String>,
 }
 method!(ThreadsTargetGet, "threads.target.get", Some(Scope::OrchestrationRead), ThreadsInterruptParams, ThreadTargetState);
 method!(ThreadsTargetSet, "threads.target.set", Some(Scope::OrchestrationOperate), ThreadTargetParams, ThreadTargetState);
@@ -1361,6 +1364,9 @@ pub struct ThreadsCreateParams {
     /// `base_branch` still applies to the primary when this map does not name it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_branches: Option<BTreeMap<String, String>>,
+    /// OpenCode only: `build` or `plan`. Other providers ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opencode_agent: Option<String>,
 }
 method!(ThreadsCreate, "threads.create", Some(Scope::OrchestrationOperate), ThreadsCreateParams, Thread);
 
@@ -1520,6 +1526,9 @@ pub struct ThreadsUpdateParams {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// OpenCode only: `build` or `plan`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opencode_agent: Option<String>,
 }
 method!(ThreadsUpdate, "threads.update", Some(Scope::OrchestrationOperate), ThreadsUpdateParams, Thread);
 
@@ -4829,6 +4838,9 @@ pub struct TaskItemsSendParams {
     /// The client's id for the first message (see `threads.send`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<MessageId>,
+    /// OpenCode only: `build` or `plan`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opencode_agent: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TaskItemsSendResult {

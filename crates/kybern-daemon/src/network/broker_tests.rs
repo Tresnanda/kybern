@@ -397,6 +397,7 @@ impl Lending {
         let thread = client(&self.b)
             .await
             .call::<ThreadsCreate>(ThreadsCreateParams {
+                opencode_agent: None,
                 pin_account: true,
                 project_id: Some(project.id),
                 provider: ProviderInstance { kind: ProviderKind::ClaudeCode, instance: self.local_account.clone() },

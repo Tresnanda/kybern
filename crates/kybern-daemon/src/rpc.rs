@@ -737,6 +737,7 @@ async fn dispatch_part_9(state: &AppState, _ctx: &ConnectionCtx, method: &str, s
             let thread = state
                 .orchestrator
                 .update_thread_fields(ThreadsUpdateParams {
+                    opencode_agent: None,
                     thread_id: p.thread_id,
                     title: Some(title),
                     pinned: None,

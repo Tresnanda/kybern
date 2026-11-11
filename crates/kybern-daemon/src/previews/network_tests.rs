@@ -150,6 +150,7 @@ async fn run_server_preview() {
         .unwrap();
     let thread = on_thread_host
         .call::<ThreadsCreate>(ThreadsCreateParams {
+            opencode_agent: None,
             project_id: Some(project.id),
             provider: ProviderInstance::default_for(ProviderKind::ClaudeCode),
             model: None,

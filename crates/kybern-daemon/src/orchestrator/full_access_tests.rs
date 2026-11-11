@@ -60,7 +60,15 @@ fn permission_request(id: &str, tool_name: &str) -> DriverEvent {
 }
 
 fn set_mode(thread: &Thread, mode: PermissionMode) -> methods::ThreadsUpdateParams {
-    methods::ThreadsUpdateParams { thread_id: thread.id, title: None, pinned: None, permission_mode: Some(mode), model: None, effort: None }
+    methods::ThreadsUpdateParams {
+        opencode_agent: None,
+        thread_id: thread.id,
+        title: None,
+        pinned: None,
+        permission_mode: Some(mode),
+        model: None,
+        effort: None,
+    }
 }
 
 /// A thread in `mode` with an active turn on a session whose permission
@@ -105,8 +113,19 @@ async fn full_access_allows_harness_permissions_without_asking_and_records_it() 
 async fn full_access_still_asks_questions_forms_and_plans() {
     let fixture = Fixture::new();
     let (thread, live, responses) = full_access_turn(&fixture, ProviderKind::ClaudeCode, PermissionMode::FullAccess).await;
-    let asks =
-        ["AskUserQuestion", "mcp_elicitation", "request_user_input", "opencode_question", "ui_select", "ui_confirm", "ExitPlanMode", SECRET_REQUEST_TOOL, LOGIN_REQUEST_TOOL, PROMPT_REQUEST_TOOL, PERMISSION_REQUEST_TOOL];
+    let asks = [
+        "AskUserQuestion",
+        "mcp_elicitation",
+        "request_user_input",
+        "opencode_question",
+        "ui_select",
+        "ui_confirm",
+        "ExitPlanMode",
+        SECRET_REQUEST_TOOL,
+        LOGIN_REQUEST_TOOL,
+        PROMPT_REQUEST_TOOL,
+        PERMISSION_REQUEST_TOOL,
+    ];
     for (index, tool) in asks.iter().enumerate() {
         fixture.orchestrator.handle_driver_event(thread.id, &live, permission_request(&format!("q{index}"), tool)).await.unwrap();
     }
