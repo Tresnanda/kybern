@@ -51,12 +51,16 @@ class Socket {
       case "daemon.info": result = { protocol_version: PROTOCOL_VERSION, environment_id: this.machine, machine_id: this.machine, features: other ? ["network.v1"] : [] }; break;
       case "events.subscribe": return void (other && queueMicrotask(() => this.reply(request, { subscription_id: "o", head_seq: 1, replay_ready: true })));
       case "providers.list": return;
-      case "threads.list": result = { threads: other ? [entry("t-other", "o1", "2026-10-03T00:00:00Z")] : [entry("thread", "project", "2026-10-01T00:00:00Z")] }; break;
+      case "threads.list": result = other
+        ? { threads: [entry("t-other", "o1", "2026-10-03T00:00:00Z")], activity: [{ thread_id: "t-other", active_agents: 0, active_processes: 0, active_monitors: 0, pending_request: "approval" }] }
+        : { threads: [entry("thread", "project", "2026-10-01T00:00:00Z")] }; break;
       case "projects.list": result = { projects: [project(other ? "o1" : "project")] }; break;
       case "threads.get": result = { thread: entry(request.params.thread_id, "o1", "2026-10-03T00:00:00Z"), transcript: [{ role: "assistant", id: "m", turn_id: "turn", seq: 1, text: "From Satyamas", complete: true }], pending_approvals: [] }; break;
       case "spaces.list": result = { spaces: [{ id: "s1", name: "Work", color: "blue", position: 0, is_default: true }], placements: [] }; break;
       case "network.status": result = { enabled: true, members: [], found: [], outbox: {}, tailscale: {} }; break;
-      case "approvals.list": result = { approvals: [] }; break;
+      case "approvals.list": result = { approvals: other ? [{ id: "a-other", thread_id: "t-other", kind: "command", title: "Run ls" }] : [] }; break;
+      case "spaces.create": result = { id: "s2", name: request.params.name, color: request.params.color, position: 1, is_default: false }; break;
+      case "providers.accounts.list": result = { accounts: [] }; break;
       case "queue.list": result = { messages: [] }; break;
       case "settings.get": result = { default_provider: "codex", providers: {} }; break;
       default: result = {};
@@ -83,6 +87,8 @@ test("with the computer the phone is at away, a thread on another machine works 
   await new Promise(resolve => setTimeout(resolve, 350));
   assert.equal(runtime.threadMachine("t-other"), "other");
   assert.equal(runtime.threadMachine("thread"), undefined, "the computer the phone is at");
+  await tick();
+  assert.deepEqual(runtime.getState().approvals.map(a => a.id), ["a-other"], "another machine's waiting approval is listed");
 
   // The computer goes away.
   host.drop(); await tick();
@@ -120,6 +126,13 @@ test("with the computer the phone is at away, a thread on another machine works 
   spaces.loadSpacesThroughNetwork(); await tick();
   assert.ok(methods(other).includes("spaces.list"));
   assert.deepEqual(spaces.useSpaces().spaces.map(s => s.id), ["s1"]);
+  assert.equal(spaces.useSpaces().from, "other", "logos load from the member that listed the spaces");
+  await spaces.createSpace("Side", "green");
+  assert.ok(methods(other).includes("spaces.create"), "a space change goes through the live member");
+  assert.equal(host.sent.filter(r => r.method === "spaces.create").length, 0);
+  assert.deepEqual(runtime.getState().approvals.map(a => a.id), ["a-other"], "its approvals stay listed while the computer is away");
+  await runtime.rpc("providers.accounts.list", { kind: "codex" }, runtime.threadMachine("t-other"));
+  assert.ok(methods(other).includes("providers.accounts.list"));
 
   // The away computer's lists stay as cached copies, greyed.
   const lists = runtime.listsOf(hub.view(), null);
