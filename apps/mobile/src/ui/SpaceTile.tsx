@@ -1,9 +1,12 @@
 // A space's tile, as the desktop rail draws it: the logo the user chose (an
 // uploaded image, a curated glyph) on the space's colour, else its initials
-// (or a sparkle when the name has none). An image shows the swatch while it loads.
+// (or a sparkle when the name has none). An image shows the swatch while it loads, and the initials when it can't load.
+// The image comes from the machine the spaces were read from: the computer the phone is at, or a member while it is away.
 import { spaceInitials } from "../../../../packages/kybern-client/src/spaces";
 import type { Space, SpaceColor } from "../state/protocol";
+import { useState } from "react";
 import { StyleSheet, View } from "react-native";
+import { useSpaces } from "../state/spaces";
 import { assetSource } from "../state/machineRequests";
 import type { IconName } from "./icons";
 import { Icon, T } from "./primitives";
@@ -68,12 +71,16 @@ export function SpaceTile({
   machineId?: string;
 }) {
   const { colors } = useTheme();
+  const spacesFrom = useSpaces().from;
+  const [failed, setFailed] = useState<string | null>(null);
   const swatch = SPACE_SWATCHES[space.color] ?? SPACE_SWATCHES.graphite;
   const initials = spaceInitials(space.name).slice(0, size < 24 ? 1 : 2);
   const logo = space.logo;
   const glyph = logo?.kind === "icon" ? SPACE_GLYPHS[logo.icon] : undefined;
-  // A space's logo lives on the machine that owns the space; the computer the phone is at when that is unknown.
-  const image = logo?.kind === "image" ? assetSource(logo.asset_id, machineId ? { machineId } : {}) : undefined;
+  // A space's logo lives on the machine that owns the space, else on the one the spaces were read from.
+  const from = machineId ?? spacesFrom;
+  const source = logo?.kind === "image" ? assetSource(logo.asset_id, from ? { machineId: from } : {}) : undefined;
+  const image = source && failed !== source.uri ? source : undefined;
   const corner = size >= 28 ? radius.sm - 2 : radius.xs;
   return (
     <View
@@ -90,7 +97,7 @@ export function SpaceTile({
     >
       {image ? (
         <>
-          <AuthedImage source={image} resizeMode="cover" style={{ width: size, height: size }} />
+          <AuthedImage source={image} resizeMode="cover" style={{ width: size, height: size }} onError={() => setFailed(image.uri)} />
           {/* A hairline keeps a light image from melting into a light surface. */}
           <View
             pointerEvents="none"
