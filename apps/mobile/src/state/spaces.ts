@@ -13,6 +13,7 @@ import * as SecureStore from "expo-secure-store";
 import { useMemo, useSyncExternalStore } from "react";
 import { Platform } from "react-native";
 import { METHOD_NOT_FOUND } from "./notesModel";
+import type { MachineId } from "../../../../packages/kybern-client/src/types";
 import {
   isFreeChatProject,
   SPACES_CHANGED_NOTIFICATION,
@@ -45,6 +46,11 @@ type SpacesState = {
   spaces: Space[];
   /** The space this phone shows, as saved. `currentSpaceId()` resolves a stale one. */
   savedId: SpaceId | null;
+  /**
+   * The member the spaces were read from while the computer the phone is at was away; undefined when they came from it.
+   * An image logo is loaded from the same machine: every member installs the logo under its own asset id (#245).
+   */
+  from?: MachineId;
 };
 
 let state: SpacesState = { supported: null, spaces: [], savedId: null };
@@ -74,7 +80,7 @@ onClientAttach((client, isCurrent) => {
   client.onNotification(SPACES_CHANGED_NOTIFICATION, (params) => {
     if (!isCurrent()) return;
     const spaces = (params as SpacesChangedNotification | null)?.spaces;
-    if (Array.isArray(spaces)) { publish({ supported: true, spaces: ordered(spaces) }); void loadSpaces(); }
+    if (Array.isArray(spaces)) { publish({ supported: true, spaces: ordered(spaces), from: undefined }); void loadSpaces(); }
   });
   client.onNotification("spaces.placements_changed", () => { if (isCurrent()) void loadSpaces(); });
   const key = savedKey();
@@ -102,12 +108,14 @@ export function loadSpacesThroughNetwork() {
   const client = networkClient();
   if (!client || networkSpacesFrom === client) return;
   networkSpacesFrom = client;
+  const hub = machineHub();
+  const from = hub.memberConnection(hub.primaryMachineId)?.record.machineId;
   const version = ++spacesLoadVersion;
   client.call("spaces.list", {}).then(
     (result) => {
       if (version !== spacesLoadVersion) return;
       setSpacePlacements(result.spaces, result.placements);
-      publish({ supported: true, spaces: ordered(result.spaces) });
+      publish({ supported: true, spaces: ordered(result.spaces), from });
     },
     (e) => {
       if (version !== spacesLoadVersion) return;
@@ -124,7 +132,7 @@ export async function loadSpaces() {
     const result = await rpc("spaces.list", {});
     if (version !== spacesLoadVersion) return;
     setSpacePlacements(result.spaces, result.placements);
-    publish({ supported: true, spaces: ordered(result.spaces) });
+    publish({ supported: true, spaces: ordered(result.spaces), from: undefined });
   } catch (e) {
     if (version !== spacesLoadVersion) return;
     if ((e as { code?: number } | null)?.code === METHOD_NOT_FOUND)
