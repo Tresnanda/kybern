@@ -80,6 +80,7 @@ async fn run_turn(kind: ProviderKind, mode: PermissionMode) -> Vec<DriverEvent> 
             rewind: None,
             binary: None,
             env: env.clone(),
+            compaction: Default::default(),
         })
         .await
         .expect("spawn");
@@ -133,6 +134,7 @@ async fn run_turn(kind: ProviderKind, mode: PermissionMode) -> Vec<DriverEvent> 
                 rewind: None,
                 binary: None,
                 env,
+                compaction: Default::default(),
             })
             .await
             .expect("resume SDK agent");
@@ -307,6 +309,7 @@ async fn run_native_bridge_turn(kind: ProviderKind) {
             } else {
                 HashMap::new()
             },
+            compaction: Default::default(),
         })
         .await
         .unwrap_or_else(|error| panic!("{kind}: native bridge spawn failed: {error}"));
@@ -429,6 +432,7 @@ async fn spawn_with_guide(
             } else {
                 HashMap::new()
             },
+            compaction: Default::default(),
         })
         .await
         .unwrap_or_else(|error| panic!("{kind}: spawn with guide failed: {error}"));
@@ -650,6 +654,7 @@ fn antigravity_config(dir: &std::path::Path, resume: Option<String>) -> SessionC
         rewind: None,
         binary: None,
         env: HashMap::new(),
+        compaction: Default::default(),
     }
 }
 
@@ -757,6 +762,7 @@ fn grok_config(dir: &std::path::Path, resume: Option<String>) -> SessionConfig {
         rewind: None,
         binary: None,
         env: HashMap::new(),
+        compaction: Default::default(),
     }
 }
 

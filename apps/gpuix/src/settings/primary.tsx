@@ -1,6 +1,7 @@
 import { activeEnvironment } from '../shell/environment.ts'
 import { problemSentence } from '../problems/sentence.ts'
 import { AntigravitySetup } from './Antigravity.tsx'
+import { CompactionSection } from './Compaction.tsx'
 import { CursorAccountSection, useCursorSetup } from './Cursor.tsx'
 import { InstalledAgents } from './InstalledAgents.tsx'
 import { load, save } from '../shell/persist.ts'
@@ -103,6 +104,7 @@ export function Agents() {
       <Row title={ROTATION_COPY.settingTitle} description={ROTATION_COPY.settingDetail} shared="orchestration"><Select label={ROTATION_COPY.settingTitle} testId="settings-rotation-budget" compact value={String(effective.rotation_budget_tokens)} options={rotationBudgetChoices(effective.rotation_budget_tokens)} disabled={saving} onChange={(v) => change({ rotation_budget_tokens: Number(v) })} /></Row>
       <Row title="Delegation depth" description="1 lets only top-level threads delegate. 2 also lets their agents delegate again."><NumberField label="Delegation depth" unit="levels" min={1} max={4} value={current.max_depth} disabled={saving} onCommit={(max_depth) => change({ max_depth })} /></Row>
     </Section>
+    <CompactionSection />
     <AskDeadlineSection />
     <Section title={COPY.defaultsSection}>
       <Row title={COPY.autonomy} description={autonomyHint(effective.lead_autonomy)}><Select label={COPY.autonomy} value={effective.lead_autonomy} options={AUTONOMY_OPTIONS} disabled={saving} onChange={(v) => change({ lead_autonomy: v as OrchestrationSettings['lead_autonomy'] })} /></Row>

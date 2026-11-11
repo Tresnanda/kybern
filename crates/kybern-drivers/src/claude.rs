@@ -38,6 +38,8 @@ const MIN_VERSION: (u64, u64, u64) = (2, 1, 0);
 /// show those labels drawing the 5-hour window about 1.8× faster per token than any other label.
 /// Anthropic has not confirmed this, so the fix is only to name Kybern honestly.
 pub(crate) const ENTRYPOINT_ENV: &str = "CLAUDE_CODE_ENTRYPOINT";
+/// Claude Code's auto-compact window (100k..=1M tokens), ahead of its `autoCompactWindow` setting.
+pub(crate) const AUTO_COMPACT_WINDOW_ENV: &str = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
 pub(crate) const KYBERN_ENTRYPOINT: &str = "kybern";
 
 /// The label for a Claude process: a value set in the session's own environment wins; anything
@@ -50,13 +52,73 @@ pub(crate) fn entrypoint(session_value: Option<&String>) -> String {
 #[derive(Default)]
 pub struct ClaudeDriver {
     catalog: Arc<ModelCatalog>,
+    /// Where the Kybern plugin is written for `--plugin-dir`; none, no plugin.
+    plugin_root: Option<PathBuf>,
+    /// `claude --version` per binary, so a spawn does not run it every time.
+    versions: std::sync::Mutex<HashMap<PathBuf, KnownVersion>>,
+}
+
+/// How long a `claude --version` answer is trusted for a binary that has not changed.
+const VERSION_TTL: std::time::Duration = std::time::Duration::from_secs(600);
+
+struct KnownVersion {
+    modified: Option<std::time::SystemTime>,
+    len: u64,
+    checked: std::time::Instant,
+    version: Option<String>,
 }
 
 impl ClaudeDriver {
     /// A driver that keeps Claude Code's model catalog in `file` across
     /// daemon restarts.
     pub fn with_catalog_file(file: PathBuf) -> Self {
-        Self { catalog: Arc::new(ModelCatalog::persistent(file)) }
+        Self { catalog: Arc::new(ModelCatalog::persistent(file)), ..Self::default() }
+    }
+
+    /// Write the plugin that lists rarely used built-in tools behind ToolSearch
+    /// under `root` and start sessions of a Claude Code that supports it with it.
+    pub fn with_plugin_root(mut self, root: PathBuf) -> Self {
+        self.plugin_root = Some(root);
+        self
+    }
+
+    /// The folder for `--plugin-dir`, or none when this session should run as before.
+    async fn tool_loading_plugin(&self, bin: &std::path::Path, env: &HashMap<String, String>) -> Option<PathBuf> {
+        let root = self.plugin_root.as_ref()?;
+        let opt_out = env.get(crate::claude_plugin::OPT_OUT_ENV).cloned().or_else(|| std::env::var(crate::claude_plugin::OPT_OUT_ENV).ok());
+        if crate::claude_plugin::opted_out(opt_out.as_deref()) {
+            return None;
+        }
+        let version = self.cli_version(bin).await;
+        if !crate::claude_plugin::should_load(version.as_deref(), opt_out.as_deref()) {
+            return None;
+        }
+        match crate::claude_plugin::install(root) {
+            Ok(dir) => Some(dir),
+            Err(error) => {
+                tracing::warn!(%error, "could not write the Kybern Claude plugin; starting Claude without it");
+                None
+            }
+        }
+    }
+
+    async fn cli_version(&self, bin: &std::path::Path) -> Option<String> {
+        let metadata = fs::metadata(bin).ok();
+        let (modified, len) = (metadata.as_ref().and_then(|m| m.modified().ok()), metadata.as_ref().map_or(0, |m| m.len()));
+        if let Some(known) = self.versions.lock().ok().and_then(|versions| {
+            versions
+                .get(bin)
+                .filter(|k| k.modified == modified && k.len == len && k.checked.elapsed() < VERSION_TTL)
+                .map(|k| k.version.clone())
+        }) {
+            return known;
+        }
+        let version = version_of(bin, &["--version"]).await;
+        if let Ok(mut versions) = self.versions.lock() {
+            versions
+                .insert(bin.to_path_buf(), KnownVersion { modified, len, checked: std::time::Instant::now(), version: version.clone() });
+        }
+        version
     }
 }
 
@@ -222,12 +284,20 @@ impl AgentDriver for ClaudeDriver {
         if let Some(effort) = &config.effort {
             cmd.args(["--effort", effort]);
         }
+        if let Some(plugin) = self.tool_loading_plugin(&bin, &config.env).await {
+            cmd.arg("--plugin-dir").arg(plugin);
+        }
         cmd.env_remove("NODE_OPTIONS");
         // stream-json makes Claude Code an `sdk-cli` session, where the
         // Artifact tools are off unless explicitly enabled. Session env may
         // still turn them off.
         cmd.env("CLAUDE_CODE_ARTIFACT", "1");
         cmd.env("CLAUDE_CODE_ARTIFACT_AUTO_OPEN", "0");
+        // Kybern's auto-compact threshold. Claude reads it before its own
+        // `autoCompactWindow` setting; a value in the account's env still wins.
+        if let Some(tokens) = config.compaction.auto_compact_tokens {
+            cmd.env(AUTO_COMPACT_WINDOW_ENV, tokens.to_string());
+        }
         for (k, v) in config.env.iter().filter(|(k, _)| k.as_str() != crate::login_lend::BORROW_ENV) {
             cmd.env(k, v);
         }
@@ -279,6 +349,7 @@ impl AgentDriver for ClaudeDriver {
             child_inbox: Mutex::new(ChildInbox::default()),
             session_id: Mutex::new(session_id.clone()),
             catalog,
+            decline_resume_prompt: config.compaction.decline_resume_prompt,
             _native_mcp_config: native_mcp_config,
         });
 
@@ -845,6 +916,11 @@ struct TurnState {
     /// failure the daemon can recover from (it borrows again, resumes and sends the message once more).
     lent_login: bool,
     last_context: Option<(String, u64)>,
+    /// The prompt-cache TTL this session's requests last reported. The TTL is the
+    /// account's, so it covers a later request served fully from cache.
+    cache_ttl: Option<u64>,
+    /// The latest root API request: its message id, when it started, and the TTL it reported.
+    last_request: Option<(String, chrono::DateTime<chrono::Utc>, Option<u64>)>,
     /// Accumulated final text per API message id, so multi-block messages coalesce.
     text: HashMap<String, String>,
     thinking: HashMap<String, String>,
@@ -876,6 +952,31 @@ struct TurnState {
 const MAX_AGENT_ROLES: usize = 256;
 
 impl TurnState {
+    /// A root API request: the first sighting of a message id dates it.
+    fn note_request(&mut self, message_id: &str, at: chrono::DateTime<chrono::Utc>, ttl: Option<u64>) {
+        if ttl.is_some() {
+            self.cache_ttl = ttl;
+        }
+        match self.last_request.as_mut() {
+            Some((id, _, known)) if id == message_id => {
+                if ttl.is_some() {
+                    *known = ttl;
+                }
+            }
+            _ => self.last_request = Some((message_id.to_string(), at, ttl)),
+        }
+    }
+
+    /// The prompt cache the latest request left: its own TTL, else the one this
+    /// session reported before, else unknown. `None` before any request.
+    fn prompt_cache(&self) -> Option<PromptCache> {
+        let (_, at, ttl) = self.last_request.as_ref()?;
+        Some(match ttl.or(self.cache_ttl) {
+            Some(ttl) => PromptCache::from_request(ttl, *at, false),
+            None => PromptCache::unknown(),
+        })
+    }
+
     fn remember_agent_role(&mut self, tool_call_id: &str, role: &str) {
         self.agent_roles.retain(|(id, _)| id != tool_call_id);
         if self.agent_roles.len() >= MAX_AGENT_ROLES {
@@ -984,6 +1085,7 @@ mod child_message_tests {
             child_inbox: Mutex::new(ChildInbox::default()),
             session_id: Mutex::new("native-session".into()),
             catalog: None,
+            decline_resume_prompt: false,
             _native_mcp_config: None,
         });
         let handle = SessionHandle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
@@ -1035,6 +1137,7 @@ mod child_message_tests {
             child_inbox: Mutex::new(ChildInbox::default()),
             session_id: Mutex::new("test".into()),
             catalog: None,
+            decline_resume_prompt: false,
             _native_mcp_config: None,
         };
         session.child_inbox.lock().await.active.insert("child".into());
@@ -1080,6 +1183,8 @@ struct ClaudeSession {
     /// Where this session's `initialize` catalog is recorded, keeping the
     /// probe's cached catalog fresh without a separate process.
     catalog: Option<(Arc<ModelCatalog>, CatalogKey)>,
+    /// Answer the resume offer with "Don't ask again" ("Compact idle threads: Never").
+    decline_resume_prompt: bool,
     _native_mcp_config: Option<NativeMcpConfig>,
 }
 
@@ -1200,6 +1305,7 @@ impl ClaudeSession {
                             window_minutes,
                             resets_at: info.get("resetsAt").and_then(Value::as_i64),
                         }]),
+                        prompt_cache: None,
                     }))
                     .await;
                 }
@@ -1258,6 +1364,14 @@ impl ClaudeSession {
                         data: None,
                     })
                     .await;
+                    return;
+                }
+                if self.decline_resume_prompt {
+                    // "Compact idle threads: Never": keep the history and stop asking. Claude
+                    // keeps this as `resumeReturnDismissed` in the account's `.claude.json`,
+                    // which running Claude processes rewrite, so Kybern never undoes it; the
+                    // setting's copy says the choice sticks for Claude.
+                    let _ = self.respond_control(&request_id, Ok(json!({ "behavior": "completed", "result": "never" }))).await;
                     return;
                 }
                 self.pending_permissions.lock().await.insert(request_id.clone(), (json!({ "_kybern_dialog": req }), vec![]));
@@ -1350,6 +1464,11 @@ impl ClaudeSession {
                 let mut st = self.state.lock().await;
                 let bound = (session_id.clone(), model.clone());
                 if st.last_bound.as_ref() != Some(&bound) {
+                    if st.last_bound.as_ref().is_some_and(|(previous, _)| *previous != session_id) {
+                        // Another Claude session: its cache, and what it reported about it, start over.
+                        st.cache_ttl = None;
+                        st.last_request = None;
+                    }
                     st.last_bound = Some(bound);
                     *self.session_id.lock().await = session_id.clone();
                     drop(st);
@@ -1367,6 +1486,12 @@ impl ClaudeSession {
             }
             "compact_boundary" => {
                 let meta = &v["compact_metadata"];
+                // The conversation now starts from the summary: report that size, not the history's.
+                if let Some(after) = meta.get("post_tokens").and_then(Value::as_u64)
+                    && let Some((_, used)) = self.state.lock().await.last_context.as_mut()
+                {
+                    *used = after;
+                }
                 self.emit(DriverEvent::Notice {
                     level: NoticeLevel::Info,
                     text: match meta.get("post_tokens").and_then(Value::as_u64) {
@@ -1469,6 +1594,10 @@ impl ClaudeSession {
             "message_start" => {
                 if parent.is_none() {
                     self.emit(DriverEvent::ResponseStarted).await;
+                    if let Some(id) = ev.pointer("/message/id").and_then(Value::as_str) {
+                        let ttl = ev.pointer("/message/usage").and_then(cache_ttl_seconds);
+                        self.state.lock().await.note_request(id, chrono::Utc::now(), ttl);
+                    }
                 }
                 if let Some(id) = ev.pointer("/message/id").and_then(|i| i.as_str()) {
                     let mut st = self.state.lock().await;
@@ -1537,7 +1666,11 @@ impl ClaudeSession {
                 .iter()
                 .map(|key| usage.get(*key).and_then(Value::as_u64).unwrap_or(0))
                 .sum();
-            self.state.lock().await.last_context = Some((model.into(), used));
+            let mut st = self.state.lock().await;
+            st.last_context = Some((model.into(), used));
+            if let Some(id) = msg.get("id").and_then(Value::as_str) {
+                st.note_request(id, chrono::Utc::now(), cache_ttl_seconds(usage));
+            }
         }
 
         let message_id = msg.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
@@ -1633,19 +1766,20 @@ impl ClaudeSession {
     }
 
     async fn handle_result(&self, v: &Value) {
-        let context = self.state.lock().await.last_context.clone();
-        if let Some((model, used_tokens)) = context
-            && let Some(window_tokens) = v
+        let (context, prompt_cache) = {
+            let st = self.state.lock().await;
+            (st.last_context.clone(), st.prompt_cache())
+        };
+        let context = context.and_then(|(model, used_tokens)| {
+            let window_tokens = v
                 .get("modelUsage")
                 .and_then(|models| models.get(&model))
                 .and_then(|model| model.get("contextWindow"))
-                .and_then(Value::as_u64)
-        {
-            self.emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage {
-                context: Some(kybern_protocol::ContextUsage { used_tokens, window_tokens }),
-                limits: None,
-            }))
-            .await;
+                .and_then(Value::as_u64)?;
+            Some(kybern_protocol::ContextUsage { used_tokens, window_tokens })
+        });
+        if context.is_some() || prompt_cache.is_some() {
+            self.emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage { context, limits: None, prompt_cache })).await;
         }
 
         let subtype = v.get("subtype").and_then(|s| s.as_str()).unwrap_or("");
@@ -1707,6 +1841,19 @@ impl ClaudeSession {
             _ => DriverEvent::turn_failed(ProviderKind::ClaudeCode, if errors.is_empty() { format!("claude: {subtype}") } else { errors }),
         };
         self.emit(ev).await;
+    }
+}
+
+/// The prompt-cache TTL an API usage block reports: the tier its request wrote.
+/// A request served fully from cache writes nothing and says nothing.
+fn cache_ttl_seconds(usage: &Value) -> Option<u64> {
+    let written = |key: &str| usage.pointer(&format!("/cache_creation/{key}")).and_then(Value::as_u64).unwrap_or(0) > 0;
+    if written("ephemeral_1h_input_tokens") {
+        Some(60 * 60)
+    } else if written("ephemeral_5m_input_tokens") {
+        Some(5 * 60)
+    } else {
+        None
     }
 }
 
@@ -1897,6 +2044,8 @@ fn content_blocks(message: &UserMessage) -> Vec<Value> {
             ContentPart::Attachment { name, .. } => {
                 trailing.push_str(&format!("\n[attached file: {name}]"));
             }
+            // The daemon inlines stored images before a send; one that reaches a driver is gone.
+            ContentPart::Media { .. } => trailing.push_str("\n[image]"),
             ContentPart::Mention { name, .. } => {
                 trailing.push('@');
                 trailing.push_str(name);
@@ -1940,6 +2089,7 @@ fn claude_block(part: &ContentPart) -> Option<Value> {
                 .then(|| json!({ "type": "image", "source": { "type": "base64", "media_type": media_type, "data": data } }))
         }
         ContentPart::Attachment { name, .. } => Some(json!({ "type": "text", "text": format!("[attached file: {name}]") })),
+        ContentPart::Media { .. } => Some(json!({ "type": "text", "text": "[image]" })),
         ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } | ContentPart::SystemRow { .. } => {
             part.orchestration_text().map(|text| json!({ "type": "text", "text": text }))
         }
@@ -2154,6 +2304,7 @@ mod tests {
             child_inbox: Mutex::new(ChildInbox::default()),
             session_id: Mutex::new("test".into()),
             catalog: None,
+            decline_resume_prompt: false,
             _native_mcp_config: None,
         });
         let handle = SessionHandle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
@@ -2189,6 +2340,7 @@ mod tests {
             child_inbox: Mutex::new(ChildInbox::default()),
             session_id: Mutex::new("test".into()),
             catalog: None,
+            decline_resume_prompt: false,
             _native_mcp_config: None,
         });
         let handle = SessionHandle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
@@ -2276,6 +2428,7 @@ mod tests {
             child_inbox: Mutex::new(ChildInbox::default()),
             session_id: Mutex::new("test".into()),
             catalog: None,
+            decline_resume_prompt: false,
             _native_mcp_config: None,
         });
         for line in include_str!("../tests/fixtures/claude-subagent-frames.ndjson").lines() {
@@ -2338,6 +2491,7 @@ mod tests {
             child_inbox: Mutex::new(ChildInbox::default()),
             session_id: Mutex::new("test".into()),
             catalog: None,
+            decline_resume_prompt: false,
             _native_mcp_config: None,
         });
         let frame = |parent: Option<&str>, event: Value| json!({"type":"stream_event", "parent_tool_use_id":parent, "event":event});
@@ -2380,6 +2534,7 @@ mod tests {
             child_inbox: Mutex::new(ChildInbox::default()),
             session_id: Mutex::new("test".into()),
             catalog: None,
+            decline_resume_prompt: false,
             _native_mcp_config: None,
         });
         let handle = SessionHandle(session.clone(), crate::ndjson::SessionLifetime::new(session.child.clone()));
@@ -2548,6 +2703,7 @@ mod tests {
                     rewind: None,
                     binary: Some(binary),
                     env: Default::default(),
+                    compaction: Default::default(),
                 })
                 .await
                 .unwrap();
@@ -2617,6 +2773,7 @@ mod tests {
                     rewind: None,
                     binary: Some(binary),
                     env: Default::default(),
+                    compaction: Default::default(),
                 })
                 .await
                 .unwrap();
@@ -2661,6 +2818,7 @@ mod tests {
                     rewind: None,
                     binary: Some(binary.clone()),
                     env: Default::default(),
+                    compaction: Default::default(),
                 })
                 .await
                 .unwrap();
@@ -2699,6 +2857,7 @@ mod tests {
             child_inbox: Mutex::new(ChildInbox::default()),
             session_id: Mutex::new("test".into()),
             catalog: None,
+            decline_resume_prompt: false,
             _native_mcp_config: None,
         };
         let command = "for d in a; do rm -f $P/$d/*-[0-9].png; done";
@@ -2742,6 +2901,7 @@ mod tests {
                     rewind: None,
                     binary: Some(binary),
                     env: env.map(|value| ("CLAUDE_CODE_ARTIFACT".to_string(), value.to_string())).into_iter().collect(),
+                    compaction: Default::default(),
                 })
                 .await
                 .unwrap();
@@ -2759,6 +2919,69 @@ mod tests {
             assert_eq!(seen["CLAUDE_CODE_ARTIFACT_AUTO_OPEN"], "0");
             assert_eq!(seen["CLAUDE_CODE_ENTRYPOINT"], "kybern");
         }
+    }
+
+    /// Start the driver with a stand-in `claude` that reports `version` and return the arguments it was started with.
+    async fn launch_arguments(driver: super::ClaudeDriver, version: &str, env: &[(&str, &str)]) -> Vec<String> {
+        use crate::{AgentDriver, SessionConfig};
+        let root = tempfile::tempdir().unwrap();
+        let binary = root.path().join(format!("claude{}", std::env::consts::EXE_SUFFIX));
+        std::fs::copy(crate::test_process::binary(), &binary).unwrap();
+        std::fs::write(binary.with_extension("version"), version).unwrap();
+        let spawned = driver
+            .spawn(SessionConfig {
+                cwd: root.path().into(),
+                model: None,
+                effort: None,
+                permission_mode: kybern_protocol::PermissionMode::FullAccess,
+                native_tool_bridge: None,
+                resume_session_id: None,
+                resume_lacks_instructions: false,
+                fork: false,
+                rewind: None,
+                binary: Some(binary),
+                env: env.iter().map(|(key, value)| (key.to_string(), value.to_string())).collect(),
+                compaction: Default::default(),
+            })
+            .await
+            .unwrap();
+        let argv = root.path().join("argv.json");
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !argv.exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let args: Vec<String> = serde_json::from_slice(&std::fs::read(argv).unwrap()).unwrap();
+        spawned.session.close().await.unwrap();
+        args
+    }
+
+    fn plugin_dir(args: &[String]) -> Option<&String> {
+        args.iter().position(|arg| arg == "--plugin-dir").map(|index| &args[index + 1])
+    }
+
+    #[tokio::test]
+    async fn the_tool_loading_plugin_is_passed_only_to_claude_code_releases_that_support_it() {
+        let plugins = tempfile::tempdir().unwrap();
+        let driver = || super::ClaudeDriver::default().with_plugin_root(plugins.path().to_path_buf());
+
+        let args = launch_arguments(driver(), "2.1.319 (Claude Code)", &[]).await;
+        let dir = std::path::PathBuf::from(plugin_dir(&args).expect("a supported release gets --plugin-dir"));
+        assert!(dir.is_absolute() && dir.starts_with(plugins.path()), "{dir:?}");
+        assert!(dir.join("hooks/register.ts").is_file() && dir.join(".claude-plugin/plugin.json").is_file());
+
+        let args = launch_arguments(driver(), "2.1.286 (Claude Code)", &[]).await;
+        assert!(plugin_dir(&args).is_some(), "the first release with plugin hook modules gets it");
+        for old in ["2.1.285 (Claude Code)", "2.0.9", "garbage"] {
+            let args = launch_arguments(driver(), old, &[]).await;
+            assert_eq!(plugin_dir(&args), None, "{old} keeps today's launch");
+        }
+        let args = launch_arguments(driver(), "2.1.319", &[("KYBERN_CLAUDE_TOOL_PLUGIN", "0")]).await;
+        assert_eq!(plugin_dir(&args), None, "the opt-out wins");
+        let args = launch_arguments(super::ClaudeDriver::default(), "2.1.319", &[]).await;
+        assert_eq!(plugin_dir(&args), None, "a driver without a plugin folder never passes one");
     }
 
     #[test]
@@ -2806,6 +3029,7 @@ mod tests {
             child_inbox: Mutex::new(ChildInbox::default()),
             session_id: Mutex::new("test".into()),
             catalog: None,
+            decline_resume_prompt: false,
             _native_mcp_config: None,
         });
         let launch = |id: &str, role: Option<&str>| {
@@ -2962,6 +3186,181 @@ mod orchestration_part_tests {
             assert_eq!(value["mcpServers"].as_object().unwrap().len(), if enforced { 2 } else { 1 });
             assert_eq!(value["mcpServers"].get("memory").is_some(), enforced);
             assert!(value["mcpServers"].get("other").is_none());
+        }
+    }
+}
+
+#[cfg(test)]
+mod compaction_tests {
+    use super::*;
+
+    fn session(decline_resume_prompt: bool) -> (Arc<ClaudeSession>, Arc<NdjsonChild>, mpsc::Receiver<DriverEvent>) {
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
+        let (events, rx) = mpsc::channel(32);
+        let session = Arc::new(ClaudeSession {
+            child: child.clone(),
+            events,
+            pending_control: Mutex::new(HashMap::new()),
+            pending_permissions: Mutex::new(HashMap::new()),
+            state: Mutex::new(TurnState::default()),
+            child_inbox: Mutex::new(ChildInbox::default()),
+            session_id: Mutex::new("test".into()),
+            catalog: None,
+            decline_resume_prompt,
+            _native_mcp_config: None,
+        });
+        (session, child, rx)
+    }
+
+    fn usage(one_hour: u64, five_minutes: u64) -> Value {
+        json!({ "input_tokens": 3, "cache_read_input_tokens": 90_000, "cache_creation_input_tokens": one_hour + five_minutes,
+            "cache_creation": { "ephemeral_1h_input_tokens": one_hour, "ephemeral_5m_input_tokens": five_minutes } })
+    }
+
+    /// One root request, then the turn's result; returns the prompt cache the result reported.
+    async fn turn(session: &ClaudeSession, rx: &mut mpsc::Receiver<DriverEvent>, id: &str, usage: Value) -> Option<PromptCache> {
+        session.handle_frame(json!({"type":"stream_event", "event":{"type":"message_start", "message":{"id": id, "usage": usage}}})).await;
+        session
+            .handle_frame(json!({"type":"assistant", "message":{"id": id, "model":"claude-opus-5-5", "usage": usage,
+                "content":[{"type":"text","text":"done"}]}}))
+            .await;
+        session.handle_frame(json!({"type":"result", "subtype":"success", "total_cost_usd":0, "duration_ms":1, "usage":{}})).await;
+        let mut cache = None;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                DriverEvent::UsageUpdated(usage) => cache = usage.prompt_cache.or(cache),
+                DriverEvent::TurnCompleted { .. } => return cache,
+                _ => {}
+            }
+        }
+        panic!("the turn did not complete")
+    }
+
+    #[test]
+    fn the_cache_ttl_is_the_tier_the_request_wrote() {
+        assert_eq!(cache_ttl_seconds(&usage(1200, 0)), Some(3600));
+        assert_eq!(cache_ttl_seconds(&usage(0, 1200)), Some(300));
+        assert_eq!(cache_ttl_seconds(&usage(10, 1200)), Some(3600), "a request that wrote 1 h entries keeps them for 1 h");
+        assert_eq!(cache_ttl_seconds(&usage(0, 0)), None, "a fully cached request says nothing");
+        assert_eq!(cache_ttl_seconds(&json!({ "cache_creation_input_tokens": 50 })), None, "no breakdown, no TTL");
+    }
+
+    #[tokio::test]
+    async fn turns_record_the_expiry_of_their_last_request() {
+        let (claude, child, mut rx) = session(false);
+        let before = chrono::Utc::now();
+        // A subscription session writes 1 h entries.
+        let cache = turn(&claude, &mut rx, "m1", usage(4_000, 0)).await.expect("a cache");
+        assert_eq!((cache.ttl_seconds, cache.estimated), (Some(3600), false));
+        let expires = cache.expires_at.unwrap();
+        assert!(expires >= before + chrono::Duration::seconds(3600) && expires <= chrono::Utc::now() + chrono::Duration::seconds(3600));
+        // The next turn is served fully from cache: the session's TTL still applies, from this request.
+        let cache = turn(&claude, &mut rx, "m2", usage(0, 0)).await.expect("a cache");
+        assert_eq!(cache.ttl_seconds, Some(3600));
+        assert!(cache.expires_at.unwrap() >= expires);
+        child.close().await;
+
+        // An API key writes 5 min entries.
+        let (claude, child, mut rx) = session(false);
+        assert_eq!(turn(&claude, &mut rx, "k1", usage(0, 900)).await.unwrap().ttl_seconds, Some(300));
+        child.close().await;
+
+        // A session whose every request was fully cached never said: unknown, not a guess.
+        let (claude, child, mut rx) = session(false);
+        assert_eq!(turn(&claude, &mut rx, "c1", usage(0, 0)).await, Some(PromptCache::unknown()));
+        child.close().await;
+    }
+
+    #[tokio::test]
+    async fn another_claude_session_forgets_the_ttl_the_last_one_reported() {
+        let (claude, child, mut rx) = session(false);
+        let init = |id: &str| json!({"type":"system", "subtype":"init", "session_id": id, "model":"claude-opus-5-5"});
+        claude.handle_frame(init("first")).await;
+        assert_eq!(turn(&claude, &mut rx, "m1", usage(4_000, 0)).await.unwrap().ttl_seconds, Some(3600));
+        // The same session again (a model change re-announces it): the TTL holds.
+        claude.handle_frame(json!({"type":"system", "subtype":"init", "session_id":"first", "model":"claude-sonnet-5-5"})).await;
+        assert_eq!(turn(&claude, &mut rx, "m2", usage(0, 0)).await.unwrap().ttl_seconds, Some(3600));
+        // A new session served fully from cache has not said yet: unknown.
+        claude.handle_frame(init("second")).await;
+        assert_eq!(turn(&claude, &mut rx, "m3", usage(0, 0)).await, Some(PromptCache::unknown()));
+        child.close().await;
+    }
+
+    #[tokio::test]
+    async fn compaction_reports_the_summarys_size_as_the_context() {
+        let (claude, child, mut rx) = session(false);
+        let _ = turn(&claude, &mut rx, "m1", usage(4_000, 0)).await;
+        claude
+            .handle_frame(json!({"type":"system", "subtype":"compact_boundary",
+                "compact_metadata":{"trigger":"manual","pre_tokens":312_000,"post_tokens":38_000}}))
+            .await;
+        claude
+            .handle_frame(json!({"type":"result", "subtype":"success", "total_cost_usd":0, "duration_ms":1, "usage":{},
+                "modelUsage":{"claude-opus-5-5":{"contextWindow":1_000_000}}}))
+            .await;
+        let mut context = None;
+        while let Ok(event) = rx.try_recv() {
+            if let DriverEvent::UsageUpdated(usage) = event {
+                context = usage.context.or(context);
+            }
+        }
+        assert_eq!(context.map(|context| context.used_tokens), Some(38_000));
+        child.close().await;
+    }
+
+    #[tokio::test]
+    async fn never_answers_the_resume_offer_with_dont_ask_again_without_asking() {
+        let (claude, child, mut rx) = session(true);
+        claude
+            .handle_control_request(&json!({ "request_id": "resume", "request": { "subtype": "request_user_dialog",
+                "dialog_kind": "resume_return",
+                "payload": { "sessionAgeMinutes": 90, "estimatedTokens": 240_000, "hasPrecomputedSummary": false } } }))
+            .await;
+        let response = tokio::time::timeout(std::time::Duration::from_secs(1), async { child.lines.lock().await.recv().await.unwrap() })
+            .await
+            .unwrap();
+        assert_eq!(response["response"]["request_id"], "resume");
+        assert_eq!(response["response"]["response"], json!({ "behavior": "completed", "result": "never" }));
+        assert!(rx.try_recv().is_err(), "the user is not asked");
+        assert!(claude.pending_permissions.lock().await.is_empty());
+        child.close().await;
+    }
+
+    #[tokio::test]
+    async fn the_auto_compact_threshold_reaches_claude_unless_the_account_sets_its_own() {
+        use crate::{AgentDriver, CompactionLaunch, SessionConfig};
+        for (threshold, account, expected) in
+            [(None, None, ""), (Some(300_000), None, "300000"), (Some(300_000), Some("500k"), "500k"), (None, Some("500k"), "500k")]
+        {
+            let root = tempfile::tempdir().unwrap();
+            let spawned = ClaudeDriver::default()
+                .spawn(SessionConfig {
+                    cwd: root.path().into(),
+                    model: None,
+                    effort: None,
+                    permission_mode: PermissionMode::FullAccess,
+                    native_tool_bridge: None,
+                    resume_session_id: None,
+                    resume_lacks_instructions: false,
+                    fork: false,
+                    rewind: None,
+                    binary: Some(crate::test_process::binary().to_path_buf()),
+                    env: account.map(|value| (AUTO_COMPACT_WINDOW_ENV.to_string(), value.to_string())).into_iter().collect(),
+                    compaction: CompactionLaunch { auto_compact_tokens: threshold, decline_resume_prompt: false },
+                })
+                .await
+                .unwrap();
+            let env_path = root.path().join("env.json");
+            tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                while !env_path.exists() {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let seen: Value = serde_json::from_slice(&std::fs::read(env_path).unwrap()).unwrap();
+            spawned.session.close().await.unwrap();
+            assert_eq!(seen[AUTO_COMPACT_WINDOW_ENV], expected, "threshold {threshold:?}, account {account:?}");
         }
     }
 }

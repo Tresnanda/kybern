@@ -4,7 +4,7 @@
 import { View } from "react-native";
 import { isGroupProject } from "../../../../packages/kybern-client/src/groups";
 import { isFreeChatProject, type Project } from "../state/protocol";
-import { useProjects } from "../state/runtime";
+import { useLists } from "../state/useLists";
 import { scopeLabel, type ProjectScope } from "../state/scopeModel";
 import { useSpaceProjects } from "../state/spaces";
 import { MenuButton } from "../ui/ActionMenu";
@@ -50,7 +50,7 @@ export function ScopeBar({
   scope: ProjectScope;
   onChange: (scope: ProjectScope) => void;
 }) {
-  const all = useProjects();
+  const { projects: all } = useLists(null);
   const inSpace = useSpaceProjects().filter((p) => !isFreeChatProject(p.id));
   // A project a link asked for stays listed even when it lives in another space.
   const linked = scope !== "all" && scope !== "global" && !inSpace.some((p) => p.id === scope)

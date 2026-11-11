@@ -57,6 +57,9 @@ import {
   Sun03Icon,
   Tick02Icon,
   UserGroupIcon,
+  SearchAddIcon,
+  SearchMinusIcon,
+  SearchFocusIcon,
 } from '@hugeicons/core-free-icons'
 import { filled, glyph } from '../icons.tsx'
 
@@ -141,4 +144,7 @@ export const N = {
   circleCheck: glyph(CheckmarkCircle02Icon),
   sun: glyph(Sun03Icon),
   moon: glyph(Moon02Icon),
+  zoomIn: glyph(SearchAddIcon),
+  zoomOut: glyph(SearchMinusIcon),
+  actualSize: glyph(SearchFocusIcon),
 } as const

@@ -104,7 +104,11 @@ pub enum EventPayload {
     ImageReceived {
         id: String,
         origin: EventOrigin,
+        /// A URL, a path or an inline `data:` URL. Empty when `media` holds the image.
         source: String,
+        /// The image, stored outside the event log (events since 0.24.0).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        media: Option<MediaRef>,
     },
     AssistantThinkingDelta {
         message_id: MessageId,
@@ -245,6 +249,19 @@ pub enum EventPayload {
     ProviderUsageUpdated {
         usage: ProviderUsage,
     },
+    /// Kybern started this turn's compaction itself: the thread sat idle above
+    /// 200 000 tokens and its prompt cache was about to expire ("Compact idle
+    /// threads: Before the cache expires"). Clients show a notice row instead of
+    /// the `/compact` message and send no notification for the turn.
+    IdleCompactionStarted {
+        /// Context size when Kybern decided to compact.
+        context_tokens: u64,
+        /// When the prompt cache would have expired.
+        cache_expires_at: DateTime<Utc>,
+        /// How long that cache lives after a request, when known.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_ttl_seconds: Option<u64>,
+    },
     /// Provider emitted an informational notice (compaction, status, warnings).
     ProviderNotice {
         level: NoticeLevel,
@@ -366,6 +383,7 @@ impl EventPayload {
             Self::ProviderCommandsUpdated { .. } => "provider_commands_updated",
             Self::SessionTransitioned { .. } => "session_transitioned",
             Self::ProviderUsageUpdated { .. } => "provider_usage_updated",
+            Self::IdleCompactionStarted { .. } => "idle_compaction_started",
             Self::ProviderNotice { .. } => "provider_notice",
             Self::CheckpointUpdated { .. } => "checkpoint_updated",
             Self::WorkspaceReverted { .. } => "workspace_reverted",
@@ -447,6 +465,11 @@ mod kind_tests {
                 problem: Some(crate::rpc::Problem::new(crate::rpc::ProblemKind::SignedOut, "Invalid API key")),
             },
             EventPayload::ProviderUsageUpdated { usage: Default::default() },
+            EventPayload::IdleCompactionStarted {
+                context_tokens: 240_000,
+                cache_expires_at: DateTime::<Utc>::default(),
+                cache_ttl_seconds: Some(3600),
+            },
             EventPayload::ProviderCommandsUpdated { commands: Vec::new() },
             EventPayload::WorkspaceReverted { to_turn_id: TurnId::nil(), commit: "abc".into() },
             EventPayload::OutsideRepoChanged {

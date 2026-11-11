@@ -281,7 +281,6 @@ test('successful project setup waits for an overlapping notification refresh bef
   await openPrimary(hub, new FakeDaemon('mac-1'), undefined, { projects: [source], threads: [] })
   await hub.set.ensureAll()
   await settle()
-  const key = hub.view().projects.find(item => item.instances.some(instance => instance.project.id === source.id))!.key
   hold = true
   remote.notify('threads.changed')
   await settle()
@@ -290,7 +289,7 @@ test('successful project setup waits for an overlapping notification refresh bef
   hold = false
   const selected: string[] = []
   let outcome = 'pending'
-  const completion = finishMachineSetup({ projectId: source.id, key, targetId: 'pc', paneId: 'original-pane' }, {
+  const completion = finishMachineSetup({ projectId: source.id, targetId: 'pc', paneId: 'original-pane' }, {
     refresh: id => hub.refreshMachineLists(id), projects: () => hub.view().projects, localMachineId: hub.localMachineId,
     paths: async () => {}, providers: async () => {}, select: (_key, machineId) => { selected.push(machineId) },
   }).then(() => { outcome = 'selected' }, error => { outcome = error.message })

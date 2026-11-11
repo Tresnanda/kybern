@@ -56,6 +56,8 @@ struct ClaudePreferences {
     model: Option<String>,
     effort_level: Option<String>,
     model_efforts: BTreeMap<String, String>,
+    /// `subagentPromptCacheTtl`: `5m` or `1h`, how long Claude keeps a subagent's prompt cache.
+    subagent_prompt_cache_ttl: Option<String>,
 }
 
 impl ClaudePreferences {
@@ -65,6 +67,9 @@ impl ClaudePreferences {
         }
         if let Some(effort) = value.get("effortLevel").and_then(Value::as_str).and_then(valid_effort) {
             self.effort_level = Some(effort.to_string());
+        }
+        if let Some(ttl) = value.get("subagentPromptCacheTtl").and_then(Value::as_str).and_then(cache_ttl) {
+            self.subagent_prompt_cache_ttl = Some(ttl.to_string());
         }
         if let Some(settings) = value.get("modelSettings").and_then(Value::as_object) {
             for (model, settings) in settings {
@@ -103,6 +108,20 @@ pub(super) async fn resolve(context: &ProbeContext, binary: &Path, catalog_defau
     let alias_target = alias_target(context, &model);
 
     ClaudeConfig { model, effort, alias_target, preferences, environment_effort }
+}
+
+/// The cache length Claude Code accepts for a prompt cache: `5m` or `1h`.
+pub(super) fn cache_ttl(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "5m" => Some("5m"),
+        "1h" => Some("1h"),
+        _ => None,
+    }
+}
+
+/// The user's `subagentPromptCacheTtl` from Claude Code's settings files (user, project, local, managed).
+pub(super) fn subagent_prompt_cache_ttl(context: &ProbeContext) -> Option<String> {
+    load_preferences(context).subagent_prompt_cache_ttl
 }
 
 fn load_preferences(context: &ProbeContext) -> ClaudePreferences {

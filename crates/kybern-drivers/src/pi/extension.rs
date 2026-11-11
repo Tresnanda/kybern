@@ -235,6 +235,48 @@ impl Drop for StagedExtension {
     }
 }
 
+/// A one-session OMP settings overlay (`--config <file>`), so Kybern's
+/// auto-compact threshold applies without writing the user's `config.yml`.
+/// Removed with the session.
+pub struct CompactionOverlay {
+    directory: PathBuf,
+    path: PathBuf,
+}
+
+impl CompactionOverlay {
+    pub fn new(threshold_tokens: u64) -> Result<Self> {
+        let directory = std::env::temp_dir().join(format!("kybern-omp-config-{}-{}", std::process::id(), Uuid::new_v4().simple()));
+        create_private_directory(&directory)?;
+        let path = directory.join("kybern-compaction.yml");
+        if let Err(error) = write_private_file(&path, overlay_yaml(threshold_tokens).as_bytes()) {
+            let _ = fs::remove_file(&path);
+            let _ = fs::remove_dir(&directory);
+            return Err(error.into());
+        }
+        Ok(Self { directory, path })
+    }
+
+    pub fn configure(&self, command: &mut Command) {
+        command.arg("--config").arg(&self.path);
+    }
+}
+
+/// OMP's fixed compaction trigger. A positive `thresholdTokens` wins over `thresholdPercent`.
+fn overlay_yaml(threshold_tokens: u64) -> String {
+    format!(
+        "compaction:
+  thresholdTokens: {threshold_tokens}
+"
+    )
+}
+
+impl Drop for CompactionOverlay {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+        let _ = fs::remove_dir(&self.directory);
+    }
+}
+
 pub fn mode_command(mode: PermissionMode) -> Result<String> {
     Ok(format!("/{MODE_COMMAND} {}", mode_name_checked(mode)?))
 }
@@ -356,6 +398,30 @@ fn write_private_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_compaction_overlay_sets_omps_fixed_threshold_and_is_removed_with_the_session() {
+        assert_eq!(
+            super::overlay_yaml(250_000),
+            "compaction:
+  thresholdTokens: 250000
+"
+        );
+        let overlay = super::CompactionOverlay::new(250_000).unwrap();
+        let path = overlay.path.clone();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "compaction:
+  thresholdTokens: 250000
+"
+        );
+        let mut command = tokio::process::Command::new("omp");
+        overlay.configure(&mut command);
+        let args: Vec<_> = command.as_std().get_args().map(|arg| arg.to_string_lossy().into_owned()).collect();
+        assert_eq!(args, ["--config".to_string(), path.to_string_lossy().into_owned()]);
+        drop(overlay);
+        assert!(!path.exists());
+    }
+
     use std::ffi::OsStr;
     use std::process::Command as StdCommand;
 

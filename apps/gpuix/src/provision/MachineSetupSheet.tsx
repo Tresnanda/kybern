@@ -32,6 +32,8 @@ export function MachineSetupSheet({ projectId, targetId, close, onReady, onProvi
     try { return source ? fixtureClient() ?? machineHub().clientFor(source.machineId) : null } catch { return null }
   }, [source?.machineId])
   const missing = context?.targets.filter((item) => !item.has) ?? []
+  // The sheet opens only for machines without the project, so a setup remembered as done there was undone since.
+  useState(() => { for (const instance of context?.instances ?? []) for (const item of missing) setupAttempts.forgetFinished(setupAttempts.key(instance.machineId, instance.projectId, item.machineId)) })
   const chosen = missing.find((item) => item.machineId === targetId)
   const [all, setAll] = useState(() => !!source && missing.some((item) => item.machineId !== targetId && setupAttempts.get(setupAttempts.key(source.machineId, source.projectId, item.machineId))))
   const targets = all ? missing : chosen ? [chosen] : []

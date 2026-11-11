@@ -20,6 +20,7 @@ use crate::auth::{Principal, PrincipalKind, authenticate, effective_scopes, prin
 use crate::network::peers::{self, Direction, FrameSink, PeerLink};
 use crate::network::session::GRANT_PREFIX;
 use crate::state::AppState;
+use crate::ws_lanes;
 
 /// The address a request came from, when the listener records it (`into_make_service_with_connect_info`).
 /// Never rejects: tests that serve the router without connection info get `None`.
@@ -546,12 +547,13 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     let (mut sink, mut stream) = socket.split();
     let (out_tx, mut out_rx) = mpsc::channel::<QueuedFrame>(64);
     let closed = tokio_util::sync::CancellationToken::new();
-    let requests = Arc::new(tokio::sync::Semaphore::new(16));
+    let id = Uuid::now_v7();
+    let requests = ws_lanes::RequestBudget::new(id.to_string());
     // Terminal keystrokes are one ordered stream per connection: a task per request would let two writes pass each other
     // (and a burst would hit the concurrency limit), so they queue here and run one at a time.
     let (input_tx, mut input_rx) = mpsc::channel::<String>(INPUT_LANE_FRAMES);
     let ctx = Arc::new(ConnectionCtx {
-        id: Uuid::now_v7(),
+        id,
         principal,
         heads: Arc::new(SubscribeHeads::default()),
         delivery: Mutex::new(()),
@@ -568,6 +570,7 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     let mut settings = ctx.principal.has(Scope::OrchestrationRead).then(|| state.settings.subscribe());
     let mut account_logins = ctx.principal.has(Scope::OrchestrationRead).then(|| state.account_logins.subscribe());
     let mut session_imports = ctx.principal.has(Scope::OrchestrationRead).then(|| state.session_imports.subscribe());
+    let mut storage_progress = ctx.principal.has(Scope::OrchestrationRead).then(|| state.storage.subscribe());
     let mut projects = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_projects());
     let mut outbox = ctx.principal.has(Scope::OrchestrationRead).then(|| state.network.subscribe_outbox());
     let mut utility = ctx.principal.has(Scope::OrchestrationRead).then(|| state.network.subscribe_utility());
@@ -629,17 +632,44 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
                         let ctx = ctx.clone();
                         // Taken here, in arrival order, before the request runs as its own task.
                         let order = ctx.heads.order(text.as_str());
-                        // Bound producers as well as queued bytes. Do not make a
-                        // saturated RPC lane block event/approval delivery.
-                        if let Ok(permit) = requests.clone().try_acquire_owned() {
+                        // Bound producers as well as queued bytes, per lane (see `ws_lanes`). A full lane never
+                        // blocks this reader: the request waits for its permit in its own task, so event and
+                        // approval delivery keep flowing, and `order` already fixed its place among subscribes.
+                        let placed = ws_lanes::place(text.as_str());
+                        let Some(first) = requests.try_acquire(placed.as_ref().unwrap_or(&ws_lanes::Placed::unreadable())) else {
+                            // A frame that is not a request has nobody to answer; drop it when there is no room.
+                            let Some(placed) = placed else { continue };
+                            // Waiting tasks are bounded too. Past the bound the request is refused here, without a
+                            // task; only a client that floods a full lane and stops reading its answers waits on this.
+                            let Some(slot) = requests.reserve_wait() else {
+                                let error = requests.refuse(&placed).ensure_problem();
+                                let _ = ctx.out.send(ServerFrame::Response(RpcResponse::err(placed.id, error))).await;
+                                continue;
+                            };
+                            let requests = requests.clone();
+                            let closed = closed.clone();
                             tokio::spawn(async move {
-                                let _permit = permit;
-                                handle_text(&state, &ctx, text.as_str(), order).await;
+                                // A request still waiting when the client leaves never starts.
+                                let acquired = tokio::select! {
+                                    _ = closed.cancelled() => return,
+                                    acquired = requests.acquire(&placed, slot, ws_lanes::PERMIT_WAIT) => acquired,
+                                };
+                                match acquired {
+                                    Ok(permit) => {
+                                        let _permit = permit;
+                                        handle_text(&state, &ctx, text.as_str(), order).await;
+                                    }
+                                    Err(error) => {
+                                        let _ = ctx.out.send(ServerFrame::Response(RpcResponse::err(placed.id, error.ensure_problem()))).await;
+                                    }
+                                }
                             });
-                        } else if let Ok(ClientFrame::Request(request)) = serde_json::from_str(text.as_str()) {
-                            let _ = ctx.out.send(ServerFrame::Response(RpcResponse::err(request.id,
-                                RpcError::internal("Too many concurrent requests; retry after pending requests finish")))).await;
-                        }
+                            continue;
+                        };
+                        tokio::spawn(async move {
+                            let _permit = first;
+                            handle_text(&state, &ctx, text.as_str(), order).await;
+                        });
                     }
                     Some(Ok(Message::Close(_))) | None => break,
                     Some(Ok(_)) => {}
@@ -812,6 +842,19 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
                     // Clients also read `sessions.scan_get` / `sessions.import_get`, so a missed step is recovered.
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     Err(_) => session_imports = None,
+                }
+            }
+            reclaim = async {
+                match storage_progress.as_mut() {
+                    Some(updates) => updates.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match reclaim {
+                    Ok(status) => { let _ = ctx.out.notify(crate::storage::NOTIFICATION, status).await; }
+                    // Clients also read `storage.stats`, so a missed step is recovered.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => storage_progress = None,
                 }
             }
             child = async {

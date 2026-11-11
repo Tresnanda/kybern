@@ -16,6 +16,7 @@ import {
 } from "../src/features/settings/categories";
 import { useLayout } from "../src/state/layout";
 import { currentClient } from "../src/state/runtime";
+import { choiceMenu, pickSettingsMachine, settingsClient, useSettingsChoice } from "../src/state/machineChoice";
 import { ListRow, SectionFooter, SectionHeader, InsetGroup } from "../src/ui/List";
 import { Page } from "../src/ui/primitives";
 import { CONTENT_MAX_WIDTH, gutter, space, useTheme } from "../src/ui/theme";
@@ -23,7 +24,7 @@ import { CONTENT_MAX_WIDTH, gutter, space, useTheme } from "../src/ui/theme";
 const RAIL_WIDTH = 320;
 
 function versionLine() {
-  const daemon = currentClient()?.info?.version;
+  const daemon = (settingsClient() ?? currentClient())?.info?.version;
   return [`Kybern for mobile ${appVersion() || Constants.nativeAppVersion || ""}`.trim(), daemon ? `Kybern ${daemon} on the computer` : null]
     .filter(Boolean)
     .join(" · ");
@@ -37,6 +38,8 @@ function Groups({
   onSelect: (id: CategoryId) => void;
 }) {
   const { phone, computer, computerName } = useCategories();
+  // With more than one machine, the machine settings below belong to the one picked here.
+  const choice = useSettingsChoice();
   const row = (item: Category) => (
     <ListRow
       key={item.id}
@@ -54,7 +57,17 @@ function Groups({
       <SectionHeader title="On this phone" inset first />
       <InsetGroup>{phone.map(row)}</InsetGroup>
       <SectionHeader title={`On ${computerName}`} inset />
-      <InsetGroup>{computer.map(row)}</InsetGroup>
+      <InsetGroup>
+        {choice ? (
+          <ListRow
+            title="Machine"
+            leading="laptopcomputer"
+            value={choice.name}
+            valueMenu={choiceMenu(choice, pickSettingsMachine)}
+          />
+        ) : null}
+        {computer.map(row)}
+      </InsetGroup>
       <SectionFooter inset>{versionLine()}</SectionFooter>
     </>
   );

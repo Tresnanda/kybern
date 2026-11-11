@@ -1123,7 +1123,7 @@ fn followup_saved_text(message: &UserMessage) -> Result<String> {
                     "Messages from other agents cannot be saved as a task follow-up. Remove them to save this follow-up for the next run.",
                 );
             }
-            ContentPart::Image { .. } | ContentPart::Attachment { .. } => {
+            ContentPart::Image { .. } | ContentPart::Media { .. } | ContentPart::Attachment { .. } => {
                 return invalid(
                     "This task has no run to receive attachments. Start a new run to send them, or remove them to save this follow-up for the next run.",
                 );

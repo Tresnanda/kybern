@@ -104,6 +104,69 @@ pub struct DaemonActivity {
 }
 method!(DaemonActivityMethod, "daemon.activity", Some(Scope::OrchestrationRead), Empty, DaemonActivity);
 
+// ---- storage (issue #298) ----
+
+/// What this machine's Kybern data takes on disk, for Settings → Storage.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct StorageStats {
+    /// The database (`state.sqlite` and its write-ahead log).
+    pub database_bytes: u64,
+    /// Images and files in `assets/`: media moved out of the database and uploads.
+    pub files_bytes: u64,
+    /// Unused space inside the database that "Reclaim space" returns to the disk.
+    pub reclaimable_bytes: u64,
+    /// About how large the database is after compacting.
+    pub compacted_bytes: u64,
+    /// Free space compacting needs: about twice the compacted size.
+    pub needed_disk_bytes: u64,
+    /// Free space on the database's disk. Absent when the daemon cannot tell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub free_disk_bytes: Option<u64>,
+    /// Moving images of existing threads out of the database, in the background.
+    pub media_rewrite: StorageMediaRewrite,
+    pub reclaim: StorageReclaimStatus,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct StorageMediaRewrite {
+    /// Rows that may hold images, checked so far.
+    pub processed: u64,
+    /// Rows that may hold images. 0 while they are still being counted.
+    pub total: u64,
+    pub done: bool,
+}
+
+/// Where compacting the database stands. Also the params of `storage.reclaim.progress`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum StorageReclaimStatus {
+    #[default]
+    Idle,
+    Running {
+        /// Bytes of the compacted copy written so far, when the daemon can measure them.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        written_bytes: Option<u64>,
+        /// About how large the copy will be.
+        total_bytes: u64,
+        /// The copy is written; Kybern is checking it and swapping it in.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        finishing: bool,
+    },
+    Done {
+        freed_bytes: u64,
+    },
+    Failed {
+        /// What happened, in plain words. The data is unchanged.
+        message: String,
+    },
+}
+
+method!(StorageStatsGet, "storage.stats", Some(Scope::OrchestrationRead), Empty, StorageStats);
+// Start compacting the database in the background. Progress arrives as
+// `storage.reclaim.progress`; `storage.stats` reports it too.
+method!(StorageReclaim, "storage.reclaim", Some(Scope::OrchestrationOperate), Empty, StorageReclaimStatus);
+pub const STORAGE_RECLAIM_PROGRESS_NOTIFICATION: &str = "storage.reclaim.progress";
+
 // ---- saved provider sessions ----
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -5092,6 +5155,8 @@ registry!(
     DaemonInfoMethod,
     DaemonShutdown,
     DaemonActivityMethod,
+    StorageStatsGet,
+    StorageReclaim,
     SessionsList,
     SessionsResume,
     SessionsScanProjects,

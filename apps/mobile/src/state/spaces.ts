@@ -13,6 +13,7 @@ import * as SecureStore from "expo-secure-store";
 import { useMemo, useSyncExternalStore } from "react";
 import { Platform } from "react-native";
 import { METHOD_NOT_FOUND } from "./notesModel";
+import type { MachineId, MethodName, ParamsOf, ResultOf } from "../../../../packages/kybern-client/src/types";
 import {
   isFreeChatProject,
   SPACES_CHANGED_NOTIFICATION,
@@ -45,6 +46,11 @@ type SpacesState = {
   spaces: Space[];
   /** The space this phone shows, as saved. `currentSpaceId()` resolves a stale one. */
   savedId: SpaceId | null;
+  /**
+   * The member the spaces were read from while the computer the phone is at was away; undefined when they came from it.
+   * An image logo is loaded from the same machine: every member installs the logo under its own asset id (#245).
+   */
+  from?: MachineId;
 };
 
 let state: SpacesState = { supported: null, spaces: [], savedId: null };
@@ -74,7 +80,7 @@ onClientAttach((client, isCurrent) => {
   client.onNotification(SPACES_CHANGED_NOTIFICATION, (params) => {
     if (!isCurrent()) return;
     const spaces = (params as SpacesChangedNotification | null)?.spaces;
-    if (Array.isArray(spaces)) { publish({ supported: true, spaces: ordered(spaces) }); void loadSpaces(); }
+    if (Array.isArray(spaces)) { publish({ supported: true, spaces: ordered(spaces), from: undefined }); void loadSpaces(); }
   });
   client.onNotification("spaces.placements_changed", () => { if (isCurrent()) void loadSpaces(); });
   const key = savedKey();
@@ -102,12 +108,14 @@ export function loadSpacesThroughNetwork() {
   const client = networkClient();
   if (!client || networkSpacesFrom === client) return;
   networkSpacesFrom = client;
+  const hub = machineHub();
+  const from = hub.memberConnection(hub.primaryMachineId)?.record.machineId;
   const version = ++spacesLoadVersion;
   client.call("spaces.list", {}).then(
     (result) => {
       if (version !== spacesLoadVersion) return;
       setSpacePlacements(result.spaces, result.placements);
-      publish({ supported: true, spaces: ordered(result.spaces) });
+      publish({ supported: true, spaces: ordered(result.spaces), from });
     },
     (e) => {
       if (version !== spacesLoadVersion) return;
@@ -124,7 +132,7 @@ export async function loadSpaces() {
     const result = await rpc("spaces.list", {});
     if (version !== spacesLoadVersion) return;
     setSpacePlacements(result.spaces, result.placements);
-    publish({ supported: true, spaces: ordered(result.spaces) });
+    publish({ supported: true, spaces: ordered(result.spaces), from: undefined });
   } catch (e) {
     if (version !== spacesLoadVersion) return;
     if ((e as { code?: number } | null)?.code === METHOD_NOT_FOUND)
@@ -182,25 +190,36 @@ export function useInSpace() {
 
 // ---- changes (the daemon answers with `spaces.changed` too; publishing here makes them instant) ----
 
+/**
+ * Spaces are the network's: every member keeps the same ones. A change goes to the computer the phone is at while it
+ * answers, else to a member that does (#245), which shares it with the rest.
+ */
+function spacesRpc<M extends MethodName>(method: M, params: ParamsOf<M>): Promise<ResultOf<M>> {
+  if (currentClient()?.status === "open") return rpc(method, params);
+  const member = networkClient();
+  if (!member) return Promise.reject(new Error("None of your computers is reachable. Connect to one, then try again."));
+  return member.call(method, params);
+}
+
 function upsert(space: Space) {
   publish({ spaces: ordered([...state.spaces.filter((s) => s.id !== space.id), space]) });
 }
 
 export async function createSpace(name: string, color?: SpaceColor) {
-  const space = await rpc("spaces.create", { name: name.trim(), color: color ?? nextSpaceColor(state.spaces) });
+  const space = await spacesRpc("spaces.create", { name: name.trim(), color: color ?? nextSpaceColor(state.spaces) });
   upsert(space);
   return space;
 }
 
 export async function updateSpace(id: SpaceId, patch: { name?: string; color?: SpaceColor }) {
-  const space = await rpc("spaces.update", { space_id: id, ...patch, ...(patch.name ? { name: patch.name.trim() } : {}) });
+  const space = await spacesRpc("spaces.update", { space_id: id, ...patch, ...(patch.name ? { name: patch.name.trim() } : {}) });
   upsert(space);
   return space;
 }
 
 /** Deletes a space; its projects move to the space the daemon names. The default space can't be deleted. */
 export async function deleteSpace(id: SpaceId) {
-  const result = await rpc("spaces.delete", { space_id: id });
+  const result = await spacesRpc("spaces.delete", { space_id: id });
   publish({
     spaces: state.spaces.filter((s) => s.id !== id),
     ...(state.savedId === id ? { savedId: result.moved_to } : {}),
@@ -214,7 +233,7 @@ export async function moveSpace(id: SpaceId, offset: -1 | 1) {
   const to = from + offset;
   if (from < 0 || to < 0 || to >= ids.length) return;
   ids.splice(to, 0, ...ids.splice(from, 1));
-  const result = await rpc("spaces.reorder", { space_ids: ids });
+  const result = await spacesRpc("spaces.reorder", { space_ids: ids });
   publish({ spaces: ordered(result.spaces) });
 }
 
@@ -225,7 +244,7 @@ export async function moveProjectToSpace(projectId: string, spaceId: SpaceId) {
   const instance = logical?.instances.find((i) => i.project.id === projectId) ?? logical?.primary;
   if (instance) {
     try {
-      const result = await rpc("spaces.place", { project: spaceProject(instance.machineId, instance.project), space_id: spaceId }, hub.primaryMachineId ?? undefined);
+      const result = await spacesRpc("spaces.place", { project: spaceProject(instance.machineId, instance.project), space_id: spaceId });
       setSpacePlacements(result.spaces, result.placements);
       publish({ spaces: ordered(result.spaces) });
       return result;

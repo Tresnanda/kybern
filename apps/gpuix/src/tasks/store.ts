@@ -131,7 +131,9 @@ export async function refreshTasks() {
   const token = ++generation
   const queue: TaskItemsChangedNotification[] = []
   pending = queue
-  setTasks({ error: null })
+  // A failed first load keeps its error until the next load answers, so the page can show "Try again" busy rather
+  // than flash back to "Loading tasks…".
+  if (state.loaded) setTasks({ error: null })
   try {
     const all = state.allMachines && machineHub().machineCount > 1
     const result = await client.call('tasks.items.list', all ? { machine: MACHINE_ALL } : {})
@@ -139,7 +141,7 @@ export async function refreshTasks() {
     recordFederation('tasks', all ? result.federation : null)
     let map = Object.fromEntries(result.tasks.map((task) => [task.id, task]))
     for (const event of queue) map = change(map, event)
-    setTasks({ tasks: map, loaded: true, federation: all ? (result.federation ?? null) : null })
+    setTasks({ tasks: map, loaded: true, error: null, federation: all ? (result.federation ?? null) : null })
   } catch (error) {
     if (token === generation) {
       let map = state.tasks

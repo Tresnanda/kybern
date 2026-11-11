@@ -5,7 +5,7 @@
 // pull request the images belong to.
 import { createContext, memo, useContext, useMemo, type ReactNode } from 'react'
 import type { MarkdownProps } from '@gpuix/react'
-import { DocumentMarkdown } from '../../native/markdownDocument.tsx'
+import { FencedMarkdown } from '../../transcript/markdown.tsx'
 import { ResponseImage } from '../../transcript/images.tsx'
 import { ImageCard } from '../../transcript/ThreadImage.tsx'
 import { column } from '../../usage/controls.tsx'
@@ -48,9 +48,7 @@ export const GithubMarkdown = memo(function GithubMarkdown({ source, document = 
   const first = segments.findIndex(segment => segment.kind === 'text')
   const text = (key: string | number, value: string, index: number) => {
     const own = index === first && ref ? { ref } : {}
-    return document
-      ? <DocumentMarkdown key={key} {...props} {...own} source={value} />
-      : <markdown key={key} {...props} {...own} source={value} />
+    return <FencedMarkdown key={key} document={document} {...props} {...own} source={value} />
   }
   const [box, room] = useBoxWidth()
   if (segments.length === 1 && segments[0]!.kind === 'text') return text('text', segments[0]!.text, 0)

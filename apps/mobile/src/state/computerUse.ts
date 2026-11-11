@@ -6,6 +6,7 @@ import type { ComputerFrame, ComputerNote, ComputerStatus, KybernClient } from "
 import { errorText, onClientAttach, onEnvironmentReset } from "./runtime";
 import { ownerClient } from "./machineRequests";
 import { attachLate } from "./lateAttach";
+import { onSettingsMachineChange, settingsClient } from "./machineChoice";
 
 type State = { status: ComputerStatus | null; notes: ComputerNote[] | null; error: string };
 let state: State = { status: null, notes: null, error: "" };
@@ -21,6 +22,10 @@ function attach(next: KybernClient) {
   client = next;
 }
 onClientAttach(attach);
+onSettingsMachineChange(() => {
+  publish({ status: null, notes: null, error: "" });
+  void loadComputerUse();
+});
 onEnvironmentReset(() => {
   client = null;
   publish({ status: null, notes: null, error: "" });
@@ -28,23 +33,25 @@ onEnvironmentReset(() => {
 
 /** Read CuaDriver's status and the app notes. */
 export async function loadComputerUse() {
-  const active = client;
+  // The machine Settings shows (`machineChoice.ts`).
+  const active = settingsClient() ?? client;
   if (!active) return;
   try {
     const [status, notes] = await Promise.all([
       active.call("computer.status", {}),
       active.call("computer.notes.list", {}),
     ]);
-    if (client === active) publish({ status, notes: notes.notes, error: "" });
+    if ((settingsClient() ?? client) === active) publish({ status, notes: notes.notes, error: "" });
   } catch (e) {
-    if (client === active) publish({ error: errorText(e, "load computer use") });
+    if ((settingsClient() ?? client) === active) publish({ error: errorText(e, "load computer use") });
   }
 }
 
 /** Replace one app's note; empty text deletes it. */
 export async function saveComputerNote(note: Pick<ComputerNote, "bundle_id" | "app">, text: string) {
-  if (!client) throw new Error("Connect to your computer to continue.");
-  const result = await client.call("computer.notes.set", { bundle_id: note.bundle_id, app: note.app, text });
+  const active = settingsClient() ?? client;
+  if (!active) throw new Error("Connect to your computer to continue.");
+  const result = await active.call("computer.notes.set", { bundle_id: note.bundle_id, app: note.app, text });
   publish({ notes: result.notes });
 }
 

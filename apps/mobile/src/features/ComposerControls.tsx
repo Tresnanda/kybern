@@ -14,7 +14,6 @@ import {
   loadThread,
   refresh,
   rpc,
-  useApp,
   useThreadValue,
 } from "../state/runtime";
 import { Icon, T, Tap, styles, ErrorBanner } from "../ui/primitives";
@@ -81,12 +80,12 @@ export function ComposerControls({
   leading?: ReactNode;
   trailing?: ReactNode;
 }) {
-  const app = useApp();
   const draft = useDraft();
   const usage = useThreadValue(thread?.id ?? "", selectUsage);
   const { colors } = useTheme();
   const kind = thread?.provider.kind ?? draft.provider;
-  const provider = app.providers.find((p) => p.kind === kind);
+  const providers = useComposerProviders(thread);
+  const provider = providers.find((p) => p.kind === kind);
   const model = thread ? thread.model : draft.model;
   const effort = thread ? thread.effort : draft.effort;
   // Antigravity only runs in Full access, whatever the draft or the last agent had.
@@ -250,13 +249,13 @@ export function ComposerOptions({
   /** Drawn first inside the sheet's scroll view (the section control). */
   top?: ReactNode;
 }) {
-  const app = useApp();
   const draft = useDraft();
   const usage = useThreadValue(thread?.id ?? "", selectUsage);
   const { colors } = useTheme();
   const kind = thread?.provider.kind ?? draft.provider;
   const instance = thread?.provider.instance ?? draft.instance ?? "default";
-  const provider = app.providers.find((p) => p.kind === kind);
+  const providers = useComposerProviders(thread);
+  const provider = providers.find((p) => p.kind === kind);
   const model = thread ? thread.model : draft.model;
   const effort = thread ? thread.effort : draft.effort;
   // Antigravity only runs in Full access, whatever the draft or the last agent had.
@@ -367,7 +366,7 @@ export function ComposerOptions({
         Keyboard.dismiss();
       }
     });
-  const agentItems: MenuItem[] = app.providers
+  const agentItems: MenuItem[] = providers
     .filter((p) => p.available)
     .map((p) => ({
       title: p.display_name,

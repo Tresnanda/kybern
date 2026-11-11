@@ -63,6 +63,7 @@ mod settings_share;
 mod skill_frame;
 mod skills;
 mod state;
+mod storage;
 mod terminal;
 mod thread_image;
 mod thread_projection;
@@ -71,6 +72,7 @@ mod usage;
 mod visuals;
 mod windows_path;
 mod ws;
+mod ws_lanes;
 
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -283,6 +285,11 @@ async fn serve() -> Result<()> {
     // Keep the port reserved while it runs, but do not serve requests or publish
     // daemon.port to general clients until the state is consistent.
     state.orchestrator.recover_after_restart().await?;
+    // Compactions planned before the restart: plan again from each thread's recorded cache expiry.
+    // Optional work: a failure leaves those threads to "When you return" and the daemon serves on.
+    if let Err(error) = state.orchestrator.resume_idle_compactions().await {
+        tracing::warn!(%error, "could not plan idle compactions after the restart");
+    }
 
     let orphans = account_login::orphaned_staging(&state);
     if !orphans.is_empty() {
@@ -300,6 +307,7 @@ async fn serve() -> Result<()> {
     });
     let maintenance_worker = tokio::spawn(maintenance::run(state.clone(), !args.pair));
     let notes_worker = tokio::spawn(purge_expired_notes(state.clone()));
+    let storage_worker = tokio::spawn(storage::run(state.clone()));
     let queue_state = state.clone();
     let queue_worker = tokio::spawn(async move {
         // Follow-ups dispatch when their thread goes idle. The orchestrator
@@ -402,6 +410,7 @@ async fn serve() -> Result<()> {
     axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(shutdown).await?;
     queue_worker.abort();
     notes_worker.abort();
+    storage_worker.abort();
     let _ = network_worker.await;
     outbox_worker.abort();
     repo_identity_worker.abort();

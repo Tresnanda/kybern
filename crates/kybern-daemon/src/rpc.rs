@@ -84,6 +84,8 @@ async fn dispatch_part_1(state: &AppState, ctx: &ConnectionCtx, method: &str, sl
             ok(info)
         }
         DaemonActivityMethod::NAME => ok(crate::maintenance::activity(state).await.map_err(internal)?),
+        StorageStatsGet::NAME => ok(crate::storage::stats(state).await.map_err(internal)?),
+        StorageReclaim::NAME => ok(crate::storage::reclaim(state).await?),
         DaemonShutdown::NAME => {
             if !crate::auth::is_bootstrap(state, &ctx.principal) {
                 return Err(RpcError::new(codes::FORBIDDEN, "daemon shutdown requires the local bootstrap client"));

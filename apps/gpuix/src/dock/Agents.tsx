@@ -1,3 +1,4 @@
+import { FencedMarkdown } from '../transcript/markdown.tsx'
 import { pinChildThread } from '../tabs/Body.tsx'
 import { getState } from '../state.ts'
 // The Agents pane retains completed children (unlike the sidebar's temporary
@@ -210,7 +211,7 @@ const AgentRow = memo(function AgentRow({ row, fresh, last, rails, detailOpen, o
       {info?.error && <Label color={t.red} size={12}>{info.error}</Label>}
       {result ? <>
         <Label color={muted(t, 0.65)} size={11}>Result</Label>
-        <markdown style={{ userSelect: 'text' }} source={clamp && !expanded ? result.split('\n').slice(0, 8).join('\n').slice(0, 720) : result} theme={cachedMarkdownTheme(t)} />
+        <FencedMarkdown style={{ userSelect: 'text' }} source={clamp && !expanded ? result.split('\n').slice(0, 8).join('\n').slice(0, 720) : result} theme={cachedMarkdownTheme(t)} />
         {clamp && <Button variant="ghost" size="sm" style={{ alignSelf: 'flex-start' }} onClick={() => setExpanded(!expanded)}>{expanded ? 'Show less' : 'Show more'}</Button>}
       </> : <Label color={muted(t, 0.8)} size={12}>{state.phase === 'working' || state.phase === 'waiting' ? 'The result comes back to this thread when the agent finishes.' : 'Open the thread to see its work.'}</Label>}
       {info?.branch && <Label color={muted(t, 0.8)} size={11}>{`Branch · ${info.branch}`}</Label>}

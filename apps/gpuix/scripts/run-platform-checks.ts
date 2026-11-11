@@ -56,6 +56,10 @@ const CHECKS: Record<string, Check> = {
     description: 'The Problem component (#231): ProblemState, ProblemRow and toast.problem by title and test id, Show details and Copy (the text reaches the clipboard), Reduce Motion',
     runs: ({ capture }) => capture === 'none' ? [] : [{ name: 'problem', args: [script('kit-problem-check.ts')], minutes: 10 }],
   },
+  zoom: {
+    description: 'Interface zoom (#292) at 100/150/80 %: content-pixel viewport and layout observers, a crisp 1 px border at scale × zoom, a popover under its trigger, steps that stop at the largest size that fits; macOS adds AppKit pointer input, the web page zoom and the minimum window',
+    runs: ({ capture }) => capture === 'none' ? [] : [{ name: 'zoom', args: [native('zoom-check.ts')], minutes: 10 }],
+  },
   clip: {
     description: 'Rounded overflow clip: hit tests, painted corners, cached replay, virtual list, code scroll/wrap, dark/light x motion',
     runs: () => [{ name: 'clip', args: [native('clip-check.ts')], minutes: 25 }],

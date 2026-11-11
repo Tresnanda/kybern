@@ -5,6 +5,7 @@
 // - every window claims `<client config>/gpuix-windows/<pid>.json` with a Unix socket;
 // - another window can be asked to come to the front (`focus`);
 // - claims of processes that are gone are dropped when read;
+// - a window that changes the interface size tells the others to re-read it (`uiZoom`, `shell/uiZoom.ts`);
 // - the updater asks every other window to quit before it runs the installer (`quitOtherWindows`), because each
 //   process keeps the install's files locked.
 //
@@ -18,7 +19,7 @@ import path from 'node:path'
 import { configDir } from '../environments/registry.ts'
 
 export interface WindowClaim { pid: number; name?: string; socket: string; at: number }
-type Request = { type: 'focus' } | { type: 'ping' } | { type: 'quit' }
+type Request = { type: 'focus' } | { type: 'ping' } | { type: 'quit' } | { type: 'uiZoom' }
 export interface WindowReply { ok: boolean; pid: number; focused: number }
 
 const dir = () => path.join(configDir(), 'gpuix-windows')
@@ -82,6 +83,15 @@ interface Host { name: () => string; focus: () => void; /** Leave the app; the p
 let host: Host | null = null
 let server: Server | null = null
 let focusCount = 0
+let uiZoomListener: (() => void) | null = null
+
+/** Hear another window's interface size change (`shell/uiZoom.ts` re-reads the saved value). */
+export function onSiblingUiZoom(listener: () => void) { uiZoomListener = listener }
+
+/** Tell every other window the interface size changed. Nothing waits for the answers. */
+export function tellOtherWindowsUiZoom() {
+  for (const claim of windowClaims()) if (claim.pid !== process.pid) void askWindow(claim, { type: 'uiZoom' }, 1000)
+}
 
 /** Claim this process's window and answer focus requests from sibling windows. */
 export function startWindowRegistry(next: Host) {
@@ -103,7 +113,10 @@ export function startWindowRegistry(next: Host) {
       if (request?.type === 'focus') { focusCount++; host!.focus() }
       const reply: WindowReply = { ok: !!request, pid: process.pid, focused: focusCount }
       // Answer first so the asker sees the request was taken, then leave.
-      connection.end(`${JSON.stringify(reply)}\n`, () => { if (request?.type === 'quit') (host!.quit ?? (() => process.exit(0)))() })
+      connection.end(`${JSON.stringify(reply)}\n`, () => {
+        if (request?.type === 'quit') (host!.quit ?? (() => process.exit(0)))()
+        else if (request?.type === 'uiZoom') uiZoomListener?.()
+      })
     })
   })
   server.on('error', error => console.error('[windows] registry socket:', error))

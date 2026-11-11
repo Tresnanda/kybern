@@ -4,6 +4,7 @@ import {
   partToken,
   structuredSegments,
 } from "../../../../packages/kybern-client/src/composerTokens";
+import { useLists } from "../state/useLists";
 import { threadReferenceLabel } from "../../../../packages/kybern-client/src/threadReferences";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
@@ -46,7 +47,6 @@ import {
   loadThread,
   problemFor,
   rpc,
-  useProjects,
   useThreadValue,
 } from "../state/runtime";
 import type { ErrorValue } from "../ui/Problem";
@@ -228,7 +228,8 @@ export const Composer = memo(function Composer({
   const draft = useDraft();
   // Attachments are uploaded to the machine that will own the thread: the thread's own, or the one
   // the new chat is sent to (a send queued for an offline machine uploads to the member it queues on).
-  const projects = useProjects();
+  // Home's list (the same machine filter), so the draft's project is found while the paired computer is away.
+  const { projects } = useLists();
   const machineTarget = useMachineTarget(
     thread ? undefined : projects.find((p) => p.id === draft.projectId),
   );

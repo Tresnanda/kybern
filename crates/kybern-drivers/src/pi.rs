@@ -329,6 +329,14 @@ impl AgentDriver for PiDriver {
         if let Some(extension) = &extension {
             extension.configure(&mut cmd, config.native_tool_bridge.as_ref());
         }
+        // Only OMP has a fixed token trigger (`compaction.thresholdTokens`); Pi's is a reserve.
+        let compaction_overlay = match (self.flavor, config.compaction.auto_compact_tokens) {
+            (Flavor::Omp, Some(tokens)) => Some(extension::CompactionOverlay::new(tokens)?),
+            _ => None,
+        };
+        if let Some(overlay) = &compaction_overlay {
+            overlay.configure(&mut cmd);
+        }
         tracing::info!(bin = %bin.display(), cwd = %config.cwd.display(), flavor = ?self.flavor, "spawning pi-family agent");
         let child = Arc::new(NdjsonChild::spawn(cmd)?);
 
@@ -346,6 +354,7 @@ impl AgentDriver for PiDriver {
             initialized,
             command_gate: Mutex::new(()),
             extension,
+            _compaction_overlay: compaction_overlay,
             pending_app_tools: Mutex::new(HashMap::new()),
             app_tool_names,
         });
@@ -429,6 +438,7 @@ struct PiSession {
     initialized: tokio::sync::watch::Receiver<Option<std::result::Result<(), String>>>,
     command_gate: Mutex<()>,
     extension: Option<extension::StagedExtension>,
+    _compaction_overlay: Option<extension::CompactionOverlay>,
     pending_app_tools: Mutex<HashMap<String, u64>>,
     app_tool_names: HashSet<String>,
 }
@@ -813,6 +823,7 @@ impl PiSession {
                         self.emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage {
                             context: Some(kybern_protocol::ContextUsage { used_tokens, window_tokens }),
                             limits: None,
+                            prompt_cache: None,
                         }))
                         .await;
                     }
@@ -1206,6 +1217,7 @@ impl PiSession {
             let event = DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage {
                 context: Some(kybern_protocol::ContextUsage { used_tokens, window_tokens }),
                 limits: None,
+                prompt_cache: None,
             });
             let Ok(permit) = self.events.reserve().await else { return };
             let st = self.state.lock().await;
@@ -1775,7 +1787,7 @@ fn prompt_text(message: &UserMessage) -> String {
                 out.push('@');
                 out.push_str(name);
             }
-            ContentPart::Image { .. } => out.push_str("[image]"),
+            ContentPart::Image { .. } | ContentPart::Media { .. } => out.push_str("[image]"),
             ContentPart::Attachment { name, .. } => {
                 out.push('[');
                 out.push_str(name);
@@ -2104,6 +2116,7 @@ mod tests {
             initialized: tokio::sync::watch::channel(Some(Ok(()))).1,
             command_gate: Mutex::new(()),
             extension: None,
+            _compaction_overlay: None,
             pending_app_tools: Mutex::new(HashMap::new()),
             app_tool_names: HashSet::new(),
         });
@@ -2140,6 +2153,7 @@ mod tests {
             initialized: tokio::sync::watch::channel(Some(Ok(()))).1,
             command_gate: Mutex::new(()),
             extension: None,
+            _compaction_overlay: None,
             pending_app_tools: Mutex::new(HashMap::new()),
             app_tool_names: HashSet::new(),
         });
@@ -2170,6 +2184,7 @@ mod tests {
                 initialized: tokio::sync::watch::channel(Some(Ok(()))).1,
                 command_gate: Mutex::new(()),
                 extension: None,
+                _compaction_overlay: None,
                 pending_app_tools: Mutex::new(HashMap::new()),
                 app_tool_names: extension::DEFAULT_APP_TOOL_NAMES.iter().map(|name| (*name).to_string()).collect(),
             });
@@ -2235,6 +2250,7 @@ mod tests {
                 initialized: tokio::sync::watch::channel(Some(Ok(()))).1,
                 command_gate: Mutex::new(()),
                 extension: None,
+                _compaction_overlay: None,
                 pending_app_tools: Mutex::new(HashMap::new()),
                 app_tool_names: extension::DEFAULT_APP_TOOL_NAMES.iter().map(|name| (*name).to_string()).collect(),
             });
@@ -2374,6 +2390,7 @@ mod tests {
             initialized: tokio::sync::watch::channel(Some(Ok(()))).1,
             command_gate: Mutex::new(()),
             extension: None,
+            _compaction_overlay: None,
             pending_app_tools: Mutex::new(HashMap::new()),
             app_tool_names: extension::DEFAULT_APP_TOOL_NAMES.iter().map(|name| (*name).to_string()).collect(),
         })
@@ -2582,6 +2599,7 @@ mod tests {
             initialized: tokio::sync::watch::channel(Some(Ok(()))).1,
             command_gate: Mutex::new(()),
             extension: None,
+            _compaction_overlay: None,
             pending_app_tools: Mutex::new(HashMap::new()),
             app_tool_names: extension::DEFAULT_APP_TOOL_NAMES.iter().map(|name| (*name).to_string()).collect(),
         });

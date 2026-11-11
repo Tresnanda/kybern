@@ -47,6 +47,8 @@ pub struct Inner {
     pub account_logins: crate::account_login::AccountLogins,
     /// First-run scan and bulk import of saved harness sessions.
     pub session_imports: crate::session_import::SessionImports,
+    /// Settings → Storage: compaction status and its progress notifications (#298).
+    pub storage: crate::storage::Storage,
     /// Where this machine's user skill folders are (ADE-86 skill copies).
     pub plugin_runtime: crate::plugins::PluginRuntime,
     pub skill_homes: crate::network::skill_sync::SkillHomes,
@@ -214,6 +216,7 @@ impl AppState {
                 account_identities: Default::default(),
                 account_logins: Default::default(),
                 session_imports: Default::default(),
+                storage: Default::default(),
                 skill_homes: Default::default(),
                 plugin_runtime: Default::default(),
                 previews,

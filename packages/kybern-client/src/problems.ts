@@ -134,6 +134,8 @@ function copyFor(problem: Problem, message: string, context: ProblemContext): Co
       }
     }
     case "conflict":
+      if (subject === "busy")
+        return { title: `Couldn't ${context.action}`, body: "Kybern is busy with other work. Try again in a moment.", action: retry(), retryable: true }
       return { title: `Couldn't ${context.action}`, body: plain ?? "Something changed at the same time. Refresh, then try again.", action: retry(), retryable: true }
     case "invalid_input":
       return { title: `Couldn't ${context.action}`, body: plain ?? "Kybern didn't accept that. Check what you entered, then try again.", secondary: copyDetail, retryable: false }
@@ -240,6 +242,7 @@ function textProblem(text: string): Problem | null {
   }
   const notFound = /^not found: (\w+)/i.exec(text)
   if (notFound) return { kind: "not_found", subject: notFound[1], detail, retryable: false }
+  if (/^too many (concurrent requests|calls in flight)/i.test(text)) return { kind: "conflict", subject: "busy", detail, retryable: true }
   if (/^invalid params:/i.test(text)) return { kind: "invalid_input", detail, retryable: false }
   if (/^method not found:/i.test(text)) return { kind: "update_needed", detail, retryable: false }
   return null
@@ -265,6 +268,7 @@ function kindForCode(code: number): ProblemKind {
       return "not_found"
     case -32004:
     case -32012:
+    case -32014:
       return "conflict"
     default:
       return "internal"

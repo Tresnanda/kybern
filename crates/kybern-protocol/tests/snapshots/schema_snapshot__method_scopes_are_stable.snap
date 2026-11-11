@@ -8,6 +8,10 @@ expression: scopes
   - "access:write"
 - - daemon.activity
   - "orchestration:read"
+- - storage.stats
+  - "orchestration:read"
+- - storage.reclaim
+  - "orchestration:operate"
 - - sessions.list
   - "orchestration:read"
 - - sessions.resume

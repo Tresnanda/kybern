@@ -439,10 +439,10 @@ fn apply_transcript_event(
                 unscoped_assistant_message_value = None;
                 out.retain(|entry| !matches!(entry, TranscriptEntry::TurnSummary { turn_id: id, .. } if *id == turn_id));
             }
-            EventPayload::ImageReceived { id, origin, source } => {
+            EventPayload::ImageReceived { id, origin, source, media } => {
                 if let Some(turn_id) = turn_id.filter(|_| origin.is_root())
                     && !out.iter().any(|entry| matches!(entry, TranscriptEntry::Image { id: previous, turn_id: previous_turn, .. } if previous == id && *previous_turn == turn_id)) {
-                        out.push(TranscriptEntry::Image { id: id.clone(), turn_id, seq: ev.seq, at: ev.at, origin: origin.clone(), source: source.clone() });
+                        out.push(TranscriptEntry::Image { id: id.clone(), turn_id, seq: ev.seq, at: ev.at, origin: origin.clone(), source: source.clone(), media: media.clone() });
                 }
             }
             EventPayload::AssistantTextDelta { message_id, origin, delta } => {
@@ -751,6 +751,23 @@ fn apply_transcript_event(
                 let Some(turn_id) = turn_id.or(if fork { last_turn_id_value } else { None }) else { continue };
                 out.push(TranscriptEntry::Notice { turn_id, seq: ev.seq, level: *level, text: text.clone(), at: ev.at, data: data.clone(), problem: problem.clone() });
             }
+            EventPayload::IdleCompactionStarted { context_tokens, cache_expires_at, cache_ttl_seconds } => {
+                let Some(turn_id) = turn_id else { continue };
+                out.push(TranscriptEntry::Notice {
+                    turn_id,
+                    seq: ev.seq,
+                    level: NoticeLevel::Info,
+                    text: "Compacted while you were away".into(),
+                    at: ev.at,
+                    data: Some(serde_json::json!({
+                        "kind": "idle_compaction",
+                        "context_tokens": context_tokens,
+                        "cache_expires_at": cache_expires_at,
+                        "cache_ttl_seconds": cache_ttl_seconds,
+                    })),
+                    problem: None,
+                });
+            }
             EventPayload::WorkspaceReverted { commit, .. } => {
                 let Some(turn_id) = turn_id else { continue };
                 out.push(TranscriptEntry::Reverted { turn_id, seq: ev.seq, commit: commit.clone(), at: ev.at });
@@ -1042,10 +1059,14 @@ pub fn project_provider_usage(events: &[ThreadEvent]) -> ProviderUsage {
         // A failed refresh kept the old session, and its context.
         if matches!(event.payload, EventPayload::ContextRotated { session_kept: false, .. }) {
             result.context = None;
+            result.prompt_cache = None;
         }
         if let EventPayload::ProviderUsageUpdated { usage } = &event.payload {
             if usage.context.is_some() {
                 result.context = usage.context.clone();
+            }
+            if usage.prompt_cache.is_some() {
+                result.prompt_cache = usage.prompt_cache.clone();
             }
             if let Some(limits) = &usage.limits {
                 let current = result.limits.get_or_insert_default();
@@ -1287,8 +1308,12 @@ mod tests {
     fn native_images_reload_once_per_turn_and_keep_the_original_source() {
         let thread_id = Uuid::new_v4();
         let turn_id = Uuid::new_v4();
-        let image =
-            EventPayload::ImageReceived { id: "image".into(), origin: EventOrigin::Root, source: "data:image/png;base64,YQ==".into() };
+        let image = EventPayload::ImageReceived {
+            id: "image".into(),
+            origin: EventOrigin::Root,
+            source: "data:image/png;base64,YQ==".into(),
+            media: None,
+        };
         let events = [1, 2].map(|seq| ThreadEvent { seq, thread_id, turn_id: Some(turn_id), at: Utc::now(), payload: image.clone() });
         let serialized = serde_json::to_string(&events).unwrap();
         let reloaded: Vec<ThreadEvent> = serde_json::from_str(&serialized).unwrap();
@@ -2078,6 +2103,7 @@ mod rotation_tests {
         let usage = |used| ProviderUsage {
             context: Some(ContextUsage { used_tokens: used, window_tokens: 1_000 }),
             limits: Some(vec![UsageLimit { name: "5h".into(), used_percent: 10.0, window_minutes: Some(300), resets_at: None }]),
+            prompt_cache: None,
         };
         let rotated = |seq, session_kept| {
             event(

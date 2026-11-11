@@ -26,7 +26,7 @@ import { sendFollowUp } from "../state/followUp";
 import { createNote } from "../state/notes";
 import { type ApprovalDecision, type ApprovalRequest } from "../state/protocol";
 import { getState, problemFor } from "../state/runtime";
-import { threadImageSource } from "../state/machineRequests";
+import { agentImageSource } from "../state/machineRequests";
 import { type Block } from "../state/transcript";
 import type { TurnRow } from "../state/turnRows";
 import { turnFooterText } from "../state/format";
@@ -39,7 +39,7 @@ import { showToast } from "../ui/Toast";
 import { useStreamedText } from "../ui/useStreamedText";
 import { radius, space, useTheme } from "../ui/theme";
 import { ApprovalPanel } from "./Approvals";
-import { CoordinatorCardLine, RotationRow, SystemRowLine } from "./CoordinatorCards";
+import { CoordinatorCardLine, IdleCompactionRow, RotationRow, SystemRowLine } from "./CoordinatorCards";
 import { EditedFilesCard, confirmRewind } from "./EditedFiles";
 import { Lightbox } from "./Lightbox";
 import { HistoryRow } from "./HistoryRow";
@@ -95,7 +95,7 @@ const threadLive = (threadId: string) =>
 function rowGap(row: Extract<TurnRow, { kind: "block" }>) {
   const kind = row.block.kind;
   if (row.nested) return kind === "tool" || kind === "runtime_task" ? 0 : space.sm;
-  if (kind === "rotation") return 0;
+  if (kind === "rotation" || kind === "idle_compaction") return 0;
   if (kind === "user") return row.first ? space["2xl"] : space.md;
   if (kind === "turn_end") return space.xs;
   if (kind === "tool" || kind === "runtime_task") return space.xs;
@@ -332,7 +332,7 @@ function answerMenu(text: string, threadId: string, turnId: string | null): Menu
 function AgentImage({ block, threadId }: { block: Extract<Block, { kind: "image" }>; threadId: string }) {
   const { colors } = useTheme();
   const [open, setOpen] = useState(false);
-  const source = threadImageSource(threadId, block.source);
+  const source = agentImageSource(threadId, block.source);
   return (
     <>
       <Tap label="Image from the agent. Open full screen" onPress={() => setOpen(true)} feedback="none">
@@ -453,6 +453,8 @@ export const TranscriptBlock = memo(function TranscriptBlock({
       return <OutsideChangeRow block={block} threadId={threadId} />;
     case "rotation":
       return <RotationRow block={block} threadId={threadId} />;
+    case "idle_compaction":
+      return <IdleCompactionRow block={block} />;
     case "history":
       return <HistoryRow block={block} />;
     case "reverted":

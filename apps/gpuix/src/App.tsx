@@ -67,6 +67,7 @@ import { SidebarDragLayer, SidebarResizeHandle } from './shell/ResizeHandle.tsx'
 import { ResizeCaptureLayer } from './kit/Resize.tsx'
 import { ThemeFade } from './motion/themeFade.tsx'
 import { Toaster } from './shell/toasts.tsx'
+import { ZoomPill } from './shell/ZoomPill.tsx'
 import { startStarPrompt } from './shell/starPromptApp.ts'
 import { AppUpdateSurface } from './platform/UpdateSurface.tsx'
 import { NetworkIntroSurface } from './machines/NetworkIntro.tsx'
@@ -270,6 +271,7 @@ function Workspace() {
       <WebPageUi />
       <GhSetupSheet />
       <Toaster />
+      <ZoomPill />
       <AppUpdateSurface />
       <NetworkIntroSurface />
       <SidebarDragLayer />

@@ -28,6 +28,7 @@ impl UiHarness {
             initialized: tokio::sync::watch::channel(Some(Ok(()))).1,
             command_gate: Mutex::new(()),
             extension: extension.then(|| extension::StagedExtension::new(PermissionMode::FullAccess).unwrap()),
+            _compaction_overlay: None,
             pending_app_tools: Mutex::new(HashMap::new()),
             app_tool_names: extension::APP_TOOL_NAMES.iter().map(|name| (*name).to_string()).collect(),
         });

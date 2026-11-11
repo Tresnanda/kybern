@@ -90,6 +90,17 @@ fn git_out(dir: &std::path::Path, args: &[&str]) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn planning_stores_the_identity_of_a_project_registered_before_its_first_commit() {
+    let Some(net) = ProvisionNet::new().await else { return };
+    // As if the project was added before its first commit: nothing for the clients to pair the copy with.
+    net.b.state.store.project_set_repo_identity(net.project_b.id, None).unwrap();
+    let plan = net.b.state.orchestrator.provision_plan(net.project_b.id, &net.c.id(), None).await.unwrap();
+    assert!(plan.blocked.is_none(), "{plan:?}");
+    let stored = net.b.state.store.project_get(net.project_b.id).unwrap().unwrap();
+    assert!(stored.repo.as_ref().is_some_and(|repo| !repo.root_commits.is_empty()), "the plan stores the identity: {:?}", stored.repo);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_project_is_cloned_from_its_remote_on_another_machine_with_its_env_files() {
     let Some(net) = ProvisionNet::new().await else { return };
     // The plan, as a client on any machine asks b for it.

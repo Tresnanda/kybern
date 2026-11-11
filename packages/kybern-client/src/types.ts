@@ -125,6 +125,8 @@ export const codes = {
   PROVIDER_ERROR: -32011,
   THREAD_BUSY: -32012,
   NOT_AVAILABLE: -32013,
+  /** The connection had too many calls in flight. The call did not start, so repeating it is safe. */
+  CAPACITY_EXCEEDED: -32014,
 } as const;
 
 // ---- auth ----
@@ -646,12 +648,26 @@ export interface AgentResultsPart {
   items: AgentResultItem[];
 }
 
+/** Image or document bytes kept outside the event log in the owning daemon's `assets/<hash>` (#298). Fetch them from
+ *  that machine with `GET /assets/{hash}`; events never carry a URL. Inside a stored tool result the base64 string it
+ *  replaced becomes `{ kybern_media: MediaRef }`. */
+export interface MediaRef {
+  /** Lowercase hex SHA-256 of the bytes. */
+  hash: string;
+  mime: string;
+  size: number;
+  /** How the replaced value was written; absent for plain base64. */
+  encoding?: "base64" | "data_url";
+}
+
 export type ContentPart =
   | { type: "text"; text: string }
   | ThreadReferencePart
   | ThreadMessagePart
   | AgentResultsPart
   | { type: "image"; media_type: string; data: string }
+  /** A large image stored outside the event log (0.24+). */
+  | { type: "media"; media: MediaRef }
   | {
       type: "attachment";
       asset_id: AssetId;
@@ -1100,7 +1116,7 @@ export interface VisualControl { x: number; y: number; w: number; h: number; r: 
 export interface HtmlSnapshotResult { key: string; width: number; height: number; scale: number; clamped?: boolean; clamp: number; controls: VisualControl[] }
 export type TranscriptEntry =
   | { role: "visual"; turn_id: TurnId; seq: EventSeq; at: DateTime; visual: HtmlVisual; answer?: VisualAnswerRecord | null }
-  | { role: "image"; id: string; turn_id: TurnId; seq: number; at: string; origin: EventOrigin; source: string }
+  | { role: "image"; id: string; turn_id: TurnId; seq: number; at: string; origin: EventOrigin; source: string; media?: MediaRef | null }
   | {
       role: "user";
       id: MessageId;
@@ -1357,7 +1373,8 @@ export type EventPayload =
   | { kind: "session_transitioned"; from: ProviderInstance; to: ProviderInstance; native_resume: boolean; text: string }
   | { kind: "provider_session_bound"; session_id: string; model: string | null }
   | { kind: "provider_session_released"; reason: SessionReleaseReason }
-  | { kind: "image_received"; id: string; origin: EventOrigin; source: string }
+  /** `source` is empty when `media` holds the image (0.24+). */
+  | { kind: "image_received"; id: string; origin: EventOrigin; source: string; media?: MediaRef | null }
   | {
       kind: "assistant_text_delta";
       message_id: MessageId;
@@ -1415,6 +1432,8 @@ export type EventPayload =
   | { kind: "session_imported"; provider: ProviderKind; session_id: string }
   | { kind: "provider_commands_updated"; commands: ProviderCommand[] }
   | { kind: "provider_usage_updated"; usage: ProviderUsage }
+  /** Kybern started this turn's compaction because the thread sat idle above 200K tokens and its cache was about to expire. */
+  | { kind: "idle_compaction_started"; context_tokens: number; cache_expires_at: DateTime; cache_ttl_seconds?: number | null }
   /** `problem` says what the failure means (signed out, rate limited, offline, ...) when Kybern could tell; events from before it existed have none. */
   | { kind: "turn_failed"; error: string; problem?: Problem | null }
   | {
@@ -1626,6 +1645,40 @@ export interface DaemonInfo {
   /** Feature names this daemon supports, such as `network.v1`. See `NETWORK_FEATURES`. */
   features?: string[];
 }
+
+// ---- storage (#298) ----
+
+/** What this machine's Kybern data takes on disk (`storage.stats`). */
+export interface StorageStats {
+  database_bytes: number;
+  /** Images and files in `assets/`. */
+  files_bytes: number;
+  /** Unused space inside the database that "Reclaim space" frees. */
+  reclaimable_bytes: number;
+  compacted_bytes: number;
+  /** Free space compacting needs: about twice the compacted size. */
+  needed_disk_bytes: number;
+  /** Absent when the daemon cannot tell. */
+  free_disk_bytes?: number | null;
+  media_rewrite: StorageMediaRewrite;
+  reclaim: StorageReclaimStatus;
+}
+
+/** Moving images of existing threads out of the database, in the background. `total` is 0 while counting. */
+export interface StorageMediaRewrite {
+  processed: number;
+  total: number;
+  done: boolean;
+}
+
+/** Where compacting stands; also the params of `storage.reclaim.progress`. */
+export type StorageReclaimStatus =
+  | { state: "idle" }
+  | { state: "running"; written_bytes?: number | null; total_bytes: number; finishing?: boolean }
+  | { state: "done"; freed_bytes: number }
+  | { state: "failed"; message: string };
+
+export const STORAGE_RECLAIM_PROGRESS_NOTIFICATION = "storage.reclaim.progress";
 
 /** What the daemon is holding open right now. */
 export interface DaemonActivity {
@@ -2657,6 +2710,19 @@ export interface ProviderSettings {
   env: Record<string, string>;
   /** OMP profile overrides keyed by registered project path. */
   project_profiles?: Record<string, string>;
+  /** "Compact idle threads" per account, keyed by instance (`default` is the harness's own sign-in). Absent: the global choice. */
+  idle_compaction?: Record<string, IdleCompaction>;
+}
+
+/** When Kybern compacts a long thread left idle. */
+export type IdleCompaction = "when_you_return" | "before_cache_expires" | "never";
+
+/** Compaction for every harness, mapped to each harness's own setting at launch. */
+export interface CompactionSettings {
+  /** What happens to a long idle thread. Accounts can override it. */
+  idle: IdleCompaction;
+  /** Context size at which each agent compacts on its own (100 000-1 000 000). An agent absent here keeps its default. */
+  auto_compact_tokens?: Partial<Record<ProviderKind, number>>;
 }
 
 /** Limits on what the daemon keeps alive after work finishes. Minutes; 0 turns a limit off. */
@@ -2707,6 +2773,8 @@ export interface Settings {
   preview_allowed_folders?: string[];
   /** Joining and staying joined to the machine network. Absent from a daemon older than the network. */
   network?: NetworkSettings;
+  /** When long threads are compacted. Absent from a daemon older than 0.24 (When you return, harness thresholds). */
+  compaction?: CompactionSettings;
 }
 
 /** Limits for `kybern_agent_delegate`, read each time an agent delegates. */
@@ -4822,6 +4890,8 @@ export interface Methods {
   ];
   "daemon.info": [Empty, DaemonInfo];
   "daemon.activity": [Empty, DaemonActivity];
+  "storage.stats": [Empty, StorageStats];
+  "storage.reclaim": [Empty, StorageReclaimStatus];
   "sessions.list": [{ provider: ProviderKind; query?: string; project_id?: ProjectId | null; cursor?: string | null }, SessionsListResult];
   "sessions.resume": [{ provider: ProviderKind; session_id: string; project_id?: ProjectId | null }, Thread];
   "sessions.scan_projects": [{ providers?: ProviderKind[] | null }, SessionsScan];
@@ -5250,6 +5320,18 @@ export interface ProviderCommand { name: string; description: string; aliases?: 
 export interface ProviderUsage {
   context?: { used_tokens: number; window_tokens: number };
   limits?: { name: string; used_percent: number; window_minutes: number | null; resets_at: number | null }[];
+  /** The prompt cache the latest turn's last request left. Absent when the harness reports nothing to estimate from. */
+  prompt_cache?: PromptCache;
+}
+
+/** How long the provider keeps a turn's prompt cache, and when it lapses. */
+export interface PromptCache {
+  /** Seconds an entry lives after a request. Absent: unknown. */
+  ttl_seconds?: number | null;
+  /** When the cache of the turn's last request expires. Absent: unknown. */
+  expires_at?: DateTime | null;
+  /** The provider's documented default rather than a value read from the response. */
+  estimated?: boolean;
 }
 
 export type IntegrationKind = "plugin" | "connector";

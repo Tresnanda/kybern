@@ -18,6 +18,7 @@ import {
   startNewChat,
   supportsOptimisticCreate,
   useApp,
+  useThreadConnection,
 } from "../src/state/runtime";
 import { optimisticThread } from "../../../packages/kybern-client/src/newChat";
 import { newThreadId } from "../src/state/ids";
@@ -39,6 +40,7 @@ import {
 import { ProviderMark } from "../src/ui/ProviderMark";
 import { useMachineTarget } from "../src/state/machineTarget";
 import { useProviders } from "../src/state/machineProviders";
+import { providerMachine, threadProviderMachine } from "../src/state/providerSource";
 import { useTheme } from "../src/ui/theme";
 import { modelChoices } from "../../../packages/kybern-client/src/models";
 import { useLists } from "../src/state/useLists";
@@ -99,7 +101,8 @@ export default function Configure() {
   const project = lists.projects.find((p) => p.id === options.projectId);
   // A new thread's agents are those of the machine it will run on (`state/machineTarget.ts`); an open thread keeps its own.
   const target = useMachineTarget(threadId ? undefined : project);
-  const providers = useProviders(!threadId && target.remote && target.chosen ? { machineId: target.chosen.machineId, reachable: target.reachable } : undefined);
+  const connection = useThreadConnection(threadId);
+  const providers = useProviders(threadId ? threadProviderMachine(connection) : providerMachine(target));
   const provider = providers.find((p) => p.kind === options.provider);
   const { models: visibleModels, customId } = modelChoices(
     provider?.models ?? [],

@@ -274,6 +274,7 @@ fn sdk_message(message: &UserMessage) -> Value {
             ContentPart::Mention { name, .. } => text.push_str(&format!("@{name}")),
             ContentPart::Image { media_type, data } => images.push(json!({"data": data, "mimeType": media_type})),
             ContentPart::Attachment { name, .. } => text.push_str(&format!("[attached file: {name}]")),
+            ContentPart::Media { .. } => text.push_str("[image]"),
             ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } | ContentPart::SystemRow { .. } => {
                 if let Some(flat) = part.orchestration_text() {
                     text.push_str(&flat);
@@ -357,6 +358,7 @@ for line in sys.stdin:
                     ("KYBERN_CURSOR_NODE".into(), host.display().to_string()),
                     ("KYBERN_CURSOR_SDK_DIR".into(), root.path().display().to_string()),
                 ]),
+                compaction: Default::default(),
             };
             // Other concurrently forked tests can briefly inherit an open script
             // descriptor on Linux, producing ETXTBSY until their child execs.

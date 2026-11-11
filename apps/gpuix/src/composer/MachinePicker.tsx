@@ -82,7 +82,7 @@ export function MachinePicker({ target, locked }: { target: MachineTarget; locke
     {(error || target.groupPathsError) && <Label color={t.red} size={12} truncate>{error || target.groupPathsError}</Label>}
     {setup && target.projectId && <MachineSetupSheet projectId={target.projectId} targetId={setup} close={() => setSetup(null)} onReady={(plan) => {
       const hub = machineHub()
-      return finishMachineSetup({ projectId: target.projectId!, key: target.key, targetId: setup, paneId, plan }, {
+      return finishMachineSetup({ projectId: target.projectId!, targetId: setup, paneId, plan }, {
         refresh: (id) => hub.refreshMachineLists(id), projects: () => hub.view().projects, localMachineId: hub.localMachineId,
         paths: loadGroupPaths, providers: loadMachineLists, select: chooseMachine,
       })

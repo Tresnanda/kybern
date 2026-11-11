@@ -58,6 +58,7 @@ impl SettingsStore {
         // A credential a client just typed goes into the secret store; settings keep the reference.
         crate::secret_store::externalize(&mut settings)?;
         validate_orchestration(&settings.orchestration)?;
+        settings.compaction.validate().map_err(anyhow::Error::msg)?;
         for (kind, servers) in &settings.coordinator_mcp_servers {
             anyhow::ensure!(
                 matches!(

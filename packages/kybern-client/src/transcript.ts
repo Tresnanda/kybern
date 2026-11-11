@@ -1,4 +1,5 @@
 import type { ProviderUsage } from "./types.ts"
+import { mediaSource } from "./responseImages.ts"
 // Client-side transcript projection. Seeds from `threads.get`, then folds live
 // `ThreadEvent`s into blocks the views render directly.
 
@@ -123,6 +124,30 @@ export type Block =
     }
   /** Deselected repositories of a group worktree thread changed outside its worktree during this turn. */
   | { kind: "outside_repo_changed"; id: string; turnId: TurnId; at: string; seq: number; repos: OutsideRepoChange[] }
+  | IdleCompactionBlock
+
+/** Kybern compacted a thread left idle before its prompt cache expired. Shown as
+ * one notice row in place of the turn's `/compact` message and the harness's
+ * compaction notices. */
+export interface IdleCompactionBlock {
+  kind: "idle_compaction"
+  id: string
+  turnId: TurnId
+  at: string
+  seq: number
+  /** Context size when Kybern decided to compact. */
+  contextTokens: number
+  /** Context size after the compaction, when the harness reported it. */
+  contextAfter: number | null
+  /** When the prompt cache would have expired. */
+  cacheExpiresAt: string
+  /** How long that cache lived after a request, when known. */
+  cacheTtlSeconds: number | null
+  /** When the compaction turn ended; `null` while it runs. */
+  finishedAt: string | null
+  /** The compaction turn failed or was stopped. */
+  failed: boolean
+}
 
 export interface ThreadState {
   notes?: import("./types.ts").ThreadNotes
@@ -158,7 +183,7 @@ export function seedFromGet(res: ThreadsGetResult, prev?: ThreadState): ThreadSt
     providerCommands: res.provider_commands ?? [],
     providerUsage: res.provider_usage ?? {},
     thread: res.thread,
-    blocks: res.transcript.map(entryToBlock).filter((b): b is Block => !!b),
+    blocks: settleIdleCompactions(res.transcript.map(entryToBlock).filter((b): b is Block => !!b)),
     pendingApprovals: res.pending_approvals,
     pendingQuestions: res.pending_questions ?? [],
     checkpoints: prev?.checkpoints ?? [],
@@ -215,7 +240,7 @@ export function applyBackgroundEvent(state: ThreadState, event: ThreadEvent): Th
 function entryToBlock(e: TranscriptEntry): Block | null {
   switch (e.role) {
     case "visual": return { kind: "visual", id: e.visual.id, turnId: e.turn_id, at: e.at, seq: e.seq, visual: e.visual, answer: e.answer ?? null }
-    case "image": return e.origin.kind === "root" ? { kind: "image", id: e.id, turnId: e.turn_id, at: e.at, seq: e.seq, source: e.source } : null
+    case "image": return e.origin.kind === "root" ? { kind: "image", id: e.id, turnId: e.turn_id, at: e.at, seq: e.seq, source: e.media ? mediaSource(e.media) : e.source } : null
     case "approval":
       return { kind: "approval", id: `approval:${e.approval.id}`, turnId: e.turn_id, at: e.approval.created_at, seq: e.seq ?? 0, approval: e.approval, decision: e.decision ?? null, ...(e.auto ? { auto: true } : {}), ...(e.answered_by ? { answeredBy: e.answered_by } : {}) }
     case "user":
@@ -245,8 +270,11 @@ function entryToBlock(e: TranscriptEntry): Block | null {
       }
     case "runtime_task":
       return { kind: "runtime_task", id: `task:${e.task.id}`, turnId: e.turn_id, at: e.at, seq: e.seq ?? e.task.started_seq ?? 0, task: e.task }
-    case "notice":
+    case "notice": {
+      const idle = idleCompactionData(e.data)
+      if (idle) return idleCompactionBlock(e.turn_id, e.at, e.seq ?? 0, idle.contextTokens, idle.cacheExpiresAt, idle.cacheTtlSeconds)
       return { kind: "notice", id: `notice:${e.seq}`, turnId: e.turn_id, at: e.at, seq: e.seq ?? 0, level: e.level, text: e.text, ...(e.data ? { data: e.data } : {}), ...(e.problem ? { problem: e.problem } : {}) }
+    }
     case "reverted":
       return { kind: "reverted", id: `revert:${e.seq}`, turnId: e.turn_id, at: e.at, seq: e.seq ?? 0, commit: e.commit }
     case "rotation":
@@ -360,7 +388,7 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       blocks = [...blocks, { kind: "user", id: ev.message_id, turnId, at, seq: ev.seq, message: ev.message }]
       break
     case "image_received":
-      if (ev.turn_id && ev.origin.kind === "root" && !blocks.some((block) => block.kind === "image" && block.id === ev.id && block.turnId === ev.turn_id)) blocks = [...blocks, { kind: "image", id: ev.id, turnId: ev.turn_id, at, seq: ev.seq, source: ev.source }]
+      if (ev.turn_id && ev.origin.kind === "root" && !blocks.some((block) => block.kind === "image" && block.id === ev.id && block.turnId === ev.turn_id)) blocks = [...blocks, { kind: "image", id: ev.id, turnId: ev.turn_id, at, seq: ev.seq, source: ev.media ? mediaSource(ev.media) : ev.source }]
       break
     case "assistant_text_delta": {
       const origin = ev.origin ?? ROOT_ORIGIN
@@ -545,6 +573,7 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
           error: null,
         },
       ]
+      blocks = finishIdleCompaction(blocks, turnId, at, ev.stop_reason !== "completed")
       break
     case "turn_failed":
       blocks = [
@@ -564,6 +593,7 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
           ...(ev.problem ? { problem: ev.problem } : {}),
         },
       ]
+      blocks = finishIdleCompaction(blocks, turnId, at, true)
       break
     case "subagent_message_updated": {
       const records = state.subagentMessages ?? []
@@ -575,14 +605,33 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       return { ...state, providerCommands: ev.commands, lastSeq: ev.seq }
     case "session_transitioned":
       return { ...state, providerUsage: undefined, providerCommands: [], blocks: [...blocks, { kind: "notice", id: `notice:${ev.seq}`, turnId: ev.turn_id ?? latestConversationTurnId(blocks), at, seq: ev.seq, level: "info", text: ev.text }], lastSeq: ev.seq }
-    case "provider_usage_updated":
-      return { ...state, providerUsage: mergeProviderUsage(state.providerUsage, ev.usage), lastSeq: ev.seq }
+    case "provider_usage_updated": {
+      const after = ev.usage.context?.used_tokens
+      const idle = after === undefined ? -1 : findIdleCompaction(blocks, turnId)
+      const next = idle < 0 ? blocks : replaceAt(blocks, idle, { ...(blocks[idle] as IdleCompactionBlock), contextAfter: after ?? null })
+      return { ...state, blocks: next, providerUsage: mergeProviderUsage(state.providerUsage, ev.usage), lastSeq: ev.seq }
+    }
+    case "idle_compaction_started":
+      // The notice stands for the turn: its `/compact` message is Kybern's, not the user's.
+      blocks = [
+        ...blocks.filter((block) => !(block.kind === "user" && block.turnId === turnId)),
+        idleCompactionBlock(turnId, at, ev.seq, ev.context_tokens, ev.cache_expires_at, ev.cache_ttl_seconds ?? null),
+      ]
+      break
     case "session_imported":
       blocks = [...blocks, { kind: "notice", id: `notice:${ev.seq}`, turnId, at, seq: ev.seq, level: "info", text: "Session resumed. Earlier messages are shown above." }]
       break
-    case "provider_notice":
+    case "provider_notice": {
+      const idle = ev.level === "info" ? findIdleCompaction(blocks, turnId) : -1
+      if (idle >= 0) {
+        // The harness's own compaction notices fold into the idle compaction's row.
+        const after = postTokens(ev.data)
+        if (after !== null) blocks = replaceAt(blocks, idle, { ...(blocks[idle] as IdleCompactionBlock), contextAfter: after })
+        break
+      }
       blocks = [...blocks, { kind: "notice", id: `notice:${ev.seq}`, turnId, at, seq: ev.seq, level: ev.level, text: ev.text, ...(ev.data ? { data: ev.data } : {}), ...(ev.problem ? { problem: ev.problem } : {}) }]
       break
+    }
     case "checkpoint_updated": {
       const i = checkpoints.findIndex((c) => c.turn_id === ev.checkpoint.turn_id)
       checkpoints = i === -1 ? [...checkpoints, ev.checkpoint] : replaceAt(checkpoints, i, ev.checkpoint)
@@ -811,6 +860,70 @@ function reconcileAssistantField(
 
 function isActiveRuntimeStatus(status: RuntimeTask["status"]): boolean {
   return status === "pending" || status === "running" || status === "waiting" || status === "stopping"
+}
+
+function idleCompactionBlock(turnId: TurnId, at: string, seq: number, contextTokens: number, cacheExpiresAt: string, cacheTtlSeconds: number | null): IdleCompactionBlock {
+  return { kind: "idle_compaction", id: `idle-compaction:${turnId}`, turnId, at, seq, contextTokens, contextAfter: null, cacheExpiresAt, cacheTtlSeconds, finishedAt: null, failed: false }
+}
+
+/** The daemon's idle-compaction notice entry (`data.kind == "idle_compaction"`). */
+function jsonObject(data: JsonValue | null | undefined): Record<string, JsonValue | undefined> | null {
+  return data && typeof data === "object" && !Array.isArray(data) ? (data as Record<string, JsonValue | undefined>) : null
+}
+
+function idleCompactionData(value: JsonValue | null | undefined): { contextTokens: number; cacheExpiresAt: string; cacheTtlSeconds: number | null } | null {
+  const data = jsonObject(value)
+  if (!data || data.kind !== "idle_compaction") return null
+  const { context_tokens: contextTokens, cache_expires_at: cacheExpiresAt, cache_ttl_seconds: ttl } = data
+  if (typeof contextTokens !== "number" || typeof cacheExpiresAt !== "string") return null
+  return { contextTokens, cacheExpiresAt, cacheTtlSeconds: typeof ttl === "number" ? ttl : null }
+}
+
+/** The context size a harness's compaction notice reports (Claude's `post_tokens`). */
+function postTokens(value: JsonValue | null | undefined): number | null {
+  const after = jsonObject(value)?.post_tokens
+  return typeof after === "number" ? after : null
+}
+
+function findIdleCompaction(blocks: Block[], turnId: TurnId): number {
+  if (!turnId) return -1
+  // From the end back to the latest turn start: an idle compaction's turn has no user row.
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const block = blocks[i]!
+    if (block.kind === "idle_compaction" && block.turnId === turnId) return i
+    if (block.kind === "user") return -1
+  }
+  return -1
+}
+
+function finishIdleCompaction(blocks: Block[], turnId: TurnId, at: string, failed: boolean): Block[] {
+  const idle = findIdleCompaction(blocks, turnId)
+  return idle < 0 ? blocks : replaceAt(blocks, idle, { ...(blocks[idle] as IdleCompactionBlock), finishedAt: at, failed })
+}
+
+/** A hydrated transcript holds the idle compaction's turn as stored: fold its
+ * `/compact` message and the harness's compaction notices into the notice row,
+ * and settle it from the turn's end. */
+export function settleIdleCompactions(blocks: Block[]): Block[] {
+  const idle = new Map<TurnId, IdleCompactionBlock>()
+  for (const block of blocks) if (block.kind === "idle_compaction") idle.set(block.turnId, block)
+  if (idle.size === 0) return blocks
+  const settled = new Map(idle)
+  for (const block of blocks) {
+    const row = settled.get(block.turnId)
+    if (!row) continue
+    if (block.kind === "notice" && block.level === "info") {
+      const after = postTokens(block.data)
+      if (after !== null) settled.set(block.turnId, { ...row, contextAfter: after })
+    } else if (block.kind === "turn_end") {
+      settled.set(block.turnId, { ...row, finishedAt: block.at, failed: block.stopReason !== "completed" })
+    }
+  }
+  return blocks.flatMap((block) => {
+    if (!idle.has(block.turnId)) return [block]
+    if (block.kind === "user" || (block.kind === "notice" && block.level === "info")) return []
+    return block.kind === "idle_compaction" ? [settled.get(block.turnId)!] : [block]
+  })
 }
 
 function finishTurn(blocks: Block[], turnId: TurnId): Block[] {

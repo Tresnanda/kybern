@@ -10,8 +10,10 @@ import {
 } from "./protocol";
 import {
   errorText,
+  networkClient,
   onClientAttach,
   onEnvironmentReset,
+  onNetworkClient,
   onSubscriptionReady,
 } from "./runtime";
 import { attachLate } from "./lateAttach";
@@ -37,6 +39,8 @@ function attach(next: KybernClient, current: () => boolean) {
 }
 onClientAttach(attach);
 onSubscriptionReady(() => void loadUsageLimits());
+// The computer the phone is at is away and a member answers: its limits stand in (the accounts are the network's).
+onNetworkClient(() => void loadUsageLimits());
 onEnvironmentReset(() => {
   client = null;
   publish({ limits: null, error: "", loading: false });
@@ -44,7 +48,8 @@ onEnvironmentReset(() => {
 
 /** Ask for the limits; `refresh` re-reads every provider now (pull to refresh, opening Usage). */
 export async function loadUsageLimits(refresh = false) {
-  const active = client;
+  const own = client;
+  const active = own?.status === "open" ? own : networkClient() ?? own;
   if (!active) return;
   publish({ loading: true });
   try {
@@ -53,13 +58,13 @@ export async function loadUsageLimits(refresh = false) {
       all_accounts: true,
       ...(refresh ? { refresh: true } : {}),
     });
-    if (client === active && isCurrent())
+    if (client === own && isCurrent())
       publish({ limits: mergeLimits(state.limits, limits), error: "" });
   } catch (e) {
-    if (client === active && isCurrent())
+    if (client === own && isCurrent())
       publish({ error: errorText(e, "load plan limits") });
   } finally {
-    if (client === active) publish({ loading: false });
+    if (client === own) publish({ loading: false });
   }
 }
 

@@ -35,6 +35,7 @@ pub(crate) mod group_git;
 mod group_pr;
 mod group_transfer;
 mod groups;
+mod idle_compaction;
 pub(crate) mod inbound;
 mod lead;
 mod lead_git;
@@ -644,6 +645,8 @@ struct Inner {
     lead_git: crate::lead_git::LeadGitConfig,
     /// Coordinator context rotations in progress, and the handoff deadline.
     rotation: rotation::RotationState,
+    /// Compactions planned for idle threads ("Compact idle threads: Before the cache expires").
+    idle_compactions: idle_compaction::IdleCompactions,
 }
 
 struct LiveSession {
@@ -1035,6 +1038,7 @@ impl Orchestrator {
                 messaging: Default::default(),
                 lead_git: Default::default(),
                 rotation: Default::default(),
+                idle_compactions: Default::default(),
             }),
         }
     }
@@ -1508,6 +1512,11 @@ impl Orchestrator {
                     self.spawn_repo_identity(id);
                 }
             }
+        }
+        // A repository added before its first commit (or remote) has no identity yet, so other machines cannot match it.
+        // Look again on every list instead of waiting for the periodic pass; projects that have one are not touched.
+        for project in projects.iter().filter(|project| project.is_git && project.repo.is_none()) {
+            self.spawn_repo_identity(project.id);
         }
         if changed {
             self.publish_projects();
@@ -2082,6 +2091,7 @@ impl Orchestrator {
             self.inner.previews.revoke_thread(thread_id);
             self.emit(thread_id, None, EventPayload::ThreadArchived)?;
             self.subagents_archive_below(thread_id)?;
+            self.inner.idle_compactions.cancel(thread_id);
         }
         // Machines this thread ran tools on archive their inbound threads for it.
         self.archive_forwarded(thread_id);
@@ -2201,7 +2211,7 @@ impl Orchestrator {
         }
         self.resolve_attachments(&mut message);
         if retryable && let Some((stored_thread_id, turn_id, stored_message)) = self.inner.store.turn_started_receipt(message_id)? {
-            if stored_thread_id != thread_id || stored_message != message {
+            if stored_thread_id != thread_id || stored_message != self.stored_shape(&message)? {
                 return Err(anyhow!("message_id already belongs to a different thread or message"));
             }
             return Ok((turn_id, message_id, Admission::Replayed));
@@ -2211,7 +2221,8 @@ impl Orchestrator {
         // the queue drains is the same message: it stays queued, once.
         if !queued && let Some(waiting) = self.inner.store.queue_receipt(message_id)? {
             anyhow::ensure!(
-                waiting.thread_id == thread_id && serde_json::to_value(&waiting.message)? == serde_json::to_value(&message)?,
+                waiting.thread_id == thread_id
+                    && serde_json::to_value(&waiting.message)? == serde_json::to_value(self.stored_shape(&message)?)?,
                 "message_id already belongs to a different thread or message"
             );
             if self.inner.store.queue_is_pending(message_id)? {
@@ -2280,6 +2291,8 @@ impl Orchestrator {
         let thread = self.update_thread(thread)?;
         let startup_started = std::time::Instant::now();
         self.emit(thread.id, Some(turn_id), EventPayload::TurnStarted { message_id, message: message.clone() })?;
+        // The user is back (or Kybern compacts now): a compaction planned for the idle thread is moot.
+        self.inner.idle_compactions.cancel(thread_id);
         if selected_mode.is_some() && self.pending_permission_for(&thread, &thread.provider)? == selected_mode {
             self.inner.store.meta_set_many(&[
                 (&format!("pending_permission:{thread_id}"), ""),
@@ -2331,7 +2344,8 @@ impl Orchestrator {
             return Err(anyhow!("This chat is archived. Start a new chat to keep working."));
         }
         if let Some(receipt) = self.inner.store.queue_receipt(message.id)? {
-            if serde_json::to_value(receipt)? != serde_json::to_value(&message)? {
+            let shaped = methods::QueuedMessage { message: self.stored_shape(&message.message)?, ..message.clone() };
+            if serde_json::to_value(receipt)? != serde_json::to_value(&shaped)? {
                 return Err(anyhow!("message id already belongs to another request"));
             }
             return Ok(());
@@ -2386,7 +2400,7 @@ impl Orchestrator {
             else {
                 return Ok(None);
             };
-            if thread != params.thread_id || serde_json::to_value(message)? != serde_json::to_value(&params.message)? {
+            if thread != params.thread_id || serde_json::to_value(message)? != serde_json::to_value(self.stored_shape(&params.message)?)? {
                 return Err(anyhow!("Message id already belongs to another request."));
             }
             Ok(Some(methods::ThreadsSendResult { turn_id, message_id: params.id, queued: false }))
@@ -3496,8 +3510,23 @@ impl Orchestrator {
     }
 
     /// Turn uploaded image attachments into inline images so drivers can send them.
+    /// The message as an event stores it: large images as references (#298).
+    /// A retried request is compared with what was stored in this shape.
+    pub(crate) fn stored_shape(&self, message: &UserMessage) -> Result<UserMessage> {
+        let mut shaped = message.clone();
+        self.inner.store.externalize_message(&mut shaped)?;
+        Ok(shaped)
+    }
+
+    /// Make a message ready for a provider: uploaded images and images stored
+    /// outside the event log are inlined as base64.
     fn resolve_attachments(&self, message: &mut UserMessage) {
         use base64::Engine;
+        if message.parts.iter().any(|part| matches!(part, ContentPart::Media { .. }))
+            && let Err(error) = self.inner.store.inline_message(message)
+        {
+            tracing::warn!(%error, "a stored image could not be read back for the agent");
+        }
         for part in message.parts.iter_mut() {
             if let ContentPart::Attachment { asset_id, media_type, .. } = part
                 && media_type.starts_with("image/")
@@ -3775,6 +3804,19 @@ impl Orchestrator {
         if thread.provider.kind == ProviderKind::ClaudeCode && !provider_settings.env.contains_key("MCP_TOOL_TIMEOUT") {
             provider_settings.env.insert("MCP_TOOL_TIMEOUT".into(), "21600000".into());
         }
+        // A delegated child is its own Claude session, so Claude Code would give it the main
+        // conversation's cache length (one hour on a subscription, which costs more to write).
+        // Give it the user's `subagentPromptCacheTtl` instead, as a native subagent would get;
+        // an explicit `CLAUDE_CODE_PROMPT_CACHE_TTL` on the account still wins.
+        if thread.provider.kind == ProviderKind::ClaudeCode
+            && thread.delegation.is_some()
+            && let Some(ttl) = kybern_drivers::claude_context::delegated_child_cache_ttl(
+                &provider_settings.env.iter().map(|(key, value)| (key.clone(), value.clone())).collect(),
+                std::path::Path::new(&thread.cwd),
+            )
+        {
+            provider_settings.env.insert(kybern_drivers::claude_context::CACHE_TTL_ENV.into(), ttl.into());
+        }
         // Commands in the session can ask for a password through a private card.
         // Codex runs commands in a sandbox that can't reach the daemon outside
         // Full access, so it only gets the helper there.
@@ -3821,6 +3863,7 @@ impl Orchestrator {
             binary: provider_settings.binary.map(PathBuf::from),
             env: provider_settings.env.into_iter().collect(),
             native_tool_bridge,
+            compaction: self.compaction_launch(&thread.provider),
         };
         let spawned = driver.spawn(config).await;
         // The drivers resolved the lent login's handle while spawning; nothing needs it afterwards.
@@ -4581,7 +4624,7 @@ impl Orchestrator {
             }
             DriverEvent::ImageReceived { id, origin, source } => {
                 if source.len() <= 70_000_000 {
-                    self.emit(thread_id, turn_id, EventPayload::ImageReceived { id, origin, source })?;
+                    self.emit(thread_id, turn_id, EventPayload::ImageReceived { id, origin, source, media: None })?;
                 }
             }
             DriverEvent::TextDelta { message_id, origin, delta } => {
@@ -4944,6 +4987,10 @@ impl Orchestrator {
                 } else {
                     self.checkpoint_after_turn(&t, turn_id).await;
                 }
+                if let Some(prompt_cache) = self.estimated_prompt_cache(&t) {
+                    let usage = ProviderUsage { prompt_cache: Some(prompt_cache), ..Default::default() };
+                    self.emit(thread_id, Some(turn_id), EventPayload::ProviderUsageUpdated { usage })?;
+                }
                 self.emit(
                     thread_id,
                     Some(turn_id),
@@ -4969,6 +5016,7 @@ impl Orchestrator {
                 if t.coordinator_project_id.is_some() {
                     self.rotate_if_over_budget(thread_id, live.clone());
                 }
+                self.schedule_idle_compaction(thread_id);
             }
             DriverEvent::TurnFailed { error, problem } => {
                 let Some(turn) = turn_guard.as_mut() else { return Ok(()) };
@@ -5046,8 +5094,11 @@ impl Orchestrator {
                 }
                 self.update_thread(thread)?;
             }
+            // Every session start reports its full list (often ~150 KB); store it only when it changed (#298).
             DriverEvent::CommandsUpdated(commands) => {
-                self.emit(thread_id, turn_id, EventPayload::ProviderCommandsUpdated { commands })?;
+                if self.inner.store.provider_commands_changed(thread_id, &commands)? {
+                    self.emit(thread_id, turn_id, EventPayload::ProviderCommandsUpdated { commands })?;
+                }
             }
             DriverEvent::UsageUpdated(usage) => {
                 if let Some(context) = &usage.context {
@@ -5733,6 +5784,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn listing_projects_reads_the_identity_a_repository_gained_after_it_was_added() {
+        let root = std::env::temp_dir().join(format!("kybern-identity-test-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&root).unwrap();
+        let paths = Paths::resolve(Some(root.join(".kyb"))).unwrap();
+        let settings = SettingsStore::load(&paths.settings).unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let (events_tx, _) = crate::bounded_broadcast::channel(32, 8 * 1024 * 1024);
+        let orchestrator = Orchestrator::new(store.clone(), DriverRegistry::default(), events_tx, paths, settings);
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&workspace)
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        git(&["init", "-q", "-b", "main"]);
+
+        // Added before the first commit: a repository without an identity.
+        let project = orchestrator.add_project(workspace.to_string_lossy().into_owned(), None, None).unwrap();
+        assert!(project.is_git);
+        std::fs::write(workspace.join("file.txt"), "one").unwrap();
+        git(&["add", "file.txt"]);
+        git(&["commit", "-q", "-m", "one"]);
+        store.project_set_repo_identity(project.id, None).unwrap();
+
+        orchestrator.refresh_projects_git().await.unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while store.project_get(project.id).unwrap().unwrap().repo.is_none() {
+            assert!(std::time::Instant::now() < deadline, "the list never read the new identity");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
     async fn free_chat_uses_a_hidden_neutral_workspace() {
         let root = std::env::temp_dir().join(format!("kybern-free-chat-test-{}", Uuid::now_v7()));
         let paths = Paths::resolve(Some(root.clone())).unwrap();
@@ -6304,7 +6395,12 @@ mod tests {
             let mut initial = settings.get();
             initial.antigravity.kybern_tools = false;
             settings.set(initial).unwrap();
-            let store = if on_disk { Store::open(&root.join("state.sqlite")).unwrap() } else { Store::open_in_memory().unwrap() };
+            // Large media goes to the data folder's `assets/`, as in the daemon (#298).
+            let store = if on_disk {
+                Store::open(&root.join("state.sqlite")).unwrap()
+            } else {
+                Store::open_in_memory().unwrap().with_media_dir(paths.assets.clone())
+            };
             let now = chrono::Utc::now();
             let project = Project {
                 repo: None,
@@ -9172,6 +9268,7 @@ for line in sys.stdin:
     include!("orchestrator/group_transfer_tests.rs");
     include!("orchestrator/federated_tools_tests.rs");
     include!("orchestrator/child_questions_tests.rs");
+    include!("orchestrator/idle_compaction_flow_tests.rs");
     include!("orchestrator/secret_tests.rs");
     include!("orchestrator/request_tests.rs");
     include!("orchestrator/lead_git_tests.rs");
@@ -9189,4 +9286,5 @@ for line in sys.stdin:
     include!("orchestrator/groups_tests.rs");
     include!("orchestrator/project_map_tests.rs");
     include!("orchestrator/rotation_tests.rs");
+    include!("orchestrator/media_tests.rs");
 }

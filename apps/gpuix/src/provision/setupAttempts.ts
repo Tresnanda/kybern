@@ -21,6 +21,8 @@ export class SetupAttempts {
     this.attempts.set(key, attempt)
   }
   forget(key: string) { this.attempts.delete(key) }
+  /** A finished setup for a machine that no longer has the project (it was removed there) is over: start again. */
+  forgetFinished(key: string) { if (this.attempts.get(key)?.status?.phase === 'done') this.attempts.delete(key) }
 }
 
 export const setupAttempts = new SetupAttempts()

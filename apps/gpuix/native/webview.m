@@ -13,6 +13,8 @@ static NSMutableDictionary *hosts;
 static NSMutableDictionary<NSNumber *, NSDictionary *> *occlusions;
 static id keyMonitor, mouseMonitor;
 static BOOL pointerCaptured;
+// Interface zoom (#292): every page is zoomed like a browser page; placements arrive in window points already.
+static CGFloat uiZoom = 1;
 static void emit(NSDictionary *event) {
   NSData *data = [NSJSONSerialization dataWithJSONObject:event options:0 error:nil];
   if (!data || data.length > 65536) return;
@@ -250,6 +252,11 @@ void kybern_web_command(const char *json) {
   dispatch_async(dispatch_get_main_queue(), ^{
     NSString *identifier = cmd[@"id"], *op = cmd[@"op"];
     if ([op isEqual:@"capture"]) { pointerCaptured = [cmd[@"active"] boolValue]; return; }
+    if ([op isEqual:@"zoom"]) {
+      double zoom = [cmd[@"zoom"] doubleValue]; uiZoom = zoom > 0 ? zoom : 1;
+      for (KybernWebHost *h in hosts.allValues) if (h.web) h.web.pageZoom = uiZoom;
+      return;
+    }
     if ([op isEqual:@"release"]) { for (NSWindow *w in NSApp.windows) releaseFocus(w); return; }
     if ([op isEqual:@"occlusion"]) {
       if ([cmd[@"rect"] isKindOfClass:NSDictionary.class]) occlusions[cmd[@"layer"]] = cmd; else [occlusions removeObjectForKey:cmd[@"layer"]];
@@ -262,7 +269,9 @@ void kybern_web_command(const char *json) {
         NSString *key = event.charactersIgnoringModifiers.lowercaseString;
         if ([key isEqual:@"\uf700"]) key = @"up";
         BOOL alt = (event.modifierFlags & NSEventModifierFlagOption) != 0;
-        if (!(alt ? [key isEqual:@"p"] : [@[@"l",@"r",@"n",@"b",@"k",@"j",@"[",@"]",@"up",@",",@"\\"] containsObject:key])) return event;
+        // ⌘= ⌘+ ⌘− ⌘0: the interface zoom (#292), handed back like the window shortcuts.
+        if ([key isEqual:@"+"]) key = @"=";
+        if (!(alt ? [key isEqual:@"p"] : [@[@"l",@"r",@"n",@"b",@"k",@"j",@"[",@"]",@"up",@",",@"\\",@"=",@"-",@"0"] containsObject:key])) return event;
         for (KybernWebHost *h in hosts.allValues) {
           NSResponder *responder = event.window.firstResponder;
           if ([responder isKindOfClass:NSView.class] && [(NSView *)responder isDescendantOf:h.web]) {
@@ -304,7 +313,7 @@ void kybern_web_command(const char *json) {
       NSString *frameScript = @"if(window.parent!==window&&window.parent===window.top){const send=()=>window.webkit.messageHandlers.kybernFrame.postMessage('frame');send();addEventListener('popstate',send);addEventListener('hashchange',send)}";
       [config.userContentController addUserScript:[[WKUserScript alloc] initWithSource:frameScript injectionTime:WKUserScriptInjectionTimeAtDocumentEnd forMainFrameOnly:NO inContentWorld:world]];
       host.clip = [KybernWebClip new]; host.clip.wantsLayer = YES; host.clip.layer.masksToBounds = YES; host.clip.hidden = YES;
-      host.web = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:config]; host.web.navigationDelegate = host;
+      host.web = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:config]; host.web.navigationDelegate = host; host.web.pageZoom = uiZoom;
       // A visual sits on the thread's own material, like its picture: nothing is painted behind the page.
       if ([host.category isEqual:@"visual"]) @try { [host.web setValue:@NO forKey:@"drawsBackground"]; } @catch (NSException *e) {}
       host.shade = [KybernWebShade new]; host.shade.wantsLayer = YES;
@@ -420,7 +429,9 @@ void kybern_web_command(const char *json) {
       [host.web evaluateJavaScript:probe completionHandler:^(id box, NSError *error) {
         NSArray *frame = [box isKindOfClass:NSArray.class] && [box count] == 3 ? box : @[@0, @0, @1];
         double scale = [frame[2] doubleValue] > 0 ? [frame[2] doubleValue] : 1;
-        NSRect wanted = NSMakeRect([frame[0] doubleValue] + rx * scale, [frame[1] doubleValue] + ry * scale, MAX(1, rw * scale), MAX(1, rh * scale));
+        // CSS pixels to the web view's points: the interface zoom is the page's `pageZoom` (#292).
+        double z = host.web.pageZoom > 0 ? host.web.pageZoom : 1;
+        NSRect wanted = NSMakeRect(([frame[0] doubleValue] + rx * scale) * z, ([frame[1] doubleValue] + ry * scale) * z, MAX(1, rw * scale * z), MAX(1, rh * scale * z));
         wanted = NSIntersectionRect(wanted, host.web.bounds);
         if (NSIsEmptyRect(wanted)) { fail(@"The element is not on screen."); return; }
         WKSnapshotConfiguration *config = [WKSnapshotConfiguration new];

@@ -459,7 +459,7 @@ async fn run_connection(
                         let _ = ev.send(DriverEvent::CommandsUpdated(commands)).await;
                     }
                     SessionUpdate::UsageUpdate(u) => {
-                        let _ = ev.send(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage { context: Some(kybern_protocol::ContextUsage { used_tokens: u.used, window_tokens: u.size }), limits: None })).await;
+                        let _ = ev.send(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage { context: Some(kybern_protocol::ContextUsage { used_tokens: u.used, window_tokens: u.size }), limits: None, prompt_cache: None })).await;
                     }
                     _ => {}
                 }
@@ -651,6 +651,7 @@ fn blocks(message: &UserMessage) -> Vec<ContentBlock> {
             ContentPart::Mention { name, .. } => out.push(ContentBlock::Text(TextContent::new(format!("@{name}")))),
             ContentPart::Image { media_type, data } => out.push(ContentBlock::Image(ImageContent::new(data.clone(), media_type.clone()))),
             ContentPart::Attachment { name, .. } => out.push(ContentBlock::Text(TextContent::new(format!("[attached file: {name}]")))),
+            ContentPart::Media { .. } => out.push(ContentBlock::Text(TextContent::new("[image]".to_string()))),
             ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } | ContentPart::SystemRow { .. } => {
                 if let Some(text) = part.orchestration_text() {
                     out.push(ContentBlock::Text(TextContent::new(text)));

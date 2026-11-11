@@ -18,6 +18,13 @@ fn json_string(value: &str) -> String {
 }
 
 fn main() {
+    // A stand-in for `claude --version`: the answer is the text of the file beside this binary with the extension `version`.
+    if std::env::args().nth(1).as_deref() == Some("--version") {
+        if let Ok(version) = std::env::current_exe().map(|exe| exe.with_extension("version")).and_then(std::fs::read_to_string) {
+            println!("{}", version.trim());
+        }
+        return;
+    }
     if std::env::var_os("KYBERN_TEST_OMP").is_some() {
         omp();
         return;
@@ -30,7 +37,7 @@ fn main() {
         let args = std::env::args().skip(1).map(|a| json_string(&a)).collect::<Vec<_>>();
         std::fs::write("argv.tmp", format!("[{}]", args.join(","))).unwrap();
         std::fs::rename("argv.tmp", "argv.json").unwrap();
-        let env = ["CLAUDE_CODE_ARTIFACT", "CLAUDE_CODE_ARTIFACT_AUTO_OPEN", "CLAUDE_CODE_ENTRYPOINT"]
+        let env = ["CLAUDE_CODE_ARTIFACT", "CLAUDE_CODE_ARTIFACT_AUTO_OPEN", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_AUTO_COMPACT_WINDOW"]
             .map(|key| format!("{}:{}", json_string(key), json_string(&std::env::var(key).unwrap_or_default())));
         std::fs::write("env.tmp", format!("{{{}}}", env.join(","))).unwrap();
         std::fs::rename("env.tmp", "env.json").unwrap();

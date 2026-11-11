@@ -13,7 +13,10 @@ import {
 import { setDraft } from "../src/state/draft";
 import { candidateDetail, toggleCandidate } from "../src/state/groups";
 import type { ProjectsBrowseResult, ProjectsScanReposResult } from "../src/state/protocol";
-import { currentClient, errorText, refresh, rpc, supportsGroupProjects, useApp } from "../src/state/runtime";
+import { errorText, machineHub, refresh, rpc, supportsGroupProjects } from "../src/state/runtime";
+import { choiceMenu, choiceTarget, useMachineChoice } from "../src/state/machineChoice";
+import { machineClient } from "../src/state/machineRequests";
+import type { MachineId } from "../src/state/protocol";
 import { CheckRow } from "../src/ui/CheckRow";
 import { homeOf, shortPath } from "../src/state/projectList";
 import { InsetGroup, ListRow, SectionFooter, SectionHeader } from "../src/ui/List";
@@ -28,7 +31,7 @@ type Kind = "single" | "group";
 const swap = FadeIn.duration(150).reduceMotion(ReduceMotion.Never);
 
 /** One `projects.browse` listing at a time; a newer request wins over a slower one. */
-function useBrowse() {
+function useBrowse(target: MachineId | undefined) {
   const [browse, setBrowse] = useState<ProjectsBrowseResult>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -44,7 +47,7 @@ function useBrowse() {
     setBusy(true);
     setError("");
     try {
-      const result = await rpc("projects.browse", path ? { path } : {});
+      const result = await rpc("projects.browse", path ? { path } : {}, target);
       if (id === request.current) setBrowse(result);
       return result;
     } catch (e) {
@@ -61,15 +64,18 @@ function FolderList({
   root,
   onOpen,
   choose,
+  target,
 }: {
   browse: ProjectsBrowseResult;
+  /** The machine the folders are on; undefined is the computer the phone is at. */
+  target?: MachineId;
   /** Browsing stays inside this folder ("Add folder…"). */
   root?: string;
   onOpen: (path: string) => void;
   choose?: { title: string; disabled?: boolean; onPress: () => void };
 }) {
   const atRoot = !!root && browse.path === root;
-  const home = homeOf(currentClient()?.info?.data_dir);
+  const home = homeOf(machineClient(target)?.info?.data_dir);
   return (
     <View style={{ marginTop: space.sm }}>
       <SectionHeader title={`Folders in ${shortPath(browse.path, home)}`} inset first />
@@ -88,7 +94,6 @@ function FolderList({
 
 export default function AddProject() {
   const { projectId } = useLocalSearchParams<{ projectId?: string }>();
-  const app = useApp();
   // Every machine's projects: the computer the phone is at may be away (#245).
   const lists = useLists(null);
   const group = projectId ? lists.projects.find((p) => p.id === projectId) : undefined;
@@ -99,7 +104,7 @@ export default function AddProject() {
       <>
         <Stack.Screen options={{ title: GROUP_COPY.addRepositories.replace("…", "") }} />
         {group ? (
-          <GroupForm existing={group} />
+          <GroupForm existing={group} target={machineHub().routeFor({ project_id: group.id })} />
         ) : (
           <Page>
             <T tone="secondary">This project is no longer on your computer.</T>
@@ -118,15 +123,34 @@ export default function AddProject() {
       ]}
     />
   ) : null;
-  return kind === "group" ? <GroupForm header={picker} /> : <SingleForm header={picker} />;
+  return <NewProject kind={kind} picker={picker} />;
 }
 
-function SingleForm({ header }: { header: React.ReactNode }) {
+/** A new project goes on the machine picked here: the computer the phone is at, or another live one while it is away. */
+function NewProject({ kind, picker }: { kind: Kind; picker: React.ReactNode }) {
+  const { choice, pick } = useMachineChoice();
+  const target = choiceTarget(choice);
+  const where = choice?.name ?? "your computer";
+  const header = choice ? (
+    <>
+      <InsetGroup>
+        <ListRow title="Machine" leading="laptopcomputer" value={choice.name} valueMenu={choiceMenu(choice, pick)} />
+      </InsetGroup>
+      {picker ? <View style={{ marginTop: space.md }}>{picker}</View> : null}
+    </>
+  ) : picker;
+  // Another machine starts over: its folders and repositories are its own.
+  return kind === "group"
+    ? <GroupForm key={target ?? "here"} header={header} target={target} where={where} />
+    : <SingleForm key={target ?? "here"} header={header} target={target} where={where} />;
+}
+
+function SingleForm({ header, target, where }: { header: React.ReactNode; target?: MachineId; where: string }) {
   const [path, setPath] = useState("");
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const folders = useBrowse();
+  const folders = useBrowse(target);
   async function directories(next?: string) {
     const result = await folders.open(next);
     if (result) setPath(result.path);
@@ -141,8 +165,8 @@ function SingleForm({ header }: { header: React.ReactNode }) {
       const project = await rpc("projects.add", {
         path: path.trim(),
         name: name.trim() || undefined,
-      });
-      await refresh();
+      }, target);
+      await refresh(target);
       setDraft({ projectId: project.id, baseBranch: "" });
       router.dismissTo("/");
     } catch (e) {
@@ -156,11 +180,11 @@ function SingleForm({ header }: { header: React.ReactNode }) {
       {header}
       <Animated.View entering={header ? swap : undefined}>
         <T tone="secondary" style={{ marginTop: header ? 14 : 0, marginBottom: 24 }}>
-          Choose a folder on your computer. It shows up in Kybern on your computer too.
+          {where === "your computer" ? "Choose a folder on your computer. It shows up in Kybern on your computer too." : `Choose a folder on ${where}. It shows up in Kybern on ${where} too.`}
         </T>
         <View style={{ gap: 16 }}>
           <Field
-            label="Folder on your computer"
+            label={`Folder on ${where}`}
             value={path}
             onChangeText={setPath}
             autoCorrect={false}
@@ -178,7 +202,7 @@ function SingleForm({ header }: { header: React.ReactNode }) {
         </View>
         {folders.browse && (
           <View style={{ marginTop: 16 }}>
-            <FolderList browse={folders.browse} onOpen={(next) => void directories(next)} />
+            <FolderList browse={folders.browse} target={target} onOpen={(next) => void directories(next)} />
           </View>
         )}
       </Animated.View>
@@ -190,7 +214,17 @@ function SingleForm({ header }: { header: React.ReactNode }) {
  * A group project, or more repositories for an existing one (`existing`). The
  * checklist starts empty: Kybern never picks repositories for the user.
  */
-function GroupForm({ header, existing }: { header?: React.ReactNode; existing?: { id: string; name: string; path: string; members?: { path: string }[] } }) {
+function GroupForm({
+  header,
+  existing,
+  target,
+}: {
+  header?: React.ReactNode;
+  existing?: { id: string; name: string; path: string; members?: { path: string }[] };
+  /** The machine the group is on; undefined is the computer the phone is at. */
+  target?: MachineId;
+  where?: string;
+}) {
   const { colors } = useTheme();
   const typography = useType();
   const insets = useSafeAreaInsets();
@@ -202,7 +236,7 @@ function GroupForm({ header, existing }: { header?: React.ReactNode; existing?: 
   const [scanning, setScanning] = useState(false);
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState("");
-  const folders = useBrowse();
+  const folders = useBrowse(target);
   const scanRequest = useRef(0);
   const memberPaths = new Set(existing?.members?.map((member) => member.path) ?? []);
 
@@ -212,7 +246,7 @@ function GroupForm({ header, existing }: { header?: React.ReactNode; existing?: 
     setScanning(true);
     setError("");
     try {
-      const result = await rpc("projects.scan_repos", { path: path.trim(), ...(extra.length ? { include: extra } : {}) });
+      const result = await rpc("projects.scan_repos", { path: path.trim(), ...(extra.length ? { include: extra } : {}) }, target);
       if (id !== scanRequest.current) return;
       setScan(result);
       setFolder(result.path);
@@ -263,11 +297,11 @@ function GroupForm({ header, existing }: { header?: React.ReactNode; existing?: 
     try {
       if (existing) {
         await rpc("projects.update", { project_id: existing.id, members: orderMemberPaths(allSelected) });
-        await refresh();
+        await refresh(target);
         router.back();
       } else {
-        const project = await rpc("projects.add", { path: scan.path, kind: "group", members: orderMemberPaths(selected) });
-        await refresh();
+        const project = await rpc("projects.add", { path: scan.path, kind: "group", members: orderMemberPaths(selected) }, target);
+        await refresh(target);
         setDraft({ projectId: project.id, baseBranch: "" });
         router.dismissTo("/");
       }
@@ -348,6 +382,7 @@ function GroupForm({ header, existing }: { header?: React.ReactNode; existing?: 
               </View>
               {browsing === "folder" && folders.browse && (
                 <FolderList
+                  target={target}
                   browse={folders.browse}
                   onOpen={(path) => void folders.open(path)}
                   choose={{ title: "Use this folder", onPress: () => chooseFolder(folders.browse!.path) }}
@@ -443,6 +478,7 @@ function GroupForm({ header, existing }: { header?: React.ReactNode; existing?: 
               </Tap>
               {browsing === "add" && folders.browse && (
                 <FolderList
+                  target={target}
                   browse={folders.browse}
                   root={scan.path}
                   onOpen={(path) => void folders.open(path)}

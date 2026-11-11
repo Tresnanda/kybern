@@ -1,0 +1,6 @@
+{
+  "name": "kybern-tool-loading",
+  "version": "0.1.0",
+  "author": { "name": "Kybern" },
+  "description": "Lists Claude Code's rarely used built-in tools behind ToolSearch so Kybern threads send fewer prompt tokens per request."
+}

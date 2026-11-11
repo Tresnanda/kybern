@@ -45,7 +45,9 @@ pub(crate) mod test_support {
 pub mod claude;
 mod claude_catalog;
 mod claude_config;
+pub mod claude_context;
 pub mod claude_integrations;
+mod claude_plugin;
 mod claude_usage;
 pub mod codex;
 pub mod codex_integrations;
@@ -143,6 +145,19 @@ pub struct SessionConfig {
     /// Absolute path to the provider binary; `None` means look up on PATH.
     pub binary: Option<PathBuf>,
     pub env: HashMap<String, String>,
+    /// Kybern's compaction settings for this session, mapped to the harness's own.
+    pub compaction: CompactionLaunch,
+}
+
+/// Compaction settings a driver applies at launch, through the harness's own
+/// flag, environment or inline config; never by editing the user's config files.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CompactionLaunch {
+    /// Context size at which the harness compacts on its own. `None` keeps its default.
+    pub auto_compact_tokens: Option<u64>,
+    /// Answer Claude Code's "compact when you return" offer with "Don't ask
+    /// again" instead of asking the user ("Compact idle threads: Never").
+    pub decline_resume_prompt: bool,
 }
 
 /// A provider-neutral description of tools that the daemon is willing to
@@ -682,6 +697,7 @@ mod lifecycle_tests {
                 } else {
                     std::collections::HashMap::new()
                 },
+                compaction: Default::default(),
             };
             let driver = registry.get(kind).unwrap();
             let mut startup = Box::pin(driver.spawn(config.clone()));
