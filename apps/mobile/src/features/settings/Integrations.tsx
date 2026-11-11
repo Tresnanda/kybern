@@ -6,7 +6,10 @@ import { Linking, View } from "react-native";
 import type { Integration, IntegrationAction, IntegrationsCatalog, ProviderKind, Thread } from "../../state/protocol";
 import { isFreeChatProject, PROVIDER_DISPLAY_NAME } from "../../state/protocol";
 import { count } from "../../state/format";
-import { errorText, rpc, useApp } from "../../state/runtime";
+import { errorText, rpc } from "../../state/runtime";
+import { useSettingsChoice, useSettingsLive } from "../../state/machineChoice";
+import { useSettingsProviders } from "../../state/machineProviders";
+import { useLists } from "../../state/useLists";
 import { ListRow } from "../../ui/List";
 import type { MenuItem } from "../../ui/menuModel";
 import { Button, Empty, ErrorBanner, T } from "../../ui/primitives";
@@ -47,10 +50,14 @@ export function IntegrationsSettings({
   projectId?: string;
   provider?: ProviderKind;
 }) {
-  const app = useApp();
-  const projects = app.projects.filter((p) => !isFreeChatProject(p.id));
+  // The projects and agents of the machine Settings shows (`machineChoice.ts`).
+  const choice = useSettingsChoice();
+  const online = useSettingsLive();
+  const lists = useLists(choice?.machineId ?? null);
+  const allProviders = useSettingsProviders();
+  const projects = lists.projects.filter((p) => !isFreeChatProject(p.id));
   const [projectId, setProjectId] = useState(initialProject ?? thread?.project_id ?? projects[0]?.id);
-  const available = app.providers.filter((p) => p.available);
+  const available = allProviders.filter((p) => p.available);
   const [provider, setProvider] = useState<ProviderKind>(initialProvider ?? thread?.provider.kind ?? "claude-code");
   const [category, setCategory] = useState<"plugin" | "connector">("plugin");
   const [catalog, setCatalog] = useState<IntegrationsCatalog>({ items: [], warnings: [] });
@@ -61,7 +68,7 @@ export function IntegrationsSettings({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => {
-    if (!projectId || app.status !== "open") return;
+    if (!projectId || !online) return;
     let live = true;
     setLoading(true);
     setError("");
@@ -73,7 +80,7 @@ export function IntegrationsSettings({
     return () => {
       live = false;
     };
-  }, [projectId, provider, reload, app.status, app.activeId]);
+  }, [projectId, provider, reload, online, choice?.machineId]);
   const change = async (item: Integration, action: IntegrationAction) => {
     if (!projectId) return;
     setBusy(true);
@@ -112,7 +119,7 @@ export function IntegrationsSettings({
     ...item.actions.map((action) => ({
       title: ACTIONS[action],
       destructive: action === "uninstall",
-      disabled: busy || app.status !== "open",
+      disabled: busy || !online,
       onPress: () => void change(item, action),
     })),
     ...(item.connect_url ? [{ title: item.installed ? "Manage connection" : "Connect", icon: "link" as const, onPress: () => open(item.connect_url!) }] : []),
@@ -124,7 +131,7 @@ export function IntegrationsSettings({
   const items = catalog.items.filter(
     (i) => i.kind === category && `${i.name} ${i.description ?? ""} ${i.id}`.toLowerCase().includes(needle),
   );
-  const project = app.projects.find((p) => p.id === projectId);
+  const project = lists.projects.find((p) => p.id === projectId);
   const native = provider === "claude-code" || provider === "codex";
   return (
     <>
@@ -133,7 +140,7 @@ export function IntegrationsSettings({
           title="Agent"
           leading={<ProviderMark kind={provider} size={20} />}
           value={PROVIDER_DISPLAY_NAME[provider]}
-          valueMenu={(available.length ? available : app.providers).map((p) => ({
+          valueMenu={(available.length ? available : allProviders).map((p) => ({
             title: p.display_name,
             checked: p.kind === provider,
             onPress: () => {

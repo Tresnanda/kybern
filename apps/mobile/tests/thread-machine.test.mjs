@@ -32,6 +32,8 @@ registerHooks({ resolve(specifier, context, next) {
 } });
 const runtime = await import("../src/state/runtime.ts");
 const spaces = await import("../src/state/spaces.ts");
+const choice = await import("../src/state/machineChoice.ts");
+const settingsStore = await import("../src/state/settings.ts");
 const sockets = [];
 const project = (id) => ({ id, name: id, path: `/${id}`, is_git: true, brief_in_all_threads: false, repo: { root_commit: `r-${id}` }, created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z" });
 const entry = (id, project_id, updated_at) => ({ id, project_id, last_seq: 1, status: "running", pinned: false, title: id, provider: { kind: "codex" }, updated_at });
@@ -63,6 +65,7 @@ class Socket {
       case "providers.accounts.list": result = { accounts: [] }; break;
       case "queue.list": result = { messages: [] }; break;
       case "settings.get": result = { default_provider: "codex", providers: {} }; break;
+      case "settings.update": result = request.params.settings; break;
       default: result = {};
     }
     queueMicrotask(() => this.reply(request, result));
@@ -133,6 +136,16 @@ test("with the computer the phone is at away, a thread on another machine works 
   assert.deepEqual(runtime.getState().approvals.map(a => a.id), ["a-other"], "its approvals stay listed while the computer is away");
   await runtime.rpc("providers.accounts.list", { kind: "codex" }, runtime.threadMachine("t-other"));
   assert.ok(methods(other).includes("providers.accounts.list"));
+
+  // Settings show a live machine while the computer is away, and read and write there.
+  assert.equal(choice.settingsChoice()?.machineId, "other");
+  const settingsBefore = other.sent.filter(r => r.method === "settings.get").length;
+  await settingsStore.loadSettings();
+  assert.equal(other.sent.filter(r => r.method === "settings.get").length, settingsBefore + 1);
+  assert.equal(settingsStore.useSettings().settings?.default_provider, "codex");
+  await settingsStore.saveSettings({ ...settingsStore.useSettings().settings, generate_titles: true });
+  assert.ok(methods(other).includes("settings.update"));
+  assert.equal(host.sent.filter(r => r.method === "settings.update").length, 0);
 
   // The away computer's lists stay as cached copies, greyed.
   const lists = runtime.listsOf(hub.view(), null);
