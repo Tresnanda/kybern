@@ -13,7 +13,7 @@ import * as SecureStore from "expo-secure-store";
 import { useMemo, useSyncExternalStore } from "react";
 import { Platform } from "react-native";
 import { METHOD_NOT_FOUND } from "./notesModel";
-import type { MachineId } from "../../../../packages/kybern-client/src/types";
+import type { MachineId, MethodName, ParamsOf, ResultOf } from "../../../../packages/kybern-client/src/types";
 import {
   isFreeChatProject,
   SPACES_CHANGED_NOTIFICATION,
@@ -190,25 +190,36 @@ export function useInSpace() {
 
 // ---- changes (the daemon answers with `spaces.changed` too; publishing here makes them instant) ----
 
+/**
+ * Spaces are the network's: every member keeps the same ones. A change goes to the computer the phone is at while it
+ * answers, else to a member that does (#245), which shares it with the rest.
+ */
+function spacesRpc<M extends MethodName>(method: M, params: ParamsOf<M>): Promise<ResultOf<M>> {
+  if (currentClient()?.status === "open") return rpc(method, params);
+  const member = networkClient();
+  if (!member) return Promise.reject(new Error("None of your computers is reachable. Connect to one, then try again."));
+  return member.call(method, params);
+}
+
 function upsert(space: Space) {
   publish({ spaces: ordered([...state.spaces.filter((s) => s.id !== space.id), space]) });
 }
 
 export async function createSpace(name: string, color?: SpaceColor) {
-  const space = await rpc("spaces.create", { name: name.trim(), color: color ?? nextSpaceColor(state.spaces) });
+  const space = await spacesRpc("spaces.create", { name: name.trim(), color: color ?? nextSpaceColor(state.spaces) });
   upsert(space);
   return space;
 }
 
 export async function updateSpace(id: SpaceId, patch: { name?: string; color?: SpaceColor }) {
-  const space = await rpc("spaces.update", { space_id: id, ...patch, ...(patch.name ? { name: patch.name.trim() } : {}) });
+  const space = await spacesRpc("spaces.update", { space_id: id, ...patch, ...(patch.name ? { name: patch.name.trim() } : {}) });
   upsert(space);
   return space;
 }
 
 /** Deletes a space; its projects move to the space the daemon names. The default space can't be deleted. */
 export async function deleteSpace(id: SpaceId) {
-  const result = await rpc("spaces.delete", { space_id: id });
+  const result = await spacesRpc("spaces.delete", { space_id: id });
   publish({
     spaces: state.spaces.filter((s) => s.id !== id),
     ...(state.savedId === id ? { savedId: result.moved_to } : {}),
@@ -222,7 +233,7 @@ export async function moveSpace(id: SpaceId, offset: -1 | 1) {
   const to = from + offset;
   if (from < 0 || to < 0 || to >= ids.length) return;
   ids.splice(to, 0, ...ids.splice(from, 1));
-  const result = await rpc("spaces.reorder", { space_ids: ids });
+  const result = await spacesRpc("spaces.reorder", { space_ids: ids });
   publish({ spaces: ordered(result.spaces) });
 }
 
@@ -233,7 +244,7 @@ export async function moveProjectToSpace(projectId: string, spaceId: SpaceId) {
   const instance = logical?.instances.find((i) => i.project.id === projectId) ?? logical?.primary;
   if (instance) {
     try {
-      const result = await rpc("spaces.place", { project: spaceProject(instance.machineId, instance.project), space_id: spaceId }, hub.primaryMachineId ?? undefined);
+      const result = await spacesRpc("spaces.place", { project: spaceProject(instance.machineId, instance.project), space_id: spaceId });
       setSpacePlacements(result.spaces, result.placements);
       publish({ spaces: ordered(result.spaces) });
       return result;
