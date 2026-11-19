@@ -1399,7 +1399,7 @@ changing network protocol 1 or the existing WebSocket stream format.
   - **Shared:** `default_provider`, `default_permission_mode`,
     `worktrees_default`, `automatic_worktree_cleanup`, `generate_titles`,
     `title_provider`, `notifications`, `auto_update_harnesses`,
-    `auto_update_daemon`, `orchestration`, `tell_agents_about_kybern`,
+    `check_harness_versions`, `auto_update_daemon`, `orchestration`, `tell_agents_about_kybern`,
     `ask_deadlines`, and per-provider `model`.
   - **PerMachine:** provider `binary`, `env`, `accounts`, `project_*`,
     `access`, `background`, `computer_use`, `preview_allowed_folders`, and

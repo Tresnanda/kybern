@@ -128,6 +128,7 @@ export const SHARED_SETTINGS = [
   "title_provider",
   "notifications",
   "auto_update_harnesses",
+  "check_harness_versions",
   "auto_update_daemon",
   "update_track",
   "orchestration",

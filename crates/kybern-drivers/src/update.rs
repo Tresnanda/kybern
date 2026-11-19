@@ -1,5 +1,6 @@
-//! Delegate harness updates to the installed CLI or its existing Homebrew package.
-//! No installers, package migrations, or user-provided command strings.
+//! Delegate harness updates to the installed CLI or its existing Homebrew package. A script install whose
+//! CLI has no updater of its own re-runs the vendor's own install script (`latest::install_script`).
+//! No package migrations or user-provided command strings.
 use anyhow::{Result, bail};
 use kybern_protocol::ProviderKind;
 use kybern_protocol::process::NoWindow;
@@ -17,7 +18,7 @@ pub struct UpdateCommand {
     pub args: Vec<String>,
 }
 
-fn brew_package(kind: ProviderKind, path: &Path) -> Option<(PathBuf, String, bool)> {
+pub(crate) fn brew_package(kind: ProviderKind, path: &Path) -> Option<(PathBuf, String, bool)> {
     let components: Vec<_> = path.components().collect();
     for (index, component) in components.iter().enumerate() {
         let cask = component.as_os_str() == "Caskroom";
@@ -41,12 +42,25 @@ fn brew_package(kind: ProviderKind, path: &Path) -> Option<(PathBuf, String, boo
 }
 
 pub async fn plan(kind: ProviderKind, binary: &Path, env: &BTreeMap<String, String>, cwd: &Path) -> Result<UpdateCommand> {
-    if kind == ProviderKind::Cursor {
+    plan_in(kind, binary, env, cwd, &crate::latest::Places::current()).await
+}
+
+async fn plan_in(
+    kind: ProviderKind,
+    binary: &Path,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+    places: &crate::latest::Places,
+) -> Result<UpdateCommand> {
+    let canonical = std::fs::canonicalize(binary)?;
+    // Kybern runs Cursor through its SDK, pinned per release; only the Cursor CLI from Cursor's own installer
+    // (`agent`, which Grok Build also names a command) is updated here.
+    let cursor_cli = canonical.to_string_lossy().contains("cursor-agent");
+    if kind == ProviderKind::Cursor && !cursor_cli {
         bail!(
             "Each Kybern release uses its own Cursor SDK version. Install or update it under Cursor SDK in Settings → Agent providers, or run `kybern cursor install`."
         );
     }
-    let canonical = std::fs::canonicalize(binary)?;
     let paths = format!("{} {}", binary.display(), canonical.display());
     if ["/nix/store/", "/.local/share/mise/", "/.asdf/", "/.local/share/rtx/"].iter().any(|part| paths.contains(part)) {
         bail!("Managed or pinned installation. Update it through its version manager.");
@@ -69,6 +83,10 @@ pub async fn plan(kind: ProviderKind, binary: &Path, env: &BTreeMap<String, Stri
     let text = format!("{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
     let command = if kind == ProviderKind::Opencode { "upgrade" } else { "update" };
     if !output.status.success() || !advertises(&text, command) {
+        let script = crate::latest::detect(kind, binary, places).method == kybern_protocol::HarnessInstall::Script;
+        if let Some(script) = script.then(|| crate::latest::install_script(kind, cfg!(windows))).flatten() {
+            return Ok(script_command(script));
+        }
         bail!("This CLI does not advertise a supported self-updater. Update it with its original installer.");
     }
     let mut args = vec![command.into()];
@@ -80,6 +98,16 @@ pub async fn plan(kind: ProviderKind, binary: &Path, env: &BTreeMap<String, Stri
         args.push("--self".into());
     }
     Ok(UpdateCommand { program: binary.to_owned(), args })
+}
+
+/// The vendor's install script, run the way its instructions say.
+fn script_command(script: &str) -> UpdateCommand {
+    if cfg!(windows) {
+        let args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script];
+        UpdateCommand { program: "powershell.exe".into(), args: args.iter().map(|arg| arg.to_string()).collect() }
+    } else {
+        UpdateCommand { program: "/bin/sh".into(), args: vec!["-c".into(), script.into()] }
+    }
 }
 
 fn advertises(help: &str, command: &str) -> bool {
@@ -197,6 +225,29 @@ mod tests {
         );
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert!(!root.path().join("escaped").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_script_install_without_an_updater_reruns_the_vendor_script() {
+        let root = tempfile::tempdir().unwrap();
+        let places = crate::latest::Places { home: Some(root.path().to_path_buf()), local_app_data: None, os: "linux", arch: "x86_64" };
+        let agy = root.path().join(".local/bin/agy");
+        std::fs::create_dir_all(agy.parent().unwrap()).unwrap();
+        kybern_protocol::process::write_executable(&agy, "#!/bin/sh\necho '  login  Sign in'\n").unwrap();
+        let env = BTreeMap::new();
+        let command = unbusy(|| plan_in(ProviderKind::Antigravity, &agy, &env, root.path(), &places)).await.unwrap();
+        assert_eq!(command.program, PathBuf::from("/bin/sh"));
+        assert_eq!(command.args, ["-c", "curl -fsSL https://antigravity.google/cli/install.sh | bash"]);
+        // The same CLI somewhere Kybern does not recognise keeps the old answer.
+        let other = root.path().join("elsewhere/agy");
+        std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+        kybern_protocol::process::write_executable(&other, "#!/bin/sh\necho '  login  Sign in'\n").unwrap();
+        let error = unbusy(|| plan_in(ProviderKind::Antigravity, &other, &env, root.path(), &places)).await.unwrap_err();
+        assert!(error.to_string().contains("original installer"), "{error}");
+        // Cursor's SDK is not updated here; only the Cursor CLI from Cursor's installer is.
+        let error = unbusy(|| plan_in(ProviderKind::Cursor, &other, &env, root.path(), &places)).await.unwrap_err();
+        assert!(error.to_string().contains("Cursor SDK"), "{error}");
     }
 
     #[test]

@@ -19,6 +19,7 @@ import { ContextMenu, Menu, MenuItem, MenuLabel, MenuSeparator, muted } from './
 import { Kbd } from './kit/Kbd.tsx'
 import { getNav, setNav, useNav } from './nav/store.ts'
 import { filterByMachine, MachineFilter, MachinesFooter } from './sidebar/MachineFilter.tsx'
+import { HarnessUpdatePill } from './harnessUpdates/Pill.tsx'
 import { buildRows, type Row } from './sidebar/model.ts'
 import { attentionItems, type AttentionKind } from '../../../packages/kybern-client/src/threadAttention.ts'
 import { BlockRow, inProjectBlock, setReorderContext } from './sidebar/reorder.tsx'
@@ -204,6 +205,7 @@ export function Sidebar() {
       ]} />
       </div>
       </Rise>
+      <HarnessUpdatePill />
       <MachinesFooter />
     </div>
   )

@@ -322,3 +322,35 @@ fn only_a_machine_can_say_where_it_is_reached_and_only_an_https_address_carries_
     assert!(!super::session::url_allowed("ftp://box.example.com", true));
     assert!(!super::session::url_allowed("not a url", true));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn harness_updates_run_on_every_online_member_and_name_the_ones_skipped() {
+    let Some(cluster) = cluster(&[NodeSpec::owner("a"), NodeSpec::owner("b"), NodeSpec::owner("c"), NodeSpec::owner("d")]) else { return };
+    let a = cluster.start("a", true).await;
+    let b = cluster.start("b", true).await;
+    let mut c = cluster.start("c", true).await;
+    let d = cluster.start("d", true).await;
+    eventually("one network", WAIT, || converged(&[&a, &b, &c, &d], 4)).await;
+    all_linked(&[&a, &b, &c, &d]).await;
+
+    // `b`'s own version check found a newer Grok Build; `a` has nothing newer; `d` runs a Kybern from before
+    // harness updates could be asked for; `c` goes offline.
+    let flagged =
+        HarnessUpdate { update_available: true, latest_version: Some("9.9.9".into()), ..HarnessUpdate::unchecked(ProviderKind::GrokBuild) };
+    b.state.harness_updates.save(&b.state.store, flagged);
+    heard_from(&a, &d).await;
+    a.state.network.peers.set_presence(&d.id(), presence("0.24.0", &[features::UPDATE_V1]));
+    c.stop();
+    eventually("a loses c", WAIT, || a.state.network.peers.link(&c.id()).is_none()).await;
+
+    let result = admin(&a).await.call::<HarnessUpdatesRunAll>(HarnessUpdatesRunAllParams::default()).await.unwrap();
+    let reason = |id: &str| result.skipped.iter().find(|skipped| skipped.machine_id == id).map(|skipped| skipped.reason.as_str());
+    assert_eq!(result.started, [HarnessUpdatesStarted { machine_id: b.id(), kinds: vec![ProviderKind::GrokBuild] }], "{result:?}");
+    assert_eq!(reason(&a.id()), Some("Every harness is up to date"));
+    assert_eq!(reason(&c.id()), Some("Offline"));
+    assert!(reason(&d.id()).is_some_and(|reason| reason.contains("0.24.0")), "{result:?}");
+    assert_eq!(result.started.len() + result.skipped.len(), 4, "every member is listed once");
+    // `b` queued it; the worker there waits for Grok Build to be idle (a test build never runs the real updater).
+    let status = b.state.harness_updates.list().into_iter().find(|record| record.kind == ProviderKind::GrokBuild).unwrap().status;
+    assert_ne!(status, HarnessUpdateStatus::NotChecked);
+}
