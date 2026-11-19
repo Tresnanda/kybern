@@ -68,6 +68,7 @@ expression: names
 - threads.recover_omp_answer
 - threads.update
 - threads.archive
+- threads.unarchive
 - threads.send
 - threads.steer
 - subagents.send

@@ -134,6 +134,8 @@ expression: scopes
   - "orchestration:operate"
 - - threads.archive
   - "orchestration:operate"
+- - threads.unarchive
+  - "orchestration:operate"
 - - threads.send
   - "orchestration:operate"
 - - threads.steer

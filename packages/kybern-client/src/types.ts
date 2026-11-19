@@ -390,6 +390,10 @@ export interface Thread {
   inbound?: InboundInfo | null;
   /** Set while "Continue on…" moves this thread (`departing`: it takes no messages) and after it moved (`departed`: read-only, with a link). */
   moved?: MoveInfo | null;
+  /** Set while the thread sits in its project's Older group (no turn for the `older_after` setting's time). Only the daemon sets it; group with `splitOlder`. */
+  older_at?: string | null;
+  /** The person chose "Never move to Older" for this thread. */
+  keep_out_of_older?: boolean;
 }
 
 export type DelegationRole = "implementation" | "research" | "review" | "design" | "test" | "general";
@@ -2023,6 +2027,8 @@ export interface ThreadsListResult {
   head_seq?: EventSeq;
   /** With `settled_limit`: settled threads per project that this result left out. */
   omitted?: ProjectThreadCount[];
+  /** Archived top-level threads per project, on reads that leave archived threads out. Absent from daemons that cannot unarchive. */
+  archived?: ProjectThreadCount[];
 }
 
 export interface ProjectThreadCount {
@@ -2505,9 +2511,18 @@ export interface ThreadsUpdateParams {
   permission_mode?: PermissionMode;
   model?: string;
   effort?: string;
+  /** "Never move to Older" (`true`) or its reversal. Setting it takes the thread out of Older. */
+  keep_out_of_older?: boolean;
+  /** "Move out of Older": back to the top of its list, with its inactivity clock started again. */
+  move_out_of_older?: boolean;
 }
 
 export interface ThreadsArchiveParams {
+  thread_id: ThreadId;
+}
+
+/** Bring an archived thread back as idle; its worktree returns with the next message. Children stay archived. */
+export interface ThreadsUnarchiveParams {
   thread_id: ThreadId;
 }
 
@@ -2767,7 +2782,12 @@ export interface Settings {
   network?: NetworkSettings;
   /** When long threads are compacted. Absent from a daemon older than 0.24 (When you return, harness thresholds). */
   compaction?: CompactionSettings;
+  /** "Move inactive threads to Older". Absent from a daemon older than 0.25 (no Older group). */
+  older_after?: OlderAfter;
 }
+
+/** How long a top-level thread goes without a turn before it moves to its project's Older group. */
+export type OlderAfter = "never" | "three_days" | "seven_days" | "thirty_days";
 
 /** Limits for `kybern_agent_delegate`, read each time an agent delegates. */
 export interface OrchestrationSettings {
@@ -4978,6 +4998,7 @@ export interface Methods {
   "threads.tool_output": [ThreadsToolOutputParams, ThreadsToolOutputResult];
   "threads.update": [ThreadsUpdateParams, Thread];
   "threads.archive": [ThreadsArchiveParams, Empty];
+  "threads.unarchive": [ThreadsUnarchiveParams, Thread];
   "threads.send": [ThreadsSendParams, ThreadsSendResult];
   "threads.release": [ThreadsInterruptParams, Empty];
   "threads.answer": [ThreadsAnswerParams, Empty];
