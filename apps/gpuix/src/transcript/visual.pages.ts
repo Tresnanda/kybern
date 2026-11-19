@@ -44,3 +44,36 @@ addEventListener('kybern-answer-state',e=>{if(e.detail.state==='answered'&&e.det
 </script>`
 
 export const LAYOUT_SCHEMA = { type: 'object', properties: { layout: { enum: ['A', 'B', 'C'] } }, required: ['layout'] }
+
+// Inline pages (live while visible, fitted to their content, the wheel scrolls the chat): `visual.inline.seed.ts`.
+
+/** About 3,000 px tall: nothing may be cut off, and its last row is reachable by scrolling the chat. */
+export const TALL_PAGE = `<!doctype html><meta charset="utf-8">${BASE}<style>
+.r{display:flex;justify-content:space-between;align-items:center;height:59px;border-bottom:1px solid var(--border)}
+</style><div id="rows">${Array.from({ length: 50 }, (_, i) => `<div class="r"><span>Region ${i + 1}</span><span class="muted">${(i * 37) % 100} ms</span></div>`).join('')}</div><p id="end" style="margin:16px 0 0">End of the latency table</p>`
+
+/** A page with its own scrolling list: the list takes the wheel, the rest of the page passes it to the chat. */
+export const LIST_PAGE = `<!doctype html><meta charset="utf-8">${BASE}<style>
+#list{height:220px;overflow:auto;border:1px solid var(--border);border-radius:10px}
+#list div{padding:8px 12px;border-bottom:1px solid var(--border)}
+</style><p class="muted" style="margin:0 0 10px">Recent deploys</p><div id="list">${Array.from({ length: 60 }, (_, i) => `<div>Deploy ${60 - i} · ${['web', 'api', 'worker'][i % 3]}</div>`).join('')}</div><p style="margin:12px 0 0">Above: the last 60 deploys. The list scrolls on its own.</p>`
+
+/** A canvas to draw on: presses and drags reach it directly, including the first. */
+export const CANVAS_PAGE = `<!doctype html><meta charset="utf-8">${BASE}<style>canvas{display:block;width:100%;height:260px;border:1px solid var(--border);border-radius:10px;touch-action:none}</style>
+<canvas id="pad"></canvas><p class="muted" id="count" style="margin:8px 0 0">0 strokes</p><script>
+const pad=document.getElementById('pad'),ctx=pad.getContext('2d');window.state={downs:0,moves:0,ups:0,strokes:0};let drawing=false;
+function fit(){const r=pad.getBoundingClientRect();pad.width=r.width*devicePixelRatio;pad.height=r.height*devicePixelRatio;ctx.scale(devicePixelRatio,devicePixelRatio);ctx.lineWidth=3;ctx.lineCap='round';ctx.strokeStyle=getComputedStyle(document.documentElement).getPropertyValue('--chart-1')}
+fit();
+const mark=()=>pad.dataset.state=JSON.stringify(state);mark();
+pad.addEventListener('pointerdown',e=>{state.downs++;mark();drawing=true;const r=pad.getBoundingClientRect();ctx.beginPath();ctx.moveTo(e.clientX-r.left,e.clientY-r.top)});
+pad.addEventListener('pointermove',e=>{if(!drawing)return;state.moves++;mark();const r=pad.getBoundingClientRect();ctx.lineTo(e.clientX-r.left,e.clientY-r.top);ctx.stroke()});
+addEventListener('pointerup',()=>{if(!drawing)return;drawing=false;state.ups++;state.strokes++;mark();document.getElementById('count').textContent=state.strokes+' stroke'+(state.strokes===1?'':'s')});
+</script>`
+
+/** A form with labels: a label press toggles its control and focuses it without moving the chat. */
+export const FORM_PAGE = `<!doctype html><meta charset="utf-8">${BASE}<style>
+.f{display:grid;grid-template-columns:120px 1fr;gap:10px 14px;align-items:center}
+input[type=text]{font:inherit;color:inherit;background:transparent;border:1px solid var(--border);border-radius:7px;padding:5px 8px}
+</style><div class="f"><label for="name">Release name</label><input id="name" type="text" placeholder="v0.25.0">
+<label for="notify">Notify team</label><div><input id="notify" type="checkbox"> <label for="notify" id="notify-label">Post in #releases</label></div>
+<label for="beta">Beta channel</label><div><label id="beta-label"><input id="beta" type="checkbox"> Ship to beta first</label></div></div>`

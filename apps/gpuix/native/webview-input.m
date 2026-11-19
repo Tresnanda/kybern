@@ -82,3 +82,59 @@ void kybern_web_test_key(const char *characters, unsigned short keyCode) {
       [window sendEvent:[NSEvent keyEventWithType:type.unsignedIntegerValue location:NSZeroPoint modifierFlags:0 timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:window.windowNumber context:nil characters:chars charactersIgnoringModifiers:chars isARepeat:NO keyCode:keyCode]];
   });
 }
+// Test only: the window-relative point an NSEvent made from a CGEvent reports (CoreGraphics, not in its headers). The
+// screen location alone is clamped to the displays and gives no window.
+extern void CGEventSetWindowLocation(CGEventRef event, CGPoint point);
+// A wheel event through NSApp (local monitors run, then AppKit's own hit test), at window point (x, y) from the top-left.
+// `phase` is CGScrollPhase (1 began, 2 changed, 4 ended, 128 may begin; 0 none: a mouse wheel), `momentum`
+// CGMomentumScrollPhase (1 begin, 2 continue, 3 end). Deltas are points, positive y revealing what is above.
+void kybern_web_test_scroll(double x, double y, double dx, double dy, int phase, int momentum) {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    NSWindow *window = labWindow(); if (!window) return;
+    NSPoint inWindow = NSMakePoint(x, window.contentView.bounds.size.height - y);
+    NSPoint screen = [window convertPointToScreen:inWindow];
+    CGFloat top = NSScreen.screens.firstObject.frame.size.height;
+    CGEventRef cg = CGEventCreateScrollWheelEvent2(NULL, kCGScrollEventUnitPixel, 2, (int32_t)dy, (int32_t)dx, 0);
+    CGEventSetLocation(cg, CGPointMake(screen.x, top - screen.y));
+    CGEventSetIntegerValueField(cg, kCGScrollWheelEventIsContinuous, phase || momentum ? 1 : 0);
+    CGEventSetIntegerValueField(cg, kCGScrollWheelEventScrollPhase, phase);
+    CGEventSetIntegerValueField(cg, kCGScrollWheelEventMomentumPhase, momentum);
+    CGEventSetIntegerValueField(cg, kCGMouseEventWindowUnderMousePointer, window.windowNumber);
+    CGEventSetIntegerValueField(cg, kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent, window.windowNumber);
+    // The window NSEvent reads (an undocumented field; the two above are only hints) and the point in it, from the top of
+    // the frame (GPUI's content view fills it).
+    CGEventSetIntegerValueField(cg, (CGEventField)51, window.windowNumber);
+    CGEventSetWindowLocation(cg, CGPointMake(x, y + window.frame.size.height - window.contentView.bounds.size.height));
+    NSEvent *event = [NSEvent eventWithCGEvent:cg];
+    CFRelease(cg);
+    if (getenv("KYBERN_INLINE_DEBUG")) fprintf(stderr, "[scroll] frame=%.0f,%.0f screen=%.0f,%.0f window=%ld loc=%.0f,%.0f phase=%ld momentum=%ld dy=%.1f type=%ld\n", window.frame.origin.x, window.frame.origin.y, screen.x, screen.y, (long)event.window.windowNumber, event.locationInWindow.x, event.locationInWindow.y, (long)event.phase, (long)event.momentumPhase, event.scrollingDeltaY, (long)event.type);
+    if (event) [NSApp sendEvent:event];
+  });
+}
+// A keystroke with modifiers through NSApp, so the key monitor sees it (`flags` are NSEventModifierFlags).
+void kybern_web_test_chord(const char *characters, unsigned short keyCode, unsigned long flags) {
+  NSString *chars = [NSString stringWithUTF8String:characters];
+  dispatch_async(dispatch_get_main_queue(), ^{
+    NSWindow *window = labWindow(); if (!window) return;
+    for (NSNumber *type in @[@(NSEventTypeKeyDown),@(NSEventTypeKeyUp)])
+      [NSApp sendEvent:[NSEvent keyEventWithType:type.unsignedIntegerValue location:NSZeroPoint modifierFlags:flags timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:window.windowNumber context:nil characters:chars charactersIgnoringModifiers:chars isARepeat:NO keyCode:keyCode]];
+  });
+}
+// A drag on the view under (x, y), called directly as `kybern_web_test_click` does (a background window takes no first
+// click through NSApp): down there, `steps` drags to (x2, y2) a frame apart, up there.
+void kybern_web_test_drag(double x, double y, double x2, double y2, int steps) {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    NSWindow *window = labWindow(); if (!window) return;
+    CGFloat h = window.contentView.bounds.size.height;
+    NSView *target = [window.contentView hitTest:NSMakePoint(x, window.contentView.isFlipped ? y : h - y)];
+    NSEvent *(^make)(NSEventType, double, double) = ^NSEvent *(NSEventType type, double px, double py) {
+      return [NSEvent mouseEventWithType:type location:NSMakePoint(px, h - py) modifierFlags:0 timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:window.windowNumber context:nil eventNumber:1 clickCount:1 pressure:type == NSEventTypeLeftMouseUp ? 0 : 1];
+    };
+    [target mouseDown:make(NSEventTypeLeftMouseDown, x, y)];
+    // One step per display frame, as a hand moves (WebKit coalesces moves that arrive together).
+    for (int i = 1; i <= steps + 1; i++) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)i * 16 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+      if (i <= steps) [target mouseDragged:make(NSEventTypeLeftMouseDragged, x + (x2 - x) * i / steps, y + (y2 - y) * i / steps)];
+      else [target mouseUp:make(NSEventTypeLeftMouseUp, x2, y2)];
+    });
+  });
+}

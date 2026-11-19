@@ -192,28 +192,28 @@ pub(super) async fn measure(root: &Path, html: &str, widths: &[u32], fragment: &
         }
         let measured =
             cdp.call("Runtime.evaluate", json!({"expression":SETTLE_AND_MEASURE,"awaitPromise":true,"returnByValue":true})).await?;
-        let height = measured.pointer("/result/value").and_then(Value::as_u64).unwrap_or(80).clamp(80, 2000) as u32;
+        let height = measured.pointer("/result/value").and_then(Value::as_u64).unwrap_or(80).clamp(80, u64::from(super::MAX_FIT_HEIGHT)) as u32;
         heights.push(VisualHeight { width, height });
     }
     session.shutdown().await;
     Ok(heights)
 }
-/// A transcript picture of a visual: device scale 2, transparent background, the
-/// content's own height (≤ 2000), its controls, and for a page taller than
-/// `clamp` a second picture cut at `clamp` whose last 112 px fade to transparent.
+/// A transcript picture of a visual: transparent background, the content's own height up to `max` CSS pixels (a taller
+/// page shows its top), and its controls. Device scale 2, or 1 for a page over `SHARP_HEIGHT`, so a tall picture stays
+/// within GPU texture limits and a few tens of MB once decoded.
 pub(super) struct Snapshot {
     pub height: u32,
+    pub scale: u32,
     pub png: Vec<u8>,
-    pub fade: Option<Vec<u8>>,
     pub controls: Vec<kybern_protocol::methods::VisualControl>,
 }
 pub(super) const SNAPSHOT_SCALE: u32 = 2;
-/// Height of the tall fade, in CSS pixels.
-const FADE: u32 = 112;
-pub(super) async fn snapshot(root: &Path, html: String, width: u32, appearance: &str, fragment: &str, clamp: u32) -> Result<Snapshot> {
+/// Pictures up to this height (CSS pixels) are drawn at `SNAPSHOT_SCALE`; taller ones at 1.
+const SHARP_HEIGHT: u32 = 3_000;
+pub(super) async fn snapshot(root: &Path, html: String, width: u32, appearance: &str, fragment: &str, max: u32) -> Result<Snapshot> {
     let executable = executable(root).await?;
     let _permit = browser_permits().acquire().await?;
-    tokio::time::timeout(Duration::from_secs(20), render_snapshot(root, executable, html, width, appearance, fragment, clamp))
+    tokio::time::timeout(Duration::from_secs(20), render_snapshot(root, executable, html, width, appearance, fragment, max))
         .await
         .context("The visual took too long to render. Reload to try again.")?
 }
@@ -224,13 +224,13 @@ async fn render_snapshot(
     width: u32,
     appearance: &str,
     fragment: &str,
-    clamp: u32,
+    max: u32,
 ) -> Result<Snapshot> {
     let mut session = Session::start(root, &executable, html, 1).await?;
     let page_url = session.page_url.clone();
     let cdp = &mut session.cdp;
-    let metrics = |height: u32| json!({"width":width,"height":height,"deviceScaleFactor":SNAPSHOT_SCALE,"mobile":false});
-    cdp.call("Emulation.setDeviceMetricsOverride", metrics(1)).await?;
+    let metrics = |height: u32, scale: u32| json!({"width":width,"height":height,"deviceScaleFactor":scale,"mobile":false});
+    cdp.call("Emulation.setDeviceMetricsOverride", metrics(1, SNAPSHOT_SCALE)).await?;
     cdp.call("Emulation.setDefaultBackgroundColorOverride", json!({"color":{"r":0,"g":0,"b":0,"a":0}})).await?;
     cdp.call(
         "Emulation.setEmulatedMedia",
@@ -242,8 +242,9 @@ async fn render_snapshot(
         cdp.next().await?;
     }
     let measured = cdp.call("Runtime.evaluate", json!({"expression":SETTLE_AND_MEASURE,"awaitPromise":true,"returnByValue":true})).await?;
-    let height = measured.pointer("/result/value").and_then(Value::as_u64).unwrap_or(80).clamp(80, 2000) as u32;
-    cdp.call("Emulation.setDeviceMetricsOverride", metrics(height)).await?;
+    let height = measured.pointer("/result/value").and_then(Value::as_u64).unwrap_or(80).clamp(80, u64::from(max)) as u32;
+    let scale = if height > SHARP_HEIGHT { 1 } else { SNAPSHOT_SCALE };
+    cdp.call("Emulation.setDeviceMetricsOverride", metrics(height, scale)).await?;
     // A resize can reflow fluid charts: settle again before reading boxes and pixels.
     cdp.call("Runtime.evaluate", json!({"expression":SETTLE,"awaitPromise":true})).await?;
     let found = cdp.call("Runtime.evaluate", json!({"expression":CONTROLS,"returnByValue":true})).await?;
@@ -252,18 +253,8 @@ async fn render_snapshot(
         .and_then(|value| serde_json::from_value::<Vec<kybern_protocol::methods::VisualControl>>(value.clone()).ok())
         .unwrap_or_default();
     let png = capture_png(cdp, width, height).await?;
-    let fade = if height > clamp {
-        let solid = clamp.saturating_sub(FADE);
-        let mask = format!(
-            "(()=>{{const s=document.documentElement.style;for(const p of ['mask-image','-webkit-mask-image'])s.setProperty(p,'linear-gradient(to bottom,#000 {solid}px,transparent {clamp}px)');for(const p of ['mask-size','-webkit-mask-size'])s.setProperty(p,'100% {clamp}px');for(const p of ['mask-repeat','-webkit-mask-repeat'])s.setProperty(p,'no-repeat');return new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))}})()"
-        );
-        cdp.call("Runtime.evaluate", json!({"expression":mask,"awaitPromise":true})).await?;
-        Some(capture_png(cdp, width, clamp).await?)
-    } else {
-        None
-    };
     session.shutdown().await;
-    Ok(Snapshot { height, png, fade, controls })
+    Ok(Snapshot { height, scale, png, controls })
 }
 async fn capture_png(cdp: &mut Cdp, width: u32, height: u32) -> Result<Vec<u8>> {
     use base64::Engine as _;

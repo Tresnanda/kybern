@@ -1,6 +1,8 @@
 (function () {
   const style = document.getElementById("kybern-visual-theme");
-  const base = "html{background:transparent;color:var(--foreground);font:14px/1.5 var(--font-sans);-webkit-font-smoothing:antialiased;scrollbar-width:none}html::-webkit-scrollbar{display:none}body{margin:0}code,pre,kbd{font-family:var(--font-mono)}";
+  // The frame fits the page, so the page never scrolls itself (`overflow:hidden` on the root): the wheel scrolls the chat,
+  // and only the page's own scroll areas take it (`scrollers` below).
+  const base = "html{background:transparent;color:var(--foreground);font:14px/1.5 var(--font-sans);-webkit-font-smoothing:antialiased;scrollbar-width:none;overflow:hidden}html::-webkit-scrollbar{display:none}body{margin:0}code,pre,kbd{font-family:var(--font-mono)}";
   // The app's own scrollbars (styles/kit.css): 10px track, transparent, a 6px rounded thumb that
   // floats 2px from the edge and darkens on hover. Only `*::-webkit-*` rules and no standard
   // `scrollbar-*` property, so any scrollbar styling in the page itself wins at equal specificity
@@ -104,14 +106,100 @@
     if (e.key === "Escape") post({ kind: "kybern-visual-escape" });
     else if (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && !typing(e.target)) post({ kind: "kybern-visual-submit" });
   });
-  // A click on the picture, replayed where it landed once the live page is ready.
+  // A press on the picture, replayed where it landed once the live page is ready: the whole press (pointer and mouse down
+  // and up, then click) on the element under it, so canvases and custom controls get it too, not only buttons.
   function replay(x, y) {
     const el = document.elementFromPoint(x, y);
-    if (!el || el === document.documentElement || el === document.body) return;
-    if (typing(el) && el.focus) { el.focus(); return; }
-    const target = el.closest("button,a[href],input,select,summary,label,[role],[onclick],[data-kybern-id]") || el;
-    if (target.click) target.click();
+    if (!el || el === document.documentElement) return;
+    const init = { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, screenX: x, screenY: y, button: 0, view: window };
+    const fire = (Kind, type, buttons, extra) => { try { return el.dispatchEvent(new Kind(type, Object.assign({}, init, { buttons }, extra))); } catch (_) { return true; } };
+    const pointer = { pointerId: 1, pointerType: "mouse", isPrimary: true, width: 1, height: 1, pressure: 0.5 };
+    if (window.PointerEvent) fire(window.PointerEvent, "pointerdown", 1, pointer);
+    if (fire(window.MouseEvent, "mousedown", 1, { detail: 1 })) {
+      const focusable = el.closest && el.closest("input,textarea,select,button,a[href],[tabindex],[contenteditable],[contenteditable=true]");
+      if (focusable && focusable.focus) focusable.focus({ preventScroll: true });
+    }
+    if (window.PointerEvent) fire(window.PointerEvent, "pointerup", 0, Object.assign({}, pointer, { pressure: 0 }));
+    fire(window.MouseEvent, "mouseup", 0, { detail: 1 });
+    fire(window.MouseEvent, "click", 0, { detail: 1 });
   }
+  // Focus never scrolls: a label's control, a script's focus() and autofocus stay where they are (the frame fits the page).
+  const HTMLElementType = window.HTMLElement;
+  if (HTMLElementType && HTMLElementType.prototype.focus) {
+    const nativeFocus = HTMLElementType.prototype.focus;
+    HTMLElementType.prototype.focus = function (options) { return nativeFocus.call(this, Object.assign({ preventScroll: true }, options && typeof options === "object" ? options : {})); };
+  }
+  document.addEventListener("click", e => {
+    const label = e.target && e.target.closest && e.target.closest("label");
+    const control = label && label.control;
+    if (!control || control === e.target || (control.contains && control.contains(e.target))) return;
+    // The browser's own activation still toggles the control; focus it first without scrolling.
+    if (control.focus) control.focus({ preventScroll: true });
+  }, true);
+  // The page's own scroll areas, for the native host (`webview.m`, `webview-win`, `webview-linux.c`): over one that can
+  // still scroll the way a wheel gesture starts, the page takes the gesture; anywhere else the chat scrolls. Each entry
+  // is [x, y, width, height, room] in the frame's CSS pixels, room = 1 up, 2 down, 4 left, 8 right. Elements with a
+  // non-passive wheel listener (zoomable charts, maps) take every direction.
+  const wheelTakers = new Set();
+  const Target = window.EventTarget && window.EventTarget.prototype;
+  if (Target && Target.addEventListener) {
+    const nativeAdd = Target.addEventListener;
+    Target.addEventListener = function (type, listener, options) {
+      if ((type === "wheel" || type === "mousewheel") && !(options && typeof options === "object" && options.passive === true) && window.Element && this instanceof window.Element && this !== document.documentElement && this !== document.body) { wheelTakers.add(this); scheduleScan(); }
+      return nativeAdd.call(this, type, listener, options);
+    };
+  }
+  const MAX_SCROLLERS = 64;
+  let scrollerElements = [], lastScrollers = "", scanTimer = 0, roomQueued = false;
+  function room(el) {
+    if (wheelTakers.has(el)) return 15;
+    const style = getComputedStyle(el), y = style.overflowY, x = style.overflowX;
+    let bits = 0;
+    if ((y === "auto" || y === "scroll" || el.tagName === "TEXTAREA") && el.scrollHeight > el.clientHeight + 1) {
+      if (el.scrollTop > 0.5) bits |= 1;
+      if (el.scrollTop + el.clientHeight < el.scrollHeight - 1) bits |= 2;
+    }
+    if ((x === "auto" || x === "scroll") && el.scrollWidth > el.clientWidth + 1) {
+      const left = Math.abs(el.scrollLeft);
+      if (left > 0.5) bits |= 4;
+      if (left + el.clientWidth < el.scrollWidth - 1) bits |= 8;
+    }
+    return bits;
+  }
+  function report() {
+    roomQueued = false;
+    const rects = [];
+    for (const el of scrollerElements) {
+      if (!el.isConnected) continue;
+      const bits = room(el);
+      if (!bits) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) continue;
+      rects.push([Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height), bits]);
+    }
+    const key = JSON.stringify(rects);
+    if (key === lastScrollers) return;
+    lastScrollers = key;
+    post({ kind: "kybern-visual-scrollers", rects });
+  }
+  // Every element that can scroll at all (whatever its position now); `report` reads their room and boxes.
+  function scan() {
+    scanTimer = 0;
+    if (!document.body || !document.querySelectorAll) return;
+    const found = [];
+    for (const el of wheelTakers) if (el.isConnected && found.length < MAX_SCROLLERS) found.push(el);
+    for (const el of document.body.querySelectorAll("*")) {
+      if (found.length >= MAX_SCROLLERS) break;
+      if (wheelTakers.has(el) || (el.scrollHeight <= el.clientHeight + 1 && el.scrollWidth <= el.clientWidth + 1)) continue;
+      const style = getComputedStyle(el);
+      if (/(auto|scroll)/.test(style.overflowY + style.overflowX) || el.tagName === "TEXTAREA") found.push(el);
+    }
+    scrollerElements = found;
+    report();
+  }
+  function scheduleScan() { if (!scanTimer && window.setTimeout) scanTimer = window.setTimeout(scan, 120); }
+  // A scroll inside an area changes only its room: no rescan.
+  document.addEventListener("scroll", () => { if (!roomQueued) { roomQueued = true; nativeRaf(report); } }, true);
   window.addEventListener("message", e => {
     if (e.source !== window.parent) return;
     const data = e.data;
@@ -130,9 +218,16 @@
   // The whole document, not just body: a first or last child's margin collapses through body, so
   // body's own box is short by it and the page would scroll inside its frame. The root's auto height
   // contains those margins and, unlike its scrollHeight, is never raised to the frame's height.
-  function measure() { scheduled = false; const body = document.body; if (!body) return; const next = Math.ceil(Math.max(document.documentElement.getBoundingClientRect().height, body.scrollHeight, body.getBoundingClientRect().height)); if (next > 0 && next !== height) { height = next; window.parent.postMessage({ kind: "kybern-visual-size", height }, "*"); } }
+  function measure() { scheduled = false; const body = document.body; if (!body) return; const next = Math.ceil(Math.max(document.documentElement.getBoundingClientRect().height, body.scrollHeight, body.getBoundingClientRect().height)); if (next > 0 && next !== height) { height = next; window.parent.postMessage({ kind: "kybern-visual-size", height }, "*"); } if (window.parent !== window) scheduleScan(); }
   function schedule() { if (!scheduled) { scheduled = true; nativeRaf(measure); } }
   const observer = new ResizeObserver(schedule);
-  document.addEventListener("DOMContentLoaded", () => { observer.observe(document.documentElement); if (document.body) observer.observe(document.body); schedule(); if (window.parent !== window) window.parent.postMessage({ kind: "kybern-visual-ready" }, "*"); });
+  document.addEventListener("DOMContentLoaded", () => {
+    observer.observe(document.documentElement); if (document.body) observer.observe(document.body); schedule();
+    if (window.parent !== window) {
+      window.parent.postMessage({ kind: "kybern-visual-ready" }, "*");
+      // Areas appear and change size without changing the page's height (tabs, filters, lists filling in).
+      if (window.MutationObserver && document.body) new window.MutationObserver(scheduleScan).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "style", "hidden", "open"] });
+    }
+  });
   window.addEventListener("load", schedule);
 })();
