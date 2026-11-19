@@ -66,6 +66,15 @@ close cancel publication of in-flight revisions. Streaming caret/fade integratio
 must retain the existing paint-only animation path and be verified by the
 transcript lane; this lane integrates settled Explorer/PR bodies only.
 
+Every create and update goes through `markdownJobs.ts`, one queue per renderer in
+front of the worker. It keeps six jobs in flight (native refuses the ninth pending
+job with "Markdown queue is full"), holds the rest in order, drops a job whose body
+unmounted before it started, and waits and retries when native still answers
+"queue is full" because another caller holds the slots. A streaming answer's
+update (`streamDocument.ts`) goes ahead of waiting bodies. `DocumentMarkdown`
+never throws a worker failure into the page: that body draws as plain `<markdown>`
+and the failure is logged.
+
 Limits: 2MiB per source, 16MiB aggregate registered source, 32 documents, eight
 pending worker jobs. Source bytes do not count ASTs, fonts, glyph atlases or old
 mounted revision leases; these are not process-footprint caps. The parser and
