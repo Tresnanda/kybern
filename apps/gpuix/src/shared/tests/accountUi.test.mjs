@@ -141,3 +141,17 @@ test("on another machine only its installed agents are listed, and one signed ou
   const here = accountTabs(pickerTabs({ agents, accounts: remoteAccounts, current: { kind: "codex", instance: "default" }, canPickProvider: true, starredView: false }))
   assert.deepEqual([here.length, here[0].needsSignIn, here[2].notSetUp], [3, false, true])
 })
+
+test("agents that aren't installed sort after the installed ones, each group keeping its order", () => {
+  const mixed = [
+    { kind: "pi", display_name: "Pi", available: false },
+    { kind: "claude-code", display_name: "Claude Code", available: true },
+    { kind: "cursor", display_name: "Cursor", available: false },
+    { kind: "codex", display_name: "Codex", available: true },
+  ]
+  const tabs = accountTabs(pickerTabs({ ...base, agents: mixed, accounts: [], current: { kind: "codex", instance: "default" } }))
+  assert.deepEqual(tabs.map((t) => t.kind), ["claude-code", "codex", "pi", "cursor"])
+  assert.deepEqual(tabs.map((t) => t.notSetUp), [false, false, true, true])
+  // Favorites stays first.
+  assert.equal(pickerTabs({ ...base, agents: mixed, accounts: [] })[0].type, "starred")
+})

@@ -185,12 +185,13 @@ async fn handle_askpass(State(state): State<AppState>, extensions: axum::http::E
     if headers.contains_key(header::ORIGIN) || !peer.is_some_and(|peer| peer.ip().is_loopback()) {
         return no_store(StatusCode::FORBIDDEN.into_response());
     }
-    let session = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .and_then(|credential| state.native_tools.authenticate_askpass(credential));
-    let Some(session) = session else { return no_store(StatusCode::UNAUTHORIZED.into_response()) };
+    let credential =
+        headers.get(header::AUTHORIZATION).and_then(|value| value.to_str().ok()).and_then(|value| value.strip_prefix("Bearer "));
+    let Some((session, credential)) =
+        credential.and_then(|credential| Some((state.native_tools.authenticate_askpass(credential)?, credential)))
+    else {
+        return no_store(StatusCode::UNAUTHORIZED.into_response());
+    };
     #[derive(serde::Deserialize)]
     struct Body {
         prompt: String,
@@ -207,7 +208,7 @@ async fn handle_askpass(State(state): State<AppState>, extensions: axum::http::E
         None => false,
     };
     let reply = if owned {
-        state.orchestrator.ask_prompt(session.thread_id, session.session_instance_id, prompt, pid).await
+        state.orchestrator.ask_prompt(session.thread_id, session.session_instance_id, prompt, pid, credential.to_string()).await
     } else {
         crate::orchestrator::PromptReply::Cancelled(
             "Kybern only shows a password prompt that sudo, ssh or git asked for. Run the real command (for example `sudo -A …`) instead."

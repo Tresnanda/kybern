@@ -6,6 +6,7 @@ import { nextTabIndex, type PickerTab } from '@/lib/accountUi'
 import { PROVIDER_LABEL } from '@/lib/format'
 import { Icon } from '../icons.tsx'
 import { useControls } from '../kit/controls.ts'
+import { toneColor } from '../kit/tone.ts'
 import { Tip } from '../nav/overlay.tsx'
 import { Label, ProviderMark, useTheme } from '../ui.tsx'
 import { G } from './glyphs.ts'
@@ -47,7 +48,7 @@ export function ModelRail({
   }
   const [first, ...rest] = tabs
   const row = (tab: PickerTab, at: number) => (
-    <RailRow key={tab.key} tab={tab} dimmed={tab.type === 'account' && (tab.disabled || (busy && !tab.selected))} focusable={at === Math.max(0, selectedAt)} onSelect={select} onStep={step} at={at} />
+    <RailRow key={tab.key} tab={tab} dimmed={tab.type === 'account' && (tab.disabled || tab.notSetUp || (busy && !tab.selected))} focusable={at === Math.max(0, selectedAt)} onSelect={select} onStep={step} at={at} />
   )
   return (
     <div
@@ -63,6 +64,8 @@ export function ModelRail({
   )
 }
 
+// A row that isn't ready says so before it is clicked (#313): an agent that isn't installed is dimmed, one that needs a sign-in
+// carries a small amber dot on its trailing edge. Clicking either still opens its setup or sign-in, and both stay in the tab order.
 const RailRow = memo(function RailRow({
   tab,
   at,
@@ -118,9 +121,10 @@ const RailRow = memo(function RailRow({
       <div style={{ display: 'flex', width: 14, height: 14, flexShrink: 0, alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
         {tab.type === 'starred' ? <Icon source={selected ? G.starFilled : G.star} size={14} color={selected ? t.v('--color-accent-yellow') : t.textSecondary} /> : <ProviderMark kind={tab.kind} size={14} />}
       </div>
-      <Label color={color} weight={500} lineHeight={18} truncate style={{ pointerEvents: 'none' }}>
+      <Label color={color} weight={500} lineHeight={18} truncate style={{ flexGrow: 1, minWidth: 0, pointerEvents: 'none' }}>
         {label}
       </Label>
+      {tab.type === 'account' && tab.needsSignIn && !tab.notSetUp ? <div testId={`model-tab-${tab.key}-signin`} style={{ width: 6, height: 6, borderRadius: 3, flexShrink: 0, backgroundColor: toneColor(t, 'warning'), pointerEvents: 'none' }} /> : null}
     </div>
   )
   return hint ? (

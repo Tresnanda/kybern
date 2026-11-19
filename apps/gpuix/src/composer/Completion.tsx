@@ -47,6 +47,7 @@ import {
 } from '../../../../packages/kybern-client/src/composerTokens.ts'
 import { createComposerThreadReference, type ComposerThreadReference } from '../../../../packages/kybern-client/src/threadReferences.ts'
 import { isChildThread } from '../../../../packages/kybern-client/src/subagents.ts'
+import { skillSourceLabel, uniqueSkills } from '../../../../packages/kybern-client/src/skillSources.ts'
 import { isFreeChatProject, type ContentPart, type NoteId, type NoteSummary, type ProjectId, type ProviderKind, type SkillInfo, type TaskItem, type Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
 import { useControls } from '../kit/controls.ts'
@@ -105,26 +106,6 @@ function rankSkills(skills: readonly SkillInfo[], query: string, limit = 12, sco
     .sort((a, b) => a.score - b.score || a.skill.name.localeCompare(b.skill.name))
     .slice(0, limit)
     .map(({ skill }) => skill)
-}
-
-function skillSourceLabel(scope: SkillInfo['scope']): string {
-  switch (scope) {
-    case 'project':
-      return 'Project'
-    case 'repo':
-      return 'Repo'
-    case 'user':
-      return 'Personal'
-    case 'app':
-      return 'App'
-    case 'plugin':
-      return 'Plugin'
-    case 'system':
-    case 'admin':
-      return 'System'
-    default:
-      return 'Provider'
-  }
 }
 
 function titleCase(s: string): string {
@@ -259,7 +240,7 @@ export function useCompletion({
     const own = currentThreadId ? getState().threads.find((t) => t.id === currentThreadId) : undefined
     void (currentThreadId ? threadClient(currentThreadId, own?.machineId) : projectClient(projectId))
       ?.call('skills.list', { project_id: own ? ownProjectId(own) : projectId, provider: provider.kind, instance: provider.instance, include_other_agents: true })
-      .then((r) => live && setCatalog({ key: catalogKey, skills: r.skills }))
+      .then((r) => live && setCatalog({ key: catalogKey, skills: uniqueSkills(r.skills) }))
       .catch(() => live && setCatalog({ key: catalogKey, skills: [] }))
     return () => {
       live = false
@@ -326,7 +307,7 @@ export function useCompletion({
       return [...attached, ...MENTION_KINDS.flatMap((kind) => byKind[kind].slice(0, cap))]
     }
     // The agent's own skills first, then other agents' folders as their own group (#219).
-    if (skill) return [...rankSkills(skills, skill.query), ...rankSkills(skills, skill.query, 12, 'skill', 'other')].map((s) => ({ id: `skill:${s.name}`, type: 'skill' as const, skill: s }))
+    if (skill) return [...rankSkills(skills, skill.query), ...rankSkills(skills, skill.query, 12, 'skill', 'other')].map((s) => ({ id: `skill:${s.path}`, type: 'skill' as const, skill: s }))
     if (!slash) return []
     const commandItems: Item[] = slash.skillOnly
       ? []
@@ -337,7 +318,7 @@ export function useCompletion({
           })
           .sort((a, b) => a.score - b.score)
           .map(({ command }) => ({ id: `command:${command.name}`, type: 'command' as const, command }))
-    const skillItems = rankSkills(skills, slash.query).map((s) => ({ id: `skill:${s.name}`, type: 'skill' as const, skill: s }))
+    const skillItems = rankSkills(skills, slash.query).map((s) => ({ id: `skill:${s.path}`, type: 'skill' as const, skill: s }))
     return [...commandItems, ...skillItems].slice(0, 16)
   }, [mention, term, filter, threadHits, files, skills, attachments, attachmentViews, skill, slash, commands, mentionNotes, mentionTasks])
 
@@ -780,7 +761,7 @@ function Trailing({ item, projectName, scopeLabel }: { item: Item; projectName: 
       {item.task.priority !== 0 && <PriorityGlyph priority={item.task.priority} />}
       <Label color={muted(t, 0.45)} size={13} truncate>{item.task.scope === 'global' || !item.task.project_id ? 'Global' : projectName(item.task.project_id) ?? 'Project'}</Label>
     </div>
-    default: return <Label color={muted(t, 0.55)} size={13} style={{ flexShrink: 0 }}>{skillSourceLabel(item.skill.scope)}</Label>
+    default: return <Label color={muted(t, 0.55)} size={13} style={{ flexShrink: 0 }}>{skillSourceLabel(item.skill)}</Label>
   }
 }
 
