@@ -7,6 +7,8 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { cliInstallKind, cliStatus, installCli, managedCliCopy, removeOtherCli, uninstallCli, type CliEnvironment } from './cli.ts'
 
+// Windows has no symlink-and-PATH install (its installer owns the command), and these fixtures are `#!/bin/sh` files.
+const posixLinks = test.skipIf(process.platform === 'win32')
 let root = ''
 let admin: string[] = []
 const command = (file: string, output: string) => { mkdirSync(path.dirname(file), { recursive: true }); writeFileSync(file, `#!/bin/sh\necho '${output}'\n`); chmodSync(file, 0o755) }
@@ -21,7 +23,7 @@ beforeEach(() => {
 })
 afterEach(() => rmSync(root, { recursive: true, force: true }))
 
-test('links into ~/.local/bin when it is on PATH, and uninstalls only that link', async () => {
+posixLinks('links into ~/.local/bin when it is on PATH, and uninstalls only that link', async () => {
   const homeBin = path.join(root, 'home/.local/bin')
   const e = env([homeBin, '/usr/bin'])
   const before = await cliStatus(e)
@@ -47,13 +49,13 @@ test.skipIf(process.platform !== 'darwin')('uses the system bin (administrator p
   chmodSync(system, 0o755)
 })
 
-test('refuses to replace a command that is not Kybern’s', async () => {
+posixLinks('refuses to replace a command that is not Kybern’s', async () => {
   const homeBin = path.join(root, 'home/.local/bin')
   command(path.join(homeBin, 'kybern'), 'something else')
   await expect(installCli(env([homeBin]))).rejects.toThrow('already exists and isn’t Kybern’s command')
 })
 
-test('replaces a stale link left by a moved copy of the app', async () => {
+posixLinks('replaces a stale link left by a moved copy of the app', async () => {
   const homeBin = path.join(root, 'home/.local/bin')
   mkdirSync(homeBin, { recursive: true })
   symlinkSync('/nonexistent/Kybern.app/Contents/MacOS/kybern', path.join(homeBin, 'kybern'))
@@ -61,7 +63,7 @@ test('replaces a stale link left by a moved copy of the app', async () => {
   expect(lstatSync(path.join(homeBin, 'kybern')).isSymbolicLink()).toBe(true)
 })
 
-test('reports a shadowing older copy and removes only a Kybern CLI', async () => {
+posixLinks('reports a shadowing older copy and removes only a Kybern CLI', async () => {
   const homeBin = path.join(root, 'home/.local/bin'), cargo = path.join(root, 'home/.cargo/bin')
   command(path.join(cargo, 'kybern'), 'kybern 0.8.1')
   const e = env([cargo, homeBin])
@@ -73,7 +75,7 @@ test('reports a shadowing older copy and removes only a Kybern CLI', async () =>
   await expect(removeOtherCli(path.join(cargo, 'kybern'), e)).rejects.toThrow('isn’t a Kybern command, so Kybern left it in place')
 })
 
-test('a missing bundled command is a problem, not an install', async () => {
+posixLinks('a missing bundled command is a problem, not an install', async () => {
   const e = { ...env([]), bundled: null }
   expect((await cliStatus(e)).problem).toBe('This build of Kybern doesn’t include the kybern command.')
   await expect(installCli(e)).rejects.toThrow('doesn’t include the kybern command')
@@ -95,7 +97,7 @@ test('who owns the command per platform', () => {
   expect(managedCliCopy('package')).toContain('package manager')
   expect(managedCliCopy('link')).toBeNull()
 })
-test('a package or installer owns the command: reported, never installed or removed', async () => {
+posixLinks('a package or installer owns the command: reported, never installed or removed', async () => {
   const packaged: CliEnvironment = { ...env([path.join(root, 'usr-bin')]), kind: 'package', platform: 'linux' }
   command(path.join(root, 'usr-bin/kybern'), 'kybern 0.9.1')
   expect(await cliStatus(packaged)).toMatchObject({ method: 'package', installed: true, needs_admin: false, problem: null, target: path.join(root, 'usr-bin/kybern') })
@@ -105,7 +107,7 @@ test('a package or installer owns the command: reported, never installed or remo
   expect(missing).toMatchObject({ method: 'path', installed: false })
   expect(missing.problem).toContain('PATH')
 })
-test('an AppImage links ~/.local/bin/kybern to the AppImage file, with no administrator step', async () => {
+posixLinks('an AppImage links ~/.local/bin/kybern to the AppImage file, with no administrator step', async () => {
   const appImage = path.join(root, 'Kybern.AppImage')
   command(appImage, 'kybern 0.9.1')
   const homeBin = path.join(root, 'home/.local/bin')
@@ -117,7 +119,7 @@ test('an AppImage links ~/.local/bin/kybern to the AppImage file, with no admini
   expect(admin).toEqual([])
   expect((await uninstallCli(e)).installed).toBe(false)
 })
-test('off macOS the link target is the home bin even when it is not on PATH yet', async () => {
+posixLinks('off macOS the link target is the home bin even when it is not on PATH yet', async () => {
   const status = await cliStatus({ ...env(['/usr/bin']), kind: 'link', platform: 'linux' })
   expect(status).toMatchObject({ target: path.join(root, 'home/.local/bin/kybern'), needs_admin: false, target_on_path: false })
 })

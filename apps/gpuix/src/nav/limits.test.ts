@@ -2,13 +2,14 @@ import { expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 test('cached usage polls preserve store identities, while changed values and freshness still publish', () => {
   const scratch = mkdtempSync(path.join(tmpdir(), 'kybern-limits-pacing-'))
   try {
     const child = Bun.spawnSync(['bun', '-e', `
-      const {getNav,subscribeNav}=await import(${JSON.stringify(new URL('./store.ts', import.meta.url).pathname)});
-      const {applyUsageLimits}=await import(${JSON.stringify(new URL('./limits.ts', import.meta.url).pathname)});
+      const {getNav,subscribeNav}=await import(${JSON.stringify(fileURLToPath(new URL('./store.ts', import.meta.url)))});
+      const {applyUsageLimits}=await import(${JSON.stringify(fileURLToPath(new URL('./limits.ts', import.meta.url)))});
       const {strict:assert}=await import('node:assert');let notifications=0;
       const stop=subscribeNav(()=>notifications++),empty=getNav().limits;
       applyUsageLimits({providers:[]});assert.equal(notifications,0);assert.equal(getNav().limits,empty);

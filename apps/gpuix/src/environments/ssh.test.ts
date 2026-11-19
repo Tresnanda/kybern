@@ -51,7 +51,8 @@ describe('SSH setup process boundary', () => {
     const dir = await mkdtemp(path.join(tmpdir(),'gpuix-ssh-'))
     try { const file = path.join(dir,'config'); await writeFile(file,'Host work staging *.private !excluded\n'); expect(await listSshHosts(file)).toEqual(['work','staging']) } finally { await rm(dir,{recursive:true,force:true}) }
   })
-  test('cancellation kills only the task-owned mock process', async () => {
+  // The mock ssh is a `#!/bin/sh` script and the check reads its pid with `kill(pid, 0)`: neither exists on Windows.
+  test.skipIf(process.platform === 'win32')('cancellation kills only the task-owned mock process', async () => {
     const dir = await mkdtemp(path.join(tmpdir(),'gpuix-ssh-'))
     const previous = process.env.KYBERN_SSH
     try {

@@ -33,7 +33,8 @@ async function fixture(os: 'Linux' | 'Darwin' | 'Windows_NT' = 'Linux', badCheck
   }
   return { root, home, mock, env, run, calls: () => readFile(log, 'utf8'), close: () => rm(root, { recursive: true, force: true }) }
 }
-describe('verified persistent remote installer', () => {
+// `scripts/install-remote.sh` is a POSIX shell script that needs `tar`, `sha256sum` and a service manager; a Windows host never runs it.
+describe.skipIf(process.platform === 'win32')('verified persistent remote installer', () => {
   test('uses one pinned archive and checksum, installs both commands, enables a Linux user service', async () => {
     const f = await fixture()
     try {

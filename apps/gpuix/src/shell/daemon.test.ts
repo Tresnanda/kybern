@@ -87,7 +87,7 @@ test('the daemon gets none of the app’s own paths or mount variables', () => {
   expect(daemonLaunchEnv({ HOME: '/h', KYBERN_BUNDLED_CLI: '/Applications/K.app/Contents/MacOS/kybern' })).toEqual({ HOME: '/h', KYBERN_BUNDLED_CLI: '/Applications/K.app/Contents/MacOS/kybern' })
   expect(app.APPDIR).toBe('/tmp/.mount_x')
 })
-test('an AppImage runs only commands outside its mount', () => fixture(async root => {
+test.skipIf(process.platform === 'win32')('an AppImage runs only commands outside its mount', () => fixture(async root => {
   const mount = path.join(root, 'mount'), app = path.join(mount, 'usr/lib/kybern-gpuix'), stable = path.join(root, 'stable')
   for (const dir of [app, stable, path.join(root, 'bin')]) await mkdir(dir, { recursive: true })
   for (const dir of [app, stable, path.join(root, 'bin')]) { await writeFile(path.join(dir, 'kybernd'), 'x'); await writeFile(path.join(dir, 'kybern'), 'x') }
@@ -171,12 +171,12 @@ test('a development build never shuts down a daemon it did not start', () => fix
 }))
 test('only the packaged app replacing its bundled kybernd, or an explicit opt-in, may restart a daemon', () => {
   const app = '/Applications/Kybern GPUIX.app/Contents/MacOS/Kybern GPUIX'
-  expect(mayRestartDaemon('/Applications/Kybern GPUIX.app/Contents/MacOS/kybernd', {}, app)).toBe(true)
-  expect(mayRestartDaemon('/tmp/old/kybernd', {}, app)).toBe(false)
-  expect(mayRestartDaemon('/repo/target/debug/kybernd', {}, '/Users/me/.bun/bin/bun')).toBe(false)
-  expect(mayRestartDaemon('/Users/me/.bun/bin/kybernd', {}, '/Users/me/.bun/bin/bun')).toBe(false)
-  expect(mayRestartDaemon('/repo/target/debug/kybernd', { KYBERN_ALLOW_DAEMON_RESTART: '1' }, '/Users/me/.bun/bin/bun')).toBe(true)
-  expect(mayRestartDaemon('/repo/target/debug/kybernd', { KYBERN_ALLOW_DAEMON_RESTART: 'true' }, '/Users/me/.bun/bin/bun')).toBe(false)
+  expect(mayRestartDaemon('/Applications/Kybern GPUIX.app/Contents/MacOS/kybernd', {}, app, 'darwin')).toBe(true)
+  expect(mayRestartDaemon('/tmp/old/kybernd', {}, app, 'darwin')).toBe(false)
+  expect(mayRestartDaemon('/repo/target/debug/kybernd', {}, '/Users/me/.bun/bin/bun', 'darwin')).toBe(false)
+  expect(mayRestartDaemon('/Users/me/.bun/bin/kybernd', {}, '/Users/me/.bun/bin/bun', 'darwin')).toBe(false)
+  expect(mayRestartDaemon('/repo/target/debug/kybernd', { KYBERN_ALLOW_DAEMON_RESTART: '1' }, '/Users/me/.bun/bin/bun', 'darwin')).toBe(true)
+  expect(mayRestartDaemon('/repo/target/debug/kybernd', { KYBERN_ALLOW_DAEMON_RESTART: 'true' }, '/Users/me/.bun/bin/bun', 'darwin')).toBe(false)
   // A Linux AppImage runs the copy it staged outside its mount, never another binary.
   const image = '/tmp/.mount_KybernX/usr/lib/kybern-gpuix/kybern-gpuix'
   const copy = { KYBERN_GPUIX_PACKAGED_DAEMON: '/home/me/.local/share/kybern-gpuix/bin/kybernd' }

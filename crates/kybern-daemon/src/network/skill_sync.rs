@@ -1338,6 +1338,8 @@ mod tests {
         skill(&root, "x");
         let file = std::fs::File::create(root.join("blob.bin")).unwrap();
         file.set_len(MAX_SKILL_COPY_BYTES + 1).unwrap();
+        // Windows cannot rename a folder that holds an open file.
+        drop(file);
         let scan = scan_skill(&root);
         assert!(scan.problem.as_deref().is_some_and(|problem| problem.contains("20 MiB")), "{:?}", scan.problem);
         let roots = homes_in(&canonical(&dir), &[]);

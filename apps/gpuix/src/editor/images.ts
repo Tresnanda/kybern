@@ -2,6 +2,7 @@
 // that keeps the note (assets need its token), decoded natively once, and shared
 // by every editor that shows it (`setRichEditorImage`). Adding an image uploads
 // the file to that daemon first, like the desktop's `noteImage.ts`.
+import { fileURLToPath } from 'node:url'
 import type { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 
 /** Where a document's images live: the client of the daemon that keeps it (`fetch` holds its address and token). */
@@ -39,8 +40,10 @@ export function loadEditorImage(renderer: unknown, home: ImageHome | null, src: 
       } else if (src.startsWith('data:image/')) {
         const decoded = Buffer.from(src.slice(src.indexOf(',') + 1), 'base64')
         bytes = decoded.buffer.slice(decoded.byteOffset, decoded.byteOffset + decoded.byteLength) as ArrayBuffer
-      } else if (src.startsWith('/') || src.startsWith('file://')) {
-        bytes = await Bun.file(src.replace(/^file:\/\//, '')).arrayBuffer()
+      } else if (src.startsWith('/') || src.startsWith('file://') || (process.platform === 'win32' && /^(?:[A-Za-z]:[\\/]|\\\\)/.test(src))) {
+        // On Windows `C:\x\a.png` is a path and `file:///C:/x/a.png` needs Node's URL conversion, not a prefix strip.
+        const file = src.startsWith('file://') && process.platform === 'win32' ? fileURLToPath(src) : src.replace(/^file:\/\//, '')
+        bytes = await Bun.file(file).arrayBuffer()
       } else throw Error('Unsupported image address')
       if (bytes.byteLength > MAX_BYTES) throw Error('Image too large')
       native.setRichEditorImage!(src, Buffer.from(bytes))

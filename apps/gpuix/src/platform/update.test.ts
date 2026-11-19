@@ -166,7 +166,7 @@ test('replaces a running AppImage in place and refuses other files', async () =>
   expect(readFileSync(image).subarray(64).toString()).toBe('0.9.2')
   // A new file renamed over the old one: the mounted image keeps running from its own inode, with the old file's mode.
   expect(statSync(image).ino).not.toBe(before)
-  expect(statSync(image).mode & 0o777).toBe(0o700)
+  if (process.platform !== 'win32') expect(statSync(image).mode & 0o777).toBe(0o700) // Windows has no mode bits
   expect(readdirSync(root)).toEqual(['Kybern-GPUIX-x86_64.AppImage'])
   // The Tauri AppImage carries the same signing key; the signed file name tells them apart. So does the exact version:
   // an older GPUIX release's AppImage matches the pattern but not this release.

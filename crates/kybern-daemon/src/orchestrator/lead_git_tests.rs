@@ -726,6 +726,14 @@ async fn group_merge_child_merges_every_changed_repository() {
 
 #[tokio::test]
 async fn group_merge_child_merges_nothing_when_one_repository_conflicts() {
+    // `git merge-tree --write-tree` (git 2.38) is what checks every repository before any merges; an older git
+    // can only merge and abort, which the lead reports as a partial merge.
+    let version = git_in(std::path::Path::new("."), &["--version"]);
+    let numbers: Vec<u32> = version.split_whitespace().nth(2).unwrap_or("0").split('.').map_while(|part| part.parse().ok()).collect();
+    if numbers.as_slice() < [2, 38].as_slice() {
+        eprintln!("skipped: {version} cannot check a merge without making it");
+        return;
+    }
     let g = GroupLead::new().await;
     let child = g.group_child(&[("api", "b.rs", "from api\n"), ("web", "w.ts", "child edit\n")]);
     g.feature_branches();

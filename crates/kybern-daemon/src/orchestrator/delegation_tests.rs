@@ -526,6 +526,8 @@ async fn worktree_delegation_needs_a_git_project() {
 #[tokio::test]
 async fn children_finishing_together_wake_a_running_parent_with_one_steered_batch() {
     let t = Delegating::new().await;
+    // Both results must land inside one window however slowly a loaded machine (a Windows timer ticks every 15 ms) runs them.
+    t.fixture.orchestrator.set_delegation_debounce(Duration::from_millis(1500));
     let a = t.delegate(json!({"task": "task alpha", "role": "review"})).await;
     let b = t.delegate(json!({"task": "task beta"})).await;
     let (alpha, beta) = (t.agent("task alpha").await, t.agent("task beta").await);

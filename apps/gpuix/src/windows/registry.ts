@@ -43,6 +43,8 @@ function writeClaim(claim: WindowClaim) {
   renameSync(temp, file)
 }
 function dropClaim(pid: number) { rmSync(claimFile(pid), { force: true }) }
+/** Remove a socket file. A Windows named pipe is not a file: it goes away with its server, and `rm` on it throws EFAULT. */
+function dropSocket(socket: string) { if (process.platform !== 'win32') rmSync(socket, { force: true }) }
 
 /** Live window claims; claims of exited processes are removed on the way. */
 export function windowClaims(): WindowClaim[] {
@@ -54,7 +56,7 @@ export function windowClaims(): WindowClaim[] {
     try {
       const claim = JSON.parse(readFileSync(path.join(dir(), name), 'utf8')) as WindowClaim
       if (alive(claim.pid)) claims.push(claim)
-      else { dropClaim(claim.pid); rmSync(claim.socket, { force: true }) }
+      else { dropClaim(claim.pid); dropSocket(claim.socket) }
     } catch { /* A claim being rewritten; the next read sees it. */ }
   }
   return claims
@@ -99,7 +101,7 @@ export function startWindowRegistry(next: Host) {
   host = next
   mkdirSync(dir(), { recursive: true, mode: 0o700 })
   const socket = socketPath(process.pid)
-  rmSync(socket, { force: true })
+  dropSocket(socket)
   server = createServer(connection => {
     let buffer = ''
     connection.setEncoding('utf8')
@@ -122,7 +124,7 @@ export function startWindowRegistry(next: Host) {
   server.on('error', error => console.error('[windows] registry socket:', error))
   server.listen(socket, () => publishWindow())
   server.unref()
-  process.once('exit', () => { dropClaim(process.pid); rmSync(socket, { force: true }) })
+  process.once('exit', () => { dropClaim(process.pid); dropSocket(socket) })
 }
 
 /** Write this window's claim (after launch). */

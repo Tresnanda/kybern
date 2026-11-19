@@ -1,7 +1,7 @@
 import { afterAll, expect, mock, test } from 'bun:test'
 import { setKeyPlatform } from '../platform/keys.ts'
 import { createRequire } from 'node:module'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import path from 'node:path'
 import type { ReactNode } from 'react'
 
@@ -19,7 +19,7 @@ const entry = createRequire(import.meta.url).resolve('@gpuix/react')
 const { createRoot, flushSync } = await import(pathToFileURL(path.join(path.dirname(entry), 'reconciler/reconciler.js')).href)
 const { handleGpuixEvent } = await import(pathToFileURL(path.join(path.dirname(entry), 'reconciler/event-registry.js')).href)
 
-const image = new URL('../../packaging/icons/128x128@2x.png', import.meta.url).pathname
+const image = fileURLToPath(new URL('../../packaging/icons/128x128@2x.png', import.meta.url))
 const WINDOW = { width: 1200, height: 800 }
 
 test('a cropped thumbnail maps to the scale it shows the image at, clipped to its box with its own radius', () => {

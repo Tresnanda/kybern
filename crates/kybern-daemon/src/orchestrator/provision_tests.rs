@@ -568,7 +568,8 @@ async fn provision_partial_group_card_resumes_the_waiting_delegation() {
     let (live, _, _) = fixture.park_recording(&parent, Instant::now()).await;
     fixture.orchestrator.send(parent.id, UserMessage::text("coordinate the group")).await.unwrap();
     live.turn_ready.notified().await;
-    let dest = root.join("b-home/partial");
+    // Joined one name at a time: the project below is stored as spelled, and the daemon matches projects by that text.
+    let dest = root.join("b-home").join("partial");
     std::fs::create_dir_all(&dest).unwrap();
     run_git(&dest, &["clone", "-q", root.join("checkout-a").to_str().unwrap(), "api"]);
     // A group with a deleted member is a normal project state; it still holds the other checkout.
