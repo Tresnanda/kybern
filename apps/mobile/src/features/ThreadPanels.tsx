@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
 import type { AccountSummary, Thread, ThreadTargetState } from "../state/protocol";
 import { hasSignIn } from "../../../../packages/kybern-client/src/machineAgents";
-import { errorText, loadThread, rpc } from "../state/runtime";
+import { errorText, loadThread, rpc, threadMachine } from "../state/runtime";
 import { MenuButton } from "../ui/ActionMenu";
 import { Button, ErrorBanner, Icon, T } from "../ui/primitives";
 import { radius, space, useTheme } from "../ui/theme";
@@ -105,13 +105,14 @@ function LimitRecovery({ thread }: { thread: Thread }) {
   const attempt = useRef<string | null>(null);
   useEffect(() => {
     let alive = true;
-    rpc("providers.accounts.list", { kind: thread.provider.kind })
+    // The thread's own machine signs its agent in (#245).
+    rpc("providers.accounts.list", { kind: thread.provider.kind }, threadMachine(thread.id))
       .then((result) => alive && setAccounts(result.accounts))
       .catch(() => alive && setAccounts([]));
     return () => {
       alive = false;
     };
-  }, [thread.provider.kind]);
+  }, [thread.provider.kind, thread.id]);
   const options = (accounts ?? []).filter(
     (account) =>
       account.provider.kind === thread.provider.kind &&

@@ -1,7 +1,7 @@
 // General: what a new thread starts with, and how agents behave on this computer.
 import { ASK_DEADLINE_DEFAULTS, askDeadlineOptions } from "../../../../../packages/kybern-client/src/requestCards";
 import { PROVIDER_DISPLAY_NAME, type Settings } from "../../state/protocol";
-import { useApp } from "../../state/runtime";
+import { useSettingsProviders } from "../../state/machineProviders";
 import { saveSettings, useSettings } from "../../state/settings";
 import { ListRow } from "../../ui/List";
 import { ProviderMark } from "../../ui/ProviderMark";
@@ -17,11 +17,11 @@ export function GeneralSettings() {
 }
 
 function GeneralBody() {
-  const app = useApp();
+  const providers = useSettingsProviders();
   const { settings: current } = useSettings();
   const settings = current!;
   const set = (patch: Partial<Settings>) => void saveSettings({ ...settings, ...patch });
-  const provider = app.providers.find((p) => p.kind === settings.default_provider);
+  const provider = providers.find((p) => p.kind === settings.default_provider);
   const modes = provider?.supported_permission_modes?.length
     ? provider.supported_permission_modes
     : (Object.keys(PERMISSION_LABELS) as Settings["default_permission_mode"][]);
@@ -33,7 +33,7 @@ function GeneralBody() {
           title="Agent"
           leading={<ProviderMark kind={settings.default_provider} size={20} />}
           value={provider?.display_name ?? PROVIDER_DISPLAY_NAME[settings.default_provider] ?? settings.default_provider}
-          valueMenu={app.providers
+          valueMenu={providers
             .filter((p) => p.available || p.kind === settings.default_provider)
             .map((p) => ({
               title: p.display_name,

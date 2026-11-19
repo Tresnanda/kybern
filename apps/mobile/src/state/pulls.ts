@@ -14,7 +14,7 @@ import {
 } from "../../../../packages/kybern-client/src/prReview";
 import { linkedRepairThread } from "../../../../packages/kybern-client/src/pullRequests";
 import type { PrActionKind, PrDetailResult, PrPageKind, PrPageResult, PrReviewEntry } from "./protocol";
-import { activeEnvironment, problemFor, refresh, rpc, useApp } from "./runtime";
+import { activeEnvironment, machineHub, problemFor, refresh, rpc, useApp } from "./runtime";
 import type { ProblemModel } from "./problems";
 
 const drafts = new Map<string, ReviewDraft>();
@@ -110,14 +110,16 @@ export function usePullRequest(projectId: string, number: number, repo?: string)
   /** A worktree conversation for checkout or repair: the chosen one, or a new one with the computer's defaults. */
   async function conversation(choice: string | "new"): Promise<string> {
     if (choice !== "new") return choice;
-    const settings = await rpc("settings.get", {});
+    // The project's machine makes the conversation, with its own defaults: the paired computer may be away (#245).
+    const owner = machineHub().routeFor({ project_id: projectId });
+    const settings = await rpc("settings.get", {}, owner);
     const created = await rpc("threads.create", {
       project_id: projectId,
       provider: { kind: settings.default_provider, instance: "default" },
       permission_mode: settings.default_permission_mode,
       use_worktree: true,
     });
-    await refresh();
+    await refresh(owner);
     return created.id;
   }
 
