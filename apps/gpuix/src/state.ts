@@ -64,6 +64,8 @@ export interface AppState {
   listsLoaded: boolean
   /** Settled threads per project the bounded list left out (`threads.list {settled_limit}`); "Show more" pages them in. */
   omitted: Record<string, number>
+  /** Archived threads per project of the machine the user is at (`threads.list` `archived`); the sidebar's Archived row. */
+  archivedCounts: Record<string, number>
 }
 
 let state: AppState = {
@@ -78,6 +80,7 @@ let state: AppState = {
   sidebarOpen: true,
   listsLoaded: false,
   omitted: {},
+  archivedCounts: {},
 }
 const listeners = new Set<() => void>()
 
@@ -693,6 +696,8 @@ async function loadLists() {
       learnCapable(owner, result.head_seq !== undefined)
       listState = applyThreadList(listOwner === owner ? listState : undefined, request, result)
       listOwner = owner
+      const archivedCounts = Object.fromEntries((result.archived ?? []).map(({ project_id, count }) => [project_id, count]))
+      if (JSON.stringify(archivedCounts) !== JSON.stringify(state.archivedCounts)) set({ archivedCounts })
       lastActivity = { owner, activity: listState.activity }
       for (const listener of activityListeners) listener(lastActivity.activity)
       return { ...result, threads: listState.threads, activity: listState.activity }

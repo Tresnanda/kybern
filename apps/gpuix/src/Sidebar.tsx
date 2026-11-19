@@ -38,6 +38,8 @@ import {
   MessageRow,
   MoreRow,
   NoThreadsRow,
+  OlderRow,
+  ArchivedRow,
   ProjectHeader,
   RecentsHeader,
   resting,
@@ -80,6 +82,8 @@ export function Sidebar() {
   const attentionDismissals = useNav((s) => s.attentionDismissals)
   const projectOrder = useNav((s) => s.projectOrder)
   const composerDrafts = useNav((s) => s.composerDrafts)
+  const olderOpen = useNav((s) => s.olderOpen)
+  const archivedCounts = useApp((s) => s.archivedCounts)
   const space = useCurrentSpace()
   const spaceCount = useSpaces((s) => s.spaces.length)
   const [showAll, setShowAll] = useState<Record<string, boolean>>({})
@@ -98,15 +102,26 @@ export function Sidebar() {
         showAll,
         omitted,
         expanded,
-        nav: { children, activity, unread, dismissed, filter, attentionFilter, projectOrder, composerDrafts, attentionDismissals },
+        nav: { children, activity, unread, dismissed, filter, attentionFilter, projectOrder, composerDrafts, attentionDismissals, olderOpen },
+        archivedCounts,
         now: Date.now(),
         space: { id: space?.id ?? null, name: space && spaceCount >= 2 ? space.name : null, count: spaceCount },
       }),
-    [space, spaceCount, projects, threads, selectedId, draft, onHome, collapsed, showAll, omitted, expanded, children, activity, unread, dismissed, filter, attentionFilter, projectOrder, composerDrafts, attentionDismissals],
+    [space, spaceCount, projects, threads, selectedId, draft, onHome, collapsed, showAll, omitted, expanded, children, activity, unread, dismissed, filter, attentionFilter, projectOrder, composerDrafts, attentionDismissals, olderOpen, archivedCounts],
   )
   const toggleChildren = useCallback((id: string, open: boolean) => {
     markDisclosure()
     setExpanded((v) => ({ ...v, [id]: open }))
+  }, [])
+  const toggleOlder = useCallback((id: string) => {
+    markDisclosure()
+    const open = { ...getNav().olderOpen }
+    if (open[id]) delete open[id]
+    else open[id] = true
+    setNav({ olderOpen: open })
+  }, [])
+  const loadOlder = useCallback((id: string) => {
+    void loadMoreThreads(id).catch((e) => console.error('[sidebar] Unable to load more threads:', e))
   }, [])
   const toggleMore = useCallback((id: string) => {
     markDisclosure()
@@ -145,7 +160,7 @@ export function Sidebar() {
   const [listNode, setListNode] = useState<PublicInstance | null>(null)
   const [boxNode, setBoxNode] = useState<PublicInstance | null>(null)
   setReorderContext(rows, listNode, boxNode)
-  const ctx = { selectedId: onHome ? selectedId : null, activity, unread, composerDrafts, toggleChildren, toggleMore }
+  const ctx = { selectedId: onHome ? selectedId : null, activity, unread, composerDrafts, toggleChildren, toggleMore, toggleOlder, loadOlder }
   // `sidebar-surface-enter`: the actions and the list rise 4px into place when the panel appears (not at launch, not from the keyboard).
   const [enter] = useState(surfaceEnters)
 
@@ -228,6 +243,8 @@ function renderRow(
     composerDrafts: ReturnType<typeof getNav>['composerDrafts']
     toggleChildren: (id: string, open: boolean) => void
     toggleMore: (id: string) => void
+    toggleOlder: (id: string) => void
+    loadOlder: (id: string) => void
   },
 ) {
   switch (row.kind) {
@@ -285,7 +302,11 @@ function renderRow(
         />
       )
     case 'more':
-      return <MoreRow key={row.key} projectId={row.projectId} count={row.count} showAll={row.showAll} onToggle={ctx.toggleMore} />
+      return <MoreRow key={row.key} projectId={row.projectId} count={row.count} showAll={row.showAll} older={row.older} onToggle={row.older ? ctx.loadOlder : ctx.toggleMore} />
+    case 'older':
+      return <OlderRow key={row.key} projectId={row.projectId} open={row.open} onToggle={ctx.toggleOlder} />
+    case 'archived':
+      return <ArchivedRow key={row.key} projectId={row.projectId} />
     case 'no-threads':
       return <NoThreadsRow key={row.key} />
     case 'empty-space':

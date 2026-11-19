@@ -3,13 +3,16 @@
 // projects in the reader's order, the coordinator first, pinned then recent
 // threads, at most 8 top-level rows until "Show N more", working children
 // nested under their parents, filters and the bell's attention view, then
-// Recents (free chats).
+// Recents (free chats). Inactive threads sit in each project's collapsed Older
+// group (`packages/kybern-client/src/older.ts`), and a project with archived
+// threads ends with its Archived row.
 import { orderProjects, threadMatchesFilter } from '@/state/sidebarOrganize'
 import { nestedThreadRows } from '../../../../packages/kybern-client/src/threadRows.ts'
 import { isChildThread, visibleSubagentThreads } from '../../../../packages/kybern-client/src/subagents.ts'
 import { isChildWorking } from '../../../../packages/kybern-client/src/delegations.ts'
 import { inSpace } from '../../../../packages/kybern-client/src/spaces.ts'
 import { attentionItems } from '../../../../packages/kybern-client/src/threadAttention.ts'
+import { splitOlder } from '../../../../packages/kybern-client/src/older.ts'
 import { flatTree } from '../tree/geometry.ts'
 import {
   FREE_CHAT_PROJECT_ID,
@@ -54,7 +57,11 @@ export type Row =
       rails?: number
     }
   | { kind: 'child'; key: string; thread: Thread; depth: number; childCount: number; childrenOpen: boolean; last?: boolean; rails?: number }
-  | { kind: 'more'; key: string; projectId: string; count: number; showAll: boolean }
+  | { kind: 'more'; key: string; projectId: string; count: number; showAll: boolean; older?: boolean }
+  /** The Older group's disclosure; its threads follow while it is open. */
+  | { kind: 'older'; key: string; projectId: string; open: boolean }
+  /** Opens the project's archived threads. */
+  | { kind: 'archived'; key: string; projectId: string }
   | { kind: 'no-threads'; key: string }
   /** A space without projects: drag one onto it, or add a folder. `onlySpace` drops the drag hint. */
   | { kind: 'empty-space'; key: string; onlySpace: boolean }
@@ -116,7 +123,9 @@ export interface SidebarInput {
   nav: Pick<
     NavState,
     'children' | 'activity' | 'unread' | 'dismissed' | 'filter' | 'attentionFilter' | 'projectOrder' | 'composerDrafts' | 'attentionDismissals'
-  > & Partial<Pick<NavState, 'pending'>>
+  > & Partial<Pick<NavState, 'pending' | 'olderOpen'>>
+  /** Archived threads per project; a project with some ends with an Archived row. */
+  archivedCounts?: Record<string, number>
   now: number
   /** The active space; null when the daemon has no spaces. `name` is set only with two or more spaces. */
   space?: { id: string | null; name: string | null; count: number }
@@ -213,6 +222,19 @@ export function buildRows(input: SidebarInput): Row[] {
       })
       const withChildren = new Set(shownChildren.map((t) => t.parent_thread_id))
       const defaultOpen = (thread: Thread) => withChildren.has(thread.id)
+      // Inactive threads go to the Older group, below the rest. Filters and the bell list every match together.
+      const { recent, older } = shown ? { recent: threads, older: [] as Thread[] } : splitOlder(threads, nav)
+      const olderIds = new Set(older.map((t) => t.id))
+      const childRoot = (child: Thread) => {
+        let id = child.parent_thread_id
+        for (let hops = 0; id && hops < 16; hops++) {
+          if (olderIds.has(id)) return true
+          id = shownChildren.find((c) => c.id === id)?.parent_thread_id ?? null
+        }
+        return false
+      }
+      const olderChildren = older.length ? shownChildren.filter(childRoot) : []
+      const recentChildren = olderChildren.length ? shownChildren.filter((c) => !olderChildren.includes(c)) : shownChildren
       let nested
       if (shown) {
         const filtered: Thread[] = threads.filter((t) => shown!.has(t.id))
@@ -229,8 +251,8 @@ export function buildRows(input: SidebarInput): Row[] {
         }
         nested = nestedThreadRows(filtered, input.expanded, input.selectedId ?? undefined, defaultOpen)
       } else {
-        const list = coordinator ? [coordinator, ...threads.filter((t) => t.id !== coordinator.id)] : threads
-        nested = nestedThreadRows([...list, ...shownChildren], input.expanded, input.selectedId ?? undefined, defaultOpen)
+        const list = coordinator ? [coordinator, ...recent.filter((t) => t.id !== coordinator.id)] : recent
+        nested = nestedThreadRows([...list, ...recentChildren], input.expanded, input.selectedId ?? undefined, defaultOpen)
       }
 
       if (!coordinator && !shown) rows.push({ kind: 'create-coordinator', key: `${project.id}:coordinator`, project })
@@ -238,6 +260,12 @@ export function buildRows(input: SidebarInput): Row[] {
       const showAll = !!input.showAll[project.id] || !!shown
       let counted = 0
       let cutting = false
+      const pushRow = (row: (typeof nested)[number]) =>
+        rows.push(
+          isChildThread(row.thread)
+            ? { kind: 'child', key: row.thread.id, thread: row.thread, depth: row.depth, childCount: row.childCount, childrenOpen: row.open }
+            : { kind: 'thread', key: row.thread.id, thread: row.thread, depth: row.depth, childCount: row.childCount, childrenOpen: row.open, nested: true },
+        )
       for (const row of nested) {
         if (!showAll) {
           if (isChildThread(row.thread)) {
@@ -248,20 +276,28 @@ export function buildRows(input: SidebarInput): Row[] {
             counted += 1
           }
         }
-        rows.push(
-          isChildThread(row.thread)
-            ? { kind: 'child', key: row.thread.id, thread: row.thread, depth: row.depth, childCount: row.childCount, childrenOpen: row.open }
-            : { kind: 'thread', key: row.thread.id, thread: row.thread, depth: row.depth, childCount: row.childCount, childrenOpen: row.open, nested: true },
-        )
+        pushRow(row)
       }
+      // The threads the bounded list left out are the oldest settled ones: with an Older group they load from there.
       const left = input.omitted?.[project.id] ?? 0
-      if (!shown && (topRows > MAX_PROJECT_THREADS || left > 0)) {
+      const leftInOlder = older.length > 0 ? left : 0
+      const leftHere = left - leftInOlder
+      if (!shown && (topRows > MAX_PROJECT_THREADS || leftHere > 0)) {
         // Opened, with rows still on the daemon: the row offers those next instead of "Show less".
         const open = !!input.showAll[project.id]
-        const count = open && left > 0 ? left : Math.max(0, topRows - MAX_PROJECT_THREADS) + left
-        rows.push({ kind: 'more', key: `${project.id}:more`, projectId: project.id, count, showAll: open && left === 0 })
+        const count = open && leftHere > 0 ? leftHere : Math.max(0, topRows - MAX_PROJECT_THREADS) + leftHere
+        rows.push({ kind: 'more', key: `${project.id}:more`, projectId: project.id, count, showAll: open && leftHere === 0 })
+      }
+      if (older.length > 0) {
+        const olderOpen = !!nav.olderOpen?.[project.id]
+        rows.push({ kind: 'older', key: `${project.id}:older`, projectId: project.id, open: olderOpen })
+        if (olderOpen) {
+          for (const row of nestedThreadRows([...older, ...olderChildren], input.expanded, input.selectedId ?? undefined, defaultOpen)) pushRow(row)
+          if (leftInOlder > 0) rows.push({ kind: 'more', key: `${project.id}:older-more`, projectId: project.id, count: leftInOlder, showAll: false, older: true })
+        }
       }
       if (threads.length === 0) rows.push({ kind: 'no-threads', key: `${project.id}:empty` })
+      if (!shown && (input.archivedCounts?.[project.id] ?? 0) > 0) rows.push({ kind: 'archived', key: `${project.id}:archived`, projectId: project.id })
     })
   }
 

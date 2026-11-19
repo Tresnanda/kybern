@@ -562,6 +562,14 @@ pub struct Thread {
     /// that continues the work). Only the daemon writes it, and a stale copy of the thread never changes it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moved: Option<MoveInfo>,
+    /// Set while the thread sits in its project's Older group: no turn ran for the `older_after` setting's time.
+    /// Only the daemon moves a thread there (never a pinned, busy, child or opted-out one); a new turn, "Move out of
+    /// Older" and unarchiving take it out. Older threads are listed like any other; clients group them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub older_at: Option<DateTime<Utc>>,
+    /// The person chose "Never move to Older" for this thread.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep_out_of_older: bool,
 }
 
 /// What the delegating agent asked this child to be.
@@ -2774,6 +2782,32 @@ pub struct Settings {
     pub network: NetworkSettings,
     /// When long threads are compacted.
     pub compaction: CompactionSettings,
+    /// How long a thread goes without a turn before it moves to its project's Older group.
+    pub older_after: OlderAfter,
+}
+
+/// "Move inactive threads to Older": how long a top-level thread goes without a turn before the daemon moves it to
+/// its project's Older group. Moving never archives a thread or touches its worktree.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OlderAfter {
+    Never,
+    ThreeDays,
+    #[default]
+    SevenDays,
+    ThirtyDays,
+}
+
+impl OlderAfter {
+    /// The inactivity after which a thread moves, or `None` when threads never move.
+    pub fn duration(self) -> Option<chrono::Duration> {
+        match self {
+            Self::Never => None,
+            Self::ThreeDays => Some(chrono::Duration::days(3)),
+            Self::SevenDays => Some(chrono::Duration::days(7)),
+            Self::ThirtyDays => Some(chrono::Duration::days(30)),
+        }
+    }
 }
 
 /// When Kybern compacts a long thread that sits idle.
@@ -3151,6 +3185,7 @@ impl Default for Settings {
             preview_allowed_folders: Vec::new(),
             network: NetworkSettings::default(),
             compaction: CompactionSettings::default(),
+            older_after: OlderAfter::default(),
         }
     }
 }

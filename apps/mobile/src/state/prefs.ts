@@ -1,5 +1,5 @@
 // The reader's list preferences for one computer, kept across launches in a small
-// JSON file (unread marks, dismissed attention, project order). Losing it is
+// JSON file (unread marks, dismissed attention, project order, open Older groups). Losing it is
 // harmless: every field falls back to "nothing marked".
 import { File, Paths } from "expo-file-system";
 import { Platform } from "react-native";
@@ -11,9 +11,11 @@ export type ListPrefs = {
   attentionDismissals: Record<string, number>;
   /** Project ids in the reader's order; projects not listed follow by name. */
   projectOrder: string[];
+  /** Projects whose Older group the reader opened; the rest stay folded. */
+  olderOpen: Record<string, true>;
 };
 
-export const EMPTY_PREFS: ListPrefs = { unread: {}, attentionDismissals: {}, projectOrder: [] };
+export const EMPTY_PREFS: ListPrefs = { unread: {}, attentionDismissals: {}, projectOrder: [], olderOpen: {} };
 
 const fileFor = (environmentId: string) =>
   new File(Paths.document, `kybern-list-${environmentId.replace(/[^A-Za-z0-9-]/g, "")}.json`);
@@ -29,6 +31,7 @@ export function readPrefs(environmentId: string): ListPrefs {
       attentionDismissals:
         value.attentionDismissals && typeof value.attentionDismissals === "object" ? value.attentionDismissals : {},
       projectOrder: Array.isArray(value.projectOrder) ? value.projectOrder.filter((id) => typeof id === "string") : [],
+      olderOpen: value.olderOpen && typeof value.olderOpen === "object" ? value.olderOpen : {},
     };
   } catch {
     return EMPTY_PREFS;

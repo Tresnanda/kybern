@@ -960,6 +960,8 @@ impl Orchestrator {
             origin: parent.origin.clone().filter(|origin| !matches!(origin.kind, OriginKind::Fork)),
             inbound: None,
             moved: None,
+            older_at: None,
+            keep_out_of_older: false,
             subagent: None,
             delegation: Some(info),
             members,

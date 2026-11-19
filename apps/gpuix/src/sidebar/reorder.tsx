@@ -39,7 +39,7 @@ const THRESHOLD = 6
 const GAP = 12
 const HEADER = 28
 const END = 6
-const BLOCK_KINDS = new Set<Row['kind']>(['project', 'thread', 'child', 'more', 'no-threads', 'create-coordinator'])
+const BLOCK_KINDS = new Set<Row['kind']>(['project', 'thread', 'child', 'more', 'no-threads', 'create-coordinator', 'older', 'archived'])
 export const inProjectBlock = (row: Row) => BLOCK_KINDS.has(row.kind)
 
 export type Block = { id: string; keys: string[]; top: number; height: number }

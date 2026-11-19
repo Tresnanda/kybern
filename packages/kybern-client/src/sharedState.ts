@@ -134,6 +134,7 @@ export const SHARED_SETTINGS = [
   "orchestration",
   "tell_agents_about_kybern",
   "ask_deadlines",
+  "older_after",
 ] as const;
 
 /** A shared field's value in a settings document: the daemon reports an unset optional field as `null`. */

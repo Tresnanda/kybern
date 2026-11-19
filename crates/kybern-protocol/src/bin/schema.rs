@@ -162,6 +162,7 @@ fn main() {
     method::<ThreadsRecoverOmpAnswer>(&mut methods);
     method::<ThreadsUpdate>(&mut methods);
     method::<ThreadsArchive>(&mut methods);
+    method::<ThreadsUnarchive>(&mut methods);
     method::<ThreadsSend>(&mut methods);
     method::<ThreadsSteer>(&mut methods);
     method::<SubagentsSend>(&mut methods);
