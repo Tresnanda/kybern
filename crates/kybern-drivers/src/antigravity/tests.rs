@@ -1,7 +1,9 @@
 use super::login::parse_login;
 use super::stream::{TurnMapper, friendly_error};
 use super::tools::{exited_nonzero, find_in_transcript, normalize};
-use super::usage::{merge_buckets, parse_load_code_assist, parse_quota_summary, plan_name, to_limits};
+use super::usage::{
+    merge_buckets, parse_agy_usage, parse_load_code_assist, parse_quota_summary, plan_name, read_agy_usage, to_limits, user_agent,
+};
 use super::*;
 use crate::{NativeToolBridge, NativeToolRestrictions};
 use base64::Engine;
@@ -567,10 +569,10 @@ fn quota_buckets_merge_by_id_and_map_the_windows() {
     assert_eq!(limits[0].used_percent, 50.0, "the most-used reading wins");
     assert_eq!(limits[0].window_minutes, Some(300));
     assert_eq!(limits[0].resets_at, Some(1_793_534_400));
-    assert!(limits[1..].iter().all(|limit| limit.window_minutes == Some(10080)));
-    assert_eq!(limits[1].name, "Claude · Weekly");
-    assert_eq!(limits[1].used_percent, 10.0);
-    assert_eq!(limits[2].used_percent, 0.0);
+    assert_eq!(limits[1].name, "Gemini · Weekly");
+    assert_eq!(limits[1].used_percent, 0.0);
+    assert_eq!(limits[2].name, "Claude · Weekly");
+    assert_eq!(limits[2].used_percent, 10.0);
 }
 
 #[test]
@@ -892,4 +894,133 @@ printf '%s\n\n' '{"event":"result","result":{"conversation_id":"conv-1","status"
         }
         true
     }
+}
+
+/// Recorded 2026-11-19 from the daily host with the CLI User-Agent (Google AI Pro).
+fn three_group_summary() -> serde_json::Value {
+    json!({"groups": [
+        {"displayName": "Gemini Models", "description": "Models within this group: Gemini 4 Neon, Gemini 4 Hydrogen, Gemini 3.8 Flash",
+         "buckets": [
+            {"bucketId": "gemini-weekly", "displayName": "Weekly Limit Remaining", "window": "weekly", "resetTime": "2026-11-26T14:43:26Z", "remainingFraction": 0.915},
+            {"bucketId": "gemini-5h", "displayName": "Five Hour Limit Remaining", "window": "5h", "resetTime": "2026-11-19T19:43:26Z", "remainingFraction": 0.769}]},
+        {"displayName": "Claude and GPT models", "buckets": [
+            {"bucketId": "3p-weekly", "window": "weekly", "resetTime": "2026-11-26T16:10:27Z", "remainingFraction": 1},
+            {"bucketId": "3p-5h", "window": "5h", "resetTime": "2026-11-19T21:10:27Z", "remainingFraction": 1}]},
+        {"displayName": "Gemini 4 Argon", "description": "For paid Pro plans, Argon quota is separate.",
+         "buckets": [{"bucketId": "gemini-argon-wtu-weekly", "displayName": "Gemini 4 Argon Weekly Limit", "window": "weekly", "resetTime": "2026-11-26T16:10:27Z", "remainingFraction": 1}]}]})
+}
+
+/// The same account through `agy -p "/usage" --output-format json` (trimmed to the parts Kybern reads).
+fn agy_usage_json() -> serde_json::Value {
+    json!({"conversation_id": "", "status": "SUCCESS", "num_turns": 0, "command": {"name": "usage", "data": {"groups": [
+        {"name": "Gemini Models", "description": "Models within this group: Gemini 4 Neon", "buckets": [
+            {"id": "gemini-weekly", "name": "Weekly Limit Remaining", "window": "weekly", "remaining_fraction": 0.9127, "reset_time": "2026-11-26T14:43:26Z"},
+            {"id": "gemini-5h", "name": "Five Hour Limit Remaining", "window": "5h", "remaining_fraction": 0.7545, "reset_time": "2026-11-19T19:43:26Z"}]},
+        {"name": "Claude and GPT models", "buckets": [
+            {"id": "3p-weekly", "name": "Weekly Limit Remaining", "window": "weekly", "remaining_fraction": 1, "reset_time": "2026-11-26T16:10:27Z"},
+            {"id": "3p-5h", "name": "Five Hour Limit Remaining", "window": "5h", "remaining_fraction": 1, "reset_time": "2026-11-19T21:10:27Z"}]},
+        {"name": "Gemini 4 Argon", "buckets": [
+            {"id": "gemini-argon-wtu-weekly", "name": "Gemini 4 Argon Weekly Limit", "window": "weekly", "remaining_fraction": 1, "reset_time": "2026-11-26T16:10:27Z"}]}]}}})
+}
+
+#[test]
+fn every_group_becomes_rows_gemini_first() {
+    let limits = to_limits(&parse_quota_summary(&three_group_summary()));
+    let rows: Vec<_> = limits.iter().map(|limit| (limit.name.as_str(), limit.used_percent, limit.window_minutes)).collect();
+    assert_eq!(
+        rows,
+        [
+            ("Gemini Models · 5-hour", 23.1, Some(300)),
+            ("Gemini Models · Weekly", 8.5, Some(10080)),
+            ("Gemini 4 Argon · Weekly", 0.0, Some(10080)),
+            ("Claude and GPT models · 5-hour", 0.0, Some(300)),
+            ("Claude and GPT models · Weekly", 0.0, Some(10080)),
+        ]
+    );
+    // Used windows keep Google's reset time; untouched ones have none (the next test).
+    assert_eq!(limits[0].resets_at, Some(1_795_117_406));
+    assert!(limits[2..].iter().all(|limit| limit.resets_at.is_none()), "{limits:?}");
+}
+
+#[test]
+fn agy_usage_json_parses_into_the_same_rows() {
+    let from_agy = to_limits(&parse_agy_usage(&agy_usage_json()));
+    let names: Vec<_> = from_agy.iter().map(|limit| limit.name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "Gemini Models · 5-hour",
+            "Gemini Models · Weekly",
+            "Gemini 4 Argon · Weekly",
+            "Claude and GPT models · 5-hour",
+            "Claude and GPT models · Weekly"
+        ]
+    );
+    assert_eq!(from_agy[0].used_percent, 24.6);
+    assert_eq!(from_agy[1].used_percent, 8.7);
+    assert!(from_agy[2..].iter().all(|limit| limit.used_percent == 0.0 && limit.resets_at.is_none()));
+    assert!(parse_agy_usage(&json!({"response": "no command data"})).is_empty());
+}
+
+#[test]
+fn the_old_claude_only_summary_has_no_gemini_row_and_agy_fills_it_in() {
+    let claude_only = json!({"groups": [{"displayName": "Claude and GPT models", "buckets": [
+        {"bucketId": "3p-5h", "window": "5h", "resetTime": "2026-11-19T21:10:27Z", "remainingFraction": 0.96},
+        {"bucketId": "3p-weekly", "window": "weekly", "resetTime": "2026-11-26T16:10:27Z", "remainingFraction": 1}]}]});
+    let summary = parse_quota_summary(&claude_only);
+    assert!(!to_limits(&summary).iter().any(|limit| limit.name.starts_with("Gemini")));
+    // Merged by bucket id: the summary's Claude rows stay (the most-used reading wins) and Gemini arrives.
+    let merged = to_limits(&merge_buckets([summary, parse_agy_usage(&agy_usage_json())]));
+    let names: Vec<_> = merged.iter().map(|limit| (limit.name.as_str(), limit.used_percent)).collect();
+    assert_eq!(names[0], ("Gemini Models · 5-hour", 24.6));
+    assert!(names.contains(&("Claude and GPT models · 5-hour", 4.0)), "{names:?}");
+    assert_eq!(merged.len(), 5);
+}
+
+#[test]
+fn the_user_agent_names_the_cli_and_its_platform() {
+    let agent = user_agent("1.5.12");
+    let expected_os = if cfg!(target_os = "macos") { "darwin" } else { std::env::consts::OS };
+    let expected_arch = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        "x86_64" => "amd64",
+        other => other,
+    };
+    assert_eq!(agent, format!("antigravity/cli/1.5.12 {expected_os}/{expected_arch}"));
+    assert!(agent.starts_with("antigravity/cli/"), "the plain `antigravity/<version>` name gets no Gemini group");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn agy_usage_runs_once_without_a_turn_and_is_reused() {
+    let dir = tempfile::tempdir().unwrap();
+    let binary = dir.path().join("agy");
+    let calls = dir.path().join("calls");
+    let answer = dir.path().join("answer.json");
+    std::fs::write(&answer, agy_usage_json().to_string()).unwrap();
+    kybern_protocol::process::write_executable(
+        &binary,
+        format!(
+            "#!/bin/sh\necho \"$*\" >> '{}'\n[ \"$*\" = '-p /usage --output-format json' ] || exit 3\ncat '{}'\n",
+            calls.display(),
+            answer.display()
+        ),
+    )
+    .unwrap();
+    let env = std::collections::BTreeMap::new();
+    let first = read_agy_usage(Some(&binary), &env, dir.path()).await;
+    assert_eq!(first.len(), 5);
+    let second = read_agy_usage(Some(&binary), &env, dir.path()).await;
+    assert_eq!(second.len(), 5);
+    let log = std::fs::read_to_string(&calls).unwrap();
+    assert_eq!(log.lines().collect::<Vec<_>>(), ["-p /usage --output-format json"], "one call, then the cached answer");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_failing_agy_usage_reads_as_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let binary = dir.path().join("agy");
+    kybern_protocol::process::write_executable(&binary, "#!/bin/sh\necho 'not json'\nexit 1\n").unwrap();
+    assert!(read_agy_usage(Some(&binary), &std::collections::BTreeMap::new(), dir.path()).await.is_empty());
 }

@@ -5,6 +5,11 @@
 //! to `agy`'s storage: an expired token reads as stale (`LoginRefresh`) until
 //! the next Antigravity turn renews it. The endpoints are undocumented and may
 //! change or be refused without notice, so every failure is quiet.
+//!
+//! Google answers the quota summary per client: the plain `antigravity/<version>`
+//! User-Agent gets only the "Claude and GPT models" group, the CLI's own
+//! `antigravity/cli/<version>` gets the Gemini groups too. When a summary still has
+//! no Gemini group, `agy -p "/usage"` (no agent turn, no quota spent) fills it in.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -14,6 +19,7 @@ use std::time::{Duration, Instant};
 use chrono::DateTime;
 use kybern_protocol::UsageLimit;
 use kybern_protocol::methods::LimitsStale;
+use kybern_protocol::process::NoWindow;
 use serde_json::{Value, json};
 
 use super::login::read_login;
@@ -26,9 +32,15 @@ const TOTAL_TIMEOUT: Duration = Duration::from_secs(10);
 const REFRESH_MARGIN_SECONDS: i64 = 60;
 const FAILURE_BACKOFF: Duration = Duration::from_secs(2 * 60);
 const MAX_BACKOFF: Duration = Duration::from_secs(15 * 60);
+/// `agy -p "/usage"` answers in 2-3 s.
+const AGY_USAGE_TIMEOUT: Duration = Duration::from_secs(8);
+/// A `/usage` answer is reused this long, so reads never start `agy` more often than this.
+const AGY_USAGE_FRESH: Duration = Duration::from_secs(60);
 
 /// No requests before this instant after a failed or throttled read.
 static PAUSED_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
+/// The last `agy /usage` answer, for which binary, and when it was read.
+static AGY_USAGE: Mutex<Option<(PathBuf, Instant, Vec<QuotaBucket>)>> = Mutex::new(None);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct QuotaBucket {
@@ -118,12 +130,18 @@ pub fn plan_name(tier_id: &str) -> String {
     }
 }
 
-/// `retrieveUserQuotaSummary`: `{groups:[{displayName, buckets:[{bucketId, window, resetTime, remainingFraction}]}]}`.
-pub fn parse_quota_summary(body: &Value) -> Vec<QuotaBucket> {
+/// The field names of one shape of group list.
+struct GroupKeys {
+    name: &'static str,
+    id: &'static str,
+    remaining: &'static str,
+    reset: &'static str,
+}
+
+fn parse_groups(groups: Option<&Value>, keys: &GroupKeys) -> Vec<QuotaBucket> {
     let mut buckets = Vec::new();
-    for group in body.get("groups").and_then(Value::as_array).into_iter().flatten() {
-        let family =
-            group.get("displayName").and_then(Value::as_str).map(str::trim).filter(|name| !name.is_empty()).unwrap_or("Antigravity");
+    for group in groups.and_then(Value::as_array).into_iter().flatten() {
+        let family = group.get(keys.name).and_then(Value::as_str).map(str::trim).filter(|name| !name.is_empty()).unwrap_or("Antigravity");
         for bucket in group.get("buckets").and_then(Value::as_array).into_iter().flatten() {
             if bucket.get("disabled").and_then(Value::as_bool) == Some(true) {
                 continue;
@@ -133,46 +151,45 @@ pub fn parse_quota_summary(body: &Value) -> Vec<QuotaBucket> {
                 Some("weekly") => QuotaWindow::Week,
                 _ => continue,
             };
-            let Some(remaining) = bucket.get("remainingFraction").and_then(Value::as_f64).filter(|value| value.is_finite()) else {
+            let Some(remaining) = bucket.get(keys.remaining).and_then(Value::as_f64).filter(|value| value.is_finite()) else {
                 continue;
             };
-            let id = bucket
-                .get("bucketId")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("{family}:{}", window.label()));
+            let id =
+                bucket.get(keys.id).and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| format!("{family}:{}", window.label()));
             let used = (1.0 - remaining).clamp(0.0, 1.0);
             buckets.push(QuotaBucket {
                 id,
                 family: family.to_string(),
                 window,
                 used,
-                resets_at: reset_seconds(bucket.get("resetTime"), used),
+                resets_at: reset_seconds(bucket.get(keys.reset), used),
             });
         }
     }
     buckets
 }
 
-/// `fetchAvailableModels`: `models.<id>.quotaInfo` and `weeklyQuotaInfo`.
-fn parse_available_models(body: &Value) -> Vec<QuotaBucket> {
-    let mut buckets = Vec::new();
-    for (id, model) in body.get("models").and_then(Value::as_object).into_iter().flatten() {
-        let family = model.get("displayName").and_then(Value::as_str).unwrap_or(id).to_string();
-        for (key, window) in [("quotaInfo", QuotaWindow::Session), ("weeklyQuotaInfo", QuotaWindow::Week)] {
-            let Some(info) = model.get(key) else { continue };
-            let Some(remaining) = info.get("remainingFraction").and_then(Value::as_f64).filter(|value| value.is_finite()) else { continue };
-            let used = (1.0 - remaining).clamp(0.0, 1.0);
-            buckets.push(QuotaBucket {
-                id: format!("{id}:{key}"),
-                family: family.clone(),
-                window,
-                used,
-                resets_at: reset_seconds(info.get("resetTime"), used),
-            });
-        }
-    }
-    buckets
+/// `retrieveUserQuotaSummary`: `{groups:[{displayName, buckets:[{bucketId, window, resetTime, remainingFraction}]}]}`.
+pub fn parse_quota_summary(body: &Value) -> Vec<QuotaBucket> {
+    parse_groups(body.get("groups"), &GroupKeys { name: "displayName", id: "bucketId", remaining: "remainingFraction", reset: "resetTime" })
+}
+
+/// `agy -p "/usage" --output-format json`: `command.data.groups[].buckets[]`
+/// with `name`, `id`, `window`, `remaining_fraction` and `reset_time`.
+pub fn parse_agy_usage(body: &Value) -> Vec<QuotaBucket> {
+    parse_groups(
+        body.pointer("/command/data/groups"),
+        &GroupKeys { name: "name", id: "id", remaining: "remaining_fraction", reset: "reset_time" },
+    )
+}
+
+/// Whether the readings include the Gemini models' own group ("Gemini Models"),
+/// which the plain User-Agent never gets. "Gemini 4 Argon" is its own quota.
+fn has_gemini(buckets: &[QuotaBucket]) -> bool {
+    buckets.iter().any(|bucket| {
+        let family = bucket.family.to_lowercase();
+        family.contains("gemini") && !family.contains("argon")
+    })
 }
 
 /// Different calls return different groups, so readings merge by bucket id and
@@ -190,12 +207,28 @@ pub fn merge_buckets(readings: impl IntoIterator<Item = Vec<QuotaBucket>>) -> Ve
     merged.into_values().collect()
 }
 
-/// Rows for the usage cache: `<family> · 5-hour|Weekly`, the 5-hour windows
-/// first, the most used first within a window.
+/// Where a group sits in the list: the Gemini models, then Gemini 4 Argon, then Claude and GPT.
+fn family_rank(family: &str) -> u8 {
+    let family = family.to_lowercase();
+    match (family.contains("gemini"), family.contains("argon")) {
+        (true, false) => 0,
+        (true, true) => 1,
+        _ if family.contains("claude") || family.contains("gpt") => 2,
+        _ => 3,
+    }
+}
+
+/// Rows for the usage cache: `<group> · 5-hour|Weekly`, a group's 5-hour window
+/// before its weekly one, the groups in `family_rank` order.
 pub fn to_limits(buckets: &[QuotaBucket]) -> Vec<UsageLimit> {
     let mut sorted: Vec<&QuotaBucket> = buckets.iter().collect();
-    sorted
-        .sort_by(|a, b| a.window.minutes().cmp(&b.window.minutes()).then(b.used.total_cmp(&a.used)).then_with(|| a.family.cmp(&b.family)));
+    sorted.sort_by(|a, b| {
+        family_rank(&a.family)
+            .cmp(&family_rank(&b.family))
+            .then_with(|| a.family.cmp(&b.family))
+            .then(a.window.minutes().cmp(&b.window.minutes()))
+            .then_with(|| a.id.cmp(&b.id))
+    });
     sorted
         .into_iter()
         .map(|bucket| UsageLimit {
@@ -234,23 +267,55 @@ fn throttled(until: Instant, detail: String) -> UsageUnread {
     UsageUnread { reason: LimitsStale::Throttled, retry_at, detail }
 }
 
-/// Go's `GOOS/GOARCH` names, which is how `agy` names itself.
-fn user_agent(version: &str) -> String {
+/// How the `agy` CLI names itself: `antigravity/cli/<version> <GOOS>/<GOARCH>`.
+/// Google gives the Gemini quota groups only to this client name.
+pub(crate) fn user_agent(version: &str) -> String {
     let os = if std::env::consts::OS == "macos" { "darwin" } else { std::env::consts::OS };
     let arch = match std::env::consts::ARCH {
         "aarch64" => "arm64",
         "x86_64" => "amd64",
         other => other,
     };
-    format!("{ANTIGRAVITY_USER_AGENT_PREFIX}/{version} {os}/{arch}")
+    format!("{ANTIGRAVITY_USER_AGENT_PREFIX}/cli/{version} {os}/{arch}")
 }
 
+/// Google refuses the CLI name below 1.4, so the fallback is a version it accepts.
+const FALLBACK_VERSION: &str = "1.4.12";
+
 async fn agy_version(binary: Option<&PathBuf>) -> String {
-    let Ok(binary) = crate::binary::resolve(kybern_protocol::ProviderKind::Antigravity, binary) else { return "1.4.12".into() };
+    let Ok(binary) = crate::binary::resolve(kybern_protocol::ProviderKind::Antigravity, binary) else { return FALLBACK_VERSION.into() };
     crate::binary::version_of(&binary, &["--version"])
         .await
         .and_then(|line| crate::binary::parse_semver(&line).map(|(a, b, c)| format!("{a}.{b}.{c}")))
-        .unwrap_or_else(|| "1.4.12".into())
+        .unwrap_or_else(|| FALLBACK_VERSION.into())
+}
+
+/// `agy -p "/usage" --output-format json`: Google's own answer for the account,
+/// with no agent turn and no quota spent. Reused for `AGY_USAGE_FRESH`.
+pub(crate) async fn read_agy_usage(binary: Option<&PathBuf>, env: &BTreeMap<String, String>, home: &Path) -> Vec<QuotaBucket> {
+    let Ok(binary) = crate::binary::resolve(kybern_protocol::ProviderKind::Antigravity, binary) else { return Vec::new() };
+    if let Some((cached_for, at, buckets)) = AGY_USAGE.lock().ok().and_then(|cached| cached.clone())
+        && cached_for == binary
+        && at.elapsed() < AGY_USAGE_FRESH
+    {
+        return buckets;
+    }
+    let mut command = crate::binary::command(&binary).no_window();
+    command.args(["-p", "/usage", "--output-format", "json"]).current_dir(home).envs(env);
+    let Ok(Ok(output)) = tokio::time::timeout(AGY_USAGE_TIMEOUT, crate::process_tree::output(&mut command)).await else {
+        return Vec::new();
+    };
+    let buckets = if output.status.success() {
+        serde_json::from_slice::<Value>(&output.stdout).map(|body| parse_agy_usage(&body)).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    if !buckets.is_empty()
+        && let Ok(mut cached) = AGY_USAGE.lock()
+    {
+        *cached = Some((binary, Instant::now(), buckets.clone()));
+    }
+    buckets
 }
 
 enum Failure {
@@ -300,8 +365,13 @@ pub async fn read_account_usage(
         Err(_) => Err(Failure::Network("the read timed out".into())),
     };
     match outcome {
-        Ok(reading) => {
+        Ok(mut reading) => {
             clear_pause();
+            // The summary came without the Gemini group: ask `agy` itself.
+            if !has_gemini(&reading.buckets) {
+                let from_agy = read_agy_usage(binary, env, &home).await;
+                reading.buckets = merge_buckets([std::mem::take(&mut reading.buckets), from_agy]);
+            }
             let limits = to_limits(&reading.buckets);
             if limits.is_empty() {
                 pause(FAILURE_BACKOFF);
@@ -353,12 +423,11 @@ async fn read_with_token(token: &str, agent: &str) -> Result<QuotaReading, Failu
             Err(error) => failure = Some(error),
         }
     }
-    let mut buckets = merge_buckets(readings);
-    if buckets.is_empty() {
-        match post(&client, format!("{}/v1internal:fetchAvailableModels", HOSTS[1]), token, agent, &body).await {
-            Ok(body) => buckets = merge_buckets([parse_available_models(&body)]),
-            Err(error) => return Err(failure.unwrap_or(error)),
-        }
+    let buckets = merge_buckets(readings);
+    if buckets.is_empty()
+        && let Some(failure) = failure
+    {
+        return Err(failure);
     }
     Ok(QuotaReading { buckets, plan })
 }

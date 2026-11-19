@@ -41,7 +41,7 @@ test("limit windows use each vendor's words", () => {
   // Antigravity names the models a limit covers; the row keeps them.
   const covered = { name: "Claude and GPT models · 5-hour", used_percent: 0, window_minutes: 300, resets_at: null };
   assert.equal(limitLabel(covered, "antigravity"), "Claude and GPT models · 5-hour");
-  assert.equal(limitLabel({ ...covered, name: "Gemini · Weekly", window_minutes: 10080 }, "antigravity"), "Gemini · Weekly");
+  assert.equal(limitLabel({ ...covered, name: "Gemini Models · Weekly", window_minutes: 10080 }, "antigravity"), "Gemini Models · Weekly");
   assert.equal(limitTone(50), "accent");
   assert.equal(limitTone(80), "warning");
   assert.equal(limitTone(95), "negative");
