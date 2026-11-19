@@ -63,7 +63,7 @@ try {
   await app.getByTestId('rail-update').click()
   await Bun.sleep(1000)
   mark('details')
-  await app.getByTestId('rail-update-details').click()
+  await app.getByTestId('rail-update-app-open').click()
   await Bun.sleep(1500)
   mark('idle')
   await Bun.sleep(2000)

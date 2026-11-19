@@ -723,8 +723,12 @@ export function RuntimeTaskRow({ task, thread }: { task: RuntimeTask; thread?: T
   )
 }
 
-/** The stem under a launch group's 24px badge (centre 12, 24 from the top of its 48px header). */
-const LAUNCH_STEM: TreeShape = { anchor: 24, below: { x: 12, from: 36 + TICK_GAP } }
+/**
+ * How far the members' stem reaches up into the 48px header: to `TICK_GAP` under the 24px badge (which ends 36px down). The
+ * first member draws it as part of its own stem (`TreeGroup` `inset`), so the line from the badge to the last member is one
+ * kind of piece in one pixel column. A separate piece drawn by the header could round to the next column at 1x and kink.
+ */
+const LAUNCH_STEM_REACH = 48 - (36 + TICK_GAP)
 
 /** "N subagents" / "N delegated agents": counts by phase, members on expand.
  *  A member with a known child thread takes its title and phase and opens it. */
@@ -758,10 +762,11 @@ const LaunchGroupRow = memo(function LaunchGroupRow({ kind, blocks, ctx }: { kin
   return (
     <div paintTransform={tree.rise} style={{ position: 'relative', display: 'flex', flexDirection: 'column', marginTop: 4, marginBottom: 4 }}>
       <div testId={`launch-group-${blocks[0]!.id}`} onClick={() => { if (!expanded) markTreeOpen(); setChosen(!expanded) }} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 10, paddingTop: 6, paddingBottom: 6, paddingRight: 6, cursor: 'pointer' }}>
-        {expanded && <TreeLines shape={LAUNCH_STEM} />}
-        <div style={{ display: 'flex', width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: t.buttonSecondary, flexShrink: 0 }}>
-          {kind === 'subagents' && members[0]?.thread ? <ProviderMark kind={members[0].thread.provider.kind} size={13} /> : kind === 'delegations' ? <HarnessMarks kinds={members.map((m) => m.harness)} /> : <Icon source={T.robot} size={13} color={muted(t)} />}
-        </div>
+        {kind === 'delegations'
+          ? <HarnessMarks kinds={members.map((m) => m.harness)} />
+          : <div style={{ display: 'flex', width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: t.buttonSecondary, flexShrink: 0 }}>
+            {kind === 'subagents' && members[0]?.thread ? <ProviderMark kind={members[0].thread.provider.kind} size={13} /> : <Icon source={T.robot} size={13} color={muted(t)} />}
+          </div>}
         <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}>
           <Label color={fg(t, 0.88)} lineHeight={20} style={{ hover: { color: t.text } }}>
             {title}
@@ -779,7 +784,7 @@ const LaunchGroupRow = memo(function LaunchGroupRow({ kind, blocks, ctx }: { kin
       <PanelPresence show={expanded}><PanelEnter>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 1, marginLeft: 28, paddingBottom: 4 }}>
           {/* Hung from the 24px badge's centre; each member's status glyph sits 6px into its row. */}
-          <TreeGroup x={12 - 28} tickEnd={6 - TICK_GAP} gap={1} open={expanded}>
+          <TreeGroup x={12 - 28} tickEnd={6 - TICK_GAP} inset={LAUNCH_STEM_REACH} gap={1} open={expanded}>
             {members.map((member, i) => (
               <TreeItem key={member.key} joint="node" last={i === members.length - 1} index={i} count={members.length} anchor={16}>
                 <TreeBox><LaunchMember grouped block={member.block} thread={member.thread} task={member.task} delegated={kind === 'delegations'} /></TreeBox>

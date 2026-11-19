@@ -1,50 +1,55 @@
-// Pure rules for harness version notices (no React), so tests load them directly: the sidebar pill, what dismissing
-// it remembers, the quiet toast after an automatic update, and the summary of "Update on all machines".
+// Pure rules for harness version notices (no React), so tests load them directly: the rows in the rail's update card, what
+// dismissing one remembers, the quiet toast after an automatic update, and the summary of "Update on all machines".
 import type { HarnessUpdate, HarnessUpdatesRunAllResult, ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
 import { AGENT_NAMES } from '../onboarding/model.ts'
 
-/** The version each harness's pill was dismissed at. A newer version shows the pill again. */
+/** The version each harness was dismissed at. A newer version shows it again. */
 export type Dismissed = Partial<Record<ProviderKind, string>>
 
-/** `label` is what the pill shows after its logos, `text` the full sentence a screen reader hears, `action` the Update button's name. */
-export type Pill =
-  | { count: 1; kind: ProviderKind; label: string; text: string; action: string }
-  | { count: number; kinds: ProviderKind[]; label: string; text: string; action: string }
-
-const busy = (record: HarnessUpdate) => record.status === 'waiting' || record.status === 'updating'
-
-/** Harnesses with a newer version the person has not dismissed and that are not already updating. */
-export function pending(records: readonly HarnessUpdate[], dismissed: Dismissed): HarnessUpdate[] {
-  return records.filter((record) => record.update_available && record.latest_version && !busy(record) && dismissed[record.kind] !== record.latest_version)
+/** One harness with a newer version, as a row of the rail's update card. */
+export interface UpdateRow {
+  kind: ProviderKind
+  /** "Claude Code". The version is in `text`, for a screen reader. */
+  name: string
+  /** "Claude Code 2.1.330 is out". */
+  text: string
+  /** Waiting for its agents to be idle, or updating: the row stays, with a busy button, until the new version is in. */
+  busy: boolean
+  /** The last attempt did not finish. */
+  failed: boolean
 }
 
-/** The sidebar pill, or null. Automatic updates install on their own, so they need no pill; several updates are one pill. */
-export function pill(records: readonly HarnessUpdate[], dismissed: Dismissed, autoUpdate: boolean): Pill | null {
-  if (autoUpdate) return null
-  const shown = pending(records, dismissed)
-  if (shown.length === 0) return null
-  const name = (kind: ProviderKind) => AGENT_NAMES[kind] ?? kind
-  if (shown.length === 1) {
-    const [record] = shown
-    // The sidebar is narrow: the name beside its logo and Update is a notice that fits; the version is in the sentence for VoiceOver.
-    const label = name(record.kind)
-    return { count: 1, kind: record.kind, label, text: `${label} ${record.latest_version} is out`, action: `Update ${label}` }
-  }
-  // The logos say which harnesses; the count says how many. The sentence names every one.
-  const kinds = shown.map((record) => record.kind)
-  const names = kinds.map(name)
-  return { count: shown.length, kinds, label: `${shown.length} updates`, text: `Updates for ${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`, action: 'Update all' }
+/** What a failed row says; the technical text stays in Settings › Agent providers. */
+export const FAILED_UPDATE_LINE = 'The last update didn’t finish. Try again, or run the updater in your terminal.'
+
+const waiting = (record: HarnessUpdate) => record.status === 'waiting' || record.status === 'updating'
+
+const newer = (record: HarnessUpdate, dismissed: Dismissed) =>
+  !!record.update_available && !!record.latest_version && dismissed[record.kind] !== record.latest_version
+
+/**
+ * The harness rows of the rail's update card. Automatic updates install on their own, so they need none. A row that was
+ * asked to update stays, busy, until the record says the new version is in (it then has no newer version).
+ */
+export function updateRows(records: readonly HarnessUpdate[], dismissed: Dismissed, autoUpdate: boolean): UpdateRow[] {
+  if (autoUpdate) return []
+  return records.filter((record) => newer(record, dismissed)).map((record) => {
+    const name = AGENT_NAMES[record.kind] ?? record.kind
+    return { kind: record.kind, name, text: `${name} ${record.latest_version} is out`, busy: waiting(record), failed: record.status === 'failed' }
+  })
 }
 
-/** Dismissing remembers the version each pill named, so only a newer one brings it back. */
-export function dismiss(records: readonly HarnessUpdate[], dismissed: Dismissed): Dismissed {
+/** The rail update button's accessible name, or null when it has nothing to show: a Kybern release, a harness, or both. */
+export function railName(appVersion: string | null, rows: readonly UpdateRow[]): string | null {
+  return rows.length > 0 || appVersion ? 'Updates available' : null
+}
+
+/** Dismissing remembers the version a row named, so only a newer one brings it back. Without a kind it dismisses every pending row. */
+export function dismiss(records: readonly HarnessUpdate[], dismissed: Dismissed, kind?: ProviderKind): Dismissed {
   const next = { ...dismissed }
-  for (const record of pending(records, dismissed)) next[record.kind] = record.latest_version
+  for (const record of records.filter((r) => newer(r, dismissed) && (kind === undefined || r.kind === kind))) next[record.kind] = record.latest_version
   return next
 }
-
-/** What the pill's Update button queues. */
-export const kindsOf = (shown: Pill): ProviderKind[] => (shown.count === 1 && 'kind' in shown ? [shown.kind] : 'kinds' in shown ? shown.kinds : [])
 
 /** The version to show for an installed harness: the number from its `--version` line. */
 export function shortVersion(line: string | null | undefined): string | null {

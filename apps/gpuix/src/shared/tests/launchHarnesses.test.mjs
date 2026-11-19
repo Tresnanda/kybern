@@ -10,11 +10,11 @@ test("one harness across the group shows one logo", () => {
 })
 
 test("distinct harnesses keep the order they first appear in", () => {
-  assert.deepEqual(launchHarnesses(["codex", "claude-code", "codex", "cursor"], has), ["codex", "claude-code", "cursor"])
+  assert.deepEqual(launchHarnesses(["cursor", "codex", "claude-code", "codex"], has), ["cursor", "codex"])
 })
 
-test("at most three logos, with no overflow entry", () => {
-  assert.deepEqual(launchHarnesses(["codex", "claude-code", "cursor", "opencode"], has), ["codex", "claude-code", "cursor"])
+test("at most two logos, the first two harnesses, with no overflow entry", () => {
+  assert.deepEqual(launchHarnesses(["codex", "claude-code", "cursor", "opencode"], has), ["codex", "claude-code"])
 })
 
 test("an unknown or unresolved harness is the generic mark, once", () => {
@@ -22,10 +22,11 @@ test("an unknown or unresolved harness is the generic mark, once", () => {
   assert.deepEqual(launchHarnesses([undefined], has), [null])
 })
 
-test("the logos always fit the 24 px badge and overlap", () => {
-  for (const count of [1, 2, 3]) {
-    const { size, step, width } = harnessMarkGeometry(count)
-    assert.ok(width <= 24, `${count} logos are ${width}px wide`)
-    if (count > 1) assert.ok(step < size, "neighbours overlap")
-  }
+test("one logo keeps the badge's circle; two plates fill the 24 px slot exactly", () => {
+  assert.deepEqual(harnessMarkGeometry(1), { plate: 24, logo: 13, step: 0, ring: 0, width: 24 })
+  const two = harnessMarkGeometry(2)
+  assert.equal(two.width, 24)
+  assert.equal(two.plate + two.step, 24)
+  assert.equal(two.step, two.plate / 2, "the back plate is half covered")
+  assert.ok(two.logo >= 11, `logos are ${two.logo}px`)
 })
