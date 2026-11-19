@@ -12,13 +12,22 @@ describe('pill', () => {
     const shown = pill([newer('claude-code', '2.1.330'), record('codex')], {}, false)
     expect(shown?.text).toBe('Claude Code 2.1.330 is out')
     expect(shown?.label).toBe('Claude Code 2.1.330')
+    expect(shown?.action).toBe('Update Claude Code')
     expect(kindsOf(shown!)).toEqual(['claude-code'])
   })
 
   test('several updates collapse into one pill', () => {
     const shown = pill([newer('claude-code', '2.1.330'), newer('codex', '0.170.0'), newer('grok-build', '0.2.0')], {}, false)
-    expect(shown?.text).toBe('3 harness updates')
+    expect(shown?.label).toBe('3 updates')
+    expect(shown?.text).toBe('Updates for Claude Code, Codex and Grok Build')
+    expect(shown?.action).toBe('Update all')
     expect(kindsOf(shown!)).toEqual(['claude-code', 'codex', 'grok-build'])
+  })
+
+  test('two updates read as a pair', () => {
+    const shown = pill([newer('claude-code', '2.1.330'), newer('codex', '0.170.0')], {}, false)
+    expect(shown?.label).toBe('2 updates')
+    expect(shown?.text).toBe('Updates for Claude Code and Codex')
   })
 
   test('nothing while automatic updates are on, nothing without a newer version', () => {

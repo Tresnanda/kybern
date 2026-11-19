@@ -30,6 +30,8 @@ export interface ButtonProps {
   variant?: ButtonVariant
   /** Red label on a secondary or ghost button. */
   danger?: boolean
+  /** Accent label and glyph on a ghost button (the theme's link blue), for an inline action inside a notice. */
+  accent?: boolean
   size?: ControlSize
   /** Leading glyph (a kit icon name or an SVG source). */
   icon?: string
@@ -56,7 +58,7 @@ export interface ButtonProps {
   style?: StyleDesc
 }
 
-export function Button({ children, variant = 'secondary', danger = false, size = 'md', icon, iconAfter, chevron = false, kbd, busy = false, disabled = false, onClick, onKeyboard, label, swap = false, trailing, block = false, testId, style }: ButtonProps) {
+export function Button({ children, variant = 'secondary', danger = false, accent = false, size = 'md', icon, iconAfter, chevron = false, kbd, busy = false, disabled = false, onClick, onKeyboard, label, swap = false, trailing, block = false, testId, style }: ButtonProps) {
   const t = useTheme()
   const c = useControls()
   const g = CONTROL[size]
@@ -68,6 +70,7 @@ export function Button({ children, variant = 'secondary', danger = false, size =
     : variant === 'primary' ? c.primary.fg
     : variant === 'destructive' ? c.destructive.fg
     : danger ? c.danger
+    : accent && variant === 'ghost' ? t.link
     : variant === 'ghost' ? (hover ? t.text : c.ghost.fg)
     : c.secondary.fg
   const rest = off ? (filled ? c.disabled.bg : 'rgba(0, 0, 0, 0)') : v ? v.bg : 'rgba(0, 0, 0, 0)'

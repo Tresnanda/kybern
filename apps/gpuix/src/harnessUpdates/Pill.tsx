@@ -1,17 +1,16 @@
-// The sidebar's harness update pill: "Claude Code 2.1.330" (read as "… is out") with Update, or "3 harness updates" for several,
-// above the machines footer. Shown only while automatic updates are off; dismissing it hides it until a newer
-// version. It appears in place, without an entrance: it is a quiet notice, not an event.
-import { Download04Icon } from '@hugeicons/core-free-icons'
-import { glyph, Icon } from '../icons.tsx'
+// The sidebar's harness update pill: the harness's logo and "Claude Code 2.1.330" (read as "… is out") with Update, or the
+// overlapping logos and "3 updates" for several (read as "Updates for …"), above the machines footer. Shown only while
+// automatic updates are off; dismissing it hides it until a newer version. It appears in place, without an entrance: it is
+// a quiet notice, not an event.
 import { N } from '../nav/glyphs.ts'
 import { Button } from '../kit/Button.tsx'
 import { IconButton } from '../kit/IconButton.tsx'
 import { useSettings } from '../settings/store.ts'
-import { ink, Label, useTheme } from '../ui.tsx'
+import { HarnessMarks } from '../subagents/HarnessMarks.tsx'
+import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
 import { kindsOf, pill } from './model.ts'
 import { dismissPill, updateHarnesses, useHarnessUpdates } from './store.ts'
 
-const DOWNLOAD = glyph(Download04Icon)
 const openAgents = () => void import('../settings/SettingsScreen.tsx').then((m) => m.openSettingsTab('agents'))
 
 export function HarnessUpdatePill() {
@@ -30,10 +29,10 @@ export function HarnessUpdatePill() {
       <div testId="harness-update-pill-open" role="button" tabIndex={0} aria-label={`${shown.text}. Open Agent providers`} onClick={openAgents}
         onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') openAgents() }}
         style={{ display: 'flex', alignItems: 'center', gap: 6, flexGrow: 1, flexShrink: 1, minWidth: 0, cursor: 'pointer' }}>
-        <Icon source={DOWNLOAD} size={14} color={t.link} style={{ pointerEvents: 'none' }} />
+        {shown.count === 1 && 'kind' in shown ? <ProviderMark kind={shown.kind} size={14} /> : <HarnessMarks kinds={kinds} />}
         <Label color={t.text} size={12} lineHeight={16} truncate style={{ pointerEvents: 'none' }}>{shown.label}</Label>
       </div>
-      <Button testId="harness-update-pill-update" size="sm" variant="ghost" busy={busy} disabled={busy} onClick={() => void updateHarnesses(kinds)} style={{ paddingLeft: 6, paddingRight: 6, marginLeft: 2 }}>Update</Button>
+      <Button testId="harness-update-pill-update" size="sm" variant="ghost" accent icon="download" label={shown.action} busy={busy} disabled={busy} onClick={() => void updateHarnesses(kinds)} style={{ paddingRight: 6, marginLeft: 2 }}>Update</Button>
       <IconButton testId="harness-update-pill-dismiss" label="Dismiss" icon={N.x} size="sm" onClick={dismissPill} />
     </div>
   )

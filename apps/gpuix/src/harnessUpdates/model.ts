@@ -6,10 +6,10 @@ import { AGENT_NAMES } from '../onboarding/model.ts'
 /** The version each harness's pill was dismissed at. A newer version shows the pill again. */
 export type Dismissed = Partial<Record<ProviderKind, string>>
 
-/** `label` is what the pill shows, `text` the full sentence a screen reader hears. */
+/** `label` is what the pill shows after its logos, `text` the full sentence a screen reader hears, `action` the Update button's name. */
 export type Pill =
-  | { count: 1; kind: ProviderKind; label: string; text: string }
-  | { count: number; kinds: ProviderKind[]; label: string; text: string }
+  | { count: 1; kind: ProviderKind; label: string; text: string; action: string }
+  | { count: number; kinds: ProviderKind[]; label: string; text: string; action: string }
 
 const busy = (record: HarnessUpdate) => record.status === 'waiting' || record.status === 'updating'
 
@@ -23,14 +23,17 @@ export function pill(records: readonly HarnessUpdate[], dismissed: Dismissed, au
   if (autoUpdate) return null
   const shown = pending(records, dismissed)
   if (shown.length === 0) return null
+  const name = (kind: ProviderKind) => AGENT_NAMES[kind] ?? kind
   if (shown.length === 1) {
     const [record] = shown
-    // The sidebar is narrow: the name and version, which the icon and Update make a notice, always fit; the sentence is for VoiceOver.
-    const label = `${AGENT_NAMES[record.kind] ?? record.kind} ${record.latest_version}`
-    return { count: 1, kind: record.kind, label, text: `${label} is out` }
+    // The sidebar is narrow: the name and version, which the logo and Update make a notice, always fit; the sentence is for VoiceOver.
+    const label = `${name(record.kind)} ${record.latest_version}`
+    return { count: 1, kind: record.kind, label, text: `${label} is out`, action: `Update ${name(record.kind)}` }
   }
-  const label = `${shown.length} harness updates`
-  return { count: shown.length, kinds: shown.map((record) => record.kind), label, text: label }
+  // The logos say which harnesses; the count says how many. The sentence names every one.
+  const kinds = shown.map((record) => record.kind)
+  const names = kinds.map(name)
+  return { count: shown.length, kinds, label: `${shown.length} updates`, text: `Updates for ${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`, action: 'Update all' }
 }
 
 /** Dismissing remembers the version each pill named, so only a newer one brings it back. */
