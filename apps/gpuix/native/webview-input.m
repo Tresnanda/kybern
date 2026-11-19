@@ -107,7 +107,6 @@ void kybern_web_test_scroll(double x, double y, double dx, double dy, int phase,
     CGEventSetWindowLocation(cg, CGPointMake(x, y + window.frame.size.height - window.contentView.bounds.size.height));
     NSEvent *event = [NSEvent eventWithCGEvent:cg];
     CFRelease(cg);
-    if (getenv("KYBERN_INLINE_DEBUG")) fprintf(stderr, "[scroll] frame=%.0f,%.0f screen=%.0f,%.0f window=%ld loc=%.0f,%.0f phase=%ld momentum=%ld dy=%.1f type=%ld\n", window.frame.origin.x, window.frame.origin.y, screen.x, screen.y, (long)event.window.windowNumber, event.locationInWindow.x, event.locationInWindow.y, (long)event.phase, (long)event.momentumPhase, event.scrollingDeltaY, (long)event.type);
     if (event) [NSApp sendEvent:event];
   });
 }

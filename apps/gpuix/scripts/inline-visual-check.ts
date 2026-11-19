@@ -92,19 +92,6 @@ try {
   await wait(() => log().some(e => e.type === 'created'), 'a page went live without a press')
   await wait(async () => isLive('form'), 'the form, on screen, is live', 20000); await Bun.sleep(800)
   shot('1-bottom')
-  if (process.env.KYBERN_INLINE_DEBUG) {
-    await reveal('form', 300); await Bun.sleep(800)
-    const y0 = (await figure('form')).y
-    const f0 = await figure('form')
-    await gesture(f0.x + f0.width - 60, f0.y + 60, 12, 6); const y1 = (await figure('form')).y
-    await gesture(800, 500, 12, 6); const y2 = (await figure('form')).y
-    const f1 = await figure('form')
-    await gesture(f1.x + f1.width - 60, f1.y + 60, 12, 6); const y3 = (await figure('form')).y
-    await gesture(800, 500, 12, 6); const y4 = (await figure('form')).y
-    console.log('page', y1 - y0, 'text', y2 - y1, 'page', y3 - y2, 'text', y4 - y3)
-    console.log(fixture.diagnostics().split('\n').filter(l => l.includes('[wheel]')).slice(-40).join('\n'))
-    await fixture.close(); throw Error('debug run ends here')
-  }
 
   // The wheel over a page scrolls the chat, with momentum.
   await reveal('form', 300); await wait(async () => isLive('form'), 'form live'); await Bun.sleep(600)

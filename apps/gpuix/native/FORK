@@ -47,7 +47,11 @@ repo=https://github.com/Tresnanda/gpuix.git
 # setUiZoom/getUiZoom, the uiZoom window option, setTrafficLightPosition and the macOS View menu in gpuix. No shader
 # change. Built and checked on macOS (README.md, "Interface zoom"), then fast-forwarded into the forks' `next` and
 # `kybern` (gpuix 4c7d369, zed e568d32, 2026-11-08).
-commit=4c7d369e710815fbc74847f9843592128bab4eba
+# gpuix `inline-wheel` (inline pages): that plus `<websurface>` asking the companion whether a page takes a wheel
+# event (`kybern_web_surface_wheel`, optional: older companions take every one) and letting it bubble to the chat
+# otherwise, and Ctrl+W, Ctrl+1–9 and the zoom keys forwarded from a focused page. Linux-only code; no zed change.
+# Built on macOS. Not yet merged into the forks' `next` and `kybern`.
+commit=49d1d13df84c2c546b1099169620a14f7934ad10
 # The zed submodule commit `commit` records; update.sh refuses a checkout that differs.
 zed=e568d32acb2baa59f4e75ef7b1ed594a57e48fbb
 # The upstream tag `commit` is based on. It must be `@gpuix/native@<VERSION>`.

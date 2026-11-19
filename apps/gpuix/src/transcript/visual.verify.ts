@@ -1,9 +1,10 @@
-// Inline visuals, A′ (ADE-69). Seed first (`visual.seed.ts`), then:
+// Inline visuals (ADE-69; live while visible since the inline-pages change). Seed first (`visual.seed.ts`), then:
 //   VISUAL_SCRATCH=… bun src/transcript/visual.verify.ts [dark|light|glass]
-// Rest is a picture (no web process); hovering the page's Raw toggle washes it; clicking it makes the document live in
-// place and the click reaches the toggle; Esc freezes it back into a picture that shows Raw; Open in a tab moves the
-// same document (Raw still selected); the tall checklist rests clamped and Show more grows it. The embedded document
-// is captured with `screencapture -l` (the GPUI screenshot API omits child NSViews); the pointer is GPUI-level.
+// A visual on screen is live without a press (its picture first, then the page in place, same height); the tall
+// checklist is as tall as its page, with no clamp or Show more; Open in a tab moves the same document and the figure
+// takes it back live when the tab lets go. The wheel, presses and keys inside a live page are AppKit-level:
+// `scripts/inline-visual-check.ts` covers them. Pages are captured with `screencapture -l` (the GPUI screenshot API
+// omits child NSViews).
 import assert from 'node:assert/strict'
 import { mkdirSync } from 'node:fs'
 import { captureWindow, launchLive, until } from './live.ts'
@@ -25,54 +26,31 @@ try {
   // The bundle chart is the first visual: scroll it into view.
   await app.mouse.wheel({ x: 1100, y: 400 }, 0, 8000); await Bun.sleep(800)
   const figure = await boxOf(figures, 0)
-  assert.equal(webContents(), baseline, 'pictures at rest start no web process')
-  await app.mouse.move({ x: 20, y: 790 }); await Bun.sleep(300)
-  shot('1-rest')
-
-  // Hover the Raw toggle: the hit map washes it; the caption actions fade in.
-  const raw = { x: figure.x + 712, y: figure.y + 13 }
-  await app.mouse.move(raw); await Bun.sleep(400)
-  await until(async () => (await app.getByTestId('visual-hit').count()) === 1, 'hit-map wash')
-  shot('2-hover')
-
-  // Click it: live in place, the click is replayed on the toggle.
-  await app.mouse.click(raw)
-  await until(async () => (await app.getByTestId('visual-live').count()) > 0, 'live', 15000)
+  shot('1-picture')
+  // On screen: live without a press, in place, at the same height.
+  await until(async () => (await app.getByTestId('visual-live').count()) > 0, 'live without a press', 15000)
   await Bun.sleep(600)
-  shot('3-live')
+  shot('2-live')
   const live = await boxOf(figures, 0)
   assert.ok(Math.abs(live.height - figure.height) < 1, `no layout shift going live: ${figure.height} → ${live.height}`)
   console.log('web processes while live:', webContents() - baseline)
 
-  // Esc (GPUI holds the keyboard after a synthetic press): back to a picture that keeps Raw.
-  await app.getByTestId('app-ready').press('escape')
-  await until(async () => (await app.getByTestId('visual-done').count()) === 0, 'back to the picture', 5000)
-  await Bun.sleep(500)
-  shot('4-returned')
-
-  // Open in a tab: the same document (Raw still pressed), the inline figure says where it is.
+  // Open in a tab: the same document; the inline figure says where it is, then takes it back live.
   await app.mouse.move(centre(await boxOf(figures, 0))); await Bun.sleep(300)
   await app.mouse.click(centre(await boxOf(app.getByTestId('visual-expand'), 0)))
   await until(async () => (await app.getByTestId('visual-tab').count()) > 0, 'visual tab')
   await Bun.sleep(1200)
-  shot('5-tab')
+  shot('3-tab')
   await app.getByTestId('app-ready').press('cmd-1'); await Bun.sleep(700)
-  // The tab let go of it (warm): clicking the picture resumes the same document, Raw still selected.
-  await app.mouse.click(centre(await boxOf(figures, 0)))
-  await until(async () => (await app.getByTestId('visual-live').count()) > 0, 'resumed live', 8000)
-  await Bun.sleep(500)
-  shot('6-resumed')
-  await app.getByTestId('app-ready').press('escape')
-  await until(async () => (await app.getByTestId('visual-done').count()) === 0, 'back to the picture again', 5000)
+  await until(async () => (await app.getByTestId('visual-live').count()) > 0, 'live again after the tab', 8000)
+  shot('4-back')
 
-  // The tall checklist: clamped at 480, Show more grows it.
+  // The tall checklist: as tall as its page, nothing to show more of.
   await app.mouse.wheel({ x: 1100, y: 400 }, 0, -500); await Bun.sleep(500)
   const tall = await boxOf(figures, 1)
-  assert.equal(Math.round(tall.height), 480, 'tall visual rests at 480')
-  shot('7-tall')
-  await app.getByTestId('visual-more-height').click(); await Bun.sleep(600)
-  assert.ok((await boxOf(figures, 1)).height > 900, 'Show more grows it')
-  shot('8-tall-expanded')
-  console.log(`PASS ${variant}: rest, hover wash, live with replayed click, Esc to picture, tab move, clamp and Show more; web processes now ${webContents() - baseline}`)
+  assert.ok(tall.height > 900, `the tall visual is as tall as its page: ${tall.height}`)
+  assert.equal(await app.getByTestId('visual-more-height').count(), 0, 'no Show more')
+  shot('5-tall')
+  console.log(`PASS ${variant}: live without a press, no shift, tab move and back, full height; web processes now ${webContents() - baseline}`)
 } catch (error) { console.log(f.diagnostics()); throw error } finally { await f.close() }
 process.exit(0)

@@ -67,7 +67,7 @@ async function agent(run: number) {
     await Bun.sleep(1200)
     const figure = (await app.getByTestId('visual-figure').all())[0]!.bounds!
     await app.mouse.click({ x: figure.x + figure.width / 2, y: figure.y + 50 })
-    await until(async () => (await app.getByTestId('visual-ring-live').count()) > 0, 'live', 10_000)
+    await until(async () => (await app.getByTestId('visual-live').count()) > 0, 'live', 10_000)
     const drafted = (layout: string) => until(async () => (await painted(app)).includes(`Layout ${layout}`), `a draft of layout ${layout}`, 6000).then(() => true, () => false)
     const b = await drafted('B')
     await Bun.sleep(500)
