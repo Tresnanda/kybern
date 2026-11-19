@@ -383,6 +383,7 @@ pub fn install_script(kind: ProviderKind, windows: bool) -> Option<&'static str>
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     fn places(home: &Path) -> Places {
         Places { home: Some(home.to_path_buf()), local_app_data: None, os: "linux", arch: "x86_64" }
     }
