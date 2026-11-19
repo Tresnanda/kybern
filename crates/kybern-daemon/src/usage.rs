@@ -694,8 +694,9 @@ impl UsageMonitor {
                 .map(|usage| (usage.limits, usage.plan))
                 .ok_or_else(|| unavailable("Cursor reported no usage")),
             // Read with the token `agy` already refreshed; an expired one reads as stale (`LoginRefresh`).
+            // 20 s: the HTTP reads, then `agy /usage` (2-3 s) when the summary has no Gemini group.
             ProviderKind::Antigravity => {
-                tokio::time::timeout(Duration::from_secs(12), kybern_drivers::antigravity::read_account_usage(home, binary.as_ref(), env))
+                tokio::time::timeout(Duration::from_secs(20), kybern_drivers::antigravity::read_account_usage(home, binary.as_ref(), env))
                     .await
                     .unwrap_or_else(|_| Err(unavailable("the read timed out")))
             }

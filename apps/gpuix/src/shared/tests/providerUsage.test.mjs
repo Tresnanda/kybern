@@ -7,7 +7,7 @@ const now = Date.UTC(2026, 10, 19, 15, 0, 0)
 test("a limit keeps the models it covers in its name", () => {
   const covered = { name: "Claude and GPT models · 5-hour", used_percent: 0, window_minutes: 300, resets_at: null }
   assert.equal(limitLabel(covered, "antigravity"), "Claude and GPT models · 5-hour")
-  assert.equal(limitLabel({ ...covered, name: "Gemini · Weekly", window_minutes: 10080 }, "antigravity"), "Gemini · Weekly")
+  assert.equal(limitLabel({ ...covered, name: "Gemini Models · Weekly", window_minutes: 10080 }, "antigravity"), "Gemini Models · Weekly")
   assert.equal(limitFamily(covered), "Claude and GPT models")
   assert.equal(windowLabel(covered), "5-hour")
   // Harnesses that name only the window are unchanged.
