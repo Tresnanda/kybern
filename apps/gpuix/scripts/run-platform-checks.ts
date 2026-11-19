@@ -56,6 +56,10 @@ const CHECKS: Record<string, Check> = {
     description: 'The Problem component (#231): ProblemState, ProblemRow and toast.problem by title and test id, Show details and Copy (the text reaches the clipboard), Reduce Motion',
     runs: ({ capture }) => capture === 'none' ? [] : [{ name: 'problem', args: [script('kit-problem-check.ts')], minutes: 10 }],
   },
+  settings: {
+    description: 'Settings (#309): with Agent providers scrolled mid-page, a switch, a select, two quick switches and both "Check for updates" buttons leave the page exactly where it was (sampled every 40 ms); "Change in Settings" on the idle-compaction notice lands on Compaction with and without the optional rows above it, tinted once and not under Reduce Motion; dark and light',
+    runs: ({ kybernd, capture }) => capture === 'none' ? [] : [{ name: 'settings', args: [script('settings-scroll-check.ts'), '--kybernd', kybernd], minutes: 10 }],
+  },
   zoom: {
     description: 'Interface zoom (#292) at 100/150/80 %: content-pixel viewport and layout observers, a crisp 1 px border at scale × zoom, a popover under its trigger, steps that stop at the largest size that fits; macOS adds AppKit pointer input, the web page zoom and the minimum window',
     runs: ({ capture }) => capture === 'none' ? [] : [{ name: 'zoom', args: [native('zoom-check.ts')], minutes: 10 }],

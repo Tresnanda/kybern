@@ -13,23 +13,43 @@ let revision = 0
 export const latestSettings = () => state.settings
 export const latestError = () => state.error
 
-/** One in-flight write: controls disable until the daemon confirms the full document. */
-export async function updateSettings(patch: Partial<Settings>) {
+/** The last document the daemon confirmed; the page shows it plus the writes still in flight. */
+let confirmed: Settings | null = null
+/** Writes waiting for the daemon, sent one after another. */
+let inFlight = 0
+let queue: Promise<void> = Promise.resolve()
+
+/**
+ * Optimistic and in order: the page shows the change at once and every control stays usable while it saves (a control
+ * that went disabled mid-click lost focus, and the page moved). Each write sends the whole document as the page has it,
+ * so changes made while an earlier one saves are included. A failure goes back to the last confirmed document and sets
+ * `error`; Settings shows it as a problem toast.
+ */
+export function updateSettings(patch: Partial<Settings>): Promise<void> {
   const client = getClient()
-  if (!client || !state.settings || state.saving) return
-  emit({ saving: true, error: null })
-  try {
-    const before = state.settings
-    const saved = await client.call('settings.update', { settings: { ...before, ...patch } })
+  if (!client || !state.settings) return Promise.resolve()
+  if (!inFlight) confirmed = state.settings
+  inFlight++
+  emit({ settings: { ...state.settings, ...patch }, saving: true, error: null })
+  const write = queue.then(async () => {
     if (getClient() !== client) return
-    revision++
-    emit({ settings: saved })
-    // A shared field also goes to the other machines (a queued change waits for an offline one); per-machine fields stay here.
-    void shareSettings(changedSharedFields(before, saved))
-  } catch (error) {
-    if (getClient() !== client) return
-    emit({ error: failure('save the settings', error) })
-  } finally { if (getClient() === client) emit({ saving: false }) }
+    const before = confirmed ?? state.settings!
+    try {
+      const saved = await client.call('settings.update', { settings: state.settings! })
+      if (getClient() !== client) return
+      revision++
+      confirmed = saved
+      // A later write already holds the newer document; the last one to land adopts the daemon's.
+      if (inFlight === 1) emit({ settings: saved })
+      // A shared field also goes to the other machines (a queued change waits for an offline one); per-machine fields stay here.
+      void shareSettings(changedSharedFields(before, saved))
+    } catch (error) {
+      if (getClient() !== client) return
+      emit({ settings: confirmed, error: failure('save the settings', error) })
+    }
+  }).finally(() => { inFlight--; if (getClient() === client && !inFlight) emit({ saving: false }) })
+  queue = write
+  return write
 }
 
 /** Adopt a settings document the daemon just returned (another surface changed it). */
@@ -58,7 +78,11 @@ export function useSettingsConnection() {
     const at = revision
     const off = client.onNotification('settings.changed', (params) => {
       const settings = (params as { settings?: Settings })?.settings
-      if (live && settings) { revision++; emit({ settings, error: null }) }
+      if (!live || !settings) return
+      revision++
+      // Our own write echoes back before it resolves; while writes are in flight the page keeps its newer document.
+      if (inFlight) confirmed = settings
+      else emit({ settings, error: null })
     })
     void client.call('settings.get', {}).then((settings) => {
       if (live && revision === at) emit({ settings, error: null })

@@ -19,7 +19,7 @@ const LABEL = { size: 12, lineHeight: 16 }
 const BODY = { size: 13, lineHeight: 19.5 }
 
 function openCompactionSettings() {
-  void import('../settings/SettingsScreen.tsx').then((m) => m.openSettingsTab('agents'))
+  void import('../settings/SettingsScreen.tsx').then((m) => m.openSettings({ tab: 'agents', section: 'compaction' }))
 }
 
 export const IdleCompactionRow = memo(function IdleCompactionRow({ block }: { block: IdleCompactionBlock }) {

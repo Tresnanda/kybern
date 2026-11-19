@@ -95,7 +95,7 @@ export function Machines() {
       <Row title="Let your machines find each other" description="Machines signed in to the same Tailscale account join without a code. Turn this off to leave the network and keep your machines separate."><Switch aria-label="Use your network" testId="machines-enabled" checked={status.enabled} disabled={net.busy === 'enabled'} onCheckedChange={(enabled) => void setNetworkEnabled(enabled).catch((e) => toastProblem(e, { action: 'change the network' }))} /></Row>
       <KeepReachable status={status.keep_reachable} busy={net.busy === 'reachable'} />
       {settingsState.settings?.network && <Row title="Keep network data" description="Keep cached project and thread lists from your other machines on this computer.">
-        <Switch aria-label="Keep network data" testId="machines-keep-network-data" checked={settingsState.settings.network.keep_network_data !== false} disabled={settingsState.saving}
+        <Switch aria-label="Keep network data" testId="machines-keep-network-data" checked={settingsState.settings.network.keep_network_data !== false}
           onCheckedChange={(enabled) => void updateSettings({ network: { ...settingsState.settings!.network!, keep_network_data: enabled } })} />
       </Row>}
       <Row title="Check the network" description="Looks at Tailscale, the pairing and each machine, and says what to fix."><Button testId="machines-doctor" busy={net.busy === 'doctor'} onClick={() => void runDoctor()}>Run check</Button></Row>

@@ -17,7 +17,6 @@ import { Transcript } from '../Transcript.tsx'
 import { Button } from '../kit/Button.tsx'
 import { ThemeProvider, useTheme } from '../ui.tsx'
 import { AccountIdleCompaction, CompactionSection } from './Compaction.tsx'
-import { PageBlock } from './controls.tsx'
 import { setSettings } from './store.ts'
 
 const mode = process.env.COMPACTION_MODE ?? 'settings'
@@ -46,8 +45,8 @@ function SettingsPage() {
           <AccountIdleCompaction kind="claude-code" instance="work" testId="account-idle" />
         </Menu>
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', width: 680 }}>
-        <PageBlock><CompactionSection /></PageBlock>
+      <div style={{ display: 'flex', flexDirection: 'column', width: 760, marginLeft: -24 }}>
+        <CompactionSection />
       </div>
     </div>
   )
