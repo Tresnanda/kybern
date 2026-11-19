@@ -11,7 +11,7 @@ static NSMutableArray<NSString *> *events;
 static NSString *lastEvent;
 static NSMutableDictionary *hosts;
 static NSMutableDictionary<NSNumber *, NSDictionary *> *occlusions;
-static id keyMonitor, mouseMonitor;
+static id keyMonitor, mouseMonitor, wheelMonitor;
 static BOOL pointerCaptured;
 // Interface zoom (#292): every page is zoomed like a browser page; placements arrive in window points already.
 static CGFloat uiZoom = 1;
@@ -85,6 +85,9 @@ static BOOL releaseFocus(NSWindow *window) {
 @property NSString *wrapperHTML;
 @property BOOL lastVisible;
 @property BOOL hasVisibility;
+/// A visual's own scroll areas, as its page reports them (`bootstrap.js` `kybern-visual-scrollers`): [x, y, width, height,
+/// room] in the page's CSS pixels, room 1 up, 2 down, 4 left, 8 right. The wheel monitor reads them.
+@property NSArray<NSArray<NSNumber *> *> *scrollers;
 /// SHA-256 fingerprints (lowercase hex of the DER) of the certificates this document accepts for its `https://localhost`
 /// origin: the per-install certificate of a port forward's Fast (HTTP/2) listener. Nothing else is trusted this way.
 @property NSArray<NSString *> *trustedCertificates;
@@ -152,6 +155,16 @@ static NSString *leafFingerprint(SecTrustRef trust) {
   }
   // The untrusted child has the same handler name but cannot send host events.
   if (!message.frameInfo.isMainFrame || ![message.body isKindOfClass:NSDictionary.class]) return;
+  // The page's scroll areas stay here, for the wheel monitor: page data, so bounded and checked.
+  if ([message.body[@"kind"] isEqual:@"kybern-visual-scrollers"]) {
+    NSArray *rects = message.body[@"rects"]; NSMutableArray *kept = [NSMutableArray new];
+    if ([rects isKindOfClass:NSArray.class]) for (NSArray *r in rects) {
+      if (kept.count >= 64 || ![r isKindOfClass:NSArray.class] || r.count != 5) continue;
+      BOOL numbers = YES; for (id v in r) if (![v isKindOfClass:NSNumber.class] || !isfinite([v doubleValue])) numbers = NO;
+      if (numbers) [kept addObject:r];
+    }
+    self.scrollers = kept; return;
+  }
   emit(@{@"id":self.identifier,@"generation":self.generation,@"type":@"message",@"data":message.body});
 }
 - (void)webView:(WKWebView *)web decidePolicyForNavigationAction:(WKNavigationAction *)action decisionHandler:(void (^)(WKNavigationActionPolicy))done {
@@ -242,6 +255,69 @@ static WKWebView *focusedWeb(NSWindow *window) {
   for (KybernWebHost *host in hosts.allValues) if (host.web && [(NSView *)responder isDescendantOf:host.web]) return host.web;
   return nil;
 }
+// ---- The wheel over a visual ----
+// A visual's frame fits its page, which never scrolls itself, so the wheel over it scrolls the chat: GPUI's view gets
+// the event itself (phases and momentum intact, no relay). Only a gesture that starts over one of the page's own scroll
+// areas, in a direction that area can still go, stays with the page; WebKit then keeps that area for the whole gesture
+// (it does not chain mid-gesture), and a new gesture at its end goes to the chat. A gesture that starts on the chat stays
+// with the chat when a page slides under the pointer. Mouse wheels have no phases: a pause of 300 ms starts a new one.
+static NSString *wheelOwner; // nil: undecided, @"": the chat, else the page's identifier
+static NSTimeInterval wheelLast;
+static int wheelNeed(double dx, double dy) {
+  if (dx == 0 && dy == 0) return 0;
+  // AppKit's deltas move the content: positive y reveals what is above (the area needs room up).
+  if (fabs(dy) >= fabs(dx)) return dy > 0 ? 1 : 2;
+  return dx > 0 ? 4 : 8;
+}
+/// The page takes a gesture at `event` when it starts over one of its scroll areas with room that way (any room before
+/// the gesture has a direction).
+static BOOL pageTakesWheel(KybernWebHost *host, NSEvent *event, int need) {
+  NSPoint local = [host.web convertPoint:event.locationInWindow fromView:nil];
+  if (!host.web.isFlipped) local.y = host.web.bounds.size.height - local.y;
+  CGFloat zoom = host.web.pageZoom > 0 ? host.web.pageZoom : 1;
+  double x = local.x / zoom, y = local.y / zoom;
+  for (NSArray<NSNumber *> *r in host.scrollers) {
+    double rx = r[0].doubleValue, ry = r[1].doubleValue, rw = r[2].doubleValue, rh = r[3].doubleValue; int room = r[4].intValue;
+    if (x >= rx && x < rx + rw && y >= ry && y < ry + rh && (need ? (room & need) : room)) return YES;
+  }
+  return NO;
+}
+static BOOL wheelDirect; // this gesture already went to GPUI's view directly: the rest of it does too
+static NSEvent *toChat(NSWindow *window, NSEvent *event) {
+  // Once one event of a gesture skips AppKit's dispatch, all of them do: AppKit keeps a gesture with the view its first
+  // event reached, which may be the page.
+  NSView *gpui = gpuiView(window);
+  // GPUI hit-tests a wheel against where it last saw the pointer, and a page under the pointer took its moves: tell it
+  // where the pointer is first, so the first delta reaches the chat under it.
+  if (!wheelDirect) [gpui mouseMoved:[NSEvent mouseEventWithType:NSEventTypeMouseMoved location:event.locationInWindow modifierFlags:event.modifierFlags timestamp:event.timestamp windowNumber:window.windowNumber context:nil eventNumber:0 clickCount:0 pressure:0]];
+  wheelDirect = YES;
+  [gpui scrollWheel:event];
+  return nil;
+}
+static NSEvent *routeWheel(NSEvent *event) {
+  NSWindow *window = event.window;
+  if (!window) return event;
+  BOOL phased = event.phase != NSEventPhaseNone || event.momentumPhase != NSEventPhaseNone;
+  BOOL starts = phased ? (event.phase == NSEventPhaseBegan || event.phase == NSEventPhaseMayBegin) : event.timestamp - wheelLast > 0.3;
+  wheelLast = event.timestamp;
+  NSView *frame = window.contentView.superview ?: window.contentView;
+  NSView *hit = [frame hitTest:[frame convertPoint:event.locationInWindow fromView:nil]];
+  KybernWebHost *under = nil;
+  for (KybernWebHost *h in hosts.allValues) if ([h.category isEqual:@"visual"] && h.web && hit && [hit isDescendantOf:h.web]) { under = h; break; }
+  int need = wheelNeed(event.scrollingDeltaX, event.scrollingDeltaY);
+  if (starts) { wheelOwner = nil; wheelDirect = NO; }
+  if (!wheelOwner) {
+    // A gesture without a direction yet (a resting finger) is decided by its first delta; until then it goes where
+    // the page's areas would take it.
+    BOOL decided = need || !phased;
+    if (under && pageTakesWheel(under, event, need)) { if (decided) wheelOwner = under.identifier; else return event; }
+    else if (decided) wheelOwner = @"";
+    else return under ? toChat(window, event) : event;
+  }
+  if (wheelOwner.length) return event; // a page's own area: WebKit keeps it for the gesture
+  return under || wheelDirect ? toChat(window, event) : event;
+}
+
 void kybern_web_init(void (*callback)(void)) { events = [NSMutableArray new]; hosts = [NSMutableDictionary new]; occlusions = [NSMutableDictionary new]; signalJS = callback; }
 const char *kybern_web_next(void) {
   @synchronized(events) { if (!events.count) return NULL; lastEvent = events.firstObject; [events removeObjectAtIndex:0]; return lastEvent.UTF8String; }
@@ -267,11 +343,13 @@ void kybern_web_command(const char *json) {
       if (!keyMonitor) keyMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent *(NSEvent *event) {
         if (!(event.modifierFlags & NSEventModifierFlagCommand) || event.isARepeat) return event;
         NSString *key = event.charactersIgnoringModifiers.lowercaseString;
-        if ([key isEqual:@"\uf700"]) key = @"up";
+        NSDictionary *arrows = @{@"\uf700":@"up",@"\uf701":@"down",@"\uf702":@"left",@"\uf703":@"right"};
+        if (arrows[key]) key = arrows[key];
         BOOL alt = (event.modifierFlags & NSEventModifierFlagOption) != 0;
         // ⌘= ⌘+ ⌘− ⌘0: the interface zoom (#292), handed back like the window shortcuts.
         if ([key isEqual:@"+"]) key = @"=";
-        if (!(alt ? [key isEqual:@"p"] : [@[@"l",@"r",@"n",@"b",@"k",@"j",@"[",@"]",@"up",@",",@"\\",@"=",@"-",@"0"] containsObject:key])) return event;
+        // ⌘W and ⌘1–9 (tabs), ⌘⌥ arrows (groups): the app's tab and thread switching, never a field's own keys.
+        if (!(alt ? [@[@"p",@"left",@"right",@"up",@"down"] containsObject:key] : [@[@"l",@"r",@"n",@"b",@"k",@"j",@"[",@"]",@"up",@",",@"\\",@"=",@"-",@"0",@"w",@"1",@"2",@"3",@"4",@"5",@"6",@"7",@"8",@"9"] containsObject:key])) return event;
         for (KybernWebHost *h in hosts.allValues) {
           NSResponder *responder = event.window.firstResponder;
           if ([responder isKindOfClass:NSView.class] && [(NSView *)responder isDescendantOf:h.web]) {
@@ -280,6 +358,7 @@ void kybern_web_command(const char *json) {
         }
         return event;
       }];
+      if (!wheelMonitor) wheelMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskScrollWheel handler:^NSEvent *(NSEvent *event) { return routeWheel(event); }];
       // A press anywhere outside the document that holds the keyboard (GPUI, a popup cut out of the document, the
       // title bar) gives it back to GPUI before the press is dispatched. A press in another document moves it there.
       if (!mouseMonitor) mouseMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown | NSEventMaskOtherMouseDown handler:^NSEvent *(NSEvent *event) {
@@ -289,9 +368,12 @@ void kybern_web_command(const char *json) {
         // A live inline visual goes back to its picture on a press anywhere else: tell its owner where the press landed
         // (window points, top-left origin) so a press on its own caption does not count.
         NSPoint at = event.locationInWindow; CGFloat top = window.contentView.bounds.size.height - at.y;
-        for (KybernWebHost *h in hosts.allValues)
-          if ([h.category isEqual:@"visual"] && h.placed && h.web.window == window && !(hit && [hit isDescendantOf:h.web]))
-            emit(@{@"id":h.identifier,@"generation":h.generation,@"type":@"outsidePress",@"x":@(at.x),@"y":@(top)});
+        for (KybernWebHost *h in hosts.allValues) {
+          if (![h.category isEqual:@"visual"] || !h.placed || h.web.window != window) continue;
+          // A press the reader made in the page (trusted: a page cannot fake one) lets it draft an answer.
+          if (hit && [hit isDescendantOf:h.web]) emit(@{@"id":h.identifier,@"generation":h.generation,@"type":@"press"});
+          else emit(@{@"id":h.identifier,@"generation":h.generation,@"type":@"outsidePress",@"x":@(at.x),@"y":@(top)});
+        }
         if (!web) return event;
         for (KybernWebHost *h in hosts.allValues) if (hit && h.web && [hit isDescendantOf:h.web]) return event;
         releaseFocus(window); return event;
@@ -341,7 +423,7 @@ void kybern_web_command(const char *json) {
       if (script && host.childFrame) [host.web evaluateJavaScript:script inFrame:host.childFrame inContentWorld:[WKContentWorld worldWithName:@"KybernPreview"] completionHandler:^(id value, NSError *error) {}];
       return;
     }
-    if ([op isEqual:@"destroy"]) { [host dispose]; [hosts removeObjectForKey:identifier]; if (!hosts.count && keyMonitor) { [NSEvent removeMonitor:keyMonitor]; keyMonitor = nil; } if (!hosts.count && mouseMonitor) { [NSEvent removeMonitor:mouseMonitor]; mouseMonitor = nil; } emit(@{@"id":identifier,@"generation":host.generation,@"type":@"destroyed"}); return; }
+    if ([op isEqual:@"destroy"]) { [host dispose]; [hosts removeObjectForKey:identifier]; if (!hosts.count && keyMonitor) { [NSEvent removeMonitor:keyMonitor]; keyMonitor = nil; } if (!hosts.count && mouseMonitor) { [NSEvent removeMonitor:mouseMonitor]; mouseMonitor = nil; } if (!hosts.count && wheelMonitor) { [NSEvent removeMonitor:wheelMonitor]; wheelMonitor = nil; } emit(@{@"id":identifier,@"generation":host.generation,@"type":@"destroyed"}); return; }
     if ([op isEqual:@"place"]) {
       NSView *content = host.clip.superview;
       double x = [cmd[@"x"] doubleValue], y = [cmd[@"y"] doubleValue], width = [cmd[@"width"] doubleValue], height = [cmd[@"height"] doubleValue];
@@ -395,6 +477,10 @@ void kybern_web_command(const char *json) {
       // The document as it looks now, written as a PNG at the backing scale (a live visual going back to its picture).
       NSString *path = cmd[@"path"], *identifier = host.identifier; NSNumber *generation = host.generation, *token = cmd[@"token"] ?: @0;
       WKSnapshotConfiguration *config = [WKSnapshotConfiguration new]; config.afterScreenUpdates = NO;
+      // A page fits its frame (up to 20,000 points): the picture keeps at most the top 6,000, at 1x past 3,000.
+      NSRect bounds = host.web.bounds; CGFloat tall = MIN(bounds.size.height, 6000);
+      config.rect = NSMakeRect(0, 0, bounds.size.width, tall);
+      if (tall > 3000) config.snapshotWidth = @(bounds.size.width / MAX(1, host.web.window.backingScaleFactor));
       [host.web takeSnapshotWithConfiguration:config completionHandler:^(NSImage *image, NSError *error) {
         CGImageRef cg = [image CGImageForProposedRect:NULL context:nil hints:nil];
         NSData *png = cg ? [[[NSBitmapImageRep alloc] initWithCGImage:cg] representationUsingType:NSBitmapImageFileTypePNG properties:@{}] : nil;

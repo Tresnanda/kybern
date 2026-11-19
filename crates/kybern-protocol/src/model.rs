@@ -562,6 +562,14 @@ pub struct Thread {
     /// that continues the work). Only the daemon writes it, and a stale copy of the thread never changes it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moved: Option<MoveInfo>,
+    /// Set while the thread sits in its project's Older group: no turn ran for the `older_after` setting's time.
+    /// Only the daemon moves a thread there (never a pinned, busy, child or opted-out one); a new turn, "Move out of
+    /// Older" and unarchiving take it out. Older threads are listed like any other; clients group them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub older_at: Option<DateTime<Utc>>,
+    /// The person chose "Never move to Older" for this thread.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep_out_of_older: bool,
 }
 
 /// What the delegating agent asked this child to be.
@@ -1391,6 +1399,11 @@ pub struct SkillInfo {
     /// lives in. Absent on the selected agent's own skills.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub home: Option<crate::SkillHome>,
+    /// The provider plugin this skill comes from or is also installed as (`interfaces` for `interfaces:better-colors`).
+    /// On a plugin's own row the scope stays `app`; on a standalone skill whose `SKILL.md` is identical to a plugin's,
+    /// `skills.list` lists that one row and sets this. Clients say "Plugin" for it; the skill is still run as a skill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -2733,6 +2746,9 @@ pub struct Settings {
     pub notifications: bool,
     /// Check installed harnesses daily and update them when idle. Opt-in per environment.
     pub auto_update_harnesses: bool,
+    /// Ask each harness's release feed once a day whether a newer version is out. Sends only the
+    /// package or feed request, nothing about the user. On by default.
+    pub check_harness_versions: bool,
     /// Check the release feed daily and replace this daemon when idle. Opt-in
     /// per environment; ignored for a daemon the desktop app manages.
     pub auto_update_daemon: bool,
@@ -2766,6 +2782,32 @@ pub struct Settings {
     pub network: NetworkSettings,
     /// When long threads are compacted.
     pub compaction: CompactionSettings,
+    /// How long a thread goes without a turn before it moves to its project's Older group.
+    pub older_after: OlderAfter,
+}
+
+/// "Move inactive threads to Older": how long a top-level thread goes without a turn before the daemon moves it to
+/// its project's Older group. Moving never archives a thread or touches its worktree.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OlderAfter {
+    Never,
+    ThreeDays,
+    #[default]
+    SevenDays,
+    ThirtyDays,
+}
+
+impl OlderAfter {
+    /// The inactivity after which a thread moves, or `None` when threads never move.
+    pub fn duration(self) -> Option<chrono::Duration> {
+        match self {
+            Self::Never => None,
+            Self::ThreeDays => Some(chrono::Duration::days(3)),
+            Self::SevenDays => Some(chrono::Duration::days(7)),
+            Self::ThirtyDays => Some(chrono::Duration::days(30)),
+        }
+    }
 }
 
 /// When Kybern compacts a long thread that sits idle.
@@ -3129,6 +3171,7 @@ impl Default for Settings {
             providers: Default::default(),
             notifications: true,
             auto_update_harnesses: false,
+            check_harness_versions: true,
             auto_update_daemon: false,
             update_track: UpdateTrack::Stable,
             background: BackgroundSettings::default(),
@@ -3142,6 +3185,7 @@ impl Default for Settings {
             preview_allowed_folders: Vec::new(),
             network: NetworkSettings::default(),
             compaction: CompactionSettings::default(),
+            older_after: OlderAfter::default(),
         }
     }
 }
@@ -3349,14 +3393,67 @@ pub struct OutsideRepoChange {
     pub head_moved: bool,
 }
 
-/// Last daemon-owned harness update attempt. Persisted across client reconnects.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+/// Last daemon-owned harness update attempt, and what the daily version check
+/// found. Persisted across client reconnects.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct HarnessUpdate {
     pub kind: ProviderKind,
     pub status: HarnessUpdateStatus,
     pub message: String,
+    /// The installed version: the CLI's own `--version` line from the last update or version check.
     pub version: Option<String>,
+    /// When the updater last ran.
     pub checked_at: Option<DateTime<Utc>>,
+    /// The newest version published for this installation's channel, from the daily version check.
+    /// Absent before the first check, when checks are off, or when the install has no feed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_version: Option<String>,
+    /// `latest_version` is newer than the installed version.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub update_available: bool,
+    /// How the harness on this machine was installed, which decides the feed and the updater.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install: Option<HarnessInstall>,
+    /// When the version check last asked the feed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_checked_at: Option<DateTime<Utc>>,
+}
+
+impl HarnessUpdate {
+    /// A record for a harness nothing has been checked for yet.
+    pub fn unchecked(kind: ProviderKind) -> Self {
+        Self {
+            kind,
+            status: HarnessUpdateStatus::NotChecked,
+            message: "Not checked yet".into(),
+            version: None,
+            checked_at: None,
+            latest_version: None,
+            update_available: false,
+            install: None,
+            latest_checked_at: None,
+        }
+    }
+}
+
+/// How a harness was installed on a machine, found by resolving the binary on PATH.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HarnessInstall {
+    /// The vendor's native installer with its own versions folder (Claude Code).
+    Native,
+    /// A standalone release package (Codex).
+    Standalone,
+    /// The vendor's install script (Antigravity, Grok Build, pi, Oh My Pi, OpenCode, Cursor).
+    Script,
+    /// A global npm (or pnpm, Yarn, Bun) package.
+    Npm,
+    /// A Homebrew formula or cask.
+    Homebrew,
+    /// nix, mise, asdf or rtx: updated through the version manager.
+    VersionManager,
+    /// A custom binary or a layout Kybern does not recognise.
+    Other,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -128,11 +128,13 @@ export const SHARED_SETTINGS = [
   "title_provider",
   "notifications",
   "auto_update_harnesses",
+  "check_harness_versions",
   "auto_update_daemon",
   "update_track",
   "orchestration",
   "tell_agents_about_kybern",
   "ask_deadlines",
+  "older_after",
 ] as const;
 
 /** A shared field's value in a settings document: the daemon reports an unset optional field as `null`. */

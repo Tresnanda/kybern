@@ -49,16 +49,21 @@ const childKey = (t: Thread) =>
 
 /** Fields the panel, title bar and palette show for a top-level thread. */
 const threadKey = (t: Thread) =>
-  `${t.title}|${t.status}|${t.pinned}|${t.updated_at}|${t.project_id}|${t.coordinator_project_id ?? ''}|${t.worktree?.branch ?? ''}|${t.provider.kind}|${t.model ?? ''}|${t.effort ?? ''}|${t.permission_mode}`
+  `${t.title}|${t.status}|${t.pinned}|${t.older_at ?? ''}|${!!t.keep_out_of_older}|${t.updated_at}|${t.project_id}|${t.coordinator_project_id ?? ''}|${t.worktree?.branch ?? ''}|${t.provider.kind}|${t.model ?? ''}|${t.effort ?? ''}|${t.permission_mode}`
 
-/** Threads archived here or by an event: a late `thread_updated` must not bring their rows back. */
-const archived = new Set<ThreadId>()
+/** Threads archived here or by an event, with the event's sequence (Infinity until it arrives): a late `thread_updated`
+ *  must not bring their rows back. Only an update after the archive (`threads.unarchive`) does. */
+const archived = new Map<ThreadId, number>()
 export function markArchived(id: ThreadId) {
-  archived.add(id)
+  if (!archived.has(id)) archived.set(id, Infinity)
+}
+/** The thread came back (`threads.unarchive`): its rows may return. */
+export function markUnarchived(id: ThreadId) {
+  archived.delete(id)
 }
 
 function upsertThread(thread: Thread) {
-  if (thread.status === 'archived') { archived.add(thread.id); forgetThreadTranscript(thread.id) }
+  if (thread.status === 'archived') { markArchived(thread.id); forgetThreadTranscript(thread.id) }
   else if (archived.has(thread.id)) return
   if (isChildThread(thread)) {
     // A child a thread of another machine started here is nested under that thread with the merged lists (`state.ts`).
@@ -115,10 +120,19 @@ function onEvent(event: ThreadEvent) {
   if (idleCompactions.silent(event)) return
   switch (event.kind) {
     case 'thread_created':
-    case 'thread_updated':
+    case 'thread_updated': {
+      // Archived threads only change again once unarchived (the daemon keeps a late write archived).
+      const at = archived.get(event.thread.id)
+      if (event.kind === 'thread_updated' && at !== undefined && event.seq > at && event.thread.status !== 'archived') {
+        archived.delete(event.thread.id)
+        if (!event.thread.parent_thread_id) scheduleActivity()
+      }
       return upsertThread(event.thread)
+    }
     case 'thread_archived': {
-      archived.add(event.thread_id)
+      archived.set(event.thread_id, event.seq)
+      // The project's Archived row follows the daemon's count.
+      scheduleActivity()
       forgetThreadTranscript(event.thread_id)
       forgetOriginChild(event.thread_id)
       const threads = getState().threads
@@ -263,6 +277,7 @@ interface Prefs {
   sidebarOpen?: boolean
   unread?: NavState['unread']
   attentionDismissals?: NavState['attentionDismissals']
+  olderOpen?: NavState['olderOpen']
   spaceId?: string
   spaceViews?: NavState['spaceViews']
 }
@@ -288,6 +303,7 @@ function persistPrefs() {
     sidebarOpen: getState().sidebarOpen,
     unread: getNav().unread,
     attentionDismissals: getNav().attentionDismissals,
+    olderOpen: getNav().olderOpen,
     ...(getNav().spaceId ? { spaceId: getNav().spaceId! } : {}),
     spaceViews: getNav().spaceViews,
   }
@@ -332,7 +348,7 @@ export function startLive() {
   const prefs = readPrefs()
   lastPrefs = JSON.stringify(prefs)
   set({ collapsed: prefs.collapsed ?? {}, ...(prefs.sidebarOpen === undefined ? {} : { sidebarOpen: prefs.sidebarOpen }) })
-  setNav({ projectOrder: prefs.projectOrder ?? [], machineFilter: prefs.machineFilter ?? null, filter: prefs.filter ?? DEFAULT_FILTER, unread: prefs.unread ?? {}, attentionDismissals: prefs.attentionDismissals ?? {}, spaceId: prefs.spaceId ?? null, spaceViews: prefs.spaceViews ?? {} })
+  setNav({ projectOrder: prefs.projectOrder ?? [], machineFilter: prefs.machineFilter ?? null, filter: prefs.filter ?? DEFAULT_FILTER, unread: prefs.unread ?? {}, attentionDismissals: prefs.attentionDismissals ?? {}, olderOpen: prefs.olderOpen ?? {}, spaceId: prefs.spaceId ?? null, spaceViews: prefs.spaceViews ?? {} })
   stops.push(subscribe(persistPrefs), subscribeNav(persistPrefs))
 
   const events = client.subscribeEvents({ include_tool_output: false }, (event) => { if (getClient() === client) onEvent(event) })

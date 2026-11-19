@@ -26,6 +26,8 @@ export function rowHeight(row: Row): number | null {
     case 'create-coordinator':
     case 'more':
     case 'no-threads':
+    case 'older':
+    case 'archived':
       return 30
     case 'child':
       return 32

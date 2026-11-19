@@ -567,6 +567,7 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     let mut notes = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_notes());
     let mut tasks = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_tasks());
     let mut usage = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.usage().subscribe());
+    let mut harness_updates = ctx.principal.has(Scope::OrchestrationRead).then(|| state.harness_updates.subscribe());
     let mut settings = ctx.principal.has(Scope::OrchestrationRead).then(|| state.settings.subscribe());
     let mut account_logins = ctx.principal.has(Scope::OrchestrationRead).then(|| state.account_logins.subscribe());
     let mut session_imports = ctx.principal.has(Scope::OrchestrationRead).then(|| state.session_imports.subscribe());
@@ -883,6 +884,22 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
                     // Each notification carries the whole cache; the next one catches up.
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     Err(_) => usage = None,
+                }
+            }
+            updates = async {
+                match harness_updates.as_mut() {
+                    Some(updates) => updates.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match updates {
+                    Ok(updates) => {
+                        let params = kybern_protocol::methods::HarnessUpdatesResult { updates };
+                        let _ = ctx.out.notify(kybern_protocol::methods::HARNESS_UPDATES_CHANGED_NOTIFICATION, params).await;
+                    }
+                    // Each notification carries the whole list; the next one catches up.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => harness_updates = None,
                 }
             }
             notice = async {

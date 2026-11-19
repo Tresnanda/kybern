@@ -83,6 +83,11 @@ expression: schema_for!(Settings)
       "type": "boolean",
       "default": false
     },
+    "check_harness_versions": {
+      "description": "Ask each harness's release feed once a day whether a newer version is out. Sends only the\npackage or feed request, nothing about the user. On by default.",
+      "type": "boolean",
+      "default": true
+    },
     "auto_update_daemon": {
       "description": "Check the release feed daily and replace this daemon when idle. Opt-in\nper environment; ignored for a daemon the desktop app manages.",
       "type": "boolean",
@@ -232,6 +237,11 @@ expression: schema_for!(Settings)
       "default": {
         "idle": "when_you_return"
       }
+    },
+    "older_after": {
+      "description": "How long a thread goes without a turn before it moves to its project's Older group.",
+      "$ref": "#/$defs/OlderAfter",
+      "default": "seven_days"
     }
   },
   "$defs": {
@@ -789,6 +799,16 @@ expression: schema_for!(Settings)
           "additionalProperties": false
         }
       }
+    },
+    "OlderAfter": {
+      "description": "\"Move inactive threads to Older\": how long a top-level thread goes without a turn before the daemon moves it to\nits project's Older group. Moving never archives a thread or touches its worktree.",
+      "type": "string",
+      "enum": [
+        "never",
+        "three_days",
+        "seven_days",
+        "thirty_days"
+      ]
     }
   }
 }

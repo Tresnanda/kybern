@@ -60,7 +60,7 @@ fn permission_request(id: &str, tool_name: &str) -> DriverEvent {
 }
 
 fn set_mode(thread: &Thread, mode: PermissionMode) -> methods::ThreadsUpdateParams {
-    methods::ThreadsUpdateParams { thread_id: thread.id, title: None, pinned: None, permission_mode: Some(mode), model: None, effort: None }
+    methods::ThreadsUpdateParams { thread_id: thread.id, title: None, pinned: None, permission_mode: Some(mode), model: None, effort: None, keep_out_of_older: None, move_out_of_older: false, }
 }
 
 /// A thread in `mode` with an active turn on a session whose permission

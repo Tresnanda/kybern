@@ -130,6 +130,7 @@ fn main() {
 
     method::<HarnessUpdatesList>(&mut methods);
     method::<HarnessUpdatesRun>(&mut methods);
+    method::<HarnessUpdatesRunAll>(&mut methods);
     method::<DaemonUpdateStatusMethod>(&mut methods);
     method::<DaemonUpdateCheck>(&mut methods);
     method::<DaemonUpdateRun>(&mut methods);
@@ -161,6 +162,7 @@ fn main() {
     method::<ThreadsRecoverOmpAnswer>(&mut methods);
     method::<ThreadsUpdate>(&mut methods);
     method::<ThreadsArchive>(&mut methods);
+    method::<ThreadsUnarchive>(&mut methods);
     method::<ThreadsSend>(&mut methods);
     method::<ThreadsSteer>(&mut methods);
     method::<SubagentsSend>(&mut methods);
@@ -327,6 +329,7 @@ fn main() {
     method::<PeerRelayData>(&mut methods);
     method::<PeerRelayClose>(&mut methods);
     method::<PeerUpdateStart>(&mut methods);
+    method::<PeerHarnessUpdatesRun>(&mut methods);
     method::<OutboxList>(&mut methods);
     method::<OutboxRetry>(&mut methods);
     method::<OutboxCancel>(&mut methods);

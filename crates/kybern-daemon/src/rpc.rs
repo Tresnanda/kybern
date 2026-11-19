@@ -240,8 +240,12 @@ async fn dispatch_part_3(state: &AppState, ctx: &ConnectionCtx, method: &str, sl
         HarnessUpdatesRun::NAME => {
             let p: HarnessUpdateParams = parse(params)?;
             let record = state.harness_updates.request(&state.store, p.kind);
-            tokio::spawn(crate::harness_updates::tick(state.clone()));
+            crate::harness_updates::spawn_tick(state);
             ok(record)
+        }
+        HarnessUpdatesRunAll::NAME => {
+            let p: HarnessUpdatesRunAllParams = parse_or_default(params)?;
+            ok(crate::network::harness_updates::run_all(state, &p.kinds).await)
         }
         DaemonUpdateStatusMethod::NAME => ok(state.daemon_updates.get()),
         DaemonUpdateCheck::NAME => ok(crate::self_update::check(state).await),
@@ -516,6 +520,10 @@ async fn dispatch_part_7(state: &AppState, _ctx: &ConnectionCtx, method: &str, s
             state.orchestrator.archive_thread(p.thread_id).await.map_err(bad)?;
             ok(Empty {})
         }
+        ThreadsUnarchive::NAME => {
+            let p: ThreadsUnarchiveParams = parse(params)?;
+            ok(state.orchestrator.unarchive_thread(p.thread_id).map_err(bad)?)
+        }
         ThreadsSend::NAME => {
             let p: ThreadsSendParams = parse(params)?;
             let sent = state.orchestrator.send_client_message(p).await.map_err(|e| {
@@ -743,6 +751,8 @@ async fn dispatch_part_9(state: &AppState, _ctx: &ConnectionCtx, method: &str, s
                     permission_mode: None,
                     model: None,
                     effort: None,
+                    keep_out_of_older: None,
+                    move_out_of_older: false,
                 })
                 .map_err(bad)?;
             ok(thread)
@@ -1144,7 +1154,8 @@ async fn dispatch_part_13(state: &AppState, _ctx: &ConnectionCtx, method: &str, 
                 }
                 _ => crate::skills::list(cwd, p.provider, &provider_settings.env).await.map_err(internal)?,
             };
-            let mut skills = skills;
+            // One plugin skill that is also installed standalone, with the same contents, is one row.
+            let mut skills = tokio::task::spawn_blocking(move || crate::skills::merge_plugin_copies(skills)).await.map_err(internal)?;
             if p.include_other_agents {
                 // What the selected agent reads itself is already listed; the rest of the homes are "other agents".
                 let homes = state.skill_homes.resolve().into_iter().filter(|(home, _)| !home.readers().contains(&p.provider)).collect();
@@ -1505,7 +1516,8 @@ async fn dispatch_part_16(state: &AppState, ctx: &ConnectionCtx, method: &str, s
         | PeerRelayOpen::NAME
         | PeerRelayData::NAME
         | PeerRelayClose::NAME
-        | PeerUpdateStart::NAME => Err(RpcError::new(codes::NOT_AVAILABLE, format!("{method} is only available between machines."))),
+        | PeerUpdateStart::NAME
+        | PeerHarnessUpdatesRun::NAME => Err(RpcError::new(codes::NOT_AVAILABLE, format!("{method} is only available between machines."))),
         _ => {
             *slot = Some(params);
             Err(RpcError::method_not_found(method))
@@ -1849,7 +1861,18 @@ fn threads_list(state: &AppState, p: ThreadsListParams) -> Result<ThreadsListRes
         pending_request: Some(*kind),
         pending_child_request: child_pending.get(id).copied(),
     }));
-    Ok(ThreadsListResult { threads, activity, head_seq: Some(head_seq), omitted })
+    let archived = if p.parent_thread_id.is_none() && !p.include_archived {
+        state
+            .store
+            .archived_thread_counts(p.project_id)
+            .map_err(internal)?
+            .into_iter()
+            .map(|(project_id, count)| ProjectThreadCount { project_id, count })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Ok(ThreadsListResult { threads, activity, head_seq: Some(head_seq), omitted, archived })
 }
 
 /// `settled_limit`: per project keep every active thread (pinned, running, awaiting approval, or with an activity

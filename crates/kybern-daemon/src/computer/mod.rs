@@ -279,6 +279,7 @@ impl ComputerUse {
             scope: kybern_protocol::SkillScope::Plugin,
             enabled: true,
             home: None,
+            plugin: None,
         }
     }
 

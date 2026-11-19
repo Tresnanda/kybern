@@ -23,6 +23,7 @@
 #include <wpe/headless/wpe-headless.h>
 #include <glib/gstdio.h>
 #include <zlib.h>
+#include <math.h>
 #include <dlfcn.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -139,6 +140,10 @@ typedef struct {
 static GHashTable *hosts;            // id → Host, WebKit thread only
 static GMutex frames_lock;
 static GHashTable *frames;           // id → Frame, under frames_lock
+// A visual's own scroll areas (`bootstrap.js` `kybern-visual-scrollers`): id → GArray of double[5] (x, y, width, height,
+// room 1 up 2 down 4 left 8 right, CSS pixels). Written on the engine thread, read by `kybern_web_surface_wheel` on GPUI's.
+static GMutex scrollers_lock;
+static GHashTable *scrollers;
 static KybernNotify notify_fn;
 static void *notify_context;
 static GMutex notify_lock;
@@ -506,6 +511,37 @@ static void release_focus(Host *host) {
 static void on_message(WebKitUserContentManager *manager, JSCValue *value, Host *host) {
   (void)manager;
   if (!jsc_value_is_object(value) || jsc_value_is_array(value)) return;
+  // The page's scroll areas stay here, for the wheel (`kybern_web_surface_wheel`): page data, so bounded and checked.
+  JSCValue *kind = jsc_value_object_get_property(value, "kind");
+  char *kind_text = jsc_value_is_string(kind) ? jsc_value_to_string(kind) : NULL;
+  g_object_unref(kind);
+  gboolean areas = !g_strcmp0(kind_text, "kybern-visual-scrollers");
+  g_free(kind_text);
+  if (areas) {
+    GArray *list = g_array_new(FALSE, FALSE, sizeof(double) * 5);
+    JSCValue *rects = jsc_value_object_get_property(value, "rects");
+    if (jsc_value_is_array(rects)) {
+      JSCValue *length = jsc_value_object_get_property(rects, "length");
+      int count = MIN(64, jsc_value_to_int32(length));
+      g_object_unref(length);
+      for (int i = 0; i < count; i++) {
+        JSCValue *rect = jsc_value_object_get_property_at_index(rects, i);
+        double entry[5]; gboolean ok = jsc_value_is_array(rect);
+        for (int j = 0; ok && j < 5; j++) {
+          JSCValue *n = jsc_value_object_get_property_at_index(rect, j);
+          ok = jsc_value_is_number(n); entry[j] = ok ? jsc_value_to_double(n) : 0; ok = ok && isfinite(entry[j]);
+          g_object_unref(n);
+        }
+        if (ok) g_array_append_val(list, entry);
+        g_object_unref(rect);
+      }
+    }
+    g_object_unref(rects);
+    g_mutex_lock(&scrollers_lock);
+    g_hash_table_replace(scrollers, g_strdup(host->id), list);
+    g_mutex_unlock(&scrollers_lock);
+    return;
+  }
   char *json = jsc_value_to_json(value, 0);
   if (!json) return;
   GString *out = event_begin(host, "message");
@@ -828,6 +864,9 @@ static void host_free(Host *host) {
   g_mutex_lock(&frames_lock);
   g_hash_table_remove(frames, host->id);
   g_mutex_unlock(&frames_lock);
+  g_mutex_lock(&scrollers_lock);
+  g_hash_table_remove(scrollers, host->id);
+  g_mutex_unlock(&scrollers_lock);
   notify(host->id, NOTIFY_GONE, NULL);
   g_free(host->id); g_free(host->category); g_free(host->wrapper_url); g_free(host->wrapper_html); g_free(host->slot); g_free(host->cursor);
   g_free(host->nonce); g_free(host->navigation);
@@ -1203,6 +1242,8 @@ static gboolean run_input(gpointer data) {
   guint32 bit = in->button == 1 ? 1 : in->button == 2 ? 2 : in->button == 3 ? 4 : 0;
   switch (in->kind) {
     case INPUT_DOWN:
+      // A press the reader made in the page (a page cannot fake one) lets it draft an answer.
+      if (!g_strcmp0(host->category, "visual")) event_end(event_begin(host, "press"));
       if (!host->focused) { host->focused = TRUE; wpe_view_focus_in(host->view); }
       host->buttons |= bit;
       host->press_x = in->x; host->press_y = in->y;
@@ -1332,6 +1373,7 @@ __attribute__((visibility("default"))) void kybern_web_init(void (*callback)(voi
   if (!g_once_init_enter(&once)) return;
   hosts = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)host_free);
   frames = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)frame_free);
+  scrollers = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)g_array_unref);
   available_reason = check_sandbox();
   main_context = g_main_context_default();
   g_thread_new("kybern-webview", engine_thread, NULL);
@@ -1384,6 +1426,47 @@ __attribute__((visibility("default"))) void kybern_web_surface_unlock(const char
   Frame *frame = doc ? g_hash_table_lookup(frames, doc) : NULL;
   if (frame && consume) frame->dirty_x0 = frame->dirty_y0 = frame->dirty_x1 = frame->dirty_y1 = 0;
   g_mutex_unlock(&frames_lock);
+}
+
+// ── The wheel over a visual (`webview.m` `routeWheel`) ───────────────────────────────────────────────────────────────
+// A visual's frame fits its page, which never scrolls itself, so the wheel over it scrolls the chat: `<websurface>` asks
+// here and lets GPUI have the event (it bubbles to the chat) unless the page takes it. Only a gesture that starts over
+// one of the page's own scroll areas, in a direction that area can still go, goes to the page; WebKit keeps that area
+// for the whole gesture. `phase`: 0 a wheel without phases (a pause of 300 ms starts a new gesture), 1 a gesture starts,
+// 2 it moves, 3 it ends. Deltas are GPUI's: positive y reveals what is above. Called on GPUI's thread only.
+static char *wheel_owner;   // the gesture's owner: "" the chat, else the page's id; NULL when no gesture is known
+static gboolean wheel_open; // a gesture began here and has no owner yet (no direction)
+static gint64 wheel_last;
+static gboolean page_takes(const char *doc, double x, double y, int need) {
+  gboolean takes = FALSE;
+  g_mutex_lock(&scrollers_lock);
+  GArray *list = scrollers ? g_hash_table_lookup(scrollers, doc) : NULL;
+  for (guint i = 0; list && i < list->len && !takes; i++) {
+    const double *r = &g_array_index(list, double, i * 5);
+    int room = (int)r[4];
+    takes = x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3] && (need ? (room & need) : room);
+  }
+  g_mutex_unlock(&scrollers_lock);
+  return takes;
+}
+__attribute__((visibility("default"))) int32_t kybern_web_surface_wheel(const char *doc, double x, double y, double dx, double dy, int32_t phase) {
+  if (!doc) return 1;
+  gint64 now = g_get_monotonic_time();
+  gboolean gap = now - wheel_last > 300000;
+  wheel_last = now;
+  int need = dx == 0 && dy == 0 ? 0 : fabs(dy) >= fabs(dx) ? (dy > 0 ? 1 : 2) : (dx > 0 ? 4 : 8);
+  if (phase == 1 || (phase == 0 && gap)) { g_clear_pointer(&wheel_owner, g_free); wheel_open = TRUE; }
+  // A gesture whose start the chat saw stays with the chat when a page slides under the pointer.
+  else if (!wheel_owner && !wheel_open) wheel_owner = g_strdup("");
+  if (!wheel_owner) {
+    gboolean takes = page_takes(doc, x, y, need);
+    if (!need && phase) return takes; // no direction yet: where the page's areas would take it, still open
+    wheel_owner = g_strdup(takes ? doc : "");
+    wheel_open = FALSE;
+  }
+  int32_t page = !strcmp(wheel_owner, doc);
+  if (phase == 3) { g_clear_pointer(&wheel_owner, g_free); wheel_open = FALSE; }
+  return page;
 }
 
 __attribute__((visibility("default"))) void kybern_web_surface_input(const char *doc, const KybernWebInput *input) {

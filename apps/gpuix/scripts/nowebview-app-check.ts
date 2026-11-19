@@ -128,22 +128,21 @@ try {
 
 
   if (mac) {
-    // Embedded: the preview lives in a slot and opens no browser; a diagram is drawn; the picture goes live on a click; the question has its send button.
+    // Embedded: the preview lives in a slot and opens no browser; a diagram is drawn; a visual on screen is live without a
+    // press; the question has its send button.
     await until(async () => (await app.getByTestId('diagram-image').count()) > 0, 'the diagram is drawn', 30000)
     assert.equal(openedLines().length, 0, 'the preview must not open a browser')
     assert.equal(await app.getByTestId('visual-open-browser').count(), 0)
     assert.equal(await app.getByTestId('visual-answer-reply').count(), 0)
     assert.ok((await app.getByTestId('visual-answer-send').count()) >= 1, 'the send button stays')
     assert.ok((await app.getByTestId('visual-expand').count()) >= 1, 'Open in a tab stays')
-    const b = (await app.getByTestId('visual-figure').all()).at(-1)!.bounds!
-    await app.mouse.click({ x: b.x + b.width / 2, y: b.y + 80 })
-    await until(async () => (await app.getByTestId('visual-ring-live').count()) > 0, 'a click makes it live (its ring)', 20000)
+    await until(async () => (await app.getByTestId('visual-live').count()) > 0, 'a visual on screen is live without a press', 20000)
     await shot('mac-live')
     if (platform === 'linux') {
       // The question goes live and takes a draft from a click on a tile inside the page (WP10's input path).
       const figures = await app.getByTestId('visual-figure').all()
       const question = figures.at(-1)!.bounds!
-      await until(async () => (await app.getByTestId('visual-ring-live').count()) > 0, 'the question is live')
+      await until(async () => (await app.getByTestId('visual-live').count()) > 0, 'the question is live')
       await Bun.sleep(1500)
       await app.mouse.click({ x: question.x + question.width * 0.5, y: question.y + 70 })
       await until(async () => (await app.getByText('Layout B · Side panel').count()) > 0, 'the draft reaches the answer bar', 15000)
@@ -193,7 +192,6 @@ try {
     const box = figures[0]!.bounds!
     await app.mouse.click({ x: box.x + box.width / 2, y: box.y + 40 }); await Bun.sleep(700)
     assert.equal(await app.getByTestId('visual-live').count(), 0, 'a click must not go live')
-    assert.equal(await app.getByTestId('visual-ring-live').count(), 0)
 
     // Open in browser mints a frame ticket and hands its URL to the system; the page is served once.
     const before = openedLines().length

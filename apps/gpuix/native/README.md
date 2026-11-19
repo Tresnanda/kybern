@@ -1761,6 +1761,27 @@ pending input in order. The physical macOS input path and automation share
 `KYBERN_SCROLL_COALESCE=0` disables accumulation. `=all` is an experimental
 app-wide precise-wheel mode; the default uses painted `cacheLayout` targets.
 
+### Wheel latching
+
+Upstream GPUI scrolls every scroller under the pointer, and the floating
+composer (like any card that is not `pointerEvents: 'auto'`) lets the wheel
+through to the transcript, so a scrolling list over the transcript (the composer
+tray) moved both. GPUI's `scroll_latch.rs` (included in `window.rs`) latches
+scrolling the way browsers do: the first event with a delta in a gesture goes to
+the frontmost scroller under the pointer that can still move that way, and only
+it scrolls until the gesture ends, past its end, through momentum, and after the
+pointer leaves it. A gesture ends with a new contact (`TouchPhase::Started`) or
+500 ms without wheel events (mouse wheels; Linux and Windows report only
+`Moved`). A gesture that starts at a list's end, or outside any scroller, goes to
+the one behind. `div` overflow scrolling, `List` and the `input` element (a long
+draft) take part through `Window::latch_scroll`; custom elements with their own
+wheel handling (code, diff) do not. Only the scrolling is latched: `onScroll`
+listeners still see every event, as DOM wheel events do. Menus and popups on an
+occluding `<anchored>` layer never pass the wheel on at all.
+`KYBERN_SCROLL_LATCH=0` restores the old behaviour for comparisons;
+`scroll-latch-check.ts` drives the composer tray, the field and the slash list
+with phased gestures (`SCROLL_LATCH_CONTROL=1` prints the old double scroll).
+
 The native addon uses GPUI `test-support`, whose `App::flush_effects` normally
 draws dirty windows after every update. The flick follow-up now skips that
 synchronous test draw by default and relies on normal platform-frame scheduling

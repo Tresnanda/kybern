@@ -43,7 +43,7 @@ export function setAccountIdleCompaction(kind: ProviderKind, instance: string, m
 }
 
 export function CompactionSection() {
-  const { settings: s, saving } = useSettings()
+  const { settings: s } = useSettings()
   const providers = useNav((state) => state.providers)
   if (!s) return null
   const current = compaction(s)
@@ -57,9 +57,9 @@ export function CompactionSection() {
   }
   const agents = providers.filter((provider) => provider.available && AUTO_COMPACT_HARNESSES.includes(provider.kind))
   return (
-    <Section title="Compaction">
+    <Section id="compaction" title="Compaction">
       <Row title="Compact idle threads" description={option.description} status={overridesStatus(accountOverrides(s))} shared="compaction">
-        <Select label="Compact idle threads" testId="settings-idle-compaction" value={current.idle} disabled={saving} options={IDLE_COMPACTION_OPTIONS.map(({ value, label }) => ({ value, label }))} onChange={(value) => change({ idle: value as IdleCompaction })} />
+        <Select label="Compact idle threads" testId="settings-idle-compaction" value={current.idle} options={IDLE_COMPACTION_OPTIONS.map(({ value, label }) => ({ value, label }))} onChange={(value) => change({ idle: value as IdleCompaction })} />
       </Row>
       {agents.length > 0 && <Row title="Auto-compact at" description="Agents summarize a thread when its context passes this size. Default keeps each agent’s own limit." />}
       {agents.map((provider) => {
@@ -71,7 +71,7 @@ export function CompactionSection() {
               testId={`settings-auto-compact-${provider.kind}`}
               compact
               value={tokens ? String(tokens) : ''}
-              disabled={saving}
+             
               options={AUTO_COMPACT_CHOICES.map((choice) => ({ value: choice ? String(choice) : '', label: autoCompactLabel(choice) }))}
               onChange={(value) => setThreshold(provider.kind, value ? Number(value) : null)}
             />

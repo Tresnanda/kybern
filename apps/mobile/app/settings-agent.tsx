@@ -7,7 +7,9 @@ import { useHarnessUpdates } from "../src/features/settings/Agents";
 import { Section } from "../src/features/settings/common";
 import { accountStatusLabel, harnessUpdateLabel } from "../src/features/settings/labels";
 import { PROVIDER_DISPLAY_NAME, type ProviderKind, type ProviderSettings } from "../src/state/protocol";
-import { errorText, rpc, useApp } from "../src/state/runtime";
+import { activeEnvironment, errorText } from "../src/state/runtime";
+import { settingsRpc, useSettingsChoice } from "../src/state/machineChoice";
+import { useSettingsProviders } from "../src/state/machineProviders";
 import { loadAccounts, useAccounts } from "../src/state/accounts";
 import { saveSettings, useSettings } from "../src/state/settings";
 import { ListRow, SectionFooter } from "../src/ui/List";
@@ -17,9 +19,10 @@ import { space } from "../src/ui/theme";
 
 export default function SettingsAgentScreen() {
   const { kind } = useLocalSearchParams<{ kind: ProviderKind }>();
-  const app = useApp();
+  const providers = useSettingsProviders();
+  const machine = useSettingsChoice()?.machineId ?? activeEnvironment()?.id;
   const { settings } = useSettings();
-  const provider = app.providers.find((p) => p.kind === kind);
+  const provider = providers.find((p) => p.kind === kind);
   const { updates, setUpdates, error: updatesError } = useHarnessUpdates();
   const update = updates.find((u) => u.kind === kind);
   const [busy, setBusy] = useState(false);
@@ -35,7 +38,7 @@ export default function SettingsAgentScreen() {
   const runUpdate = () => {
     setBusy(true);
     setError("");
-    rpc("harness_updates.run", { kind })
+    settingsRpc("harness_updates.run", { kind })
       .then((value) => {
         setUpdates((list) => [...list.filter((u) => u.kind !== value.kind), value]);
         showToast(value.message || `Updating ${name}`);
@@ -70,7 +73,7 @@ export default function SettingsAgentScreen() {
       ) : null}
       {settings ? (
         <Configuration
-          key={`${app.activeId}:${kind}`}
+          key={`${machine}:${kind}`}
           value={settings.providers[kind]}
           onSave={(value) =>
             saveSettings({ ...settings, providers: { ...settings.providers, [kind]: value } })

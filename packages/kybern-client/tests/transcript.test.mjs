@@ -950,3 +950,99 @@ test("a reasoning-only final message has no empty answer and preserves its think
   assert.equal(group.answer, null);
   assert.equal(group.work[0].thinking, "Planning");
 });
+
+// A background subagent's tool call and task updates between two deltas of one
+// root message must not cut the message in two Markdown documents.
+const launchTool = { id: "launch-1", name: "Agent", input: {}, parent_id: null }
+const bgTask = (overrides = {}) => runtimeTask("task-1", { tool_call_id: "launch-1", ...overrides })
+const texts = (state) => state.blocks.filter((block) => block.kind === "assistant").map((block) => block.text)
+
+test("a background subagent's tool call and task updates do not split a streamed word", () => {
+  const state = fold([
+    start,
+    { kind: "tool_call_started", call: launchTool, origin: ROOT },
+    { kind: "runtime_task_started", task: bgTask() },
+    { kind: "assistant_text_delta", message_id: "m1", delta: "\n- Har", origin: ROOT },
+    { kind: "tool_call_started", call: readTool("sub-bash"), origin: agentOrigin("task-1") },
+    { kind: "runtime_task_updated", task: bgTask() },
+    { kind: "runtime_task_updated", task: bgTask() },
+    { kind: "assistant_text_delta", message_id: "m1", delta: "nesses that need sign-", origin: ROOT },
+    { kind: "assistant_text_delta", message_id: "m1", delta: "in get a dot.", origin: ROOT },
+  ])
+  assert.deepEqual(texts(state), ["\n- Harnesses that need sign-in get a dot."])
+  const [group] = groupTurns(state.blocks)
+  assert.equal(group.work.filter((block) => block.kind === "assistant").length, 1)
+})
+
+test("completing a message after hidden subagent work keeps one segment and the exact text", () => {
+  const state = fold([
+    start,
+    { kind: "assistant_text_delta", message_id: "m1", delta: "Har", origin: ROOT },
+    { kind: "tool_call_started", call: readTool("sub-bash"), origin: agentOrigin("task-1") },
+    { kind: "assistant_text_delta", message_id: "m1", delta: "nesses", origin: ROOT },
+    { kind: "assistant_message_completed", message_id: "m1", text: "Harnesses and more", thinking: null, origin: ROOT },
+  ])
+  assert.deepEqual(texts(state), ["Harnesses and more"])
+})
+
+test("a root tool call between deltas still splits the message", () => {
+  const state = fold([
+    start,
+    { kind: "assistant_text_delta", message_id: "m1", delta: "Har", origin: ROOT },
+    { kind: "tool_call_started", call: readTool("root-read"), origin: ROOT },
+    { kind: "assistant_text_delta", message_id: "m1", delta: "nesses", origin: ROOT },
+  ])
+  assert.deepEqual(texts(state), ["Har", "nesses"])
+})
+
+test("a published page, an image-free outside change and usage do not split; a root task does", () => {
+  const visual = { id: "v1", title: "t", html: "<p>x</p>", created_at: AT }
+  const hidden = fold([
+    start,
+    { kind: "assistant_text_delta", message_id: "m1", delta: "Har", origin: ROOT },
+    { kind: "html_published", visual },
+    { kind: "provider_usage_updated", usage: { limits: [] } },
+    { kind: "assistant_text_delta", message_id: "m1", delta: "nesses", origin: ROOT },
+  ])
+  assert.deepEqual(texts(hidden), ["Harnesses"])
+
+  const shown = fold([
+    start,
+    { kind: "assistant_text_delta", message_id: "m1", delta: "Har", origin: ROOT },
+    { kind: "runtime_task_started", task: runtimeTask("loose") },
+    { kind: "assistant_text_delta", message_id: "m1", delta: "nesses", origin: ROOT },
+  ])
+  assert.deepEqual(texts(shown), ["Har", "nesses"])
+})
+
+test("an already split stored transcript renders as one document without remounting", () => {
+  // The shape an older daemon projected: two segments of one message with a
+  // subagent tool call and its task between them.
+  const stored = seedFromGet({
+    thread: { id: "t", last_seq: 7 },
+    transcript: [
+      { role: "user", id: "u1", turn_id: T, seq: 1, message: { parts: [{ type: "text", text: "hi" }] }, at: AT },
+      { role: "tool_call", turn_id: T, seq: 2, origin: ROOT, call: launchTool, output_omitted: false, output: null, is_error: false, complete: true, at: AT },
+      { role: "assistant", id: "m1", turn_id: T, seq: 3, origin: ROOT, segment: 0, text: "\n- Har", thinking: null, complete: false, at: AT },
+      { role: "tool_call", turn_id: T, seq: 4, origin: agentOrigin("task-1"), call: readTool("sub-bash"), output_omitted: false, output: null, is_error: false, complete: false, at: AT },
+      { role: "runtime_task", turn_id: T, seq: 5, task: bgTask(), at: AT },
+      { role: "assistant", id: "m1", turn_id: T, seq: 6, origin: ROOT, segment: 1, text: "nesses that need sign-in", thinking: null, complete: false, at: AT },
+    ],
+    pending_approvals: [],
+  })
+  assert.equal(stored.blocks.filter((block) => block.kind === "assistant").length, 2)
+  const grouper = createTurnGrouper()
+  const [group] = grouper(stored.blocks)
+  const assistants = group.work.filter((block) => block.kind === "assistant")
+  assert.equal(assistants.length, 1)
+  assert.equal(assistants[0].text, "\n- Harnesses that need sign-in")
+  assert.equal(assistants[0].id, "m1#0", "the row keeps the first piece's key")
+  assert.equal(group.liveTextId, "m1#0")
+  // Nothing about the join changes the stored blocks, and unchanged turns reuse it.
+  assert.equal(stored.blocks.filter((block) => block.kind === "assistant")[1].text, "nesses that need sign-in")
+  assert.equal(assistants[0], groupTurns(stored.blocks)[0].work.find((block) => block.kind === "assistant"))
+
+  // A drawn row between the pieces keeps them apart.
+  const apart = stored.blocks.map((block) => (block.kind === "tool" && block.call.id === "sub-bash" ? { ...block, origin: ROOT } : block))
+  assert.equal(groupTurns(apart)[0].work.filter((block) => block.kind === "assistant").length, 2)
+})

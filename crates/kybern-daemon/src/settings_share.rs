@@ -75,6 +75,7 @@ classify!(SETTINGS_FIELDS, every_settings_field_is_classified, Settings, {
     providers => PerProvider,
     notifications => Shared,
     auto_update_harnesses => Shared,
+    check_harness_versions => Shared,
     auto_update_daemon => Shared,
     update_track => Shared,
     background => PerMachine,
@@ -88,6 +89,7 @@ classify!(SETTINGS_FIELDS, every_settings_field_is_classified, Settings, {
     preview_allowed_folders => PerMachine,
     network => PerMachine,
     compaction => Shared,
+    older_after => Shared,
 });
 
 classify!(PROVIDER_FIELDS, every_provider_field_is_classified, ProviderSettings, {
@@ -569,12 +571,14 @@ mod tests {
             "title_provider",
             "notifications",
             "auto_update_harnesses",
+            "check_harness_versions",
             "auto_update_daemon",
             "update_track",
             "orchestration",
             "tell_agents_about_kybern",
             "ask_deadlines",
             "compaction",
+            "older_after",
         ] {
             assert_eq!(class(shared), Sharing::Shared, "{shared}");
         }

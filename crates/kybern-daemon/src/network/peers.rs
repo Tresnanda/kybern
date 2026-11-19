@@ -960,6 +960,11 @@ pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, para
             tracing::info!(target: SESSION_TARGET, machine = %link.machine_id, "a member asked this machine to update");
             ok(super::updates::start_self(state, request.version.as_deref()).await)
         }
+        PeerHarnessUpdatesRun::NAME => {
+            let request: PeerHarnessUpdatesRunParams = parse(params)?;
+            tracing::info!(target: SESSION_TARGET, machine = %link.machine_id, "a member asked this machine to update its harnesses");
+            ok(crate::harness_updates::start_local(state, &request.kinds))
+        }
         PeerClientTokenMint::NAME => ok(super::client_grant::mint_for_peer(state, link, parse(params)?)?),
         PeerDeviceRevoke::NAME => {
             let revoke: PeerDeviceRevokeParams = parse(params)?;

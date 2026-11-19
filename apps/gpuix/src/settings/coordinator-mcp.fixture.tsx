@@ -10,7 +10,7 @@ function Fixture() {
   const t = useTheme()
   const [allowed, setAllowed] = useState<Partial<Record<ProviderKind, string[]>>>({})
   return <div testId="coordinator-mcp-ready" style={{ width: '100%', height: '100%', backgroundColor: t.surface, paddingTop: 30 }}>
-    <CoordinatorMcpToolsView servers={{ omp: ['codebase-memory', 'github'] }} allowed={allowed} saving={false} onChange={(provider, name, checked) => setAllowed((current) => ({ ...current, [provider]: checked ? [...(current[provider] ?? []), name] : (current[provider] ?? []).filter((server) => server !== name) }))} />
+    <CoordinatorMcpToolsView servers={{ omp: ['codebase-memory', 'github'] }} allowed={allowed} onChange={(provider, name, checked) => setAllowed((current) => ({ ...current, [provider]: checked ? [...(current[provider] ?? []), name] : (current[provider] ?? []).filter((server) => server !== name) }))} />
   </div>
 }
 render(<ThemeProvider><Fixture /></ThemeProvider>, { title: 'Coordinator tools', width: 760, height: 320, focus: false })

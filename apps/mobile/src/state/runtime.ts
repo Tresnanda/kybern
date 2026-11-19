@@ -441,6 +441,7 @@ export function machineHub(): MachineHub {
         void saveActive(secureKv, state.activeId).catch(() => {});
       },
     });
+    hub.subscribe(() => syncRemoteApprovals());
   }
   return hub;
 }
@@ -557,6 +558,11 @@ export async function respondApproval(
 ) {
   const owner = threadMachine(approval.thread_id);
   await rpc("approvals.respond", { approval_id: approval.id, ...decision }, owner);
+  const entry = owner && remoteApprovals.get(owner);
+  if (entry) {
+    remoteApprovals.set(owner, { key: entry.key, approvals: entry.approvals.filter((a) => a.id !== approval.id) });
+    publishApprovals();
+  }
   await Promise.all([refresh(owner), loadThread(approval.thread_id)]);
 }
 
@@ -1159,7 +1165,8 @@ export async function refresh(machineId?: unknown) {
         // A `projects.changed` received meanwhile is newer than this list.
         projects: projectChanges === projectsSeen ? projects.projects : state.projects,
         threads: withNewChats(list.threads),
-        approvals: approvals.approvals,
+        // Other machines' waiting approvals stay (`syncRemoteApprovals`): this computer lists only its own.
+        approvals: [...approvals.approvals, ...remoteApprovalList()],
         // Other machines' queued prompts stay (`refreshRemoteQueue`): this computer lists only its own.
         queue: [...queue.messages, ...state.queue.filter((item) => remoteOwner(item.thread_id))],
         activity: list.activity,
@@ -1248,6 +1255,83 @@ const remoteEvents = new Map<MachineId, { unsubscribe(): void }>();
 function resetRemoteEvents() {
   remoteEvents.forEach((subscription) => subscription.unsubscribe());
   remoteEvents.clear();
+  remoteApprovals.clear();
+  approvalReads.clear();
+}
+
+// ---- approvals waiting on other machines (#245) ----
+// The computer the phone is at lists only its own approvals. Every other live machine's are read from that machine
+// whenever its activity shows a different set of waiting threads, so Home, Activity and the badges count them too,
+// also while the computer the phone is at is away. An away machine's approvals leave the list: they can't be answered.
+
+/** Each other machine's waiting approvals, with the waiting threads (`key`) they were read for. */
+const remoteApprovals = new Map<MachineId, { key: string; approvals: ApprovalRequest[] }>();
+/** The waiting threads a read in flight is for, by machine. */
+const approvalReads = new Map<MachineId, string>();
+
+function remoteApprovalList(): ApprovalRequest[] {
+  return [...remoteApprovals.values()].flatMap((entry) => entry.approvals);
+}
+function publishApprovals() {
+  const own = state.approvals.filter((a) => !remoteOwner(a.thread_id));
+  const remote = remoteApprovalList();
+  const ids = new Set(remote.map((a) => a.id));
+  publish({ approvals: [...own.filter((a) => !ids.has(a.id)), ...remote] });
+}
+function readRemoteApprovals(machineId: MachineId, key: string, force = false) {
+  const known = remoteApprovals.get(machineId);
+  if (!force && (known?.key === key || approvalReads.get(machineId) === key)) return;
+  if (!key && !force) {
+    remoteApprovals.set(machineId, { key, approvals: [] });
+    if (known?.approvals.length) publishApprovals();
+    return;
+  }
+  const h = hub;
+  if (!h) return;
+  approvalReads.set(machineId, key);
+  const epoch = generation;
+  let client: KybernClient;
+  try {
+    client = h.clientFor(machineId);
+  } catch {
+    approvalReads.delete(machineId);
+    return;
+  }
+  client.call("approvals.list", {}).then(
+    (result) => {
+      if (epoch !== generation || approvalReads.get(machineId) !== key) return;
+      approvalReads.delete(machineId);
+      remoteApprovals.set(machineId, { key, approvals: result.approvals });
+      publishApprovals();
+    },
+    () => {
+      if (approvalReads.get(machineId) === key) approvalReads.delete(machineId);
+    },
+  );
+}
+/** Read the approvals of every other live machine whose waiting threads changed; drop those of machines that went away. */
+function syncRemoteApprovals() {
+  const h = hub;
+  if (!h) return;
+  const primaryId = h.primaryMachineId;
+  const live = new Set<MachineId>();
+  for (const machine of h.view().machines) {
+    if (machine.machineId === primaryId || !LIVE_MACHINE.has(machine.status)) continue;
+    live.add(machine.machineId);
+    const waiting = (h.set.activityOf(machine.machineId) ?? [])
+      .filter((a) => a.pending_request || a.pending_child_request)
+      .map((a) => a.thread_id)
+      .sort()
+      .join(",");
+    readRemoteApprovals(machine.machineId, waiting);
+  }
+  let gone = false;
+  for (const id of [...remoteApprovals.keys()])
+    if (!live.has(id)) {
+      remoteApprovals.delete(id);
+      gone = true;
+    }
+  if (gone) publishApprovals();
 }
 /** The machine a listed thread lives on, when it is not the one the phone is at. */
 function remoteOwner(threadId: string): MachineId | undefined {
@@ -1276,6 +1360,8 @@ function ensureRemoteEvents(machineId: MachineId) {
         // Queued prompts of this machine's threads follow its events (the lists stay the machine set's).
         const queue = applyIndexEvent(state, event).queue;
         if (queue !== state.queue) publish({ queue });
+        if (event.kind === "approval_requested" || event.kind === "user_input_requested" || event.kind === "approval_resolved")
+          readRemoteApprovals(machineId, remoteApprovals.get(machineId)?.key ?? "", true);
         if (event.kind === "workspace_reverted") {
           snapshots.invalidate(event.thread_id);
           if (threadListeners.has(event.thread_id)) void loadThread(event.thread_id).catch(() => {});

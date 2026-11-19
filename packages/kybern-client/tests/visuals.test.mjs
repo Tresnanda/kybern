@@ -32,6 +32,7 @@ test("streaming a later turn preserves settled visual group identity", () => {
 test("frame messages clamp size and reject executable, credentialed or oversized URLs", () => {
   assert.equal(visualHeight(140.4,400),141)
   assert.equal(visualHeight(99999999,400),400)
+  assert.equal(visualHeight(15000),15000, "the default cap fits tall pages")
   for (const value of [NaN, Infinity, -1, "400", null, {}]) assert.equal(visualHeight(value,400),null)
   for (const value of ["javascript:alert(1)","file:///etc/passwd","https://user:password@example.test","https://example.test/"+"a".repeat(5000),{}]) assert.equal(visualLink(value),null)
   assert.equal(visualLink("https://example.test/docs"),"https://example.test/docs")
@@ -111,16 +112,16 @@ test("measured heights take the taller neighbour between widths and clamp at the
   assert.equal(visualMeasuredHeight(measured,100),900, "below the narrowest measurement")
   assert.equal(visualMeasuredHeight(measured,5000),400, "above the widest measurement: the last two widths")
 })
-test("frame height prefers the page, then the measurement, and caps only when the agent asked to scroll", () => {
+test("frame height fits the page: its posted height, then the measurement, then the agent's first paint", () => {
   const visual = {id:"v",title:"t",height:1000,heights:measured}
   assert.equal(visualFrameHeight(visual,736,350),350, "posted content height wins")
   assert.equal(visualFrameHeight(visual,375),800, "measured at this width")
-  assert.equal(visualFrameHeight({...visual,height:300},736),300, "agent cap below the measured column height")
-  assert.equal(visualFrameHeight({...visual,height:500},736),400, "agent cap above the measured column height does not apply")
-  assert.equal(visualFrameHeight({id:"v",title:"t",height:400},736,650),400, "unmeasured: min(agent, content)")
+  assert.equal(visualFrameHeight({...visual,height:300},736),400, "the agent's height never caps a measured page")
+  assert.equal(visualFrameHeight({id:"v",title:"t",height:400},736,650),650, "unmeasured: the page's own height wins")
   assert.equal(visualFrameHeight({id:"v",title:"t",height:400},736),400)
   assert.equal(visualFrameHeight({id:"v",title:"t",height:400,heights:[]},736,120),120)
-  assert.equal(visualFrameHeight(visual,736,5),80); assert.equal(visualFrameHeight(visual,736,99999),2000)
+  assert.equal(visualFrameHeight(visual,736,5),80); assert.equal(visualFrameHeight(visual,736,99999),20000)
+  assert.equal(visualFrameHeight(visual,736,12000),12000, "tall pages are not clamped")
   assert.equal(clampVisualHeight(1.4),80)
 })
 test("reading measured heights rejects malformed lists and sorts valid ones", () => {

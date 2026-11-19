@@ -270,6 +270,7 @@ pub async fn discover_skills(
                 scope,
                 enabled: skill.get("enabled").and_then(Value::as_bool).unwrap_or(true),
                 home: None,
+                plugin: None,
             })
         })
         .collect();
@@ -300,6 +301,7 @@ fn connected_apps(result: &Value) -> Vec<SkillInfo> {
                 scope: SkillScope::Plugin,
                 enabled: true,
                 home: None,
+                plugin: None,
             })
         })
         .collect()
@@ -342,6 +344,7 @@ fn installed_plugins(result: &Value) -> Vec<SkillInfo> {
                 scope: SkillScope::Plugin,
                 enabled: plugin.get("enabled").and_then(Value::as_bool).unwrap_or(true),
                 home: None,
+                plugin: None,
             });
         }
     }

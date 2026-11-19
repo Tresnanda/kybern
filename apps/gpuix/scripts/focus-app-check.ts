@@ -54,7 +54,7 @@ try {
   const steps: { step: string; ok: boolean; detail: string }[] = []
   const expect = (step: string, ok: boolean, detail: unknown) => { steps.push({ step, ok, detail: JSON.stringify(detail) }); console.log(`${ok ? 'ok  ' : 'FAIL'} ${step}: ${JSON.stringify(detail)}`) }
   try {
-    // A visual rests as a picture (ADE-69 A′): a press on empty space wakes it in place.
+    // A visual on screen is live without a press (inline pages); the press below is a no-op on a live page.
     await a.getByTestId('visual-picture').waitFor({ timeoutMs: 20000 }); await a.getByTestId('composer').waitFor(); await Bun.sleep(600)
     const figure = await a.getByTestId('visual-figure').bounds()
     // Automation wakes it: the AppKit input helper learns its target window from the first web view.

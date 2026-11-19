@@ -63,6 +63,8 @@ pub mod features {
     /// A daemon the desktop app manages answers `peer.update.start` by updating the app: through an open window,
     /// or by itself while the app is closed (ADE-125). Older versions answer "Updates with the app" instead.
     pub const APP_UPDATE_V1: &str = "update.app.v1";
+    /// `peer.harness_updates.run`: another member can ask this machine to update its harnesses.
+    pub const HARNESS_UPDATE_V1: &str = "harness.update.v1";
     /// A group project's thread (several repositories) can be forked, moved or delegated to this machine:
     /// `group` in `peer.fork`, `peer.move.prepare` and `peer.delegate`, `group_repos` in `peer.git.import`.
     pub const GROUP_V1: &str = "group.v1";
@@ -85,7 +87,7 @@ pub mod features {
     pub const REMOVAL_PROOF_V1: &str = "removal.proof.v1";
 
     /// Every feature the network design names, in design order.
-    pub const ALL: [&str; 30] = [
+    pub const ALL: [&str; 31] = [
         NETWORK_V1,
         SPACES_SYNC_V1,
         RELAY_V1,
@@ -110,6 +112,7 @@ pub mod features {
         UPDATE_V1,
         UPDATE_PROGRESS_V1,
         APP_UPDATE_V1,
+        HARNESS_UPDATE_V1,
         GROUP_V1,
         PROVISION_V1,
         SKILLS_SYNC_V1,
@@ -699,6 +702,23 @@ pub struct NetworkUpdateSkipped {
 pub struct NetworkUpdateAllResult {
     pub started: Vec<MachineId>,
     pub skipped: Vec<NetworkUpdateSkipped>,
+}
+
+/// `peer.harness_updates.run`: a member asks this machine to update harnesses once each is idle.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PeerHarnessUpdatesRunParams {
+    /// Empty: every harness this machine's own version check found a newer version for.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kinds: Vec<crate::ProviderKind>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PeerHarnessUpdatesRunResult {
+    /// The harnesses this machine queued.
+    pub started: Vec<crate::ProviderKind>,
+    /// Why nothing was queued, when nothing was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// `network.follow_updates.set`.

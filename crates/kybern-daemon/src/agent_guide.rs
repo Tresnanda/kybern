@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 
 /// Bumped with every wording change so a changed guide is a deliberate act.
-pub(crate) const GUIDE_VERSION: u32 = 22;
+pub(crate) const GUIDE_VERSION: u32 = 23;
 
 /// Hard ceiling for the rendered guide (about 1.5k tokens at 4 bytes a token).
 #[cfg(test)]
@@ -93,7 +93,7 @@ pub(crate) fn render(tools: &GuideTools) -> String {
              Put findings in the conversation. Answer ordinary questions in plain text. For a substantial comparison, plan, diagram or visual report, prefer an inline page from `kybern_html_publish` over a Markdown file or an external link. Write a report file only when the user asks or the task needs one, and still give the findings here. Publish elsewhere only when the user wants a shareable link.\n\
              \n\
              ## Visual replies\n\
-             Write one self-contained HTML document; call `kybern_html_preview` for a screenshot and console diagnostics, then `kybern_html_publish` before your final written reply. The page appears above that reply, stored with its absolute local images embedded. Preview installs a small headless browser on first use; retry in a minute if it is installing. Pages run sandboxed and follow the reader’s theme through CSS variables (see the tool description). Keep width fluid and height content-driven. Kybern captions the page with your title: add no title, page background or outer card. The reader sees the page: add only what it does not explain in the final reply.\n\
+             Write one self-contained HTML document; call `kybern_html_preview` for a screenshot and console diagnostics, then `kybern_html_publish` before your final written reply. The page appears above that reply, stored with its absolute local images embedded. Preview installs a small headless browser on first use; retry in a minute if it is installing. Pages run sandboxed and follow the reader’s theme through CSS variables (see the tool description). The page is live inline and fits its content: keep width fluid and height content-driven, never use `vh` units, and keep the main content out of inner scrolling boxes. Kybern captions the page with your title: add no title, page background or outer card. The reader sees the page: add only what it does not explain in the final reply.\n\
              For a choice before you go on, publish with `await_answer` and `answer_schema`: the call waits, the page calls `kybern.answer.draft(value, {label})`, and Kybern draws the send button. You get answered, replied, skipped, cancelled or timed_out.\n",
         );
     }
@@ -240,7 +240,7 @@ mod tests {
             include_str!("agent_guide_full.golden.txt").replace("\r\n", "\n"),
             "guide wording changed: bump GUIDE_VERSION and update the golden file (KYBERN_UPDATE_GOLDEN=1)"
         );
-        assert_eq!(GUIDE_VERSION, 22);
+        assert_eq!(GUIDE_VERSION, 23);
     }
 
     #[test]

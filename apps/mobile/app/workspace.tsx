@@ -1,3 +1,4 @@
+import { isChildThread } from "../../../packages/kybern-client/src/subagents";
 import { Stack, router, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
 import { ScrollView, View } from "react-native";
@@ -12,6 +13,7 @@ import { Files } from "../src/features/Files";
 import { Terminal } from "../src/features/Terminal";
 import { Artifacts } from "../src/features/Artifacts";
 import { ThreadNotes } from "../src/features/ThreadNotes";
+import { showArchivedToast } from "../src/features/threadActions";
 import { type Checkpoint, type RuntimeTask } from "../src/state/protocol";
 import {
   errorText,
@@ -181,23 +183,35 @@ export default function Workspace() {
                   leading="pause.circle"
                   onPress={() => void run(() => rpc("threads.release", { thread_id: thread.id }), "Session released")}
                 />
-                <ListRow
-                  title="Archive thread"
-                  leading="archivebox"
-                  onPress={() =>
-                    confirm({
-                      title: "Archive this thread?",
-                      message: "You can find it in the Archived filter in Threads.",
-                      confirm: "Archive",
-                      destructive: false,
-                      onConfirm: () =>
-                        void run(async () => {
-                          await rpc("threads.archive", { thread_id: thread.id });
-                          router.dismissTo("/library");
-                        }, "Thread archived"),
-                    })
-                  }
-                />
+                {thread.status === "archived" ? (
+                  // Delegated and subagent children stay archived with their parent.
+                  isChildThread(thread) ? null : (
+                    <ListRow
+                      title="Unarchive thread"
+                      leading="tray.and.arrow.up"
+                      onPress={() => void run(() => rpc("threads.unarchive", { thread_id: thread.id }), "Thread unarchived")}
+                    />
+                  )
+                ) : (
+                  <ListRow
+                    title="Archive thread"
+                    leading="archivebox"
+                    onPress={() =>
+                      confirm({
+                        title: "Archive this thread?",
+                        message: "You can find it in the Archived filter in Threads.",
+                        confirm: "Archive",
+                        destructive: false,
+                        onConfirm: () =>
+                          void run(async () => {
+                            await rpc("threads.archive", { thread_id: thread.id });
+                            showArchivedToast(thread.id);
+                            router.dismissTo("/library");
+                          }),
+                      })
+                    }
+                  />
+                )}
               </InsetGroup>
               <SectionHeader title="Agent limits" />
               <InsetGroup>
