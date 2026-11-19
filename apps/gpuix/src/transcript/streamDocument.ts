@@ -1,3 +1,5 @@
+import { markdownQueue, MarkdownJobCancelled, type MarkdownTicket } from '../native/markdownJobs.ts'
+
 /** The native Markdown document API is additive. Older addons keep the existing
  * Markdown host; a newer addon supplies canonical blocks and append parsing. */
 export interface StreamDocumentRevision {
@@ -17,7 +19,7 @@ export interface StreamDocumentRenderer {
  * A release also handles creation that completes after the owner disappeared. */
 export function streamDocumentOwner(renderer: StreamDocumentRenderer, publish: (revision: StreamDocumentRevision, text: string) => void, failed: (error: unknown) => void) {
   let disposed = false, running = false, pending: string | undefined
-  let document: StreamDocumentRevision | undefined, source: string | undefined
+  let document: StreamDocumentRevision | undefined, source: string | undefined, ticket: MarkdownTicket<StreamDocumentRevision> | undefined
   const release = () => {
     if (document) { renderer.releaseMarkdownDocument(document.id); document = undefined }
   }
@@ -29,20 +31,22 @@ export function streamDocumentOwner(renderer: StreamDocumentRenderer, publish: (
         const text = pending
         pending = undefined
         if (document && text === source) { publish(document, text); continue }
-        const next = document
-          ? await renderer.updateMarkdownDocument(document.id, {text, expectedRevision: document.revision})
-          : await renderer.createMarkdownDocument({text})
+        // Through the shared queue (ahead of waiting document bodies): native rejects the ninth pending job.
+        ticket = markdownQueue(renderer).submit(() => document
+          ? renderer.updateMarkdownDocument(document.id, {text, expectedRevision: document.revision})
+          : renderer.createMarkdownDocument({text}), 'high')
+        const next = await ticket.result
         document = next
         source = text
         if (disposed) { release(); break }
         if (pending === undefined || pending === text) { pending = undefined; publish(next, text) }
       }
     } catch (error) {
-      if (!disposed) { disposed = true; pending = undefined; release(); failed(error) }
-    } finally { running = false }
+      if (!disposed && !(error instanceof MarkdownJobCancelled)) { disposed = true; pending = undefined; release(); failed(error) }
+    } finally { running = false; ticket = undefined }
   }
   return {
     enqueue(text: string) { if (!disposed) { pending = text; void drain() } },
-    dispose() { disposed = true; pending = undefined; release() },
+    dispose() { disposed = true; pending = undefined; ticket?.cancel(); release() },
   }
 }
