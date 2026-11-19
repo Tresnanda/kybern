@@ -29,6 +29,8 @@ pub struct ProbeOutcome {
     pub powered_by: Option<String>,
     /// `href` of the first `<link rel=icon>`, unresolved.
     pub favicon_href: Option<String>,
+    /// Every `<link rel=icon>` in the page, unresolved (reply link icons pick a light and a dark one).
+    pub icons: Vec<crate::link_icon::IconLink>,
     /// Whether the body mentions Vite's client.
     pub vite: bool,
     pub resolved: Option<SocketAddr>,
@@ -134,6 +136,7 @@ fn failed(error: PreviewProbeError) -> ProbeOutcome {
         server: None,
         powered_by: None,
         favicon_href: None,
+        icons: Vec::new(),
         vite: false,
         resolved: None,
     }
@@ -185,10 +188,12 @@ async fn fetch(url: reqwest::Url, host: &str, addrs: &[SocketAddr], pin: bool, t
     }
     result.blocked_by = frame_block(&headers);
     let mut favicon_href = None;
+    let mut icons = Vec::new();
     let mut vite = false;
     if is_html {
         result.title = html_title(&body_text);
         favicon_href = html_icon_href(&body_text);
+        icons = crate::link_icon::icon_links(&body_text);
         vite = body_text.contains("/@vite/client");
     }
     ProbeOutcome {
@@ -197,6 +202,7 @@ async fn fetch(url: reqwest::Url, host: &str, addrs: &[SocketAddr], pin: bool, t
         server: text(reqwest::header::SERVER),
         powered_by: text(reqwest::header::HeaderName::from_static("x-powered-by")),
         favicon_href,
+        icons,
         vite,
         resolved: addrs.first().copied(),
     }
@@ -400,7 +406,7 @@ fn html_icon_href(html: &str) -> Option<String> {
     None
 }
 
-fn attr(tag: &str, name: &str) -> Option<String> {
+pub(crate) fn attr(tag: &str, name: &str) -> Option<String> {
     let lower = tag.to_ascii_lowercase();
     let mut from = 0;
     while let Some(found) = lower[from..].find(name) {
@@ -424,6 +430,12 @@ fn attr(tag: &str, name: &str) -> Option<String> {
 /// Fetch a same-host favicon (<= 16 KB image) as a data URL.
 pub async fn favicon_data_url(page_url: &str, href: Option<&str>, addr: SocketAddr, timeout: Duration) -> Option<String> {
     use base64::Engine as _;
+    let (kind, bytes) = icon_bytes(page_url, href, addr, timeout, MAX_FAVICON).await?;
+    Some(format!("data:{kind};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+}
+
+/// A same-host image of at most `max` bytes (`/favicon.ico` without `href`) and its content type.
+async fn icon_bytes(page_url: &str, href: Option<&str>, addr: SocketAddr, timeout: Duration, max: usize) -> Option<(String, Vec<u8>)> {
     let page = reqwest::Url::parse(page_url).ok()?;
     let target = match href {
         Some(href) => page.join(href).ok()?,
@@ -446,17 +458,18 @@ pub async fn favicon_data_url(page_url: &str, href: Option<&str>, addr: SocketAd
         let mut bytes = Vec::new();
         while let Some(chunk) = response.chunk().await.ok()? {
             bytes.extend_from_slice(&chunk);
-            if bytes.len() > MAX_FAVICON {
+            if bytes.len() > max {
                 return None;
             }
         }
-        (!bytes.is_empty()).then(|| format!("data:{kind};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+        (!bytes.is_empty()).then_some((kind, bytes))
     };
     tokio::time::timeout(timeout, fetch).await.ok().flatten()
 }
 
-/// A public site's own icon. DNS is pinned for both requests and redirects stay closed.
-pub async fn public_favicon(raw: &str) -> Option<String> {
+/// A public site's own icon, for the default look and, when the site publishes one, for dark mode, each measured for
+/// readability (`crate::link_icon`). DNS is pinned for every request and redirects stay closed.
+pub async fn public_favicons(raw: &str) -> Option<crate::link_icon::SiteIcons> {
     let mut url = reqwest::Url::parse(raw).ok()?;
     if !matches!(url.scheme(), "http" | "https") || !url.username().is_empty() || url.password().is_some() {
         return None;
@@ -466,7 +479,6 @@ pub async fn public_favicon(raw: &str) -> Option<String> {
     url.set_fragment(None);
     let host = url.host_str()?.to_string();
     let port = url.port_or_known_default()?;
-    let timeout = Duration::from_secs(3);
     let work = async {
         let addrs: Vec<_> = tokio::net::lookup_host((host.as_str(), port)).await.ok()?.collect();
         if addrs.is_empty()
@@ -474,24 +486,50 @@ pub async fn public_favicon(raw: &str) -> Option<String> {
         {
             return None;
         }
-        let page = fetch(url.clone(), &host, &addrs, true, timeout).await;
-        if let Some(raw) = favicon_data_url(url.as_str(), page.favicon_href.as_deref(), addrs[0], timeout).await
-            && let Some(icon) = normalize_icon(&raw).await
-        {
-            return Some(icon);
-        }
-        let raw = favicon_data_url(url.as_str(), None, addrs[0], timeout).await?;
-        normalize_icon(&raw).await
+        site_icons(&url, &host, &addrs).await
     };
-    tokio::time::timeout(timeout, work).await.ok().flatten()
+    tokio::time::timeout(Duration::from_secs(4), work).await.ok().flatten()
 }
 
-async fn normalize_icon(raw: &str) -> Option<String> {
-    use base64::Engine as _;
-    let (_, data) = raw.split_once(',')?;
-    let bytes = base64::engine::general_purpose::STANDARD.decode(data).ok()?;
-    let png = tokio::task::spawn_blocking(move || crate::thumbnail::make(&bytes)).await.ok()?.ok()?;
-    (png.len() <= MAX_FAVICON).then(|| format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png)))
+/// The page's icons from already-vetted addresses: the best light candidate that decodes (then `/favicon.ico`), and a
+/// dark one from a `prefers-color-scheme: dark` link or from the chosen SVG's own dark styles.
+async fn site_icons(url: &reqwest::Url, host: &str, addrs: &[SocketAddr]) -> Option<crate::link_icon::SiteIcons> {
+    use crate::link_icon;
+    let timeout = Duration::from_secs(3);
+    let page = fetch(url.clone(), host, addrs, true, timeout).await;
+    let (light, dark) = link_icon::candidates(&page.icons);
+    let load = |href: Option<String>| async move {
+        let (_, bytes) = icon_bytes(url.as_str(), href.as_deref(), addrs[0], timeout, link_icon::MAX_BYTES).await?;
+        tokio::task::spawn_blocking(move || {
+            if link_icon::is_svg(&bytes) {
+                let (light, dark) = link_icon::svg_variants(std::str::from_utf8(&bytes).ok()?);
+                let light = link_icon::decode(light.as_bytes())?;
+                Some((light, dark.and_then(|dark| link_icon::decode(dark.as_bytes()))))
+            } else {
+                Some((link_icon::decode(&bytes)?, None))
+            }
+        })
+        .await
+        .ok()
+        .flatten()
+    };
+    let hrefs = light.iter().take(3).map(|link| Some(link.href.clone())).chain([None]);
+    let mut chosen = None;
+    for href in hrefs {
+        if let Some(found) = load(href).await {
+            chosen = Some(found);
+            break;
+        }
+    }
+    let (light, adaptive) = chosen?;
+    let mut dark_icon = None;
+    for link in dark.iter().take(2) {
+        if let Some((icon, _)) = load(Some(link.href.clone())).await {
+            dark_icon = Some(icon);
+            break;
+        }
+    }
+    Some(link_icon::SiteIcons { light, dark: dark_icon.or(adaptive) })
 }
 
 #[cfg(test)]
@@ -673,5 +711,92 @@ pub(crate) mod tests {
         assert_eq!(html_title("<titlefoo>x</titlefoo>"), None);
         assert_eq!(html_icon_href("<link rel=stylesheet href=a.css><link href='/i.svg' rel='icon'>").as_deref(), Some("/i.svg"));
         assert_eq!(html_icon_href("<link rel=\"apple-touch-icon\" href=a>"), None);
+    }
+
+    /// A server answering each path with its own body; anything else is a 404.
+    async fn serve_site(routes: Vec<(&'static str, &'static str, Vec<u8>)>) -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let routes = std::sync::Arc::new(routes);
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else { return };
+                let routes = routes.clone();
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    let n = socket.read(&mut buf).await.unwrap_or(0);
+                    let request = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let path = request.split_whitespace().nth(1).unwrap_or("/").to_string();
+                    let response = match routes.iter().find(|(route, _, _)| *route == path) {
+                        Some((_, kind, body)) => {
+                            let mut out = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                body.len()
+                            )
+                            .into_bytes();
+                            out.extend_from_slice(body);
+                            out
+                        }
+                        None => b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+                    };
+                    let _ = socket.write_all(&response).await;
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+        addr
+    }
+
+    fn png_mark(rgb: [u8; 3]) -> Vec<u8> {
+        let image = image::RgbaImage::from_fn(32, 32, |x, y| {
+            image::Rgba([rgb[0], rgb[1], rgb[2], if (8..24).contains(&x) && (8..24).contains(&y) { 255 } else { 0 }])
+        });
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image).write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    }
+
+    const ADAPTIVE_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><style>path{fill:#111}@media (prefers-color-scheme: dark){path{fill:#eee}}</style><path d="M8 8h16v16H8z"/></svg>"#;
+
+    async fn icons_of(addr: SocketAddr) -> crate::link_icon::SiteIcons {
+        let url = reqwest::Url::parse(&format!("http://{addr}/")).unwrap();
+        site_icons(&url, "127.0.0.1", &[addr]).await.expect("icons")
+    }
+
+    #[tokio::test]
+    async fn site_icons_take_the_dark_mode_link_or_the_svgs_own_dark_styles() {
+        use crate::link_icon::Ink;
+        let html = r#"<html><head><link rel="icon" href="/icon.svg" type="image/svg+xml"><link rel="icon" href="/dark.png" media="(prefers-color-scheme: dark)"></head></html>"#;
+        let addr = serve_site(vec![
+            ("/", "text/html", html.into()),
+            ("/icon.svg", "image/svg+xml", ADAPTIVE_SVG.into()),
+            ("/dark.png", "image/png", png_mark([250, 250, 250])),
+        ])
+        .await;
+        let icons = icons_of(addr).await;
+        assert_eq!(icons.light.tone.ink, Ink::Dark);
+        assert!(icons.dark.as_ref().unwrap().tone.luminance > 0.95, "the published dark link (an opaque white mark) wins");
+
+        let html = r#"<link rel="icon" href="/icon.svg">"#;
+        let addr = serve_site(vec![("/", "text/html", html.into()), ("/icon.svg", "image/svg+xml", ADAPTIVE_SVG.into())]).await;
+        let icons = icons_of(addr).await;
+        assert_eq!(icons.light.tone.ink, Ink::Dark);
+        let dark = icons.dark.unwrap();
+        assert_eq!(dark.tone.ink, Ink::Light, "the SVG's own dark styles");
+        assert!(dark.tone.luminance > 0.8);
+    }
+
+    #[tokio::test]
+    async fn site_icons_fall_back_to_favicon_ico_and_measure_it() {
+        use crate::link_icon::Ink;
+        // A broken first choice is skipped; a page without icon links uses /favicon.ico.
+        let html = r#"<link rel="icon" href="/missing.svg">"#;
+        let addr = serve_site(vec![("/", "text/html", html.into()), ("/favicon.ico", "image/x-icon", png_mark([0, 0, 0]))]).await;
+        let icons = icons_of(addr).await;
+        assert_eq!((icons.light.tone.ink, icons.light.tone.luminance), (Ink::Dark, 0.0));
+        assert!(icons.dark.is_none());
+        let value = icons.to_json();
+        assert_eq!(value["faviconInk"], "dark");
+        assert!(value.get("faviconDark").is_none());
     }
 }
