@@ -55,6 +55,7 @@ pub mod cursor;
 pub mod edit_paths;
 pub mod failure;
 pub mod grok;
+pub mod latest;
 pub mod login_lend;
 pub mod login_recipes;
 pub mod models;

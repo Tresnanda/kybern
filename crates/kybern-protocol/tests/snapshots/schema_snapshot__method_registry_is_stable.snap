@@ -37,6 +37,7 @@ expression: names
 - threads.switch_continue
 - harness_updates.list
 - harness_updates.run
+- harness_updates.run_all
 - daemon_update.status
 - daemon_update.check
 - daemon_update.run
@@ -234,6 +235,7 @@ expression: names
 - peer.relay.data
 - peer.relay.close
 - peer.update.start
+- peer.harness_updates.run
 - outbox.list
 - outbox.retry
 - outbox.cancel

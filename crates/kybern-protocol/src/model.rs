@@ -2733,6 +2733,9 @@ pub struct Settings {
     pub notifications: bool,
     /// Check installed harnesses daily and update them when idle. Opt-in per environment.
     pub auto_update_harnesses: bool,
+    /// Ask each harness's release feed once a day whether a newer version is out. Sends only the
+    /// package or feed request, nothing about the user. On by default.
+    pub check_harness_versions: bool,
     /// Check the release feed daily and replace this daemon when idle. Opt-in
     /// per environment; ignored for a daemon the desktop app manages.
     pub auto_update_daemon: bool,
@@ -3129,6 +3132,7 @@ impl Default for Settings {
             providers: Default::default(),
             notifications: true,
             auto_update_harnesses: false,
+            check_harness_versions: true,
             auto_update_daemon: false,
             update_track: UpdateTrack::Stable,
             background: BackgroundSettings::default(),
@@ -3349,14 +3353,67 @@ pub struct OutsideRepoChange {
     pub head_moved: bool,
 }
 
-/// Last daemon-owned harness update attempt. Persisted across client reconnects.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+/// Last daemon-owned harness update attempt, and what the daily version check
+/// found. Persisted across client reconnects.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct HarnessUpdate {
     pub kind: ProviderKind,
     pub status: HarnessUpdateStatus,
     pub message: String,
+    /// The installed version: the CLI's own `--version` line from the last update or version check.
     pub version: Option<String>,
+    /// When the updater last ran.
     pub checked_at: Option<DateTime<Utc>>,
+    /// The newest version published for this installation's channel, from the daily version check.
+    /// Absent before the first check, when checks are off, or when the install has no feed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_version: Option<String>,
+    /// `latest_version` is newer than the installed version.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub update_available: bool,
+    /// How the harness on this machine was installed, which decides the feed and the updater.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install: Option<HarnessInstall>,
+    /// When the version check last asked the feed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_checked_at: Option<DateTime<Utc>>,
+}
+
+impl HarnessUpdate {
+    /// A record for a harness nothing has been checked for yet.
+    pub fn unchecked(kind: ProviderKind) -> Self {
+        Self {
+            kind,
+            status: HarnessUpdateStatus::NotChecked,
+            message: "Not checked yet".into(),
+            version: None,
+            checked_at: None,
+            latest_version: None,
+            update_available: false,
+            install: None,
+            latest_checked_at: None,
+        }
+    }
+}
+
+/// How a harness was installed on a machine, found by resolving the binary on PATH.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HarnessInstall {
+    /// The vendor's native installer with its own versions folder (Claude Code).
+    Native,
+    /// A standalone release package (Codex).
+    Standalone,
+    /// The vendor's install script (Antigravity, Grok Build, pi, Oh My Pi, OpenCode, Cursor).
+    Script,
+    /// A global npm (or pnpm, Yarn, Bun) package.
+    Npm,
+    /// A Homebrew formula or cask.
+    Homebrew,
+    /// nix, mise, asdf or rtx: updated through the version manager.
+    VersionManager,
+    /// A custom binary or a layout Kybern does not recognise.
+    Other,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

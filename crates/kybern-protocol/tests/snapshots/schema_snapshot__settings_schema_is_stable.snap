@@ -83,6 +83,11 @@ expression: schema_for!(Settings)
       "type": "boolean",
       "default": false
     },
+    "check_harness_versions": {
+      "description": "Ask each harness's release feed once a day whether a newer version is out. Sends only the\npackage or feed request, nothing about the user. On by default.",
+      "type": "boolean",
+      "default": true
+    },
     "auto_update_daemon": {
       "description": "Check the release feed daily and replace this daemon when idle. Opt-in\nper environment; ignored for a daemon the desktop app manages.",
       "type": "boolean",

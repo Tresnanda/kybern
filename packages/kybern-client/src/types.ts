@@ -2747,6 +2747,8 @@ export interface Settings {
   providers: Partial<Record<ProviderKind, ProviderSettings>>;
   notifications: boolean;
   auto_update_harnesses: boolean;
+  /** Ask each harness's release feed once a day whether a newer version is out. Absent from older daemons (which never check). */
+  check_harness_versions?: boolean;
   auto_update_daemon: boolean;
   /** Which releases the desktop app and a self-updating daemon move to. Absent from a daemon older than update tracks (Stable). */
   update_track?: UpdateTrack;
@@ -3790,6 +3792,8 @@ export const NETWORK_FEATURES = {
   updateProgress: "update.progress.v1",
   /** A desktop app's machine updates the app when asked (ADE-125); older ones answer "Updates with the app". */
   appUpdate: "update.app.v1",
+  /** Another member can ask this machine to update its harnesses (`peer.harness_updates.run`). */
+  harnessUpdate: "harness.update.v1",
   group: "group.v1",
   /** The relay serves ticket pages (`network.relay_page.open`) to a web view that cannot send the relay header. */
   relayPage: "relay.page.v1",
@@ -4912,6 +4916,7 @@ export interface Methods {
   "providers.list": [ProvidersListParams, ProvidersListResult];
   "harness_updates.list": [Empty, { updates: HarnessUpdate[] }];
   "harness_updates.run": [{ kind: ProviderKind }, HarnessUpdate];
+  "harness_updates.run_all": [HarnessUpdatesRunAllParams, HarnessUpdatesRunAllResult];
   "daemon_update.status": [Empty, DaemonUpdate];
   "daemon_update.check": [Empty, DaemonUpdate];
   "daemon_update.run": [Empty, DaemonUpdate];
@@ -4961,6 +4966,7 @@ export interface Methods {
   "spaces.list": [Empty, SpacesListResult];
   "spaces.place": [SpacesPlaceParams, SpacesListResult];
   "peer.spaces.sync": [PeerSpacesSyncParams, PeerSpacesSyncResult];
+  "peer.harness_updates.run": [PeerHarnessUpdatesRunParams, PeerHarnessUpdatesRunResult];
   "peer.preferences.sync": [PeerSpacesSyncParams, PeerSpacesSyncResult];
   "peer.lists.snapshot": [Empty, NetworkListSnapshot];
   "peer.items.edit": [{ operation_id: string; method: string; params: unknown; expected_updated_at: string }, unknown];
@@ -5303,8 +5309,44 @@ export interface HarnessUpdate {
   kind: ProviderKind;
   status: "not_checked" | "waiting" | "updating" | "updated" | "current" | "unsupported" | "failed";
   message: string;
+  /** The installed version: the CLI's own `--version` line from the last update or version check. */
   version: string | null;
+  /** When the updater last ran. */
   checked_at: DateTime | null;
+  /** The newest version published for this installation's channel. Absent before the first check, when checks are off, when the install has no feed, and from older daemons. */
+  latest_version?: string;
+  /** `latest_version` is newer than the installed version. */
+  update_available?: boolean;
+  /** How the harness on this machine was installed. */
+  install?: HarnessInstall;
+  /** When the version check last asked the feed. */
+  latest_checked_at?: DateTime;
+}
+
+/** How a harness was installed on a machine. */
+export type HarnessInstall = "native" | "standalone" | "script" | "npm" | "homebrew" | "version_manager" | "other";
+
+/** `harness_updates.changed`: the whole list, after any record changed. */
+export const HARNESS_UPDATES_CHANGED_NOTIFICATION = "harness_updates.changed";
+
+/** `harness_updates.run_all`. Empty `kinds`: on each machine, the harnesses its own version check found a newer version for. */
+export interface HarnessUpdatesRunAllParams {
+  kinds?: ProviderKind[];
+}
+
+export interface HarnessUpdatesRunAllResult {
+  started: { machine_id: MachineId; kinds: ProviderKind[] }[];
+  skipped: { machine_id: MachineId; reason: string }[];
+}
+
+/** `peer.harness_updates.run`: a member asks this machine to update harnesses. */
+export interface PeerHarnessUpdatesRunParams {
+  kinds?: ProviderKind[];
+}
+
+export interface PeerHarnessUpdatesRunResult {
+  started: ProviderKind[];
+  reason?: string;
 }
 
 export interface ProviderCommand { name: string; description: string; aliases?: string[]; source?: string; input_hint?: string; subcommands?: ProviderCommand[] }

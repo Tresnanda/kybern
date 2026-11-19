@@ -23,6 +23,7 @@ pub mod federated;
 pub mod files_push;
 pub mod forward;
 pub mod git_transfer;
+pub mod harness_updates;
 pub mod item_edits;
 pub mod join;
 pub mod keys;
@@ -424,6 +425,7 @@ impl Network {
             features::UPDATE_V1.to_string(),
             features::UPDATE_PROGRESS_V1.to_string(),
             features::APP_UPDATE_V1.to_string(),
+            features::HARNESS_UPDATE_V1.to_string(),
             features::FILES_PUSH_V1.to_string(),
             features::PORTS_V1.to_string(),
             features::PORTS_DIRECT_V1.to_string(),

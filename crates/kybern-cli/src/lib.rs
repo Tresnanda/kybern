@@ -291,10 +291,17 @@ enum Cmd {
         project: Option<String>,
         session_id: String,
     },
-    /// Show harness update results, or request an update when idle.
+    /// Show harness update results and newer versions, or request an update when idle.
     HarnessUpdates {
         #[arg(long)]
         run: Option<ProviderKind>,
+        /// Update on this machine and every online member: the harnesses named with --kind, or each machine's
+        /// harnesses with a newer version.
+        #[arg(long, conflicts_with = "run")]
+        all_machines: bool,
+        /// With --all-machines: only these harnesses.
+        #[arg(long = "kind", requires = "all_machines")]
+        kinds: Vec<ProviderKind>,
     },
     /// Show the daemon's own update state, check the release feed, or install the newest version when idle.
     DaemonUpdate {
@@ -1937,8 +1944,11 @@ pub async fn run() -> Result<()> {
                 println!("{}", thread.id);
             }
         }
-        Cmd::HarnessUpdates { run } => {
-            if let Some(kind) = run {
+        Cmd::HarnessUpdates { run, all_machines, kinds } => {
+            if all_machines {
+                let result = client.call::<HarnessUpdatesRunAll>(HarnessUpdatesRunAllParams { kinds }).await?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else if let Some(kind) = run {
                 let result = client.call::<HarnessUpdatesRun>(HarnessUpdateParams { kind }).await?;
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
