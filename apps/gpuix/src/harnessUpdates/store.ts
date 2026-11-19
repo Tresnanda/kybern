@@ -1,14 +1,14 @@
 // This machine's harness update records (`harness_updates.list`, then `harness_updates.changed`), what the person
-// dismissed, and the actions behind the sidebar pill and Settings › Agent providers. Rules live in `model.ts`.
-import { useEffect, useSyncExternalStore } from 'react'
+// dismissed, and the actions behind the rail's update card and Settings › Agent providers. Rules live in `model.ts`.
+import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import { HARNESS_UPDATES_CHANGED_NOTIFICATION, type HarnessUpdate, type HarnessUpdatesRunAllResult, type ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
 import { getClient, requireClient, useApp } from '../state.ts'
-import { latestSettings } from '../settings/store.ts'
+import { latestSettings, useSettings } from '../settings/store.ts'
 import { load, save } from '../shell/persist.ts'
 import { toast } from '../shell/toasts.tsx'
 import { toastProblem } from '../problems/toast.ts'
 import { AGENT_NAMES } from '../onboarding/model.ts'
-import { dismiss, justUpdated, runAllSummary, updatedText, type Dismissed } from './model.ts'
+import { dismiss, justUpdated, runAllSummary, updatedText, updateRows, type Dismissed, type UpdateRow } from './model.ts'
 
 const DISMISSED_KEY = 'kybern.harnessUpdates.dismissed'
 
@@ -60,9 +60,18 @@ export function HarnessUpdatesFollower() {
   return null
 }
 
-/** Hide the pill until a newer version comes out. */
-export function dismissPill() {
-  const dismissed = dismiss(state.records, state.dismissed)
+/** The harnesses with an update to offer in the rail's card, and the kinds this window just asked to update. */
+export function useUpdateRows(): { rows: UpdateRow[]; starting: ProviderKind[] } {
+  const records = useHarnessUpdates((s) => s.records)
+  const dismissed = useHarnessUpdates((s) => s.dismissed)
+  const starting = useHarnessUpdates((s) => s.starting)
+  const auto = useSettings().settings?.auto_update_harnesses ?? false
+  return { rows: useMemo(() => updateRows(records, dismissed, auto), [records, dismissed, auto]), starting }
+}
+
+/** Hide one harness's row until a newer version comes out. */
+export function dismissHarness(kind: ProviderKind) {
+  const dismissed = dismiss(state.records, state.dismissed, kind)
   save(DISMISSED_KEY, dismissed)
   emit({ dismissed })
 }

@@ -20,6 +20,12 @@ import { IconButton } from '../kit/IconButton.tsx'
 import { cachedMarkdownTheme } from '../transcript/kit.tsx'
 import { openUrl } from '../pulls/PrStates.tsx'
 import { ink, Label, LOGO_SVG, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { CARD, HarnessUpdateRow, idleKinds, UpdateCapsule, UpdateListRow, UpdateTile } from '../harnessUpdates/Rows.tsx'
+import { MenuItem } from '../nav/overlay.tsx'
+import { useControls } from '../kit/controls.ts'
+import type { Theme } from '../theme.ts'
+import { railName } from '../harnessUpdates/model.ts'
+import { updateHarnesses, useUpdateRows } from '../harnessUpdates/store.ts'
 import { canCheckForUpdates, closeUpdateDetails, dismissUpdateAnnouncement, installAppUpdate, manualUpdateText, openUpdateDetails, useAppUpdate } from './update.ts'
 import { pressTransform } from '../motion/press.ts'
 import { BLUR, EASE, SCALE } from '../motion/kit.tsx'
@@ -78,42 +84,74 @@ function ArtworkClose({ label, onClick, testId }: { label: string; onClick: () =
   return <IconButton testId={testId} label={label} icon={ICON.x} size="lg" color="#ffffff" onClick={onClick} style={{ position: 'absolute', right: 20, top: 20, borderRadius: 16, backgroundColor: 'rgba(0, 0, 0, 0.35)', hover: { backgroundColor: 'rgba(0, 0, 0, 0.55)' }, active: { backgroundColor: 'rgba(0, 0, 0, 0.65)' } }} />
 }
 
+/** The card's depth without a border: a hairline ring of shadow, a close contact shadow and a soft ambient one. */
+function cardShadow(t: Theme) {
+  return t.variant === 'dark'
+    ? [{ offsetX: 0, offsetY: 0, blurRadius: 0, spreadRadius: 0.5, color: 'rgba(255, 255, 255, 0.10)' }, { offsetX: 0, offsetY: 2, blurRadius: 6, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.24)' }, { offsetX: 0, offsetY: 12, blurRadius: 32, spreadRadius: -4, color: 'rgba(0, 0, 0, 0.40)' }]
+    : [{ offsetX: 0, offsetY: 0, blurRadius: 0, spreadRadius: 0.5, color: 'rgba(0, 0, 0, 0.08)' }, { offsetX: 0, offsetY: 2, blurRadius: 6, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.05)' }, { offsetX: 0, offsetY: 12, blurRadius: 32, spreadRadius: -4, color: 'rgba(0, 0, 0, 0.14)' }]
+}
+
+/** "Update All" in the card's header: accent text, no fill until hover. */
+function UpdateAllButton({ disabled, onClick }: { disabled: boolean; onClick: () => void }) {
+  const t = useTheme()
+  const c = useControls()
+  return <div testId="harness-update-all" role="button" aria-label="Update All" aria-disabled={disabled || undefined} tabIndex={disabled ? -1 : 0}
+    onClick={() => { if (!disabled) onClick() }} onKeyDown={(e) => { if (!disabled && (e.key === 'enter' || e.key === 'space')) onClick() }}
+    paintTransform={pressTransform(!disabled, 0.96, 0.15, 0.15)}
+    style={{ display: 'flex', alignItems: 'center', height: 24, paddingLeft: 6, paddingRight: 6, borderRadius: 6, cursor: disabled ? 'default' : 'pointer', ...(disabled ? {} : { hover: { backgroundColor: c.acc(0.1) }, focusVisible: { outlineWidth: 2, outlineColor: c.focus, outlineOffset: 0 } }) }}>
+    <Label color={disabled ? t.textTertiary : c.accentFg} size={13} lineHeight={18} weight={500} style={{ pointerEvents: 'none' }}>Update All</Label>
+  </div>
+}
+
 /**
- * The app rail's update entry, above Settings, shown only when a release is
- * ready. Updating restarts Kybern and the agents on this machine, so the badge
- * opens a small card instead of installing on one click.
+ * The app rail's update entry, above Settings, shown when a Kybern release is ready or a harness has a newer version.
+ * Updating Kybern restarts it and the agents on this machine, so the badge opens a small card instead of installing on one
+ * click; the card lists the Kybern update first, then a row per harness (`harnessUpdates/Rows.tsx`).
  */
 export function RailUpdateButton() {
   const t = useTheme()
   const version = useAppUpdate(s => s.version)
   const { busy, label, errorKind, manual } = useUpdateLabel()
+  const progress = useAppUpdate(s => s.progress)
+  const { rows, starting } = useUpdateRows()
   const [open, setOpen] = useState(false)
   const pressedWhileOpen = useRef(false)
-  if (!version || !canCheckForUpdates()) return null
-  const short = version.replace(/^v/, '')
+  const app = !!version && canCheckForUpdates()
+  if (open && !app && rows.length === 0) setOpen(false)
+  const name = railName(app ? version : null, rows)
+  if (!name) return null
+  const short = version?.replace(/^v/, '')
+  const both = rows.length > 0
+  const tip = both ? 'Updates available' : busy ? label : `Kybern v${short} is ready`
+  const idle = idleKinds(rows, starting)
+  // The capsule's word: Restart, or Download for a deb or rpm install, Retry after a failed install, the percent while installing.
+  const capsuleText = busy ? (progress === null ? '' : `${Math.round(progress * 100)}%`) : manual ? 'Download' : errorKind === 'install' ? 'Retry' : 'Restart'
   return <div style={{ display: 'flex', position: 'relative' }}>
-    <Tip label={busy ? label : `Kybern v${short} is ready`} side="right" sideOffset={6} size={36} disabled={open}>
-      <div testId="rail-update" role="button" aria-label={`Update available: Kybern v${short}`}
+    <Tip label={tip} side="right" sideOffset={6} size={36} disabled={open}>
+      <div testId="rail-update" role="button" aria-label={name}
         onMouseDown={() => { pressedWhileOpen.current = open }}
         onClick={() => { if (pressedWhileOpen.current) { pressedWhileOpen.current = false; return setOpen(false) } setOpen(true) }}
         paintTransform={pressTransform()}
         style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 10, cursor: 'pointer', hover: { backgroundColor: ink(t, 0.06) } }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 14, backgroundColor: t.link, pointerEvents: 'none' }}>
-          {busy ? <Spinner size={14} color="#ffffff" /> : <Icon source={ICON.download} size={16} color="#ffffff" />}
+          {app && busy ? <Spinner size={14} color="#ffffff" /> : <Icon source={ICON.download} size={16} color="#ffffff" />}
         </div>
       </div>
     </Tip>
     {open && <PopupLayer side="right" align="end" sideOffset={10} tabIndex={0} autoFocus testId="rail-update-card"
       onMouseDownOutside={() => setOpen(false)} onKeyDown={(e) => { if (e.key === 'escape') setOpen(false) }}
-      style={{ display: 'flex', flexDirection: 'column', gap: 12, width: 288, padding: 16, borderRadius: 16, borderWidth: 1, borderColor: t.border, backgroundColor: t.popover, boxShadow: surfaceShadow(t) }}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        <Label color={t.text} size={13} lineHeight={17} weight={500}>{`Kybern v${short} is ready`}</Label>
-        <Label color={muted(t, 1)} size={12} lineHeight={19} style={manual ? { userSelect: 'text' } : undefined}>{manual ? manualUpdateText(manual) : errorKind === 'install' ? 'The last update didn’t install. Try again, or see the release details.' : 'Updating restarts Kybern and the agents running on this machine.'}</Label>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
-        <Button size="sm" variant="ghost" testId="rail-update-details" onClick={() => { setOpen(false); openUpdateDetails() }}>See what’s new</Button>
-        <Button size="sm" variant="primary" testId="rail-update-install" disabled={busy} onClick={() => void installAppUpdate()}>{label}</Button>
-      </div>
+      style={{ display: 'flex', flexDirection: 'column', width: CARD.width, padding: CARD.padding, borderRadius: CARD.radius, backgroundColor: t.popover, boxShadow: cardShadow(t) }}>
+      {(app ? 1 : 0) + rows.length > 1 && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: 32, paddingLeft: 8, paddingRight: 4 }}>
+        <Label color={t.text} size={13} lineHeight={18} weight={600}>Updates</Label>
+        {rows.length > 1 && <UpdateAllButton disabled={idle.length === 0} onClick={() => void updateHarnesses(idle)} />}
+      </div>}
+      {app && <UpdateListRow testId="rail-update-app" label={`Kybern v${short} is ready`} name="Kybern"
+        tile={<UpdateTile><svg source={LOGO_SVG} style={{ width: 18, height: 18 * 315 / 504, color: t.text, pointerEvents: 'none' }} /></UpdateTile>}
+        tip={manual ? manualUpdateText(manual) : errorKind === 'install' ? 'The last update didn’t install. Try again, or see what’s new.' : 'Restarts Kybern and the agents running on this machine.'}
+        onOpen={() => { setOpen(false); openUpdateDetails() }}
+        capsule={<UpdateCapsule testId="rail-update-install" label={label} busy={busy} onClick={() => void installAppUpdate()}>{capsuleText}</UpdateCapsule>}
+        menu={<MenuItem id="details" testId="rail-update-details-menu" label="See What’s New" onSelect={() => { setOpen(false); openUpdateDetails() }} />} />}
+      {rows.map((row) => <HarnessUpdateRow key={row.kind} row={row} starting={starting} />)}
     </PopupLayer>}
   </div>
 }

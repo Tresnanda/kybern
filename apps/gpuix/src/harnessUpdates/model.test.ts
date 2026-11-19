@@ -1,56 +1,68 @@
-// The sidebar pill: one pill whatever the count, gone while automatic updates are on, and dismissed until a newer version.
+// The rail card's harness rows: one per harness, gone while automatic updates are on, and dismissed until a newer version.
 import { describe, expect, test } from 'bun:test'
 import type { HarnessUpdate, ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
-import { dismiss, justUpdated, kindsOf, pill, runAllSummary, shortVersion, updatedText } from './model.ts'
+import { dismiss, justUpdated, railName, runAllSummary, shortVersion, updatedText, updateRows } from './model.ts'
 
 const record = (kind: ProviderKind, patch: Partial<HarnessUpdate> = {}): HarnessUpdate =>
   ({ kind, status: 'current', message: '', version: '1.0.0', checked_at: null, ...patch })
 const newer = (kind: ProviderKind, latest: string, patch: Partial<HarnessUpdate> = {}) => record(kind, { update_available: true, latest_version: latest, ...patch })
 
-describe('pill', () => {
-  test('shows the harness name, and says the version to a screen reader', () => {
-    const shown = pill([newer('claude-code', '2.1.330'), record('codex')], {}, false)
-    expect(shown?.text).toBe('Claude Code 2.1.330 is out')
-    expect(shown?.label).toBe('Claude Code')
-    expect(shown?.action).toBe('Update Claude Code')
-    expect(kindsOf(shown!)).toEqual(['claude-code'])
+describe('update rows', () => {
+  test('a row names the harness, and says the version to a screen reader', () => {
+    const rows = updateRows([newer('claude-code', '2.1.330'), record('codex')], {}, false)
+    expect(rows).toEqual([{ kind: 'claude-code', name: 'Claude Code', text: 'Claude Code 2.1.330 is out', busy: false, failed: false }])
   })
 
-  test('several updates collapse into one pill', () => {
-    const shown = pill([newer('claude-code', '2.1.330'), newer('codex', '0.170.0'), newer('grok-build', '0.2.0')], {}, false)
-    expect(shown?.label).toBe('3 updates')
-    expect(shown?.text).toBe('Updates for Claude Code, Codex and Grok Build')
-    expect(shown?.action).toBe('Update all')
-    expect(kindsOf(shown!)).toEqual(['claude-code', 'codex', 'grok-build'])
-  })
-
-  test('two updates read as a pair', () => {
-    const shown = pill([newer('claude-code', '2.1.330'), newer('codex', '0.170.0')], {}, false)
-    expect(shown?.label).toBe('2 updates')
-    expect(shown?.text).toBe('Updates for Claude Code and Codex')
+  test('each harness with an update has its own row, in order', () => {
+    const rows = updateRows([newer('claude-code', '2.1.330'), newer('codex', '0.170.0'), newer('grok-build', '0.2.0')], {}, false)
+    expect(rows.map((row) => row.name)).toEqual(['Claude Code', 'Codex', 'Grok Build'])
   })
 
   test('nothing while automatic updates are on, nothing without a newer version', () => {
-    expect(pill([newer('claude-code', '2.1.330')], {}, true)).toBeNull()
-    expect(pill([record('claude-code'), record('codex', { latest_version: '1.0.0' })], {}, false)).toBeNull()
-    expect(pill([], {}, false)).toBeNull()
+    expect(updateRows([newer('claude-code', '2.1.330')], {}, true)).toEqual([])
+    expect(updateRows([record('claude-code'), record('codex', { latest_version: '1.0.0' })], {}, false)).toEqual([])
+    expect(updateRows([], {}, false)).toEqual([])
   })
 
-  test('a harness already waiting or updating leaves the pill', () => {
-    expect(pill([newer('claude-code', '2.1.330', { status: 'waiting' })], {}, false)).toBeNull()
-    expect(pill([newer('claude-code', '2.1.330', { status: 'updating' }), newer('codex', '0.170.0')], {}, false)?.text).toBe('Codex 0.170.0 is out')
+  test('a harness waiting or updating keeps its row, busy, until the new version is in', () => {
+    const rows = updateRows([newer('claude-code', '2.1.330', { status: 'waiting' }), newer('codex', '0.170.0', { status: 'updating' }), newer('grok-build', '0.2.0')], {}, false)
+    expect(rows.map((row) => row.busy)).toEqual([true, true, false])
+    // Updated: no newer version is left, so the row goes.
+    expect(updateRows([record('claude-code', { status: 'updated', latest_version: '2.1.330', update_available: false })], {}, false)).toEqual([])
   })
 
-  test('dismissing hides it until the version changes', () => {
+  test('a failed attempt keeps its row, marked, for a retry', () => {
+    expect(updateRows([newer('codex', '0.170.0', { status: 'failed' })], {}, false)[0]).toMatchObject({ kind: 'codex', failed: true, busy: false })
+  })
+
+  test('dismissing hides a harness until its version changes', () => {
     const records = [newer('claude-code', '2.1.330'), newer('codex', '0.170.0')]
-    const dismissed = dismiss(records, {})
+    const one = dismiss(records, {}, 'codex')
+    expect(one).toEqual({ codex: '0.170.0' })
+    expect(updateRows(records, one, false).map((row) => row.kind)).toEqual(['claude-code'])
+    const dismissed = dismiss(records, one, 'claude-code')
     expect(dismissed).toEqual({ 'claude-code': '2.1.330', codex: '0.170.0' })
-    expect(pill(records, dismissed, false)).toBeNull()
+    expect(updateRows(records, dismissed, false)).toEqual([])
     // Claude Code ships again: only it comes back.
     const later = [newer('claude-code', '2.1.331'), newer('codex', '0.170.0')]
-    expect(pill(later, dismissed, false)?.text).toBe('Claude Code 2.1.331 is out')
-    // Dismissing again keeps what was already dismissed.
+    expect(updateRows(later, dismissed, false).map((row) => row.text)).toEqual(['Claude Code 2.1.331 is out'])
+    // Dismissing everything keeps what was already dismissed.
     expect(dismiss(later, dismissed)).toEqual({ 'claude-code': '2.1.331', codex: '0.170.0' })
+  })
+})
+
+describe('the rail update button', () => {
+  test('appears for harness updates alone, named for both kinds', () => {
+    const rows = updateRows([newer('claude-code', '2.1.330')], {}, false)
+    expect(railName(null, rows)).toBe('Updates available')
+    expect(railName('v0.26.0', rows)).toBe('Updates available')
+  })
+  test('a Kybern update alone is named the same; with nothing to show it is hidden', () => {
+    expect(railName('v0.26.0', [])).toBe('Updates available')
+    expect(railName(null, [])).toBeNull()
+    // Automatic updates and dismissed rows leave nothing.
+    expect(railName(null, updateRows([newer('codex', '0.170.0')], {}, true))).toBeNull()
+    expect(railName(null, updateRows([newer('codex', '0.170.0')], { codex: '0.170.0' }, false))).toBeNull()
   })
 })
 

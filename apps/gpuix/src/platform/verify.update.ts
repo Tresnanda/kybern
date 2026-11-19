@@ -55,9 +55,9 @@ async function run(tampered: boolean) {
     if (!tampered) await app.screenshot({ path: path.join(out, `rail-card-${theme}.png`) })
     await app.getByTestId('rail-update-install').click()
     if (!tampered) {
-      // Mid-download: the card's button reads "Updating… N%".
+      // Mid-download: the Kybern row's capsule shows a spinner and "N%".
       const label = await until(async () => {
-        for (let n = 1; n < 100; n++) if (await app.getByText(`Updating… ${n}%`).count()) return `Updating… ${n}%`
+        for (let n = 1; n < 100; n++) if (await app.getByText(`${n}%`).count()) return `${n}%`
         return null
       }, 'download progress', 10_000)
       console.log('progress label:', label)

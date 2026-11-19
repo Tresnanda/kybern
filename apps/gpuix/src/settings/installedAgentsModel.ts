@@ -1,6 +1,7 @@
 // Pure rules for Settings › Agent providers › Installed agents (no React), so tests load them directly.
 import type { CursorSetupStatus, HarnessUpdate, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
 import { relativeTime } from '../shared/lib/format.ts'
+import { FAILED_UPDATE_LINE } from '../harnessUpdates/model.ts'
 import { plainSentence } from '../../../../packages/kybern-client/src/problems.ts'
 
 /** "checked 3h ago", "checked just now", "checked on 2 Nov". */
@@ -25,7 +26,7 @@ export function updateLine(record: HarnessUpdate | undefined, now = Date.now()):
     case 'waiting':
     case 'updating':
     case 'unsupported': return { text: record.message, tone: 'normal' }
-    case 'failed': return { text: 'The last update didn’t finish. Try again, or run the updater in your terminal.', tone: 'warning' }
+    case 'failed': return { text: FAILED_UPDATE_LINE, tone: 'warning' }
   }
 }
 
