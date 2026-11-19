@@ -55,6 +55,8 @@ fn fixture(store: &Store) -> Thread {
         origin: None,
         inbound: None,
         moved: None,
+        older_at: None,
+        keep_out_of_older: false,
         subagent: None,
         delegation: None,
         members: Vec::new(),

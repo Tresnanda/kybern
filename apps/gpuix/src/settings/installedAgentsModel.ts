@@ -14,6 +14,9 @@ export function checkedPhrase(iso: string | null, now = Date.now()): string {
 /** The update line under an installed agent, or null when there is nothing true to say yet. */
 export function updateLine(record: HarnessUpdate | undefined, now = Date.now()): { text: string; tone: 'normal' | 'warning' } | null {
   if (!record) return null
+  const busy = record.status === 'waiting' || record.status === 'updating'
+  // A newer version says so first; the failure of an earlier attempt is behind Show details.
+  if (record.update_available && record.latest_version && !busy) return { text: `${record.latest_version} is out`, tone: 'normal' }
   const checked = checkedPhrase(record.checked_at, now)
   switch (record.status) {
     case 'not_checked': return null
@@ -22,8 +25,18 @@ export function updateLine(record: HarnessUpdate | undefined, now = Date.now()):
     case 'waiting':
     case 'updating':
     case 'unsupported': return { text: record.message, tone: 'normal' }
-    case 'failed': return { text: record.message, tone: 'warning' }
+    case 'failed': return { text: 'The last update didn’t finish. Try again, or run the updater in your terminal.', tone: 'warning' }
   }
+}
+
+/** The technical text of a failed update, for Show details; null when the last update did not fail. */
+export function failureDetail(record: HarnessUpdate | undefined): string | null {
+  return record?.status === 'failed' && !(record.update_available && record.latest_version) && record.message ? record.message : null
+}
+
+/** The version check found a newer version this machine can install: Update now. Cursor's CLI counts; its SDK is set up below. */
+export function canUpdateNow(provider: ProviderStatus, record: HarnessUpdate | undefined, customBinary: boolean): boolean {
+  return provider.available && !customBinary && !!record?.update_available && !!record.latest_version
 }
 
 /** Kybern can run this agent's updater: it is installed, not a custom binary, and its install method has one. */

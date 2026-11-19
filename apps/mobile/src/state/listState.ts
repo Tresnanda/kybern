@@ -32,11 +32,12 @@ const listeners = new Set<() => void>();
 function publish(patch: Partial<ListState>) {
   state = { ...state, ...patch };
   listeners.forEach((fn) => fn());
-  if (environmentId && ("unread" in patch || "attentionDismissals" in patch || "projectOrder" in patch))
+  if (environmentId && ("unread" in patch || "attentionDismissals" in patch || "projectOrder" in patch || "olderOpen" in patch))
     writePrefs(environmentId, {
       unread: state.unread,
       attentionDismissals: state.attentionDismissals,
       projectOrder: state.projectOrder,
+      olderOpen: state.olderOpen,
     });
 }
 function subscribe(fn: () => void) {
@@ -192,4 +193,14 @@ function loadChildren(parentId: string): Promise<void> {
 
 export function setProjectOrder(projectOrder: string[]) {
   publish({ projectOrder });
+}
+
+// ---- a project's Older group: folded unless the reader opened it (kept across launches) ----
+
+export function setOlderOpen(projectId: string, open: boolean) {
+  if (!!state.olderOpen[projectId] === open) return;
+  const olderOpen = { ...state.olderOpen };
+  if (open) olderOpen[projectId] = true;
+  else delete olderOpen[projectId];
+  publish({ olderOpen });
 }

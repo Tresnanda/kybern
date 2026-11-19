@@ -72,6 +72,8 @@ expression: scopes
   - "orchestration:read"
 - - harness_updates.run
   - "orchestration:operate"
+- - harness_updates.run_all
+  - "network:admin"
 - - daemon_update.status
   - "orchestration:read"
 - - daemon_update.check
@@ -133,6 +135,8 @@ expression: scopes
 - - threads.update
   - "orchestration:operate"
 - - threads.archive
+  - "orchestration:operate"
+- - threads.unarchive
   - "orchestration:operate"
 - - threads.send
   - "orchestration:operate"
@@ -465,6 +469,8 @@ expression: scopes
 - - peer.relay.close
   - "machine:relay"
 - - peer.update.start
+  - "machine:settings"
+- - peer.harness_updates.run
   - "machine:settings"
 - - outbox.list
   - "orchestration:read"

@@ -1,7 +1,8 @@
 // General: what a new thread starts with, and how agents behave on this computer.
 import { ASK_DEADLINE_DEFAULTS, askDeadlineOptions } from "../../../../../packages/kybern-client/src/requestCards";
+import { OLDER_AFTER_CHOICES, olderAfter } from "../../../../../packages/kybern-client/src/older";
 import { PROVIDER_DISPLAY_NAME, type Settings } from "../../state/protocol";
-import { useApp } from "../../state/runtime";
+import { useSettingsProviders } from "../../state/machineProviders";
 import { saveSettings, useSettings } from "../../state/settings";
 import { ListRow } from "../../ui/List";
 import { ProviderMark } from "../../ui/ProviderMark";
@@ -17,11 +18,11 @@ export function GeneralSettings() {
 }
 
 function GeneralBody() {
-  const app = useApp();
+  const providers = useSettingsProviders();
   const { settings: current } = useSettings();
   const settings = current!;
   const set = (patch: Partial<Settings>) => void saveSettings({ ...settings, ...patch });
-  const provider = app.providers.find((p) => p.kind === settings.default_provider);
+  const provider = providers.find((p) => p.kind === settings.default_provider);
   const modes = provider?.supported_permission_modes?.length
     ? provider.supported_permission_modes
     : (Object.keys(PERMISSION_LABELS) as Settings["default_permission_mode"][]);
@@ -33,7 +34,7 @@ function GeneralBody() {
           title="Agent"
           leading={<ProviderMark kind={settings.default_provider} size={20} />}
           value={provider?.display_name ?? PROVIDER_DISPLAY_NAME[settings.default_provider] ?? settings.default_provider}
-          valueMenu={app.providers
+          valueMenu={providers
             .filter((p) => p.available || p.kind === settings.default_provider)
             .map((p) => ({
               title: p.display_name,
@@ -74,6 +75,20 @@ function GeneralBody() {
           onChange={(value) => set({ automatic_worktree_cleanup: value })}
         />
       </Section>
+      {/* A computer older than 0.25 has no Older group and leaves the setting out. */}
+      {settings.older_after !== undefined ? (
+        <Section title="Threads">
+          <ListRow
+            title="Move inactive threads to Older"
+            value={OLDER_AFTER_CHOICES.find((choice) => choice.value === olderAfter(settings))?.label}
+            valueMenu={OLDER_AFTER_CHOICES.map((choice) => ({
+              title: choice.label,
+              checked: choice.value === olderAfter(settings),
+              onPress: () => set({ older_after: choice.value }),
+            }))}
+          />
+        </Section>
+      ) : null}
       <Section
         title="Agents"
         footer="Adds a short guide to new agent sessions: how to show images, link notes and tasks, and reach other threads."

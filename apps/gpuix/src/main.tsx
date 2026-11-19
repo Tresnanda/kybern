@@ -22,6 +22,7 @@ import { backingFor, installWindowMaterial, nativeBackground } from './shell/win
 import { startAppUpdateChecks } from './platform/update.ts'
 import { installFrameSource } from './native/frame.ts'
 import { handbackOnFocus, installFocusHandback } from './native/focusHandback.ts'
+import { installSteadyFocus } from './native/steadyLists.ts'
 import { hasSavedFrame, installWindowFrame, startWindowShell } from './shell/window.ts'
 import { savedFrameOptions, startWindowChrome } from './shell/windowChrome.ts'
 import { BASE_MIN_SIZE, installUiZoom, launchWindowOptions } from './shell/uiZoom.ts'
@@ -49,6 +50,8 @@ function Fonts({ children }: { children: ReactNode }) {
     installFrameSource(renderer)
     // Focus that GPUIX moves takes the keyboard back from a clicked web document (`native/focusHandback.ts`).
     installFocusHandback(renderer)
+    // A held list (Settings) keeps its place when focus returns to a control already on screen (`native/steadyLists.ts`).
+    installSteadyFocus(renderer)
     // Point for me: the picker in the Preview and visuals, and ⌥-click anchors (`pick/hub.ts`).
     startPickHub()
     // `registerFont` landed after @gpuix/native 0.10.0; until then the UI

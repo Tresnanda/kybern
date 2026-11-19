@@ -237,7 +237,7 @@ async fn a_password_prompt_is_a_private_card_whose_answer_is_never_stored() {
     let (thread, live) = fixture.tool_thread(PermissionMode::FullAccess).await;
     let token = format!("zq{}", Uuid::new_v4().simple());
     let (orchestrator, session) = (fixture.orchestrator.clone(), live.session_instance_id);
-    let ask = tokio::spawn(async move { orchestrator.ask_prompt(thread.id, session, "[sudo] password for me: ".into(), std::process::id()).await });
+    let ask = tokio::spawn(async move { orchestrator.ask_prompt(thread.id, session, "[sudo] password for me: ".into(), std::process::id(), String::new()).await });
     let card = secret_card(&live).await;
     let (request, _) = fixture.store.approval_get(card).unwrap().unwrap();
     assert_eq!(request.tool_name, PROMPT_REQUEST_TOOL);
@@ -260,7 +260,7 @@ async fn a_password_prompt_is_a_private_card_whose_answer_is_never_stored() {
 
     // Cancel fails the command.
     let (orchestrator, session) = (fixture.orchestrator.clone(), live.session_instance_id);
-    let ask = tokio::spawn(async move { orchestrator.ask_prompt(thread.id, session, "[sudo] password for me: ".into(), std::process::id()).await });
+    let ask = tokio::spawn(async move { orchestrator.ask_prompt(thread.id, session, "[sudo] password for me: ".into(), std::process::id(), String::new()).await });
     let card = secret_card(&live).await;
     let (request, _) = fixture.store.approval_get(card).unwrap().unwrap();
     assert_eq!(request.input["attempt"], 2, "the same prompt again is the next try");
@@ -274,7 +274,7 @@ async fn a_host_key_is_a_yes_or_no_and_github_is_sent_to_the_sign_in() {
     let (thread, live) = fixture.tool_thread(PermissionMode::Supervised).await;
     let host_key = "The authenticity of host '203.0.113.24 (203.0.113.24)' can't be established.\nED25519 key fingerprint is SHA256:abc123.\nAre you sure you want to continue connecting (yes/no/[fingerprint])? ";
     let (orchestrator, session) = (fixture.orchestrator.clone(), live.session_instance_id);
-    let ask = tokio::spawn(async move { orchestrator.ask_prompt(thread.id, session, host_key.into(), std::process::id()).await });
+    let ask = tokio::spawn(async move { orchestrator.ask_prompt(thread.id, session, host_key.into(), std::process::id(), String::new()).await });
     let card = secret_card(&live).await;
     let (request, _) = fixture.store.approval_get(card).unwrap().unwrap();
     assert_eq!((request.input["purpose"].as_str(), request.input["confirm"].as_bool()), (Some("ssh_host_key"), Some(true)));
@@ -283,15 +283,15 @@ async fn a_host_key_is_a_yes_or_no_and_github_is_sent_to_the_sign_in() {
     fixture.orchestrator.respond_approval(card, ApprovalDecision::Submit { response: json!({"confirmed": true}) }).await.unwrap();
     assert!(matches!(ask.await.unwrap(), super::PromptReply::Answer(answer) if answer == "yes"));
 
-    let reply = fixture.orchestrator.ask_prompt(thread.id, live.session_instance_id, "Password for 'https://me@github.com': ".into(), std::process::id()).await;
+    let reply = fixture.orchestrator.ask_prompt(thread.id, live.session_instance_id, "Password for 'https://me@github.com': ".into(), std::process::id(), String::new()).await;
     assert!(matches!(reply, super::PromptReply::Cancelled(message) if message.contains("kybern_request_login")), "GitHub never gets a password card");
     assert!(live.daemon_approvals.lock().await.is_empty());
 
-    let stale = fixture.orchestrator.ask_prompt(thread.id, Uuid::now_v7(), "Password:".into(), std::process::id()).await;
+    let stale = fixture.orchestrator.ask_prompt(thread.id, Uuid::now_v7(), "Password:".into(), std::process::id(), String::new()).await;
     // A helper whose parent is not sudo, ssh or git (here: this test process) may not raise a card.
     let binary = crate::test_support::powershell_script(&fixture.root.join("fake-prompt"), "untrusted", "#!/bin/sh\nsleep 5\n", "Start-Sleep -Seconds 5");
     let mut child = std::process::Command::new(binary).spawn().unwrap();
-    let faked = fixture.orchestrator.ask_prompt(thread.id, live.session_instance_id, "[sudo] password for me: ".into(), child.id()).await;
+    let faked = fixture.orchestrator.ask_prompt(thread.id, live.session_instance_id, "[sudo] password for me: ".into(), child.id(), String::new()).await;
     let _ = child.kill();
     let _ = child.wait();
     assert!(matches!(faked, super::PromptReply::Cancelled(message) if message.contains("only shows a password prompt that sudo, ssh or git asked for")));

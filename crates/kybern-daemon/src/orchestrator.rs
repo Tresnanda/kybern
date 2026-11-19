@@ -48,6 +48,7 @@ mod note_claims;
 mod note_staleness;
 mod note_tidy;
 mod notes;
+mod older;
 mod omp_recovery;
 mod pick_request;
 mod project_map;
@@ -357,6 +358,8 @@ impl Orchestrator {
                 let mut object = arguments.as_object().cloned().ok_or_else(|| anyhow!("HTML arguments must be an object"))?;
                 anyhow::ensure!(!object.contains_key("thread_id"), "HTML tools are bound to the current thread.");
                 object.insert("thread_id".into(), serde_json::json!(thread_id));
+                // The frame fits the page; without a height the measured one (or a default) is the first paint.
+                object.entry("height").or_insert(serde_json::json!(0));
                 let params: methods::HtmlPublishParams = crate::app_tools::parse(serde_json::Value::Object(object))?;
                 let ask = crate::visuals::answer_ask(&params)?;
                 if ask.is_some() {
@@ -647,6 +650,7 @@ struct Inner {
     rotation: rotation::RotationState,
     /// Compactions planned for idle threads ("Compact idle threads: Before the cache expires").
     idle_compactions: idle_compaction::IdleCompactions,
+    older_sweeps: older::OlderSweeps,
 }
 
 struct LiveSession {
@@ -1039,6 +1043,7 @@ impl Orchestrator {
                 lead_git: Default::default(),
                 rotation: Default::default(),
                 idle_compactions: Default::default(),
+                older_sweeps: Default::default(),
             }),
         }
     }
@@ -1449,6 +1454,9 @@ impl Orchestrator {
             }
             // Only the move code changes the lease; a stale copy must not undo it.
             thread.moved = current.moved;
+            // Only the Older code (`older.rs`) moves a thread to or from Older; a stale copy must not undo it.
+            thread.older_at = current.older_at;
+            thread.keep_out_of_older = current.keep_out_of_older;
         }
         thread.updated_at = Utc::now();
         self.inner.store.thread_upsert(&thread)?;
@@ -1735,6 +1743,8 @@ impl Orchestrator {
             origin: None,
             inbound: None,
             moved: None,
+            older_at: None,
+            keep_out_of_older: false,
             subagent: None,
             delegation: None,
             members,
@@ -1932,6 +1942,8 @@ impl Orchestrator {
             origin: None,
             inbound: None,
             moved: None,
+            older_at: None,
+            keep_out_of_older: false,
             subagent: None,
             delegation: None,
             members,
@@ -2037,6 +2049,7 @@ impl Orchestrator {
         if let Some(p) = params.pinned {
             t.pinned = p;
         }
+        self.update_older_fields(&t, params.keep_out_of_older, params.move_out_of_older)?;
         if let Some(m) = params.permission_mode {
             t.permission_mode = m;
         }
@@ -2283,6 +2296,8 @@ impl Orchestrator {
             thread.title = title_from_message(&message);
         }
         thread.status = ThreadStatus::Running;
+        // Any new turn brings a thread back from Older.
+        self.older_turn_started(&mut thread)?;
         let thread = self.update_thread(thread)?;
         let startup_started = std::time::Instant::now();
         self.emit(thread.id, Some(turn_id), EventPayload::TurnStarted { message_id, message: message.clone() })?;
@@ -6030,6 +6045,8 @@ mod tests {
             origin: None,
             inbound: None,
             moved: None,
+            older_at: None,
+            keep_out_of_older: false,
             subagent: None,
             delegation: None,
             members: Vec::new(),
@@ -6444,6 +6461,8 @@ mod tests {
                 origin: None,
                 inbound: None,
                 moved: None,
+                older_at: None,
+                keep_out_of_older: false,
                 subagent: None,
                 delegation: None,
                 members: Vec::new(),
@@ -9005,7 +9024,9 @@ for line in sys.stdin:
                 pinned: None,
                 permission_mode: None,
                 model: None,
-                effort: None
+                effort: None,
+                keep_out_of_older: None,
+                move_out_of_older: false,
             })
             .is_err()
         );
@@ -9267,6 +9288,7 @@ for line in sys.stdin:
     include!("orchestrator/messaging_tests.rs");
     include!("orchestrator/account_tests.rs");
     include!("orchestrator/worktree_tests.rs");
+    include!("orchestrator/older_tests.rs");
     include!("orchestrator/subagent_messaging_tests.rs");
     include!("orchestrator/full_access_tests.rs");
     include!("orchestrator/groups_tests.rs");

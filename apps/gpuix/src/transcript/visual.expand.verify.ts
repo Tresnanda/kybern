@@ -1,9 +1,9 @@
-// Show more and Full screen on visuals (ADE-80). Seed first (`visual.seed.ts`), then:
+// Full screen on visuals (ADE-80). Seed first (`visual.seed.ts`), then:
 //   VISUAL_SCRATCH=… KYBERND=… bun src/transcript/visual.expand.verify.ts [dark|light]
-// A tall visual that asks (a real Claude turn waits on it) rests clamped at 480. Its answer bar carries Show more,
-// which grows the figure in the thread, and Full screen, which moves the live document (tile B still picked) into a
-// window-sized dialog with the same answer bar; Escape closes it and the figure keeps the frozen frame. Skip records the
-// answer: the receipt keeps both tools. The tall checklist (no question) opens full screen from its caption; X closes.
+// A tall visual that asks (a real Claude turn waits on it) is as tall as its page, with no clamp or Show more, and live
+// while on screen. Its answer bar carries Full screen, which moves the live document into a window-sized dialog with the
+// same answer bar; Escape closes it and the figure keeps the frozen frame. Skip records the answer: the receipt keeps
+// Full screen. The tall checklist (no question) opens full screen from its caption; X closes.
 import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -57,29 +57,19 @@ try {
   await until(async () => (await count('visual-answer-bar')) > 0, 'the answer bar (agent publishing and waiting)', 240_000)
   await until(async () => (await count('visual-picture')) > 0, 'the picture', 20_000)
   await Bun.sleep(1200)
-  assert.equal(Math.round((await boxOf('visual-figure')).height), 480, 'a tall question rests at 480')
-  assert.equal(await count('visual-more-height'), 1, 'the answer bar has Show more')
+  assert.ok((await boxOf('visual-figure')).height > 480, 'a tall question is as tall as its page')
+  assert.equal(await count('visual-more-height'), 0, 'nothing to show more of')
   assert.equal(await count('visual-full-screen'), 1, 'the answer bar has Full screen')
   await shot('A1-waiting')
 
-  // Show more grows the figure in the thread; Show less clamps it again.
-  await f.app.getByTestId('visual-more-height').click(); await Bun.sleep(700)
-  const grown = (await boxOf('visual-figure')).height
-  assert.ok(grown > 700, `Show more grows it: ${grown}`)
-  await shot('A2-show-more')
-  await f.app.getByTestId('visual-more-height').click(); await Bun.sleep(700)
-  assert.equal(Math.round((await boxOf('visual-figure')).height), 480, 'Show less clamps it again')
-
-  // Live in place with tile B picked, then Full screen: the same document, B still picked, Send enabled.
+  // Live in place (on screen, no press), then Full screen: the same document.
   // The tiles are the page's top: scroll them into view first.
   await f.app.mouse.wheel({ x: 1100, y: 400 }, 0, 400); await Bun.sleep(600)
   // …and the answer bar above the composer.
   await placeFigure()
   const figure = await boxOf('visual-figure')
   assert.ok(figure.y > 40, `the figure's top is on screen: ${figure.y}`)
-  await f.app.mouse.click({ x: figure.x + figure.width / 2, y: figure.y + 50 })
-  await until(async () => (await count('visual-ring-live')) > 0, 'live', 15_000)
-  await until(async () => { const node = (await f.app.getByTestId('visual-answer-send').all())[0]; return !!node && !JSON.stringify(node).includes('"aria-disabled":true') }, 'a draft enables Send', 8000)
+  await until(async () => (await count('visual-live')) > 0, 'live without a press', 15_000)
   await Bun.sleep(400)
   await f.app.getByTestId('visual-full-screen').click()
   await until(async () => (await count('visual-viewer-page')) > 0, 'the full-screen viewer', 8000)
@@ -88,7 +78,7 @@ try {
   const viewer = await boxOf('visual-viewer-page')
   assert.ok(viewer.height > 500 && viewer.width > figure.width, `the viewer is larger than the figure: ${viewer.width}×${viewer.height}`)
   assert.equal(await count('visual-answer-bar'), 2, 'the viewer carries the answer bar')
-  assert.equal(await count('visual-ring-live'), 0, 'the figure gave the document up')
+  assert.equal(await count('visual-live'), 0, 'the figure gave the document up')
 
   // Escape closes it; the figure shows the frame frozen at the hand-off.
   await f.app.getByTestId('visual-viewer').press('escape')
@@ -103,7 +93,7 @@ try {
   await Bun.sleep(1500)
   await f.app.mouse.move(centre(await boxOf('visual-figure'))); await Bun.sleep(400)
   assert.equal(await count('visual-full-screen'), 1, 'the receipt has Full screen')
-  assert.equal(await count('visual-more-height'), 1, 'the receipt has Show more')
+  assert.equal(await count('visual-more-height'), 0, 'the receipt has no Show more')
   await shot('A5-receipt')
   await f.app.mouse.click(centre(await boxOf('visual-full-screen')))
   await until(async () => (await count('visual-viewer-page')) > 0, 'the viewer from the receipt', 8000)

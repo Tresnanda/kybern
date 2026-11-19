@@ -43,6 +43,8 @@ fn bounded(mut value: NetworkListSnapshot) -> NetworkListSnapshot {
             origin: None,
             inbound: None,
             moved: None,
+            older_at: None,
+            keep_out_of_older: false,
         })
         .collect();
     value.threads.sort_by_key(|t| std::cmp::Reverse(t.updated_at));

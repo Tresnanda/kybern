@@ -731,6 +731,35 @@ pub struct HarnessUpdateParams {
 }
 method!(HarnessUpdatesRun, "harness_updates.run", Some(Scope::OrchestrationOperate), HarnessUpdateParams, HarnessUpdate);
 
+/// Sent with the whole list whenever a harness's update record changes: a version check found a newer
+/// version, or an update started, waited or finished.
+pub const HARNESS_UPDATES_CHANGED_NOTIFICATION: &str = "harness_updates.changed";
+
+/// `harness_updates.run_all`: update harnesses on this machine and every online member.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct HarnessUpdatesRunAllParams {
+    /// The harnesses to update. Empty: on each machine, every harness its own version check found a newer
+    /// version for.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kinds: Vec<ProviderKind>,
+}
+
+/// The harnesses one machine queued.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HarnessUpdatesStarted {
+    pub machine_id: MachineId,
+    pub kinds: Vec<ProviderKind>,
+}
+
+/// Every machine once: queued harness updates, or skipped with the reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HarnessUpdatesRunAllResult {
+    pub started: Vec<HarnessUpdatesStarted>,
+    pub skipped: Vec<NetworkUpdateSkipped>,
+}
+// Fans out to members, so it needs what `network.update_all` needs.
+method!(HarnessUpdatesRunAll, "harness_updates.run_all", Some(Scope::NetworkAdmin), HarnessUpdatesRunAllParams, HarnessUpdatesRunAllResult);
+
 // `check` asks the release feed without installing; `run` installs the newest
 // version once nothing is running, then restarts the daemon.
 method!(DaemonUpdateStatusMethod, "daemon_update.status", Some(Scope::OrchestrationRead), Empty, DaemonUpdate);
@@ -1252,6 +1281,10 @@ pub struct ThreadsListResult {
     /// With `settled_limit`: the settled threads per project this result left out.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub omitted: Vec<ProjectThreadCount>,
+    /// Archived top-level threads per project (`threads.unarchive` brings one back), on every read that is not for
+    /// one parent's children and leaves archived threads out. Projects with none are left out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub archived: Vec<ProjectThreadCount>,
 }
 
 /// How many threads of one project a `threads.list` result left out.
@@ -1520,6 +1553,13 @@ pub struct ThreadsUpdateParams {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// "Never move to Older" (`true`) or its reversal. Setting it takes the thread out of Older.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_out_of_older: Option<bool>,
+    /// "Move out of Older": the thread goes back to the top of its project's list and its inactivity
+    /// clock starts again. Ignored when the thread is not in Older.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub move_out_of_older: bool,
 }
 method!(ThreadsUpdate, "threads.update", Some(Scope::OrchestrationOperate), ThreadsUpdateParams, Thread);
 
@@ -1528,6 +1568,15 @@ pub struct ThreadsArchiveParams {
     pub thread_id: ThreadId,
 }
 method!(ThreadsArchive, "threads.archive", Some(Scope::OrchestrationOperate), ThreadsArchiveParams, Empty);
+
+/// Bring an archived thread back: it is idle again, at the top of its project's list, and can be continued.
+/// A worktree that cleanup removed comes back with the next message. Delegated agents and subagent threads it
+/// had stay archived.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadsUnarchiveParams {
+    pub thread_id: ThreadId,
+}
+method!(ThreadsUnarchive, "threads.unarchive", Some(Scope::OrchestrationOperate), ThreadsUnarchiveParams, Thread);
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsSendParams {
@@ -4998,6 +5047,14 @@ method!(PeerRelayClose, "peer.relay.close", Some(Scope::MachineRelay), PeerRelay
 // can turn off per machine and that is not the always-on operation sync: a machine that does not let others
 // change its settings does not let them restart it into a new version either.
 method!(PeerUpdateStart, "peer.update.start", Some(Scope::MachineSettings), PeerUpdateStartParams, PeerUpdateStartResult);
+// A member asks this machine to update its harnesses (`harness_updates.run_all`). The same scope as `peer.update.start`.
+method!(
+    PeerHarnessUpdatesRun,
+    "peer.harness_updates.run",
+    Some(Scope::MachineSettings),
+    PeerHarnessUpdatesRunParams,
+    PeerHarnessUpdatesRunResult
+);
 
 // Remote delegation and the outbox (M2, R1; payloads in outbox.rs).
 method!(OutboxList, "outbox.list", Some(Scope::OrchestrationRead), OutboxListParams, OutboxListResult);
@@ -5175,6 +5232,7 @@ registry!(
     ThreadsSwitchContinue,
     HarnessUpdatesList,
     HarnessUpdatesRun,
+    HarnessUpdatesRunAll,
     DaemonUpdateStatusMethod,
     DaemonUpdateCheck,
     DaemonUpdateRun,
@@ -5206,6 +5264,7 @@ registry!(
     ThreadsRecoverOmpAnswer,
     ThreadsUpdate,
     ThreadsArchive,
+    ThreadsUnarchive,
     ThreadsSend,
     ThreadsSteer,
     SubagentsSend,
@@ -5372,6 +5431,7 @@ registry!(
     PeerRelayData,
     PeerRelayClose,
     PeerUpdateStart,
+    PeerHarnessUpdatesRun,
     OutboxList,
     OutboxRetry,
     OutboxCancel,

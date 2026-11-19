@@ -52,6 +52,10 @@ export interface NavState {
   paletteOpen: boolean
   /** The Resume session dialog, scoped to a project or all of them. */
   sessions: { projectId: string | null } | null
+  /** The Archived list of a project, opened from its last sidebar row. */
+  archived: { projectId: string } | null
+  /** Projects whose Older group the reader opened. Kept with the panel's other preferences. */
+  olderOpen: Record<string, true>
   /** The Hand off dialog for a thread, with the agent picked in the menu. */
   handoff: { threadId: ThreadId; target: ProviderKind | null } | null
   /** Provider subagent and delegated child threads, which `threads.list` leaves out. */
@@ -97,6 +101,8 @@ const initialNav: NavState = {
   history: { entries: [], index: -1 },
   paletteOpen: false,
   sessions: null,
+  archived: null,
+  olderOpen: {},
   handoff: null,
   children: {},
   activity: {},

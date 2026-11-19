@@ -1121,6 +1121,8 @@ impl Orchestrator {
             origin: Some(origin),
             inbound: None,
             moved: None,
+            older_at: None,
+            keep_out_of_older: false,
             subagent: None,
             delegation: None,
             members,

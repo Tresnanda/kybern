@@ -7,6 +7,7 @@ import {
   groupByProject,
   moveInOrder,
   orderProjects,
+  projectSection,
   relativeTime,
   sectionWindow,
   threadAgents,
@@ -105,4 +106,21 @@ test("sections page: ten first, twenty more per tap, never past the total", () =
   assert.deepEqual(sectionWindow(4, 0), { shown: 4, remaining: 0 });
   assert.deepEqual(sectionWindow(0, 2), { shown: 0, remaining: 0 });
   assert.deepEqual(sectionWindow(100, 0, 30), { shown: 30, remaining: 70 });
+});
+
+test("projectSection folds inactive threads into Older unless a filter lists everything", () => {
+  const old = { older_at: at(5000) };
+  const threads = [
+    thread("a"),
+    thread("b", old),
+    thread("c", { ...old, pinned: true }),
+    thread("d", { ...old, keep_out_of_older: true }),
+    thread("e", old),
+    thread("f", { ...old, status: "running" }),
+  ];
+  const ids = (section) => ({ recent: section.recent.map((t) => t.id), older: section.older.map((t) => t.id) });
+  assert.deepEqual(ids(projectSection(threads, false, {})), { recent: ["a", "c", "d", "f"], older: ["b", "e"] });
+  // A finished turn the reader hasn't seen keeps the thread in the main list.
+  assert.deepEqual(ids(projectSection(threads, false, { unread: { e: true } })), { recent: ["a", "c", "d", "e", "f"], older: ["b"] });
+  assert.deepEqual(ids(projectSection(threads, true, {})), { recent: ["a", "b", "c", "d", "e", "f"], older: [] });
 });

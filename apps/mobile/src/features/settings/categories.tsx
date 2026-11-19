@@ -1,5 +1,6 @@
 // The Settings categories: which group each sits in, its icon, the current value
 // the root list shows, and the page that renders it.
+import { useSettingsChoice, useSettingsLive } from "../../state/machineChoice";
 import { router } from "expo-router";
 import type { ReactNode } from "react";
 import { useAccounts } from "../../state/accounts";
@@ -67,6 +68,9 @@ export function useCategories(): { phone: Category[]; computer: Category[]; comp
   const { accounts, loaded } = useAccounts();
   const environment = activeEnvironment();
   const machines = useMachineView().machines;
+  // The machine Settings shows: the computer the phone is at, or another live one while it is away (#245).
+  const choice = useSettingsChoice();
+  const live = useSettingsLive();
   const open = app.status === "open";
   const connection = !environment ? "Not connected" : open ? "Connected" : app.status === "connecting" ? "Connecting" : "Offline";
   const phone: Category[] = [
@@ -79,7 +83,7 @@ export function useCategories(): { phone: Category[]; computer: Category[]; comp
     },
     { id: "updates", title: TITLES.updates, icon: "arrow.clockwise", subtitle: "Check for updates to Kybern on this phone" },
   ];
-  const computerUse = open && settings ? (settings.computer_use.enabled ? "On" : "Off") : null;
+  const computerUse = live && settings ? (settings.computer_use.enabled ? "On" : "Off") : null;
   const computer: Category[] = [
     { id: "general", title: TITLES.general, icon: "slider.horizontal.3", subtitle: "Permissions, worktrees, notifications" },
     { id: "agents", title: TITLES.agents, icon: "sparkles", subtitle: "Models and configuration" },
@@ -88,7 +92,7 @@ export function useCategories(): { phone: Category[]; computer: Category[]; comp
       id: "accounts",
       title: TITLES.accounts,
       icon: "person.crop.circle",
-      subtitle: open && loaded && accounts.length ? `Sign-ins for each agent · ${count(accounts.length, "account")}` : "Sign-ins for each agent",
+      subtitle: live && loaded && accounts.length ? `Sign-ins for each agent · ${count(accounts.length, "account")}` : "Sign-ins for each agent",
     },
     { id: "usage", title: TITLES.usage, icon: "chart.bar", subtitle: "Costs, tokens, and plan limits" },
     { id: "integrations", title: TITLES.integrations, icon: "puzzlepiece.extension", subtitle: "MCP servers and plugins for each agent" },
@@ -101,7 +105,7 @@ export function useCategories(): { phone: Category[]; computer: Category[]; comp
     { id: "system", title: TITLES.system, icon: "clock", subtitle: "Power, idle limits, and versions" },
     { id: "access", title: TITLES.access, icon: "lock.shield", subtitle: "Paired devices and Tailscale" },
   ];
-  return { phone, computer, computerName: environment?.name ?? "Your computer" };
+  return { phone, computer, computerName: choice?.name ?? environment?.name ?? "Your computer" };
 }
 
 /** A category's page: only its groups; the host supplies the scroll view. */

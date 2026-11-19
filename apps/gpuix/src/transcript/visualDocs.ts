@@ -1,8 +1,10 @@
-// Live visual documents (ADE-69). A visual rests as a picture; clicking it makes one WK document live in its place.
-// The document belongs to this module, not to a component, so "Open in a tab" and "Full screen" move the same document
-// (owner `inline` → `tab` or `modal`) with its state, and a row the virtualiser unmounts does not reload it. At most
-// MAX_DOCS documents exist, live or warm: a warm one is hidden with its state for WARM_MS, then destroyed. Opening a
-// third retires the least recently used one: its owner first turns it back into a picture (`retire`), then it is destroyed.
+// Live visual documents (ADE-69). A visual on screen is live: its web document sits in its place, and off screen it
+// shows its picture. The document belongs to this module, not to a component, so "Open in a tab" and "Full screen" move
+// the same document (owner `inline` → `tab` or `modal`) with its state, and a row the virtualiser unmounts does not
+// reload it. At most MAX_DOCS documents exist, live or warm: a warm one is hidden with its state for WARM_MS, then
+// destroyed. Inline figures are live only while on screen, at most MAX_LIVE of them (`useLiveSlot`), leaving room for a
+// tab or the full-screen viewer; past MAX_DOCS the least recently used one is retired: its owner first turns it back into
+// a picture (`retire`), then it is destroyed.
 import { visualHeight, visualLink, visualThemeFragment, type VisualTheme } from '../../../../packages/kybern-client/src/visuals.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { threadClient } from '../state.ts'
@@ -10,7 +12,9 @@ import { launchBrowser, launchPage } from '../preview/browser.ts'
 import { webHost, type WebEvent } from '../native/webview.ts'
 import { VISUAL_NO_WEB_VIEW } from './visualFallback.ts'
 
-export const MAX_DOCS = 2
+export const MAX_DOCS = 5
+/** Inline figures live at once: the ones with the most of themselves on screen. */
+export const MAX_LIVE = 4
 const WARM_MS = 60_000
 /** How long a retiring owner may take to freeze its document before it is destroyed anyway. */
 const RETIRE_MS = 600
@@ -27,6 +31,8 @@ export type DocMessage =
   | { kind: 'snapshot'; token: number; path: string | null }
   | { kind: 'error'; message: string }
   | { kind: 'retire' }
+  /** The reader pressed inside the page (reported by the native host, so a page cannot fake it). */
+  | { kind: 'press' }
 
 interface Doc {
   id: string
@@ -75,6 +81,7 @@ function route() {
     if (event.type === 'created' || event.type === 'loaded') { webHost.theme(doc.id, doc.theme); return }
     if (event.type === 'failed' || event.type === 'terminated') { doc.error = event.message ?? 'The page stopped responding. Reload to open it again.'; changed(); tell({ kind: 'error', message: doc.error }); return }
     if (event.type === 'outsidePress' && event.x !== undefined && event.y !== undefined) { tell({ kind: 'outsidePress', x: event.x, y: event.y }); return }
+    if (event.type === 'press') { tell({ kind: 'press' }); return }
     if (event.type === 'snapshot') { tell({ kind: 'snapshot', token: event.token ?? 0, path: event.ok && event.path ? event.path : null }); return }
     if (event.type !== 'message' || !event.data) return
     const data = event.data
@@ -209,6 +216,43 @@ export function freezeDoc(id: string, path: string): number {
   webHost.snapshot(id, path, token)
   return token
 }
+
+// ---- Which inline figures are live ----
+
+type Slot = { visible: number; live: boolean; set: (live: boolean) => void }
+const slots = new Map<string, Slot>()
+let deciding = false
+/** A figure keeps its place against a newcomer showing about as much of itself, so two at the edge do not swap. */
+const KEEP = 48
+function decide() {
+  deciding = false
+  // A tab or the full-screen viewer holds a document too; inline figures share what is left.
+  const others = [...docs.values()].filter(doc => doc.owner && doc.owner !== 'inline').length
+  const cap = Math.max(0, Math.min(MAX_LIVE, MAX_DOCS - others))
+  const chosen = new Set([...slots].filter(([, slot]) => slot.visible > 0)
+    .sort((a, b) => (b[1].visible + (b[1].live ? KEEP : 0)) - (a[1].visible + (a[1].live ? KEEP : 0)))
+    .slice(0, cap).map(([id]) => id))
+  for (const [id, slot] of slots) {
+    const live = chosen.has(id)
+    if (live !== slot.live) { slot.live = live; slot.set(live) }
+  }
+}
+const schedule = () => { if (!deciding) { deciding = true; queueMicrotask(decide) } }
+subscribeDocs(schedule)
+/**
+ * An inline figure's claim to be live: `visible` is how many of its pixels are on screen (0 off screen, hidden, or when it
+ * cannot be live). `set` hears the decision. Returns the update and the release.
+ */
+export function liveSlot(id: string, set: (live: boolean) => void) {
+  const slot: Slot = { visible: 0, live: false, set }
+  slots.set(id, slot)
+  return {
+    update(visible: number) { if (Math.abs(slot.visible - visible) < 1) return; slot.visible = visible; schedule() },
+    release() { if (slots.get(id) === slot) { slots.delete(id); schedule() } },
+  }
+}
+/** Figures that want to be live now (the RAM check reads it). */
+export const liveSlotCount = () => [...slots.values()].filter(slot => slot.live).length
 
 /**
  * Open the visual's page in the default browser (no embedded web view). It takes a fresh frame ticket, which the daemon serves

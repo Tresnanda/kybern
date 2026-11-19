@@ -21,7 +21,9 @@
  *    `plain` is an ordinary box, `island` a leaf in a cached island (the scoped paint path), `nested` a leaf in a cached
  *    island whose parent changes in the same batch. Each must show the colour of `frame % 2`. Run it again with
  *    `KYBERN_FULL_INVALIDATE=1` (the runner's `frame-wake-full`) as the control.
- * 5. Exit (off macOS; macOS quits natively): `closeWindow()`; the UI-exit wake must reach the JS loop and end it.
+ * 5. Exit (off macOS; macOS quits natively): `closeWindow()` a moment after a fallback tick, so the next tick is far
+ *    away; the UI-exit wake must reach the JS loop and end it. The loop may still end on a tick first (a loaded
+ *    machine): that is a warning, and the wake is then waited for, not raced. Only a wake that never arrives fails.
  * Prints one `[frame-wake-check]` JSON line and exits 1 when a phase fails.
  */
 import '../src/native/local-build.ts'
@@ -64,16 +66,18 @@ type Probe = {
 }
 
 // Count the JS loop's ticks and the wakes it receives on the prototype, before render() starts the loop.
-const counts = { ticks: 0, wakes: 0, frames: 0 }
+const counts = { ticks: 0, wakes: 0, frames: 0, wakeAt: 0 }
 const proto = GpuixRenderer.prototype as unknown as { tick(): boolean; setFrameWakeCallback?(callback?: (() => void) | null): boolean }
 const tick = proto.tick
 proto.tick = function (this: unknown) { counts.ticks++; return tick.call(this) }
 const setWake = proto.setFrameWakeCallback
 if (setWake) proto.setFrameWakeCallback = function (this: unknown, callback?: (() => void) | null) {
-  return setWake.call(this, callback ? () => { counts.wakes++; callback() } : callback)
+  return setWake.call(this, callback ? () => { counts.wakes++; counts.wakeAt = performance.now(); callback() } : callback)
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+/** How long a wake that has not arrived once the loop ended is waited for before it counts as dropped. */
+const WAKE_GRACE_MS = 3000
 const COLORS = {
   plain: ['#e84c42', '#3a87e9'],
   island: ['#f2c037', '#2fb36b'],
@@ -254,12 +258,29 @@ function Check() {
         failures.push('exit: this addon has no closeWindow')
         return finish()
       }
+      // The JS loop's fallback tick comes every 100 ms and also ends the loop once the UI thread is gone, so a close
+      // that lands just before a tick races the wake against it (the CI runs that failed ended the loop 2 ms after the
+      // close with no wake counted). Close right after a tick, so the wake has ~75 ms to win.
+      const ticksSeen = counts.ticks, settleBy = performance.now() + 1000
+      while (counts.ticks === ticksSeen && performance.now() < settleBy) await sleep(2)
+      await sleep(25)
       const wakesBefore = counts.wakes, closedAt = performance.now()
       process.exit = ((code?: number) => {
-        exit.wakes = counts.wakes - wakesBefore
+        // The loop has ended. If the wake has not been counted yet it may still be queued behind this call: wait for it
+        // (the event, not a fixed window); only a wake that never comes is a failure.
         exit.ms = performance.now() - closedAt
-        if (bridged && (exit.wakes as number) < 1) failures.push('exit: the UI-exit wake never reached the JS loop (it ended on the fallback timer)')
-        finish(code && code !== 0 ? code : undefined)
+        const endedBeforeWake = counts.wakes === wakesBefore
+        void (async () => {
+          const giveUp = performance.now() + WAKE_GRACE_MS
+          while (counts.wakes === wakesBefore && performance.now() < giveUp) await sleep(5)
+          exit.wakes = counts.wakes - wakesBefore
+          if ((exit.wakes as number) < 1) failures.push(`exit: the UI-exit wake never reached the JS loop (it ended on the fallback timer after ${Math.round(exit.ms as number)} ms and no wake came in ${WAKE_GRACE_MS} ms)`)
+          else if (endedBeforeWake) {
+            exit.wakeMs = counts.wakeAt - closedAt
+            warnings.push(`exit: the loop ended on a fallback tick after ${Math.round(exit.ms as number)} ms, before the UI-exit wake arrived at ${Math.round(exit.wakeMs as number)} ms`)
+          }
+          finish(code && code !== 0 ? code : undefined)
+        })()
       }) as typeof process.exit
       setTimeout(() => { failures.push('exit: the JS loop did not end within 5 s of closeWindow'); finish() }, 5000)
       renderer.closeWindow()
