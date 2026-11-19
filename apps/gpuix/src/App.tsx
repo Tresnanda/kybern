@@ -50,6 +50,8 @@ import { startLive } from './nav/live.ts'
 import { NavRail } from './nav/NavRail.tsx'
 import { Palette } from './nav/Palette.tsx'
 import { SessionsDialog } from './nav/Sessions.tsx'
+import { ArchivedDialog } from './nav/Archived.tsx'
+import { ArchivedBar } from './archive/ArchivedBar.tsx'
 import { getNav, pointerNav, useNav, type Page } from './nav/store.ts'
 import { markUserInput } from './platform/userInput.ts'
 import { EASE, HOVER_FADE_ROOT, Rise } from './motion/kit.tsx'
@@ -262,6 +264,7 @@ function Workspace() {
       <Palette />
       <HandoffDialog />
       <SessionsDialog />
+      <ArchivedDialog />
       <EnvironmentOverlay />
       <EnvironmentDialogs />
       <WorkspaceDialogs />
@@ -400,7 +403,7 @@ function ThreadPage({ selectedId }: { selectedId: string }) {
           {!thread?.subagent && <ThreadRequests />}
           {!blocking && (
             <ErrorBoundary label="the composer" compact>
-              {thread?.moved ? <MoveBar thread={thread} {...((thread as { machineId?: string }).machineId ? { machineId: (thread as { machineId?: string }).machineId! } : {})} /> : thread?.subagent ? thread.provider.kind === 'claude-code' ? <NativeSubagentComposer key={thread.id} thread={thread} /> : <SubagentBar thread={thread} /> : <Composer thread={thread ?? listed} placeholderEnter={motion.placeholderEnter} />}
+              {thread?.status === 'archived' && !thread.subagent ? <ArchivedBar thread={thread} {...((thread as { machineId?: string }).machineId ? { machineId: (thread as { machineId?: string }).machineId! } : {})} /> : thread?.moved ? <MoveBar thread={thread} {...((thread as { machineId?: string }).machineId ? { machineId: (thread as { machineId?: string }).machineId! } : {})} /> : thread?.subagent ? thread.provider.kind === 'claude-code' ? <NativeSubagentComposer key={thread.id} thread={thread} /> : <SubagentBar thread={thread} /> : <Composer thread={thread ?? listed} placeholderEnter={motion.placeholderEnter} />}
             </ErrorBoundary>
           )}
         </div>

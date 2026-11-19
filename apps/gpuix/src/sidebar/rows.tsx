@@ -702,6 +702,12 @@ export const ThreadRow = memo(function ThreadRow({
             label={thread.pinned ? 'Unpin' : 'Pin'}
             onSelect={() => void updateThread(thread.id, { pinned: !thread.pinned })}
           />
+          {thread.older_at && !thread.pinned && (
+            <MenuItem id="move-out-of-older" testId="thread-menu-move-out-of-older" icon={N.arrowUp} label="Move out of Older" onSelect={() => void updateThread(thread.id, { move_out_of_older: true }).catch((e) => toastProblem(e, { action: 'move the thread out of Older', projectId: thread.project_id }))} />
+          )}
+          {!thread.coordinator_project_id && (
+            <MenuItem id="keep-out-of-older" testId="thread-menu-keep-out-of-older" label="Never move to Older" checked={!!thread.keep_out_of_older} onSelect={() => void updateThread(thread.id, { keep_out_of_older: !thread.keep_out_of_older }).catch((e) => toastProblem(e, { action: 'update the thread', projectId: thread.project_id }))} />
+          )}
           <MenuItem id="handoff" icon={N.handoff} label="Hand off to another agent" onSelect={() => setNav({ handoff: { threadId: thread.id, target: null } })} />
           {forkTargetsOf(remote).length > 0 && <MenuItem id="fork-machine" icon={N.laptop} label="Fork to another machine…" onSelect={() => showDialog({ kind: 'fork', threadId: thread.id, ...(remote.machineId ? { machineId: remote.machineId } : {}) })} />}
           {!thread.moved && forkTargetsOf(remote).length > 0 && <MenuItem id="move-machine" icon={N.laptop} label="Continue on another machine…" onSelect={() => showDialog({ kind: 'move', threadId: thread.id, ...(remote.machineId ? { machineId: remote.machineId } : {}) })} />}
@@ -908,10 +914,50 @@ export const CreateCoordinatorRow = memo(function CreateCoordinatorRow({ project
   )
 })
 
-export const MoreRow = memo(function MoreRow({ projectId, count, showAll, onToggle }: { projectId: string; count: number; showAll: boolean; onToggle: (id: string) => void }) {
+/** The Older group's disclosure: the project's inactive threads, collapsed until opened (remembered per project). */
+export const OlderRow = memo(function OlderRow({ projectId, open, onToggle }: { projectId: string; open: boolean; onToggle: (id: string) => void }) {
+  const t = useTheme()
   return (
     <div style={{ paddingTop: 2, ...INSET }}>
-      <Button variant="ghost" size="sm" testId={`more-${projectId}`} onClick={() => onToggle(projectId)} style={{ alignSelf: 'flex-start', marginLeft: 24 }}>
+      <div
+        testId={`older-${projectId}`}
+        onClick={() => onToggle(projectId)}
+        style={{ display: 'flex', alignItems: 'center', gap: 8, height: 28, paddingLeft: 32, paddingRight: 8, borderRadius: 8, cursor: 'pointer', hover: { backgroundColor: accent(t) }, ...pressRow(t, accent(t)) }}
+      >
+        <div style={{ display: 'flex', width: 12, height: 12, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <Chevron open={open} size={12} color={muted(t, 0.65)} />
+        </div>
+        <Label color={muted(t, 0.58)} truncate>
+          Older
+        </Label>
+      </div>
+    </div>
+  )
+})
+
+/** The last row of a project with archived threads: opens their list. */
+export const ArchivedRow = memo(function ArchivedRow({ projectId }: { projectId: string }) {
+  const t = useTheme()
+  return (
+    <div style={{ paddingTop: 2, ...INSET }}>
+      <div
+        testId={`archived-${projectId}`}
+        onClick={() => setNav({ archived: { projectId } })}
+        style={{ display: 'flex', alignItems: 'center', gap: 8, height: 28, paddingLeft: 32, paddingRight: 8, borderRadius: 8, cursor: 'pointer', hover: { backgroundColor: accent(t) }, ...pressRow(t, accent(t)) }}
+      >
+        <Icon source={N.archive} size={12} color={muted(t, 0.58)} />
+        <Label color={muted(t, 0.58)} truncate>
+          Archived
+        </Label>
+      </div>
+    </div>
+  )
+})
+
+export const MoreRow = memo(function MoreRow({ projectId, count, showAll, onToggle, older = false }: { projectId: string; count: number; showAll: boolean; onToggle: (id: string) => void; older?: boolean }) {
+  return (
+    <div style={{ paddingTop: 2, ...INSET }}>
+      <Button variant="ghost" size="sm" testId={`${older ? 'older-more' : 'more'}-${projectId}`} onClick={() => onToggle(projectId)} style={{ alignSelf: 'flex-start', marginLeft: 24 }}>
         {showAll ? 'Show less' : `Show ${count} more`}
       </Button>
     </div>

@@ -81,3 +81,46 @@ describe('"Show more" with a bounded list (#248)', () => {
     expect(more(12, {}, true)).toMatchObject({ count: 4, showAll: true })
   })
 })
+
+describe('the Older group and the Archived row', () => {
+  const project = { id: 'p', name: 'p', path: '/p', is_git: false, brief_in_all_threads: false } as unknown as Project
+  const thread = (id: string, extra: Partial<Thread> = {}) => ({ id, title: id, project_id: 'p', status: 'idle', pinned: false, updated_at: '2026-10-20T00:00:00Z', last_seq: 1, provider: { kind: 'claude-code', instance: 'default' }, ...extra }) as unknown as Thread
+  const old = (id: string, extra: Partial<Thread> = {}) => thread(id, { older_at: '2026-11-01T00:00:00Z', ...extra })
+  const nav = { children: {}, activity: {}, unread: {} as Record<string, true>, dismissed: {}, filter: DEFAULT_FILTER, attentionFilter: false, projectOrder: [] as string[], composerDrafts: {}, attentionDismissals: {} }
+  const input = (threads: Thread[], extra: Partial<Parameters<typeof buildRows>[0]> = {}) =>
+    ({ projects: [project], threads, selectedId: null, draft: null, collapsed: {}, showAll: {}, expanded: {}, nav, now: 0, ...extra }) as Parameters<typeof buildRows>[0]
+  const keys = (rows: Row[]) => rows.filter((row) => row.kind !== 'label' && row.kind !== 'project' && row.kind !== 'create-coordinator').map((row) => row.key)
+
+  test('inactive threads wait in a collapsed Older group below the rest', () => {
+    expect(keys(buildRows(input([thread('a'), old('b'), thread('c'), old('d')])))).toEqual(['a', 'c', 'p:older'])
+    expect(buildRows(input([old('b')])).find((row) => row.kind === 'older')).toMatchObject({ open: false })
+  })
+
+  test('opening it lists them, and the project remembers', () => {
+    const rows = buildRows(input([thread('a'), old('b'), old('d')], { nav: { ...nav, olderOpen: { p: true } } }))
+    expect(keys(rows)).toEqual(['a', 'p:older', 'b', 'd'])
+    expect(rows.find((row) => row.kind === 'older')).toMatchObject({ open: true })
+  })
+
+  test('an unread thread stays in the main list until it is read', () => {
+    expect(keys(buildRows(input([old('b')], { nav: { ...nav, unread: { b: true } } })))).toEqual(['b'])
+  })
+
+  test('the rows the daemon left out load from the Older group when there is one', () => {
+    const rows = buildRows(input([thread('a'), old('b')], { omitted: { p: 30 }, nav: { ...nav, olderOpen: { p: true } } }))
+    expect(keys(rows)).toEqual(['a', 'p:older', 'b', 'p:older-more'])
+    expect(rows.find((row) => row.key === 'p:older-more')).toMatchObject({ kind: 'more', count: 30, older: true })
+    expect(keys(buildRows(input([thread('a')], { omitted: { p: 30 } })))).toEqual(['a', 'p:more'])
+  })
+
+  test('a filter lists every match together', () => {
+    const rows = buildRows(input([thread('a', { pinned: true }), old('b', { pinned: false })], { nav: { ...nav, filter: { threads: 'all', agent: 'claude-code' } } }))
+    expect(rows.some((row) => row.kind === 'older')).toBe(false)
+  })
+
+  test('a project with archived threads ends with its Archived row', () => {
+    expect(keys(buildRows(input([thread('a'), old('b')], { archivedCounts: { p: 2 } })))).toEqual(['a', 'p:older', 'p:archived'])
+    expect(keys(buildRows(input([], { archivedCounts: { p: 1 } })))).toEqual(['p:empty', 'p:archived'])
+    expect(keys(buildRows(input([thread('a')], { archivedCounts: {} })))).toEqual(['a'])
+  })
+})
