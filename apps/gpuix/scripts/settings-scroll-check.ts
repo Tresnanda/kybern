@@ -184,6 +184,21 @@ async function landing(settings: Record<string, any>, theme: string, optional: b
     await a.getByTestId('idle-compaction-settings').waitFor({ timeoutMs: 5000 })
     await Bun.sleep(400)
     await a.getByTestId('idle-compaction-settings').click()
+    // The tint is up for 0.7 s after landing (0.2 s fade-in), then fades for 0.4 s; Reduce Motion skips it. Wait on its state,
+    // which the first row's overlay reports as a test id while it is lit, and capture the card while it is up: a capture can
+    // take longer than the tint on a software renderer, so only a frame taken with the tint up before and after counts.
+    const tint = async () => (await a.getByTestId('settings-section-compaction-tint').count()) > 0
+    const lit: string[] = []
+    let seen = false
+    const start = Date.now()
+    for (let deadline = start + 8000; Date.now() < deadline;) {
+      if (await tint()) {
+        seen = true
+        const file = await capture(f, path.join(out, `${name}-lit-${lit.length}.png`))
+        if (await tint()) lit.push(file)
+      } else if (seen || (reduced && Date.now() - start > 2500)) break
+      await Bun.sleep(20)
+    }
     await step(`${label}: Compaction is at the top of Agent providers`, async () => {
       await a.getByTestId('settings-section-compaction').waitFor({ timeoutMs: 10_000 })
       const page = await a.getByTestId('page-settings').bounds()
@@ -193,20 +208,22 @@ async function landing(settings: Record<string, any>, theme: string, optional: b
       assert.ok(text.includes('Compact idle threads'), 'the Compaction rows are painted')
       assert.equal(await a.getByTestId('settings-tab-agents').count(), 1)
     })
-    // The tint is up from about 0.2 s to 0.7 s after landing and gone by 1.2 s; Reduce Motion skips it.
-    const lit = await capture(f, path.join(out, `${name}.png`))
-    await Bun.sleep(1500)
-    const rest = await capture(f, path.join(out, `${name}-settled.png`))
     await step(`${label}: the section is tinted once${reduced ? ' (not under Reduce Motion)' : ''}`, async () => {
+      assert.equal(seen, !reduced, reduced ? 'no tint under Reduce Motion' : 'the card is tinted after landing')
+      assert.equal(await settled(tint, (up) => !up, 5000), false, 'the tint goes away')
       const header = await a.getByTestId('settings-section-compaction').bounds()
       // The card is the page block's centred column (680 wide at most, 40 of padding each side); sample its first row.
       const inner = Math.min(680, header.width - 80)
       const card = { x: header.x + (header.width - inner) / 2 + 20, y: header.y + 40, width: inner - 40, height: 40 }
-      const [p, q] = [pngPixels(lit), pngPixels(rest)]
-      const scale = Math.round((p.width / 1200) * 2) / 2
-      const a1 = sample(p, scale, card, 8), b1 = sample(q, scale, card, 8)
-      const differs = a1.some((px, i) => !near(px, b1[i]!))
-      assert.equal(differs, !reduced, reduced ? 'no tint under Reduce Motion' : 'the card is tinted right after landing and back to normal afterwards')
+      const pixels = (file: string) => { const p = pngPixels(file); return sample(p, Math.round((p.width / 1200) * 2) / 2, card, 8) }
+      const same = (x: number[][], y: number[][]) => x.every((px, i) => near(px, y[i]!))
+      // At rest once the fade-out is over: two captures in a row paint the card the same.
+      let previous = pixels(await capture(f, path.join(out, `${name}-settled.png`)))
+      const rest = await settled(async () => { const next = pixels(await capture(f, path.join(out, `${name}-settled.png`))); const done = same(previous, next); previous = next; return { next, done } }, (r) => r.done, 5000)
+      assert.ok(rest.done, 'the card settles after the tint')
+      if (reduced) return
+      if (lit.length === 0) { console.log(`[settings-scroll] ${label}: no capture finished while the tint was up; its state was checked through automation`); return }
+      assert.ok(lit.some((file) => !same(pixels(file), rest.next)), 'a frame taken while the tint was up paints the card differently from rest')
     })
   } catch (error) {
     await capture(f, path.join(out, `${name}-failure.png`)).catch(() => {})
