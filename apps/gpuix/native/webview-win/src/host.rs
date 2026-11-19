@@ -121,6 +121,17 @@ const SHORTCUT_KEYS: &[(u32, &str)] = &[
     (0x6D, "-"),
     (0x30, "0"),
     (0x60, "0"),
+    // Ctrl+W and Ctrl+1–9: the app's tabs (a field's own keys are never in this list).
+    (0x57, "w"),
+    (0x31, "1"),
+    (0x32, "2"),
+    (0x33, "3"),
+    (0x34, "4"),
+    (0x35, "5"),
+    (0x36, "6"),
+    (0x37, "7"),
+    (0x38, "8"),
+    (0x39, "9"),
 ];
 
 /// Interface zoom (#292), as `f64` bits: every page is zoomed like a browser page (`ZoomFactor`); placements arrive in
@@ -459,6 +470,8 @@ struct Doc {
     /// `present` targets and whether its animation is still running (`probe`).
     shown: (f32, f32),
     animating: Arc<AtomicU64>,
+    /// A visual's own scroll areas (`bootstrap.js` `kybern-visual-scrollers`): `[x, y, width, height, room]` in CSS pixels.
+    scrollers: Vec<[f64; 5]>,
 }
 
 struct Host {
@@ -476,6 +489,8 @@ struct Host {
     press: Owner,
     hover: Option<String>,
     last_down: Option<(u32, POINT, String)>,
+    /// The wheel gesture in progress (`pointer::route_wheel`).
+    wheel: pointer::WheelLatch,
 }
 
 fn num(command: &Map<String, Value>, key: &str) -> f64 {
@@ -590,6 +605,7 @@ impl Host {
             press: Owner::None,
             hover: None,
             last_down: None,
+            wheel: Default::default(),
         }
     }
 
@@ -877,6 +893,7 @@ impl Host {
             child_target: None,
             shown: (1.0, 1.0),
             animating: Arc::new(AtomicU64::new(0)),
+            scrollers: Vec::new(),
         });
         emit(json!({"id": id, "generation": generation, "type": "created", "windowNumber": hwnd.0 as isize}));
         self.start_controllers();
@@ -1112,6 +1129,28 @@ impl Host {
                 let mut track =
                     TRACKMOUSEEVENT { cbSize: size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: hwnd, dwHoverTime: 0 };
                 let _ = unsafe { TrackMouseEvent(&mut track) };
+            }
+        }
+        // The wheel over a visual scrolls the chat, except over the page's own scroll areas (`pointer::route_wheel`).
+        if kind == pointer::Kind::Wheel && self.press == Owner::None {
+            let page = match &route {
+                Route::Page(id) => self.docs.iter().find(|d| d.id == *id && d.category == "visual").map(|doc| {
+                    let need = pointer::wheel_need(message == WM_MOUSEHWHEEL, data as u16 as i16 as i32);
+                    let zoom = ui_zoom();
+                    let takes = doc.placement.as_ref().is_some_and(|placement| {
+                        let (left, top) = (placement.web_px.0 as f64 / scale, placement.web_px.1 as f64 / scale);
+                        pointer::page_takes(&doc.scrollers, (x - left) / zoom, (y - top) / zoom, need)
+                    });
+                    (doc.id.as_str(), takes)
+                }),
+                Route::Gpui => None,
+            };
+            let visual_or_gpui = page.is_some() || route == Route::Gpui;
+            if visual_or_gpui {
+                let now = unsafe { GetMessageTime() } as u32 as u64;
+                if pointer::route_wheel(&mut self.wheel, now, page) == Route::Gpui {
+                    return None;
+                }
             }
         }
         let Route::Page(target) = route else { return None };
@@ -1554,6 +1593,31 @@ impl Doc {
                 return Ok(());
             }
             let Ok(Value::Object(data)) = serde_json::from_str::<Value>(&json) else { return Ok(()) };
+            // The page's scroll areas stay in the host, for the wheel filter: page data, so bounded and checked.
+            if data.get("kind").and_then(Value::as_str) == Some("kybern-visual-scrollers") {
+                let areas: Vec<[f64; 5]> = data
+                    .get("rects")
+                    .and_then(Value::as_array)
+                    .map(|rects| {
+                        rects
+                            .iter()
+                            .take(64)
+                            .filter_map(|r| {
+                                let r = r.as_array()?;
+                                let n: Vec<f64> = r.iter().filter_map(Value::as_f64).filter(|v| v.is_finite()).collect();
+                                (r.len() == 5 && n.len() == 5).then(|| [n[0], n[1], n[2], n[3], n[4]])
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let (id, generation) = (escape_id.clone(), escape_generation.clone());
+                with_host(move |host| {
+                    if let Some(doc) = host.docs.iter_mut().find(|d| d.id == id && d.generation == generation) {
+                        doc.scrollers = areas;
+                    }
+                });
+                return Ok(());
+            }
             if data.get("kybernHost").and_then(Value::as_str) == Some("escape") {
                 let (id, generation) = (escape_id.clone(), escape_generation.clone());
                 with_host(move |host| {

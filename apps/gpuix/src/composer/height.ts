@@ -10,9 +10,9 @@ const cards = new Map<object, { rect: LayoutRect; pane: string }>()
 const stacks = new Map<object, { rect: LayoutRect; pane: string }>()
 /**
  * Where composer cards are on screen (window points), each grown to its pane's floating stack: the requests above it and
- * the gutter below, across the card's width. A live visual turns back into its picture before it slides under any of it;
- * the native page is cut out only under the card itself, so a page left live under a request bar or in the gutter showed
- * through there (seen on Windows).
+ * the gutter below, across the card's width. A live visual stays live under it: native pages are cut out of all of it
+ * (`occludeStacks`; the card alone left a page showing through a request bar or the gutter, seen on Windows), and the
+ * visual shows its picture there instead, under the glass.
  */
 export const composerCardRects = (): LayoutRect[] => [...cards.values()].map(({ rect, pane }) => {
   const stack = [...stacks.values()].find(value => value.pane === pane)?.rect
@@ -20,9 +20,32 @@ export const composerCardRects = (): LayoutRect[] => [...cards.values()].map(({ 
   const y = Math.min(rect.y, stack.y), bottom = Math.max(rect.y + rect.height, stack.y + stack.height)
   return { ...rect, y, height: bottom - y }
 })
+/** The occlusion layer of each pane's stack cut-out, by pane. */
+const stackLayers = new Map<string, number>()
+const stackSent = new Map<number, string>()
+let nextStackLayer = 0
+const occlude = (layer: number, rect: LayoutRect | null) => {
+  const key = JSON.stringify(rect)
+  if (stackSent.get(layer) === key) return
+  stackSent.set(layer, key)
+  webHost.occlusion(layer, rect, 0, 0, 1)
+}
+/** Cut native pages out of each pane's whole stack (card width, stack height); the card's own rounded cut stays too. */
+function occludeStacks() {
+  const panes = new Set([...stacks.values()].map(value => value.pane))
+  for (const [pane, layer] of stackLayers) if (!panes.has(pane)) { occlude(layer, null); stackLayers.delete(pane); stackSent.delete(layer) }
+  for (const pane of panes) {
+    const card = [...cards.values()].find(value => value.pane === pane)?.rect
+    const stack = [...stacks.values()].find(value => value.pane === pane)?.rect
+    let layer = stackLayers.get(pane)
+    if (layer === undefined) { layer = -1_000_000 - ++nextStackLayer; stackLayers.set(pane, layer) }
+    occlude(layer, card && stack ? composerCardRects().find(rect => rect.x === card.x && rect.width === card.width) ?? null : null)
+  }
+}
 const listeners = new Set<() => void>()
 let height = 0
 function publish() {
+  occludeStacks()
   const priority = Math.max(-1, ...[...measurements.values()].map(value => value.priority))
   const next = Math.max(0, ...[...measurements.values()].filter(value => value.priority === priority).map(value => value.height))
   height = next

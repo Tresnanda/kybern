@@ -38,7 +38,7 @@ try {
     // Tile B is the middle third of the grid.
     const figure = await boxOf('visual-figure')
     await app.mouse.click({ x: figure.x + figure.width / 2, y: figure.y + 50 })
-    await until(async () => (await app.getByTestId('visual-ring-live').count()) > 0, 'live', 10_000)
+    await until(async () => (await app.getByTestId('visual-live').count()) > 0, 'live', 10_000)
     await until(async () => { const node = (await app.getByTestId('visual-answer-send').all())[0]; return !!node && !JSON.stringify(node).includes('"aria-disabled":true') }, 'a draft enables Send', 8000)
     await Bun.sleep(400)
     shot('T2-selected')

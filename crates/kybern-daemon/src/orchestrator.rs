@@ -358,6 +358,8 @@ impl Orchestrator {
                 let mut object = arguments.as_object().cloned().ok_or_else(|| anyhow!("HTML arguments must be an object"))?;
                 anyhow::ensure!(!object.contains_key("thread_id"), "HTML tools are bound to the current thread.");
                 object.insert("thread_id".into(), serde_json::json!(thread_id));
+                // The frame fits the page; without a height the measured one (or a default) is the first paint.
+                object.entry("height").or_insert(serde_json::json!(0));
                 let params: methods::HtmlPublishParams = crate::app_tools::parse(serde_json::Value::Object(object))?;
                 let ask = crate::visuals::answer_ask(&params)?;
                 if ask.is_some() {

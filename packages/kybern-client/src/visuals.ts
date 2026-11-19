@@ -2,7 +2,8 @@
 export interface VisualTheme { appearance: "dark" | "light"; variables: Record<string, string> }
 import type { HtmlVisual, VisualHeight } from "./types.ts";
 export const VISUAL_MIN_HEIGHT = 80;
-export const VISUAL_MAX_HEIGHT = 2000;
+/** Inline frames fit their page up to this height; it only stops a page that grows with its frame (`vh` units are refused at publish). */
+export const VISUAL_MAX_HEIGHT = 20_000;
 /** The reply column (46rem) at the default chat width; picks the measured height when a client cannot know its width. */
 export const VISUAL_COLUMN_WIDTH = 736;
 const MAX_MEASURED_HEIGHTS = 24;
@@ -32,16 +33,13 @@ export function visualMeasuredHeight(heights: readonly VisualHeight[], width: nu
   return Math.max(heights[low]!.height, heights[high]!.height);
 }
 /**
- * The box a visual reserves at a frame width. The page's own posted height wins; else the
- * daemon's measurement for that width. The agent's height caps it only when it is below the
- * page's height at the column width (the agent asked for a scrolling frame) or when the page
- * was never measured.
+ * The box a visual reserves at a frame width: the frame fits the page. The page's own posted height wins; else the
+ * daemon's measurement for that width; else the agent's first-paint height.
  */
 export function visualFrameHeight(visual: Pick<HtmlVisual, "height" | "heights">, width: number, contentHeight?: number): number {
+  if (contentHeight !== undefined) return clampVisualHeight(contentHeight);
   const heights = visual.heights;
-  if (!heights || heights.length === 0) return clampVisualHeight(Math.min(visual.height, contentHeight ?? visual.height));
-  const cap = visualMeasuredHeight(heights, VISUAL_COLUMN_WIDTH) > visual.height ? visual.height : VISUAL_MAX_HEIGHT;
-  return clampVisualHeight(Math.min(cap, contentHeight ?? visualMeasuredHeight(heights, width)));
+  return clampVisualHeight(heights && heights.length > 0 ? visualMeasuredHeight(heights, width) : visual.height);
 }
 export function visualLink(value: unknown): string | null {
   if (typeof value !== "string" || value.length > 4096) return null;

@@ -24,6 +24,62 @@ const MAX_TICKET_BYTES: usize = 64 * 1024 * 1024;
 /// column (46rem) and the 1152 px wide column (72rem).
 const MEASURE_WIDTHS: [u32; 9] = [320, 375, 430, 520, 640, 736, 860, 1000, 1152];
 const MEASURE_BUDGET: Duration = Duration::from_secs(6);
+/// Inline frames fit their page up to this height (the clients' `VISUAL_MAX_HEIGHT`). It only stops a page that grows
+/// with its frame; viewport units, the usual cause, are refused at publish.
+pub(crate) const MAX_FIT_HEIGHT: u32 = 20_000;
+const MIN_HEIGHT: u32 = 80;
+/// The first paint of a page published without a height and never measured.
+const DEFAULT_HEIGHT: u32 = 400;
+
+/// Refuse `vh`, `svh`, `lvh` and `dvh` in the page's CSS and scripts. An inline frame is as tall as its content, so a
+/// page sized by the viewport grows each time its frame does. Prose (text between tags) may mention them.
+fn viewport_units(html: &str) -> Result<()> {
+    let lower = html.to_ascii_lowercase();
+    let mut code = Vec::new();
+    for (open, close) in [("<style", "</style"), ("<script", "</script")] {
+        let mut at = 0;
+        while let Some(start) = lower[at..].find(open).map(|i| at + i) {
+            let end = lower[start..].find(close).map_or(lower.len(), |i| start + i);
+            code.push((start, end));
+            at = end.max(start + open.len());
+        }
+    }
+    // `style="…"` attributes anywhere.
+    let mut at = 0;
+    while let Some(start) = lower[at..].find("style=").map(|i| at + i) {
+        let value = start + 6;
+        let quote = lower.as_bytes().get(value).copied();
+        let end = match quote {
+            Some(q @ (b'"' | b'\'')) => lower[value + 1..].find(q as char).map_or(lower.len(), |i| value + 1 + i),
+            _ => lower[value..].find(|c: char| c.is_ascii_whitespace() || c == '>').map_or(lower.len(), |i| value + i),
+        };
+        code.push((value, end));
+        at = end.max(value);
+    }
+    let bytes = lower.as_bytes();
+    for (start, end) in code {
+        let text = &bytes[start..end.min(bytes.len())];
+        for i in 0..text.len() {
+            if text[i] != b'v' || text.get(i + 1) != Some(&b'h') {
+                continue;
+            }
+            // A number right before the unit (`100vh`, `.5dvh`), optionally with the s/l/d prefix.
+            let unit_start = if i > 0 && matches!(text[i - 1], b's' | b'l' | b'd') { i - 1 } else { i };
+            let digit = unit_start > 0 && text[unit_start - 1].is_ascii_digit();
+            let after = text.get(i + 2).copied();
+            let boundary = !after.is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-');
+            if digit && boundary {
+                let from = (start + unit_start).saturating_sub(24);
+                let to = (start + i + 2 + 8).min(html.len());
+                let snippet: String = String::from_utf8_lossy(&html.as_bytes()[from..to]).split_whitespace().collect::<Vec<_>>().join(" ");
+                anyhow::bail!(
+                    "Remove viewport height units (vh, svh, lvh, dvh) from the page, near “{snippet}”. Inline pages are as tall as their content, so a page sized by the viewport grows without end. Give charts and panels a fixed pixel height and let the rest follow the content."
+                );
+            }
+        }
+    }
+    Ok(())
+}
 /// Default dark theme with Kybern's own font stacks; the daemon usually shares the client's fonts.
 fn measure_fragment() -> String {
     format!("#kybern-theme={}", encode(&default_theme("dark")))
@@ -72,7 +128,8 @@ pub(crate) async fn publish(
     ask: Option<VisualAsk>,
 ) -> Result<ThreadEvent> {
     ensure!(!title.trim().is_empty() && title.chars().count() <= 200, "Give this page a title of 1–200 characters.");
-    ensure!((80..=2000).contains(&height), "Use a frame height of 80–2000 CSS pixels.");
+    ensure!(height == 0 || (MIN_HEIGHT..=MAX_FIT_HEIGHT).contains(&height), "Leave out height, or use 80–20,000 CSS pixels.");
+    viewport_units(html)?;
     let (source, _) = prepare::prepare(html, false).await?;
     let heights =
         match tokio::time::timeout(MEASURE_BUDGET, preview::measure(&paths.root, &source, &MEASURE_WIDTHS, &measure_fragment())).await {
@@ -86,6 +143,10 @@ pub(crate) async fn publish(
                 Vec::new()
             }
         };
+    // The frame fits the page; `height` is only the first paint before anything is measured. Older clients cap the frame
+    // at it, so it is never below what was measured.
+    let measured = heights.iter().map(|entry| entry.height).max().unwrap_or(0);
+    let height = if height == 0 && measured == 0 { DEFAULT_HEIGHT } else { height.max(measured).clamp(MIN_HEIGHT, MAX_FIT_HEIGHT) };
     let visual = HtmlVisual { id: uuid::Uuid::now_v7(), title: title.trim().to_owned(), height, heights, ask };
     let event = store.visual_publish(thread_id, turn_id, &visual, &source)?;
     prerender(paths.root.clone(), thread_id, visual.id, source);
@@ -95,9 +156,10 @@ pub(crate) async fn publish(
 // ---- transcript pictures ----
 
 /// Bumped when the picture's rendering changes, so cached pictures are redrawn.
-const SNAPSHOT_VERSION: u32 = 1;
-/// Tall pages rest at this height with a fade (`HtmlSnapshotResult::clamp`).
-pub(crate) const SNAPSHOT_CLAMP: u32 = 480;
+const SNAPSHOT_VERSION: u32 = 2;
+/// A picture shows at most this much of a page (CSS pixels); a taller page shows its top until it is live. Older clients
+/// read it as `HtmlSnapshotResult::clamp`; nothing is clamped or faded any more.
+pub(crate) const PICTURE_MAX_HEIGHT: u32 = 6_000;
 /// The reply column a picture is pre-rendered for until a client says otherwise.
 const DEFAULT_SNAPSHOT_WIDTH: u32 = 736;
 const SNAPSHOT_CACHE_BYTES: u64 = 256 * 1024 * 1024;
@@ -128,7 +190,7 @@ fn theme_appearance(theme: &serde_json::Value) -> Result<&str> {
 fn snapshot_key(width: u32, theme: &serde_json::Value, lock: Option<&serde_json::Value>) -> String {
     use sha2::Digest as _;
     let digest = sha2::Sha256::digest(format!(
-        "{SNAPSHOT_VERSION}\n{width}\n{SNAPSHOT_CLAMP}\n{theme}\n{}",
+        "{SNAPSHOT_VERSION}\n{width}\n{PICTURE_MAX_HEIGHT}\n{theme}\n{}",
         lock.map(serde_json::Value::to_string).unwrap_or_default()
     ));
     digest.iter().take(16).map(|byte| format!("{byte:02x}")).collect()
@@ -136,8 +198,12 @@ fn snapshot_key(width: u32, theme: &serde_json::Value, lock: Option<&serde_json:
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SnapshotMeta {
     height: u32,
-    clamped: bool,
+    #[serde(default = "default_scale")]
+    scale: u32,
     controls: Vec<VisualControl>,
+}
+fn default_scale() -> u32 {
+    preview::SNAPSHOT_SCALE
 }
 
 /// Draw (or read the cached) picture of a visual. `remember` records the theme for later pre-renders.
@@ -180,9 +246,9 @@ async fn render_cached(
         key: key.clone(),
         width,
         height: meta.height,
-        scale: preview::SNAPSHOT_SCALE,
-        clamped: meta.clamped,
-        clamp: SNAPSHOT_CLAMP,
+        scale: meta.scale,
+        clamped: false,
+        clamp: PICTURE_MAX_HEIGHT,
         controls: meta.controls,
     };
     let meta_file = dir.join(format!("{key}.json"));
@@ -200,18 +266,15 @@ async fn render_cached(
     if let Some(lock) = lock {
         fragment.push_str(&format!("&kybern-lock={}", encode(lock)));
     }
-    let picture = preview::snapshot(root, source.to_owned(), width, appearance, &fragment, SNAPSHOT_CLAMP).await;
+    let picture = preview::snapshot(root, source.to_owned(), width, appearance, &fragment, PICTURE_MAX_HEIGHT).await;
     if let Ok(mut map) = renders().lock() {
         map.remove(&key);
     }
     let picture = picture?;
     tokio::fs::create_dir_all(&dir).await?;
-    let meta = SnapshotMeta { height: picture.height, clamped: picture.fade.is_some(), controls: picture.controls };
+    let meta = SnapshotMeta { height: picture.height, scale: picture.scale, controls: picture.controls };
     // The picture lands before its metadata, so a reader that finds the metadata finds the picture.
     write_atomic(&dir.join(format!("{key}.png")), &picture.png).await?;
-    if let Some(fade) = &picture.fade {
-        write_atomic(&dir.join(format!("{key}-fade.png")), fade).await?;
-    }
     write_atomic(&meta_file, &serde_json::to_vec(&meta)?).await?;
     let root = root.to_owned();
     tokio::task::spawn_blocking(move || prune_snapshots(&snapshot_root(&root), SNAPSHOT_CACHE_BYTES));
@@ -485,6 +548,16 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(2), "A missing browser never delays publishing");
         let json = serde_json::to_value(&visual).unwrap();
         assert!(json.get("heights").is_none(), "Empty heights stay off the wire");
+        let paths = scratch_paths(root.clone());
+        let auto = publish(&store, &paths, thread.id, uuid::Uuid::now_v7(), "<p>Hi</p>", "Hi", 0, None).await.unwrap();
+        let EventPayload::HtmlPublished { visual } = auto.payload else { panic!("expected a published visual") };
+        assert_eq!(visual.height, DEFAULT_HEIGHT, "no height and no measurement: the default first paint");
+        let tall = publish(&store, &paths, thread.id, uuid::Uuid::now_v7(), "<p>Hi</p>", "Hi", 12_000, None).await.unwrap();
+        let EventPayload::HtmlPublished { visual } = tall.payload else { panic!("expected a published visual") };
+        assert_eq!(visual.height, 12_000);
+        let refused = publish(&store, &paths, thread.id, uuid::Uuid::now_v7(), "<style>body{height:100vh}</style>", "Hi", 0, None).await;
+        assert!(refused.unwrap_err().to_string().contains("viewport height units"));
+        assert!(publish(&store, &paths, thread.id, uuid::Uuid::now_v7(), "<p>Hi</p>", "Hi", 20_001, None).await.is_err());
         let _ = std::fs::remove_dir_all(root);
     }
     /// Needs the preview browser (`kybern html preview` installs it) under `KYBERN_VISUAL_LIVE_ROOT`.
@@ -633,17 +706,42 @@ mod tests {
     /// Needs the preview browser under `KYBERN_VISUAL_LIVE_ROOT`.
     #[tokio::test]
     #[ignore]
-    async fn pictures_are_transparent_with_controls_and_a_fade() {
+    async fn pictures_are_transparent_full_height_with_controls() {
         let root = std::path::PathBuf::from(std::env::var("KYBERN_VISUAL_LIVE_ROOT").expect("set KYBERN_VISUAL_LIVE_ROOT"));
         let html = "<style>body{margin:0}.t{height:900px}</style><button style='width:80px;height:30px;border-radius:8px'>Raw</button><div class=t></div>";
         let (source, _) = prepare::prepare(html, false).await.unwrap();
         let fragment = format!("#kybern-theme={}", encode(&default_theme("dark")));
-        let shot = preview::snapshot(&root, source, 736, "dark", &fragment, SNAPSHOT_CLAMP).await.unwrap();
-        assert!(shot.height >= 930, "{}", shot.height);
-        assert!(shot.fade.is_some(), "a tall page gets its clamped picture");
+        let shot = preview::snapshot(&root, source, 736, "dark", &fragment, PICTURE_MAX_HEIGHT).await.unwrap();
+        assert!(shot.height >= 930, "the whole page, not a clamped top: {}", shot.height);
+        assert_eq!(shot.scale, 2);
         let button = shot.controls.iter().find(|c| c.role == "button").expect("the button is in the hit map");
         assert_eq!((button.w, button.h, button.r), (80.0, 30.0, 8.0));
         assert_eq!(&shot.png[1..4], b"PNG");
+        let tall = "<div style='height:9000px'></div>";
+        let (source, _) = prepare::prepare(tall, false).await.unwrap();
+        let tall = preview::snapshot(&root, source, 736, "dark", &fragment, PICTURE_MAX_HEIGHT).await.unwrap();
+        assert_eq!((tall.height, tall.scale), (PICTURE_MAX_HEIGHT, 1), "a very tall page shows its top at scale 1");
+    }
+    #[test]
+    fn viewport_height_units_are_refused_in_styles_and_scripts_only() {
+        for page in [
+            "<style>main{min-height:100vh}</style><main>x</main>",
+            "<div style=\"height: calc(100dvh - 20px)\">x</div>",
+            "<div style='height:50svh'>x</div>",
+            "<script>el.style.height = '.5lvh'</script>",
+            "<STYLE>.a{height:100VH}</STYLE>",
+        ] {
+            let error = viewport_units(page).expect_err(page).to_string();
+            assert!(error.starts_with("Remove viewport height units"), "{error}");
+        }
+        for page in [
+            "<p>Never size a frame with 100vh.</p>",
+            "<style>.a{width:100vw;height:320px}.vh{color:red}</style>",
+            "<script>const vh = innerHeight; const svh2 = 1</script>",
+            "<div style='height:320px'>100vh in prose</div>",
+        ] {
+            assert!(viewport_units(page).is_ok(), "{page}");
+        }
     }
     #[test]
     fn screenshot_bytes_do_not_enter_event_logs() {
