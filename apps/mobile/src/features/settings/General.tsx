@@ -1,5 +1,6 @@
 // General: what a new thread starts with, and how agents behave on this computer.
 import { ASK_DEADLINE_DEFAULTS, askDeadlineOptions } from "../../../../../packages/kybern-client/src/requestCards";
+import { OLDER_AFTER_CHOICES, olderAfter } from "../../../../../packages/kybern-client/src/older";
 import { PROVIDER_DISPLAY_NAME, type Settings } from "../../state/protocol";
 import { useApp } from "../../state/runtime";
 import { saveSettings, useSettings } from "../../state/settings";
@@ -74,6 +75,20 @@ function GeneralBody() {
           onChange={(value) => set({ automatic_worktree_cleanup: value })}
         />
       </Section>
+      {/* A computer older than 0.25 has no Older group and leaves the setting out. */}
+      {settings.older_after !== undefined ? (
+        <Section title="Threads">
+          <ListRow
+            title="Move inactive threads to Older"
+            value={OLDER_AFTER_CHOICES.find((choice) => choice.value === olderAfter(settings))?.label}
+            valueMenu={OLDER_AFTER_CHOICES.map((choice) => ({
+              title: choice.label,
+              checked: choice.value === olderAfter(settings),
+              onPress: () => set({ older_after: choice.value }),
+            }))}
+          />
+        </Section>
+      ) : null}
       <Section
         title="Agents"
         footer="Adds a short guide to new agent sessions: how to show images, link notes and tasks, and reach other threads."
