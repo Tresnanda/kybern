@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { launchFixture } from '../requests/harness.ts'
 const out = process.env.KYBERN_VERIFY_OUTPUT ?? '/Users/mymac/projects/ade/previews/chatfix2/skill-pick'
 mkdirSync(out, { recursive: true })
-const until = async (check: () => Promise<boolean>, label: string) => { for (let i = 0; i < 100; i++) { try { if (await check()) return } catch {} await Bun.sleep(40) } throw Error(`Timed out: ${label}`) }
+const until = async (check: () => Promise<boolean>, label: string, tries = 100, orThrow = true) => { for (let i = 0; i < tries; i++) { try { if (await check()) return true } catch {} await Bun.sleep(40) } if (orThrow) throw Error(`Timed out: ${label}`); return false }
 const skills = [
   { query: 'better', label: 'interfaces:better-layout', row: 'Grouping, alignment' },
   { query: 'tresh', label: 'treshnanda-taste', row: 'Personal taste profile' },
@@ -17,7 +17,7 @@ const skills = [
 ]
 const befores = (process.env.SKILL_PICK_BEFORES ? JSON.parse(process.env.SKILL_PICK_BEFORES) : ['', 'hello ', '👋🏽 emoji 🎉 ']) as string[]
 const variants = (process.env.SKILL_PICK_VARIANTS ?? 'dark,light').split(',')
-let failures = 0, runs = 0
+let failures = 0, runs = 0, retried = 0
 for (const variant of variants) {
   const scratch = mkdtempSync(tmpdir() + '/gpuix-skill-pick-')
   let log = ''
@@ -38,7 +38,18 @@ for (const variant of variants) {
       await until(menu, `menu ${name}`)
       await until(async () => (await painted()).includes(skill.row), `row ${name}`)
       if (how === 'enter') await composer.press('enter')
-      else await app.getByTestId('completion-selected').click()
+      else {
+        await app.getByTestId('completion-selected').click()
+        // A click the slow Linux X11 runner lost (the menu stays up with its row selected; seen twice on main after #323, never
+        // reproduced on an idle machine or under CPU starvation): the pointer leaves, then clicks again. A second miss still fails.
+        if (!(await until(async () => !(await menu()), `menu closed ${name}`, 30, false))) {
+          retried++
+          console.log(`note ${name}: the first click did not pick; clicking again`)
+          await app.mouse.move({ x: 4, y: 4 })
+          await Bun.sleep(120)
+          await app.getByTestId('completion-selected').click()
+        }
+      }
       await until(async () => !(await menu()), `menu closed ${name}`)
       await Bun.sleep(120)
       await composer.press('Z')
@@ -62,5 +73,5 @@ for (const variant of variants) {
     await app.screenshot({ path: `${out}/picked-${variant}.png` })
   } catch (error) { failures++; await f.app.screenshot({ path: `${out}/failed-${variant}.png` }).catch(() => {}); console.log(String(error)); console.log(log.slice(-3000)) } finally { await f.close(); rmSync(scratch, { recursive: true, force: true }) }
 }
-console.log(`${runs - failures}/${runs} picks clean`)
+console.log(`${runs - failures}/${runs} picks clean${retried ? ` (${retried} needed a second click)` : ''}`)
 process.exit(failures ? 1 : 0)

@@ -26,9 +26,9 @@ export function pill(records: readonly HarnessUpdate[], dismissed: Dismissed, au
   const name = (kind: ProviderKind) => AGENT_NAMES[kind] ?? kind
   if (shown.length === 1) {
     const [record] = shown
-    // The sidebar is narrow: the name and version, which the logo and Update make a notice, always fit; the sentence is for VoiceOver.
-    const label = `${name(record.kind)} ${record.latest_version}`
-    return { count: 1, kind: record.kind, label, text: `${label} is out`, action: `Update ${name(record.kind)}` }
+    // The sidebar is narrow: the name beside its logo and Update is a notice that fits; the version is in the sentence for VoiceOver.
+    const label = name(record.kind)
+    return { count: 1, kind: record.kind, label, text: `${label} ${record.latest_version} is out`, action: `Update ${label}` }
   }
   // The logos say which harnesses; the count says how many. The sentence names every one.
   const kinds = shown.map((record) => record.kind)
