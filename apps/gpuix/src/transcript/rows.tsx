@@ -2,6 +2,7 @@ import { ProviderMark } from '../ui.tsx'
 import { getState, type StateThread } from '../state.ts'
 import { getNav } from '../nav/store.ts'
 import { PanelPresence, PanelEnter } from '../requests/Panel.tsx'
+import { HarnessMarks } from '../subagents/HarnessMarks.tsx'
 import { LaunchMember, PinRow } from '../subagents/Launch.tsx'
 import { AgentItemCard } from '../coordinator/AgentItem.tsx'
 import { SentToRow } from './Messages.tsx'
@@ -741,7 +742,9 @@ const LaunchGroupRow = memo(function LaunchGroupRow({ kind, blocks, ctx }: { kin
           const state = launchState(thread, call)
           phase = state.phase === 'working' || state.phase === 'waiting' ? 'working' : state.phase === 'failed' ? 'failed' : state.phase === 'stopped' ? 'stopped' : 'done'
         }
-        return { key: block.id, title, phase, threadId: thread?.id, block, thread, task }
+        // The harness a delegation runs on, resolved as its member row does: the child thread, else the call's result, else its input.
+        const harness = thread?.provider.kind ?? (call ? parseDelegateResult(call.output)?.provider ?? parseDelegateInput(call.call.input).provider : null)
+        return { key: block.id, title, phase, threadId: thread?.id, block, thread, task, harness }
       }),
     [blocks, ctx, kind],
   )
@@ -757,7 +760,7 @@ const LaunchGroupRow = memo(function LaunchGroupRow({ kind, blocks, ctx }: { kin
       <div testId={`launch-group-${blocks[0]!.id}`} onClick={() => { if (!expanded) markTreeOpen(); setChosen(!expanded) }} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 10, paddingTop: 6, paddingBottom: 6, paddingRight: 6, cursor: 'pointer' }}>
         {expanded && <TreeLines shape={LAUNCH_STEM} />}
         <div style={{ display: 'flex', width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: t.buttonSecondary, flexShrink: 0 }}>
-          {kind === 'subagents' && members[0]?.thread ? <ProviderMark kind={members[0].thread.provider.kind} size={13} /> : <Icon source={T.robot} size={13} color={muted(t)} />}
+          {kind === 'subagents' && members[0]?.thread ? <ProviderMark kind={members[0].thread.provider.kind} size={13} /> : kind === 'delegations' ? <HarnessMarks kinds={members.map((m) => m.harness)} /> : <Icon source={T.robot} size={13} color={muted(t)} />}
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}>
           <Label color={fg(t, 0.88)} lineHeight={20} style={{ hover: { color: t.text } }}>
