@@ -24,7 +24,6 @@ import { usePaneAccess } from '../state.ts'
 import { openTabFromPane } from '../tabs/open.ts'
 import { MachineBadge } from '../sidebar/MachineBadge.tsx'
 import { glyphOfMachine, machineHub } from '../machines/index.ts'
-const providers: readonly string[] = ['claude-code', 'codex', 'cursor', 'opencode', 'pi', 'omp']
 export function LaunchMember({ block, thread, task, delegated = false, grouped = false }: { block: Block; thread?: Thread & { machineId?: string }; task?: RuntimeTask; delegated?: boolean; grouped?: boolean }) {
   const t = useTheme(), catalog = useNav(s => s.providers)
   const call = block.kind === 'tool' ? block : null
@@ -32,7 +31,8 @@ export function LaunchMember({ block, thread, task, delegated = false, grouped =
   const result = call && delegated ? parseDelegateResult(call.output) : null
   const id = thread?.id ?? result?.threadId
   const rawProvider = thread?.provider.kind ?? result?.provider ?? input?.provider
-  const provider = providers.includes(rawProvider ?? '') ? rawProvider as ProviderKind : 'claude-code'
+  // The child's own harness (any kind, Antigravity and Grok Build included); not known yet draws the generic mark, never Claude's.
+  const provider = (rawProvider ?? '') as ProviderKind
   const title = thread?.title || task?.title || (call ? delegated ? delegateTitle(call.call.input, result) : toolLine(call.call, call.complete).detail : '') || 'Subagent'
   const known = thread?.subagent ? { phase: subagentThreadPhase(thread), word: subagentPhaseWord(thread) } : result?.status && !thread ? delegationState(result.status) : launchState(thread, { complete: call?.complete ?? true, isError: call?.isError ?? task?.status === 'failed' })
   // A delegated agent waiting on a request says so, a question as "Needs input" (the sidebar's words), even before its thread loads.
