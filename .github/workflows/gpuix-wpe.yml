@@ -13,11 +13,13 @@
 # bundled never rebuilds WebKit.
 #
 # desktop.yml (release and dry runs) and gpuix-platforms.yml call this
-# workflow. A tag can restore caches saved by main but never another tag's, and
-# GitHub deletes a cache nobody has restored for seven days: the push trigger
-# saves the entry on main whenever the inputs change, and the weekly run keeps
-# it alive. GitHub also evicts the least recently used caches once the
-# repository's pass 10 GB, which a Cargo.lock change can do on its own, so a
+# workflow. desktop.yml passes `optional`: the release's Linux bundle is a beta,
+# so this job failing must not fail the release (RELEASING.md). A tag can
+# restore caches saved by main but never another tag's, and GitHub deletes a
+# cache nobody has restored for seven days: the push trigger saves the entry
+# on main whenever the inputs change, and the weekly run keeps it alive.
+# GitHub also evicts the least recently used caches once the repository's pass
+# 10 GB, which a Cargo.lock change can do on its own, so a
 # miss then tries the WPE build store on the maintainer's server (native/wpe/
 # store.sh; the WPE_STORE_* secrets, passed by the callers with `secrets:
 # inherit`). A cold build is added to the store. Only a run without the
@@ -27,6 +29,12 @@ name: GPUIX WPE WebKit
 
 on:
   workflow_call:
+    inputs:
+      optional:
+        description: Let this job fail without failing the calling workflow (desktop.yml's Linux beta)
+        required: false
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths:
@@ -44,6 +52,8 @@ jobs:
     name: WPE WebKit (ubuntu-22.04)
     runs-on: ubuntu-22.04
     timeout-minutes: 300
+    # Only a workflow_call sets inputs; the push, schedule and dispatch warmers keep failing loudly.
+    continue-on-error: ${{ inputs.optional == true }}
     env:
       WPE_STORE_HOST: ${{ secrets.WPE_STORE_HOST }}
       WPE_STORE_SSH_KEY: ${{ secrets.WPE_STORE_SSH_KEY }}
@@ -82,9 +92,7 @@ jobs:
       # bundle-wpe.sh copies libraries and their copyright files from these packages, so a hit needs them too.
       - name: Install the build dependencies
         run: |
-          deps=$(apps/gpuix/native/wpe/build-wpe.sh deps)
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends $deps
+          scripts/ci-apt-install.sh $(apps/gpuix/native/wpe/build-wpe.sh deps)
       - name: Build WPE WebKit
         if: steps.have.outputs.build == 'true'
         env:

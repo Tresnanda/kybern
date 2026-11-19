@@ -17,6 +17,13 @@
 # from an existing release), and nothing is published; the assets stay
 # workflow artifacts.
 #
+# Only the macOS bundles and the manifest can fail this workflow. The Linux
+# and Windows bundles and the WPE build behind Linux are betas with
+# `continue-on-error`: release.yml's `host` publishes only when this whole
+# workflow succeeds, and a beta failure must cost the release just its
+# latest.json entry (RELEASING.md), as on 2026-11-19, when an Ubuntu mirror
+# outage failed the WPE job and held v0.25.0 back.
+#
 # Secrets: TAURI_SIGNING_PRIVATE_KEY (required, the minisign updater key; the
 # name dates from the retired Tauri app, and the Tauri CLI in apps/gpuix still
 # does the signing) and TAURI_SIGNING_PRIVATE_KEY_PASSWORD (empty when the key
@@ -80,9 +87,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install musl tools
         if: contains(matrix.target, 'musl')
-        run: |
-          sudo apt-get update
-          sudo apt-get install musl-tools
+        run: scripts/ci-apt-install.sh musl-tools
       - name: Install dist
         if: runner.os != 'Windows'
         run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh | sh
@@ -234,8 +239,12 @@ jobs:
   gpuix-wpe:
     # The private WPE WebKit the Linux GPUIX packages carry for the embedded web
     # view (WP10), from main's cache or built cold (about 92 minutes, alongside
-    # `binaries`); see gpuix-wpe.yml.
+    # `binaries`); see gpuix-wpe.yml. Only `gpuix-linux` needs it, so it is a
+    # beta too: `optional` gives its job `continue-on-error` (a job that calls a
+    # workflow cannot set that itself).
     uses: ./.github/workflows/gpuix-wpe.yml
+    with:
+      optional: true
     secrets: inherit
 
   gpuix-linux:
@@ -243,13 +252,14 @@ jobs:
     # a .deb and an .rpm (scripts/bundle-gpuix-linux.sh). It builds on
     # ubuntu-22.04 for an older glibc floor and packages the static musl daemon
     # and CLI, with the embedded web view (`gpuix-wpe` and the companion; required). Like
-    # `gpuix-windows`, it is a job of its own so that its failure can never skip
-    # the manifest job: the release then simply has no `linux-x86_64-gpuix`
-    # entry (scripts/updater-manifest.mjs skips a missing AppImage). It runs
-    # whatever `gpuix-wpe` did, so a failed WPE build fails this job instead
-    # of skipping it.
+    # `gpuix-windows`, it is a job of its own with `continue-on-error`, so its
+    # failure neither skips the manifest job nor fails the workflow: the release
+    # then simply has no `linux-x86_64-gpuix` entry (scripts/updater-manifest.mjs
+    # skips a missing AppImage). It runs whatever `gpuix-wpe` did, so a failed
+    # WPE build fails this job instead of skipping it.
     needs: [binaries, gpuix-wpe]
     if: ${{ !cancelled() && (needs.binaries.result == 'success' || needs.binaries.result == 'skipped') }}
+    continue-on-error: true
     name: bundle (gpuix x86_64-unknown-linux-gnu)
     runs-on: ubuntu-22.04
     timeout-minutes: 120
@@ -335,7 +345,7 @@ jobs:
           RUNTIME_URL: https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
           RUNTIME_SHA256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
         run: |
-          sudo apt-get install -y --no-install-recommends dpkg-dev rpm desktop-file-utils
+          scripts/ci-apt-install.sh dpkg-dev rpm desktop-file-utils
           tools="$RUNNER_TEMP/appimage"
           mkdir -p "$tools"
           curl -fsSL --retry 3 -o "$tools/appimagetool" "$APPIMAGETOOL_URL"
@@ -369,14 +379,15 @@ jobs:
   gpuix-windows:
     # Kybern GPUIX for Windows x64 (beta): a per-user NSIS installer
     # (scripts/bundle-gpuix-windows.sh), built natively on windows-2022. It is a
-    # job of its own, not a leg of `gpuix`, so that its failure can never skip the
-    # manifest job: `manifest` needs `gpuix` to succeed and accepts this job
-    # succeeding or failing. When it fails the release simply has no
-    # `windows-x86_64-gpuix` entry, which the updater and scripts/updater-manifest.mjs
-    # treat as "not published yet". Drop the beta handling in `manifest` once this
-    # job has shipped cleanly.
+    # job of its own, not a leg of `gpuix`, with `continue-on-error`, so that its
+    # failure neither skips the manifest job nor fails the workflow: `manifest`
+    # needs `gpuix` to succeed and takes this job however it ended. When it fails
+    # the release simply has no `windows-x86_64-gpuix` entry, which the updater
+    # and scripts/updater-manifest.mjs treat as "not published yet". Drop the
+    # beta handling once this job has shipped cleanly.
     needs: binaries
     if: ${{ !cancelled() && (needs.binaries.result == 'success' || needs.binaries.result == 'skipped') }}
+    continue-on-error: true
     name: bundle (gpuix x86_64-pc-windows-msvc)
     runs-on: windows-2022
     timeout-minutes: 120
@@ -494,11 +505,13 @@ jobs:
   manifest:
     name: updater manifest
     needs: [gpuix, gpuix-linux, gpuix-windows]
-    # Publish only when the macOS GPUIX bundles succeeded. The Linux and Windows builds are betas: success adds the
-    # `linux-x86_64-gpuix` / `windows-x86_64-gpuix` entry, failure leaves it out
-    # (updater-manifest.mjs skips a missing asset). A skipped or cancelled beta
-    # job is not a failure, so it does not publish.
-    if: ${{ !cancelled() && needs.gpuix.result == 'success' && (needs.gpuix-linux.result == 'success' || needs.gpuix-linux.result == 'failure') && (needs.gpuix-windows.result == 'success' || needs.gpuix-windows.result == 'failure') }}
+    # Publish only when the macOS GPUIX bundles succeeded. The Linux and Windows
+    # builds are betas, taken however they ended: success adds the
+    # `linux-x86_64-gpuix` / `windows-x86_64-gpuix` entry, anything else leaves
+    # it out (updater-manifest.mjs skips a missing asset). Neither this job nor
+    # `gpuix` has `continue-on-error`: a failed Mac bundle or manifest fails the
+    # workflow, and `host` publishes nothing.
+    if: ${{ !cancelled() && needs.gpuix.result == 'success' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

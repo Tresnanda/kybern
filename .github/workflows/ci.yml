@@ -91,10 +91,9 @@ jobs:
       - name: Linux credential-store dependencies
         if: runner.os == 'Linux'
         # Usually under a minute; a stalled mirror once held this step for 18 minutes.
-        timeout-minutes: 6
-        run: |
-          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
-          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y libdbus-1-dev
+        # The script caps each attempt and falls back to archive.ubuntu.com once.
+        timeout-minutes: 15
+        run: scripts/ci-apt-install.sh libdbus-1-dev
       - name: clippy
         run: >
           cargo clippy --workspace --all-targets
@@ -140,10 +139,9 @@ jobs:
       - name: Linux credential-store dependencies
         if: runner.os == 'Linux'
         # Usually under a minute; a stalled mirror once held this step for 18 minutes.
-        timeout-minutes: 6
-        run: |
-          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
-          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y libdbus-1-dev
+        # The script caps each attempt and falls back to archive.ubuntu.com once.
+        timeout-minutes: 15
+        run: scripts/ci-apt-install.sh libdbus-1-dev
       - name: build tests
         run: cargo nextest run --workspace --profile ci --no-run
       - name: test
@@ -219,7 +217,7 @@ jobs:
         run: pnpm typecheck
       # Since 0.11 the stock Linux binding links xkbcommon-x11; some unit tests load it.
       - name: native binding libraries
-        run: sudo apt-get install -y --no-install-recommends libxkbcommon-x11-0
+        run: scripts/ci-apt-install.sh libxkbcommon-x11-0
       - name: test
         working-directory: apps/gpuix
         run: bun test

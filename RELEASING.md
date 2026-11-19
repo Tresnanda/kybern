@@ -6,7 +6,7 @@ that release builds restore. Publishing is a separate action.
 
 | Release unit | Version and delivery |
 | --- | --- |
-| Daemon, CLI, and desktop | Share the Rust workspace version, which GPUIX's packaging reads. `scripts/release.sh X.Y.Z` updates it and pushes `vX.Y.Z`. The release workflow builds `kybernd` and `kybern` once per target; the desktop bundles, which include the daemon and CLI, reuse those binaries, and the whole GitHub Release is published at once. The `gpuix` job of `desktop.yml` builds Kybern GPUIX (`apps/gpuix`) for Apple Silicon and Intel Macs from the same dist binaries and attaches `kybern-gpuix_<version>_<aarch64|x86_64>.app.tar.gz` plus their signatures; `latest.json` carries them as `darwin-aarch64-gpuix` and `darwin-x86_64-gpuix`. The separate `gpuix-windows` job (beta) builds the Windows x64 installer `kybern-gpuix_<version>_x64-setup.exe` (`scripts/bundle-gpuix-windows.sh`) and its signature, published as `windows-x86_64-gpuix`; the manifest job runs whether that job succeeds or fails, so a Windows failure only leaves that entry out. The separate `gpuix-linux` job (beta) builds the Linux x86_64 packages on `ubuntu-22.04` from dist's static musl binaries: `kybern-gpuix_<version>_x86_64.AppImage` (signed; `latest.json` key `linux-x86_64-gpuix`), `.deb` and `.rpm`; like Windows, a Linux failure only leaves that entry out. |
+| Daemon, CLI, and desktop | Share the Rust workspace version, which GPUIX's packaging reads. `scripts/release.sh X.Y.Z` updates it and pushes `vX.Y.Z`. The release workflow builds `kybernd` and `kybern` once per target; the desktop bundles, which include the daemon and CLI, reuse those binaries, and the whole GitHub Release is published at once. The `gpuix` job of `desktop.yml` builds Kybern GPUIX (`apps/gpuix`) for Apple Silicon and Intel Macs from the same dist binaries and attaches `kybern-gpuix_<version>_<aarch64|x86_64>.app.tar.gz` plus their signatures; `latest.json` carries them as `darwin-aarch64-gpuix` and `darwin-x86_64-gpuix`. The separate `gpuix-windows` job (beta) builds the Windows x64 installer `kybern-gpuix_<version>_x64-setup.exe` (`scripts/bundle-gpuix-windows.sh`) and its signature, published as `windows-x86_64-gpuix`; a Windows failure only leaves that entry out (see "Beta bundles" below). The separate `gpuix-linux` job (beta) builds the Linux x86_64 packages on `ubuntu-22.04` from dist's static musl binaries: `kybern-gpuix_<version>_x86_64.AppImage` (signed; `latest.json` key `linux-x86_64-gpuix`), `.deb` and `.rpm`; like Windows, a Linux failure only leaves that entry out. |
 | Android and iOS mobile app | Use `expo.version` in `apps/mobile/app.json`, independent of the desktop release number. EAS builds use the selected commit and profile. Android `versionCode` and iOS `buildNumber` identify individual binaries; EAS manages these remotely. Preview and production builds increment them automatically. |
 | Wire protocol | `PROTOCOL_VERSION` is a compatibility contract, not an app release number. Bump it for breaking wire changes and update both clients and the daemon together. Additive features may still require a newer daemon even when the protocol number is unchanged. |
 
@@ -75,7 +75,8 @@ failed once and passed on nextest's retry is quarantined (AGENTS.md, "Tests and
 checks"): its job succeeds, so it does not block a release, and its `flaky`
 issue tracks the fix. A test that fails both attempts still blocks. Publication
 also requires both macOS GPUIX bundles to succeed (the Linux and Windows
-bundles are betas whose failure only leaves their `latest.json` entry out). Only the publishing `host` job
+bundles are betas whose failure only leaves their `latest.json` entry out; see
+"Beta bundles" below). Only the publishing `host` job
 waits for that gate; the daemon archives and desktop bundles build while CI
 finishes. Renaming or adding a job in `ci.yml` means updating `requiredJobs`
 and its test in the same change.
@@ -93,13 +94,37 @@ checks; `main` runs are never cancelled. The `CI` job is red if any
 job failed and green when the skipped ones were not needed, so it is the one
 check a branch protection rule has to require.
 
+### Beta bundles
+
+dist's generated `host` job publishes only when `custom-desktop`, the whole
+`desktop.yml` run, succeeded. Inside it, only the dist archives, the Keychain
+helper check, both macOS bundles and the `manifest` job can fail that run.
+`gpuix-linux` and `gpuix-windows` carry job-level `continue-on-error`, and the
+WPE WebKit build behind Linux gets it through `gpuix-wpe.yml`'s `optional`
+input. A failed beta shows red in the run, but the workflow still succeeds.
+`manifest` needs only the macOS bundles; it writes `latest.json` from whatever
+bundles exist, so that platform's entry is missing until the next release.
+The same failure in a dry run (`workflow_dispatch`) leaves the run green, so
+read the job list. `scripts/check-release-ci.test.mjs` keeps this wiring.
+Before 0.25.1, a failed beta failed the whole run: an Ubuntu mirror outage
+in v0.25.0's WPE job held back the release until a third attempt.
+
+Every `apt-get` in CI and the release goes through `scripts/ci-apt-install.sh`.
+It retries with short timeouts and caps each attempt. If the runner's Azure
+mirror does not answer, it switches the sources to `archive.ubuntu.com` and
+`security.ubuntu.com` and tries once more. apt's own `mirror+file:` fallback
+kept dialling the dead mirror in that outage.
+
 Release builds restore caches that `main` saved and never save their own (a
 cache saved under a tag cannot be restored by the next tag, and the repository's
 cache storage is limited): `dist-cache.yml` builds the dist archives on a
 `main` push that changes their dependencies, `gpuix-addon.yml` builds the
 patched GPUIX native addon (both also run weekly, because GitHub deletes a
-cache after seven days without use). `gpuix-wpe.yml` also preserves its
-input-triggered and weekly warmer. Affected Rust and GPUIX checks on `main`
+cache after seven days without use). `gpuix-wpe.yml` keeps its
+cache warm the same way: on main pushes that change its inputs, and weekly.
+Its build-dependency install runs on a cache hit too, because `bundle-wpe.sh`
+copies libraries from those packages; a release that installs them is not
+building WebKit cold. Only "Build WPE WebKit" running means a cold build. Affected Rust and GPUIX checks on `main`
 continue saving their Rust and pnpm caches; PR runs only restore them.
 
 `latest.json` (and a dev release's `latest-dev.json`) lists only the `-gpuix` keys (`darwin-aarch64-gpuix`,

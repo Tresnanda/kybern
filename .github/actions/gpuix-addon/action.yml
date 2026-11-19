@@ -68,8 +68,7 @@ runs:
       if: runner.os == 'Linux'
       shell: bash
       run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends \
+        scripts/ci-apt-install.sh \
           gcc g++ clang pkg-config libfontconfig-dev libfreetype-dev libwayland-dev \
           libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev libssl-dev libzstd-dev libvulkan1
     - id: key-linux
