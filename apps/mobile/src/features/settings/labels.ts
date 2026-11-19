@@ -104,8 +104,22 @@ export const shortAddress = (url: string) =>
 
 type Limit = NonNullable<ProviderUsage["limits"]>[number];
 
-/** Each vendor's own words for a limit window ("Current session", "This week"). */
+/**
+ * Each vendor's own words for a limit window ("Current session", "This week"),
+ * after the models it covers when the agent names them: Antigravity's
+ * "Claude and GPT models · 5-hour".
+ */
 export function limitLabel(limit: Limit, provider?: ProviderKind): string {
+  const name = limit.name?.trim() ?? "";
+  const cut = name.lastIndexOf(" · ");
+  const family = cut > 0 ? name.slice(0, cut).trim() : "";
+  const window = windowLabel(limit, provider);
+  // Any other window shows its whole name already.
+  const known = limit.window_minutes === 300 || limit.window_minutes === 10080;
+  return family && known ? `${family} · ${window}` : window;
+}
+
+function windowLabel(limit: Limit, provider?: ProviderKind): string {
   const claude = provider === "claude-code";
   if (limit.window_minutes === 300) return claude ? "Current session" : "5-hour";
   if (limit.window_minutes === 10080) return claude ? "This week" : "Weekly";

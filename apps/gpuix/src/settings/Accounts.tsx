@@ -3,7 +3,7 @@
 // sign-in) comes first; named accounts follow in creation order.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ACCOUNT_COLORS, ACCOUNT_COLOR_LABELS, isAccountColor, isCliInstance, isNameValid, withoutSignIn } from '../shared/lib/accounts.ts'
-import { bindingLimit, limitLabel, PROVIDER_NAMES } from '../shared/lib/providerUsage.ts'
+import { bindingLimit, limitFamily, PROVIDER_NAMES, windowLabel } from '../shared/lib/providerUsage.ts'
 import type { AccountSummary, ProviderKind, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
 import { goPage } from '../nav/history.ts'
@@ -213,8 +213,9 @@ function UsageCell({ account }: { account: AccountSummary }) {
   const binding = entry ? bindingLimit(entry.limits, Date.now()) : null
   if (!binding) return null
   const left = Math.max(0, Math.min(100, Math.round(100 - binding.used)))
-  const window = limitLabel(binding.limit).toLowerCase()
-  return <Tip label={`${left}% of the ${window} limit left · Open usage`} side="top" size={64}>
+  const window = windowLabel(binding.limit).toLowerCase()
+  const family = limitFamily(binding.limit)
+  return <Tip label={`${left}% of the ${window} limit left${family ? ` for ${family}` : ''} · Open usage`} side="top" size={64}>
     <Button testId={`account-usage-${kind}-${instance}`} variant="ghost" size="sm" label={`${left}% left`} onClick={() => { setUsageAnchor(kind, instance); goPage('usage') }}>
       <AccountUsageRing left={left} />
       <Label color={t.textSecondary} size={12} lineHeight={16} weight={500}>{`${left}%`}</Label>

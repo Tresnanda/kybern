@@ -261,6 +261,7 @@ function UsagePopover({
           const used = limitUsed(limit, now)
           const name = limitLabel(limit, kind)
           const pace = limitPace(limit, now)
+          const reset = resetIn(limit.resets_at, now)
           return (
             <div key={`${limit.name}-${index}`} testId="composer-status-limit" data-tone={limitTone(used)} style={{ display: 'flex', flexDirection: 'column', marginTop: index === 0 ? 0 : 16 }}>
               <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', justifyContent: 'space-between', columnGap: 12, rowGap: 4, marginBottom: 8, minWidth: 0 }}>
@@ -268,10 +269,11 @@ function UsagePopover({
                 <Label color={muted} size={UI} lineHeight={UI * 1.5} weight={500}>{limitLeftLabel(limit, now)}</Label>
               </div>
               {used !== null && <LimitMeter left={100 - used} pace={pace} label={`${name} left`} />}
-              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginTop: used === null ? 0 : 8 }}>
-                <Label color={muted} size={SM} lineHeight={SM * 1.5} truncate>{resetIn(limit.resets_at ?? null, now)}</Label>
+              {/* No reset time, no line: `pace` needs one too. */}
+              {reset !== null && <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginTop: used === null ? 0 : 8 }}>
+                <Label color={muted} size={SM} lineHeight={SM * 1.5} truncate>{reset}</Label>
                 {pace && <Label color={pace.short ? t.warning : muted} size={SM} lineHeight={SM * 1.5} style={{ flexShrink: 0 }}>{pace.label}</Label>}
-              </div>
+              </div>}
             </div>
           )
         }) : <Caption color={muted}>Account limits haven’t been reported yet.</Caption>}
