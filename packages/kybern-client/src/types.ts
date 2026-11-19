@@ -5456,3 +5456,19 @@ export interface PeerSpaceLogoParams { hash: string }
 export interface PeerSpaceLogoResult { data: string }
 
 export interface NetworkListSnapshot { machine_id: string; fetched_at: string; stale: boolean; projects: Project[]; threads: Thread[]; }
+
+/** `data.hook_no_verdict` of a Claude Code `provider_notice` (level `warning`): a PreToolUse hook gave no verdict on call `tool_use_id`, so it did not check
+ * it. Claude Code's own fields, plus (from Kybern 0.25.1, additive) the hook's `hook_name`, `command` and Claude Code's own `error` text when the hook's
+ * failure was seen. `plugin_id` is `name@marketplace` for a plugin's hook; a hook in settings.json has none. `hookWarnings.ts` words it. */
+export interface HookNoVerdictData {
+  hook_no_verdict: {
+    hook_event: string
+    tool_use_id: string
+    timed_out: boolean
+    plugin_id?: string
+    plugin_root?: string
+    hook_name?: string
+    command?: string
+    error?: string
+  }
+}

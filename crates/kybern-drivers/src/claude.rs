@@ -33,6 +33,10 @@ use crate::{
 
 const MIN_VERSION: (u64, u64, u64) = (2, 1, 0);
 
+/// The first release that gets `--include-hook-events`. The flag is older, but 2.1.286 is the
+/// oldest release this driver has been run against with hook modules, so older ones keep their launch.
+const HOOK_EVENTS_MIN_VERSION: (u64, u64, u64) = (2, 1, 286);
+
 /// Claude Code labels its API requests with this variable. Headless runs default to `sdk-cli` (or
 /// inherit `sdk-*` from a parent Claude process), and measurements in anthropics/claude-code#97074
 /// show those labels drawing the 5-hour window about 1.8× faster per token than any other label.
@@ -286,6 +290,10 @@ impl AgentDriver for ClaudeDriver {
         }
         if let Some(plugin) = self.tool_loading_plugin(&bin, &config.env).await {
             cmd.arg("--plugin-dir").arg(plugin);
+        }
+        // The reason a hook gave no answer rides in its `hook_response` frame, which is sent only on request.
+        if self.cli_version(&bin).await.is_some_and(|version| at_least(&version, HOOK_EVENTS_MIN_VERSION)) {
+            cmd.arg("--include-hook-events");
         }
         cmd.env_remove("NODE_OPTIONS");
         // stream-json makes Claude Code an `sdk-cli` session, where the
@@ -935,6 +943,9 @@ struct TurnState {
     /// 2.1.290 omits it from `task_started`, so the role is recovered from the launching
     /// call's input by tool call id.
     agent_roles: VecDeque<(String, String)>,
+    /// PreToolUse hooks that failed without refusing a call, oldest first, until the
+    /// `hook_no_verdict` warning that stands for each of them arrives.
+    hook_failures: VecDeque<HookFailure>,
     last_total_cost: f64,
     last_bound: Option<(String, Option<String>)>,
     /// uuid of the most recent assistant frame this turn (the rewind anchor).
@@ -950,6 +961,74 @@ struct TurnState {
 
 /// Launch calls remembered for their role; older ones are forgotten first.
 const MAX_AGENT_ROLES: usize = 256;
+
+/// Hook failures kept for their warning; the oldest is forgotten first.
+const MAX_HOOK_FAILURES: usize = 32;
+
+/// Longest hook error text carried in a notice, in characters.
+const HOOK_TEXT_CHARS: usize = 2000;
+
+/// A hook that ran and failed without refusing the call: what Claude Code's `hook_response`
+/// frame says, which its later `hook_no_verdict` warning leaves out (the warning names no hook).
+#[derive(Debug, Clone, PartialEq)]
+struct HookFailure {
+    hook_name: String,
+    /// The hook's command, when Claude Code's own error text names it.
+    command: Option<String>,
+    /// Claude Code's own error text.
+    error: String,
+}
+
+fn bounded(text: &str, chars: usize) -> String {
+    let text = text.trim();
+    match text.char_indices().nth(chars) {
+        Some((end, _)) => format!("{}…", &text[..end]),
+        None => text.to_string(),
+    }
+}
+
+/// The failure a `hook_response` frame reports, only for a PreToolUse hook that did not refuse
+/// the call (exit code 2 refuses it, so no warning follows).
+fn hook_failure(frame: &Value) -> Option<HookFailure> {
+    if frame.get("hook_event").and_then(Value::as_str) != Some("PreToolUse")
+        || frame.get("outcome").and_then(Value::as_str) == Some("success")
+    {
+        return None;
+    }
+    if frame.get("exit_code").and_then(Value::as_i64) == Some(2) {
+        return None;
+    }
+    let text = |key: &str| frame.get(key).and_then(Value::as_str).map(str::trim).filter(|text| !text.is_empty());
+    let error = text("stderr").or_else(|| text("output")).map(|text| bounded(text, HOOK_TEXT_CHARS)).unwrap_or_default();
+    // Claude Code ends "Failed to run: …" with the hook's command on its own line of text.
+    let command = error
+        .rfind("Command: ")
+        .map(|at| error[at + "Command: ".len()..].trim())
+        .filter(|command| !command.is_empty() && !command.contains('\n'))
+        .map(|command| bounded(command, 500));
+    Some(HookFailure { hook_name: frame.get("hook_name").and_then(Value::as_str).unwrap_or("PreToolUse").to_string(), command, error })
+}
+
+/// The notice for Claude Code's `hook_no_verdict` warning: its own words, and in `data` what it
+/// says about the call plus, when the hook's failure was seen, the hook's name, command and error.
+/// Clients draw the hooks of one call as one row from `data.hook_no_verdict`.
+fn hook_no_verdict_notice(frame: &Value, failure: Option<HookFailure>) -> Option<(String, Value)> {
+    if frame.get("tag").and_then(Value::as_str) != Some("hook_no_verdict") {
+        return None;
+    }
+    let mut warning = frame.get("hook_no_verdict").and_then(Value::as_object).cloned().unwrap_or_default();
+    if let Some(failure) = failure {
+        warning.insert("hook_name".into(), json!(failure.hook_name));
+        if let Some(command) = failure.command {
+            warning.insert("command".into(), json!(command));
+        }
+        if !failure.error.is_empty() {
+            warning.insert("error".into(), json!(failure.error));
+        }
+    }
+    let text = frame.get("content").and_then(Value::as_str).unwrap_or("A hook gave no usable answer, so it didn't check this action.");
+    Some((text.to_string(), json!({ "hook_no_verdict": warning })))
+}
 
 impl TurnState {
     /// A root API request: the first sighting of a message id dates it.
@@ -1513,6 +1592,22 @@ impl ClaudeSession {
                     data: None,
                 })
                 .await;
+            }
+            "hook_response" => {
+                if let Some(failure) = hook_failure(v) {
+                    let mut st = self.state.lock().await;
+                    if st.hook_failures.len() >= MAX_HOOK_FAILURES {
+                        st.hook_failures.pop_front();
+                    }
+                    st.hook_failures.push_back(failure);
+                }
+            }
+            "informational" if v.get("tag").and_then(Value::as_str) == Some("hook_no_verdict") => {
+                // Each warning stands for one hook, in the order the hooks failed.
+                let failure = self.state.lock().await.hook_failures.pop_front();
+                if let Some((text, data)) = hook_no_verdict_notice(v, failure) {
+                    self.emit(DriverEvent::Notice { level: NoticeLevel::Warning, text, data: Some(data) }).await;
+                }
             }
             "informational" => {
                 let level = match v.get("level").and_then(|s| s.as_str()) {
@@ -2411,6 +2506,77 @@ mod tests {
         child.kill().await;
     }
 
+    /// Frames recorded from Claude Code 2.1.327 (`--include-hook-events`) for two settings.json
+    /// hooks that use `${CLAUDE_PLUGIN_ROOT}`: each hook's failure, then one `hook_no_verdict`
+    /// warning per hook. The warning names no hook, so each takes the next failure in order.
+    #[tokio::test]
+    async fn hook_warnings_carry_the_error_and_command_of_the_hook_that_failed() {
+        use super::*;
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
+        let (events, mut rx) = mpsc::channel(64);
+        let session = Arc::new(ClaudeSession {
+            child: child.clone(),
+            events,
+            pending_control: Mutex::new(HashMap::new()),
+            pending_permissions: Mutex::new(HashMap::new()),
+            state: Mutex::new(TurnState::default()),
+            child_inbox: Mutex::new(ChildInbox::default()),
+            session_id: Mutex::new("test".into()),
+            catalog: None,
+            decline_resume_prompt: false,
+            _native_mcp_config: None,
+        });
+        for line in include_str!("../tests/fixtures/claude-hook-no-verdict.ndjson").lines() {
+            session.handle_frame(serde_json::from_str(line).unwrap()).await;
+        }
+        let mut notices = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let DriverEvent::Notice { level, text, data } = event {
+                notices.push((level, text, data.expect("the warning carries data")));
+            }
+        }
+        assert_eq!(notices.len(), 2, "one notice per warning, none for the hook frames");
+        for (n, command) in ["${CLAUDE_PLUGIN_ROOT}/hooks/check.sh", "${CLAUDE_PLUGIN_ROOT}/hooks/other.sh"].into_iter().enumerate() {
+            let (level, text, data) = &notices[n];
+            assert_eq!(*level, NoticeLevel::Warning);
+            assert_eq!(text, "A hook gave no usable answer, so it didn't check this action.");
+            let warning = &data["hook_no_verdict"];
+            assert_eq!(warning["tool_use_id"], "toolu_01KNtXG35UqgUt422G7qkcP2");
+            assert_eq!(warning["timed_out"], false);
+            assert_eq!(warning["hook_event"], "PreToolUse");
+            assert_eq!(warning["hook_name"], "PreToolUse:Bash");
+            assert_eq!(warning["command"], command);
+            assert!(warning["error"].as_str().unwrap().starts_with("Failed to run: Hook command references ${CLAUDE_PLUGIN_ROOT}"));
+            assert!(warning.get("plugin_id").is_none());
+        }
+        child.kill().await;
+    }
+
+    /// A refusing hook (exit code 2) and a successful one are not the cause of a later warning, and a
+    /// warning with no failure on record still reaches the transcript with what Claude Code said.
+    #[test]
+    fn only_a_hook_that_failed_without_refusing_the_call_is_kept_for_its_warning() {
+        use super::*;
+        let frame = |event: &str, outcome: &str, code: i64| {
+            json!({"type":"system","subtype":"hook_response","hook_name":"PreToolUse:Bash","hook_event":event,
+                   "output":"boom","stdout":"","stderr":"boom","exit_code":code,"outcome":outcome})
+        };
+        assert!(hook_failure(&frame("PreToolUse", "error", 1)).is_some());
+        assert!(hook_failure(&frame("PreToolUse", "error", 2)).is_none(), "exit 2 refuses the call, so no warning follows");
+        assert!(hook_failure(&frame("PreToolUse", "success", 0)).is_none());
+        assert!(hook_failure(&frame("SessionStart", "error", 1)).is_none());
+
+        let warning = json!({"type":"system","subtype":"informational","level":"warning","tag":"hook_no_verdict",
+            "content":"A hook of the \"acme\" plugin didn't answer in time, so it didn't check this action.",
+            "hook_no_verdict":{"hook_event":"PreToolUse","tool_use_id":"t1","timed_out":true,"plugin_id":"acme@market","plugin_root":"/p"}});
+        let (text, data) = hook_no_verdict_notice(&warning, None).unwrap();
+        assert!(text.contains("didn't answer in time"));
+        assert_eq!(data["hook_no_verdict"]["plugin_id"], "acme@market");
+        assert!(data["hook_no_verdict"].get("error").is_none());
+        let other = json!({"type":"system","subtype":"informational","level":"warning","content":"x"});
+        assert!(hook_no_verdict_notice(&other, None).is_none(), "an ordinary warning stays an ordinary notice");
+    }
+
     /// Frames recorded from Claude Code 2.1.290 (haiku, `--include-partial-messages`) while a
     /// background Agent read a file: lifecycle plus the subagent's own tool call, result and
     /// answer, all stamped with `parent_tool_use_id`. The CLI sent no `stream_event` for them.
@@ -2960,6 +3126,16 @@ mod tests {
 
     fn plugin_dir(args: &[String]) -> Option<&String> {
         args.iter().position(|arg| arg == "--plugin-dir").map(|index| &args[index + 1])
+    }
+
+    #[tokio::test]
+    async fn hook_events_are_requested_only_from_releases_known_to_send_them() {
+        let asks = |args: &[String]| args.iter().any(|arg| arg == "--include-hook-events");
+        assert!(asks(&launch_arguments(super::ClaudeDriver::default(), "2.1.327 (Claude Code)", &[]).await));
+        assert!(asks(&launch_arguments(super::ClaudeDriver::default(), "2.1.286", &[]).await));
+        for old in ["2.1.285", "2.0.9", "garbage"] {
+            assert!(!asks(&launch_arguments(super::ClaudeDriver::default(), old, &[]).await), "{old} keeps today's launch");
+        }
     }
 
     #[tokio::test]

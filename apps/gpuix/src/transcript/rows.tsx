@@ -16,6 +16,7 @@ import { recordText, requestRecord } from '../../../../packages/kybern-client/sr
 import { RequestRecordRow } from './RequestRecord.tsx'
 import { SignInChip } from './SignInChip.tsx'
 import { ForkOpen } from './ForkNotice.tsx'
+import { HookNotice } from './HookNotice.tsx'
 import { HistoryRow } from './HistoryBlock.tsx'
 import { forkNotice, forkNoticeText } from '../../../../packages/kybern-client/src/forkMachine.ts'
 import type { LoginRecipe } from '../../../../packages/kybern-client/src/loginRecipes.ts'
@@ -412,6 +413,7 @@ export const WorkRow = memo(function WorkRow({
       )
     }
     case 'notice': {
+      if (block.hooks) return <HookNotice title={block.text} hooks={block.hooks} />
       // A fork notice ("Forked to satyamas") offers the new thread beside its words.
       const fork = block.data ? forkNotice(block.data) : null
       const open = fork?.threadId ? fork : null
