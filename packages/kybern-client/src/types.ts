@@ -3706,6 +3706,11 @@ export interface SkillInfo {
   enabled: boolean;
   /** Set on a skill listed from another agent's folder (`include_other_agents`): the home it lives in. */
   home?: SkillHome | null;
+  /**
+   * The provider plugin this skill comes from (`interfaces`). On a plugin's own row the scope stays "app"; on a standalone
+   * skill it means the plugin ships an identical copy, which `skills.list` leaves out. An older daemon omits it.
+   */
+  plugin?: string | null;
 }
 
 export interface SkillsListParams {
