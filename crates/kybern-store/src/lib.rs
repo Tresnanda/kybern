@@ -3905,6 +3905,8 @@ mod orchestration_tests {
         thread.title = "renamed".into();
         store.thread_upsert(&thread).unwrap();
         assert!(store.thread_get(id).unwrap().unwrap().older_at.is_some(), "an upsert of a stale copy keeps the move");
+        let found = store.search_thread_history(None, None, Some("renamed"), true, None, 10).unwrap();
+        assert!(found.threads[0].thread.older_at.is_some(), "search reads the same columns");
 
         store.thread_restart_older_clock(id, moved_at).unwrap();
         let after = store.thread_get(id).unwrap().unwrap();

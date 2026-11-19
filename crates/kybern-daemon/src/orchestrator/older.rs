@@ -162,8 +162,8 @@ mod tests {
         let long = row(40, now);
         let moves = plan(&[almost.clone(), exactly.clone(), long.clone()], WEEK, now);
         assert_eq!(moves, vec![(exactly.thread_id, Some(now)), (long.thread_id, Some(now))], "a second short of 7 days stays");
-        assert!(plan(&[long.clone()], None, now).is_empty(), "Never moves nothing");
-        assert_eq!(plan(&[long.clone()], Some(chrono::Duration::days(30)), now).len(), 1);
+        assert!(plan(std::slice::from_ref(&long), None, now).is_empty(), "Never moves nothing");
+        assert_eq!(plan(std::slice::from_ref(&long), Some(chrono::Duration::days(30)), now).len(), 1);
         assert!(plan(&[row(29, now)], Some(chrono::Duration::days(30)), now).is_empty());
         assert_eq!(plan(&[row(3, now)], Some(chrono::Duration::days(3)), now).len(), 1);
     }
