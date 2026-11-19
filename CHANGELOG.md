@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.25.1
+
+<!-- kybern-release-title: Gemini usage for Antigravity, one place for updates, and fixes -->
+<!-- kybern-release-summary: Antigravity's usage panel shows your Gemini limits, harness and Kybern updates live in the rail's update card, and several 0.25.0 rough edges are fixed. -->
+
+- Antigravity's usage panel shows your real limits for Gemini Models, Gemini 4 Argon, and Claude and GPT models, each with its 5-hour and weekly window. A window you haven't used no longer shows a reset time that keeps restarting at 5 hours.
+- Antigravity turns no longer end with "NOT_FOUND (code 404)" after a complete answer. agy repeats an earlier turn's error on every later turn of a conversation; Kybern now ignores that stale error.
+- Updates for Kybern and your harnesses are in one place: the rail's update button opens a list with **Update** for each and **Update All**. Right-click a harness for **Skip This Version**. The sidebar pill is gone.
+- When several Claude Code hooks fail, the thread shows one row ("8 hooks couldn't check this action") instead of one per hook, and **Show details** gives each hook's command and Claude Code's reason.
+- A pull request whose description has many images or code blocks opens again instead of failing with "Markdown queue is full".
+- File and site icons show again before links written as code right after a bracket, like "(`NamesForm.tsx`)".
+- Delegated agents show their own harness logo in the list (Antigravity and Grok Build showed Claude's), the logo stack sits on its own plates, and the line under it is straight.
+- On Windows, port forwarding skips ports Windows reserves, project folders no longer show a `\\?\` prefix, and uploaded files keep just their name.
+
 ## 0.25.0
 
 <!-- kybern-release-title: Inline pages that feel like the chat, an Older shelf, and harness update notices -->
