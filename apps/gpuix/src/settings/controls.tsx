@@ -117,7 +117,7 @@ export function Section({ id, title, accessory, children }: { id?: SettingsSecti
         <div style={{ ...card, ...corners, borderLeftWidth: 1, borderRightWidth: 1, borderTopWidth: 1, borderBottomWidth: last ? 1 : 0, ...(t.scope === 'none' ? { overflow: 'hidden' as const } : {}) }}>
           {first && <GlassEdge radius={12} color={g.highlight} />}
           {row}
-          {tinted && <div paintTransform={{ initial: { opacity: 0 }, animate: { opacity: lit ? 1 : 0 }, transition: { duration: lit ? 0.2 : 0.4, ease: [...EASE.out] } }} style={{ position: 'absolute', left: 1, right: 1, top: 1, bottom: last ? 1 : 0, ...insetCorners(corners), backgroundColor: c.optionSelected, pointerEvents: 'none' }} />}
+          {tinted && <div testId={first && lit && id ? `settings-section-${id}-tint` : undefined} paintTransform={{ initial: { opacity: 0 }, animate: { opacity: lit ? 1 : 0 }, transition: { duration: lit ? 0.2 : 0.4, ease: [...EASE.out] } }} style={{ position: 'absolute', left: 1, right: 1, top: 1, bottom: last ? 1 : 0, ...insetCorners(corners), backgroundColor: c.optionSelected, pointerEvents: 'none' }} />}
         </div>
       </div></PageBlock>
     })}
