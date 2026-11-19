@@ -59,7 +59,10 @@ repo=https://github.com/Tresnanda/gpuix.git
 # zed `scroll-latch` fast-forwarded into zed `next` and `kybern` (8eb92af); the three gpuix branches merged into gpuix
 # `next` with the zed gitlink at 8eb92af, built for macOS, Windows and Linux by the GPUIX addon workflow, then
 # fast-forwarded into `kybern` (gpuix ffed45d, zed 8eb92af, 2026-11-19).
-commit=ffed45d381b2c7ea23411bdd75c2ca2454491ee8
+# gpuix `link-icon-code`: in inline flow a link icon's slot is a piece of its own (a word right before it, such as "(",
+# took the slot's first space and the icon was never painted) and wraps with the link's first piece. No zed or shader
+# change. Merged into gpuix `next`, built by the GPUIX addon workflow, then fast-forwarded into `kybern` (gpuix 5d7f0df).
+commit=5d7f0dfb6a8aa3d01cb5de94ca2664803481eb06
 # The zed submodule commit `commit` records; update.sh refuses a checkout that differs.
 zed=8eb92afabdd2b46daaf32ac5fe8097c50458b83c
 # The upstream tag `commit` is based on. It must be `@gpuix/native@<VERSION>`.

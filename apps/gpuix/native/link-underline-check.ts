@@ -1,7 +1,8 @@
 // One link, one straight underline: a link containing inline code, a bold link, bold and code in one link, a link wrapped
 // onto two lines (inline flow and single run) and links that lead with an icon each draw exactly one 1 px line per visual
 // line, at one height, from the link's first glyph to its last with no gap, never under the icon and never under the
-// space a line wraps at. Hover and always modes, dark and light. Runs on macOS, Linux and Windows.
+// space a line wraps at, and the icon painted in its slot right before the link's text, whether that text is plain or
+// inline code and whatever comes before the link. Hover and always modes, dark and light. Runs on macOS, Linux and Windows.
 //   bun native/link-underline-check.ts [--baseline]     (--baseline records without asserting, for a before/after)
 import '../src/native/local-build.ts'
 import assert from 'node:assert/strict'
@@ -19,7 +20,7 @@ const link = rgb(LINK_INK), icon = rgb(ICON_INK)
 /** A strongly link-coloured glyph pixel; sub-pixel fringes of white or black text can be pinkish, never this saturated. */
 const glyph = (c: number[]) => near(c, link, 70) && c[1]! < c[0]! - 100 && c[1]! < c[2]! - 100
 
-type Line = {y: number; rows: number; left: number; right: number; inkLeft: number; inkRight: number; iconRight: number | null}
+type Line = {y: number; rows: number; left: number; right: number; inkLeft: number; inkRight: number; iconLeft: number | null; iconRight: number | null}
 /**
  * The underlines inside `box` (logical px): rows whose longest unbroken run of exact link-colour pixels is at least
  * `min` px, grouped into lines by adjacency, each with that run and the extent of the link's glyphs (and icon) in the
@@ -42,7 +43,7 @@ function underlines(png: Png, scale: number, box: Rect, lineHeight: number, min 
     if (r.right - r.left + 1 < min * scale) continue
     const last = lines.at(-1)
     if (last && y === last.y + last.rows) { last.rows++; continue }
-    lines.push({y, rows: 1, left: r.left, right: r.right, inkLeft: Infinity, inkRight: -Infinity, iconRight: null})
+    lines.push({y, rows: 1, left: r.left, right: r.right, inkLeft: Infinity, inkRight: -Infinity, iconLeft: null, iconRight: null})
   }
   for (const line of lines) {
     // The glyphs sit within 20 px above their underline (2 px above the bottom of a ~23 px line box); a paragraph's box can
@@ -50,7 +51,7 @@ function underlines(png: Png, scale: number, box: Rect, lineHeight: number, min 
     for (let y = Math.max(y0, line.y - Math.round(Math.min(lineHeight, 20) * scale)); y < line.y; y++) for (let x = x0; x < x1; x++) {
       const c = png.at(x, y)
       if (glyph(c)) { line.inkLeft = Math.min(line.inkLeft, x); line.inkRight = Math.max(line.inkRight, x) }
-      if (near(c, icon, 40)) line.iconRight = Math.max(line.iconRight ?? -Infinity, x)
+      if (near(c, icon, 40)) { line.iconLeft = Math.min(line.iconLeft ?? Infinity, x); line.iconRight = Math.max(line.iconRight ?? -Infinity, x) }
     }
   }
   return lines
@@ -87,7 +88,7 @@ for (const appearance of ['dark', 'light'] as const) for (const mode of ['always
         await settled(() => shot('rest-again'), s => underlines(s.png, s.scale, box, lineHeight).length === 0, 2000)
       }
       const slack = 3 * scale
-      results.push({appearance, mode, id, lines: found.map(l => ({y: l.y / scale, rows: l.rows, left: l.left / scale, right: l.right / scale, inkLeft: l.inkLeft / scale, inkRight: l.inkRight / scale, iconRight: l.iconRight === null ? null : l.iconRight / scale}))})
+      results.push({appearance, mode, id, lines: found.map(l => ({y: l.y / scale, rows: l.rows, left: l.left / scale, right: l.right / scale, inkLeft: l.inkLeft / scale, inkRight: l.inkRight / scale, iconLeft: l.iconLeft === null ? null : l.iconLeft / scale, iconRight: l.iconRight === null ? null : l.iconRight / scale}))})
       if (baseline) continue
       await step(`${label}: one straight underline per line`, () => {
         assert.equal(found.length, spec.lines, `${found.length} underline row group(s) for ${spec.lines} line(s): ${JSON.stringify(found)}`)
@@ -101,7 +102,11 @@ for (const appearance of ['dark', 'light'] as const) for (const mode of ['always
       })
       if (spec.icon) await step(`${label}: never under the icon`, () => {
         const line = found[0]!
-        assert.ok(line.iconRight !== null, 'the icon is painted')
+        assert.ok(line.iconLeft !== null && line.iconRight !== null, 'the icon is painted')
+        // In its slot: about icon-sized, and just before the link's first glyph (a code chip's padding in between).
+        const width = (line.iconRight! - line.iconLeft! + 1) / scale, gap = (line.inkLeft - line.iconRight!) / scale
+        assert.ok(width >= 10 && width <= 18, `the icon is ${width} px wide, not one icon in its slot`)
+        assert.ok(gap > 0 && gap <= 14, `the icon ends ${gap} px before the link's first glyph, not in the slot right before it`)
         assert.ok(line.left > line.iconRight!, `the underline starts at ${line.left}, inside the icon (ends at ${line.iconRight})`)
       })
     }
