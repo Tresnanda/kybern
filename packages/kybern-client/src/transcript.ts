@@ -437,7 +437,7 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
         const segment = nextAssistantSegment(blocks, messageId, origin)
         blocks = [...blocks, { kind: "assistant", id: `${messageId}#${segment}`, turnId, at, seq: ev.seq, origin, messageId, segment, text: ev.text, thinking: ev.thinking ?? "", complete: true }]
       } else {
-        const lastIsTail = indices.at(-1) === blocks.length - 1
+        const lastIsTail = onlyHiddenAfter(blocks, indices.at(-1)!)
         const streamedText = indices.map((index) => {
           const block = blocks[index]
           return block?.kind === "assistant" ? block.text : ""
@@ -751,12 +751,72 @@ function continuationMessageId(blocks: readonly Block[], turnId: TurnId, incomin
   return incoming
 }
 
+/**
+ * The open segment this message's next text continues: the last block that is
+ * drawn, ignoring blocks hidden between text (`isHiddenBetweenText`). Anything
+ * drawn after the segment closes it without changing its key.
+ */
 function findOpenAssistantSegment(blocks: readonly Block[], messageId: string, origin: EventOrigin): number {
-  const index = blocks.length - 1
-  const block = blocks[index]
-  return block?.kind === "assistant" && !block.complete && block.messageId === messageId && sameOrigin(block.origin, origin)
-    ? index
-    : -1
+  const hasTool = (id: string) => blocks.some((block) => block.kind === "tool" && block.call.id === id)
+  const hasTask = (id: string) => blocks.some((block) => block.kind === "runtime_task" && block.task.id === id)
+  for (let index = blocks.length - 1; index >= 0; index--) {
+    const block = blocks[index]!
+    if (block.kind === "assistant") {
+      return !block.complete && block.messageId === messageId && sameOrigin(block.origin, origin) ? index : -1
+    }
+    if (!isHiddenBetweenText(block, hasTool, hasTask)) return -1
+  }
+  return -1
+}
+
+/** Whether every block after `index` is hidden between text. */
+function onlyHiddenAfter(blocks: readonly Block[], index: number): boolean {
+  if (index === blocks.length - 1) return true
+  const hasTool = (id: string) => blocks.some((block) => block.kind === "tool" && block.call.id === id)
+  const hasTask = (id: string) => blocks.some((block) => block.kind === "runtime_task" && block.task.id === id)
+  for (let later = index + 1; later < blocks.length; later++) {
+    if (!isHiddenBetweenText(blocks[later]!, hasTool, hasTask)) return false
+  }
+  return true
+}
+
+/**
+ * Whether the transcript draws nothing for this block between two pieces of one
+ * message's text: it nests under the tool or task that owns it, or sits above
+ * or beside the turn. Text that continues across such a block is one segment,
+ * so a word or list item is never cut into two Markdown documents. The daemon
+ * applies the same rule in `hidden_between_text` (`kybern-store/src/projection.rs`).
+ * Root tool calls, notices, approvals, images and messages are drawn in the
+ * flow, so they still end the segment. Keep this in step with
+ * `buildWorkHierarchy` and `groupTurns`, which decide where blocks are drawn.
+ */
+export function isHiddenBetweenText(
+  block: Block,
+  hasTool: (id: string) => boolean,
+  hasTask: (id: string) => boolean,
+): boolean {
+  switch (block.kind) {
+    case "tool":
+      return block.origin.kind !== "root" || toolNestsUnderKnownTool(block, hasTool)
+    case "runtime_task":
+      return taskNestsUnderKnownParent(block.task, hasTool, hasTask)
+    case "visual":
+    case "outside_repo_changed":
+      return true
+    default:
+      return false
+  }
+}
+
+function toolNestsUnderKnownTool(block: ToolBlock, hasTool: (id: string) => boolean): boolean {
+  const parentId = block.call.parent_id
+  return !!parentId && parentId !== block.call.id && hasTool(parentId)
+}
+
+/** A task is drawn under the tool that launched it, or under its parent task. */
+function taskNestsUnderKnownParent(task: RuntimeTask, hasTool: (id: string) => boolean, hasTask: (id: string) => boolean): boolean {
+  if (task.tool_call_id && hasTool(task.tool_call_id)) return true
+  return !!task.parent_id && task.parent_id !== task.id && hasTask(task.parent_id)
 }
 
 function nextAssistantSegment(blocks: readonly Block[], messageId: string, origin: EventOrigin): number {
@@ -1010,7 +1070,7 @@ export function buildWorkHierarchy(blocks: readonly Block[]): WorkHierarchy {
     if (block.kind === "runtime_task") {
       if (block.task.tool_call_id && toolIds.has(block.task.tool_call_id)) continue
       const parentId = block.task.parent_id
-      if (parentId && parentId !== block.task.id && taskIds.has(parentId)) {
+      if (parentId && parentId !== block.task.id && taskIds.has(parentId)) { // see `isHiddenBetweenText`
         const children = taskChildrenByParent.get(parentId) ?? []
         children.push(block)
         taskChildrenByParent.set(parentId, children)
@@ -1090,6 +1150,76 @@ function joinSegments(segs: AssistantBlock[]): AssistantBlock {
     thinking: segs.map((s) => s.thinking).join(""),
     complete: segs.every((s) => s.complete),
   }
+}
+
+const joinedSegments = new WeakMap<AssistantBlock, { parts: readonly AssistantBlock[]; joined: AssistantBlock }>()
+
+/**
+ * One block for the pieces of a message that nothing visible separates. It keeps
+ * the first piece's id and position so the row does not remount, concatenates
+ * text and reasoning exactly, and is reused while its pieces are unchanged.
+ */
+function mergeSegments(parts: readonly AssistantBlock[]): AssistantBlock {
+  const last = parts[parts.length - 1]!
+  const cached = joinedSegments.get(last)
+  if (cached && cached.parts.length === parts.length && cached.parts.every((part, index) => part === parts[index])) return cached.joined
+  const joined: AssistantBlock = {
+    ...parts[0]!,
+    text: parts.map((part) => part.text).join(""),
+    thinking: parts.map((part) => part.thinking).join(""),
+    thinkingComplete: parts.every((part) => !part.thinking || part.thinkingComplete === true),
+    complete: parts.every((part) => part.complete),
+  }
+  joinedSegments.set(last, { parts, joined })
+  return joined
+}
+
+/**
+ * Repair a message that an older projection cut in two where nothing is drawn
+ * between the pieces (a subagent's tool call, a task update): join the pieces
+ * so they render as one Markdown document. Stored events stay as they were.
+ * Pieces separated by anything drawn stay separate, in order.
+ */
+function joinHiddenSplits(work: Block[]): Block[] {
+  const seen = new Set<string>()
+  let split = false
+  for (const block of work) {
+    if (block.kind !== "assistant") continue
+    if (seen.has(block.messageId)) { split = true; break }
+    seen.add(block.messageId)
+  }
+  if (!split) return work
+
+  const toolIds = new Set<string>()
+  const taskIds = new Set<string>()
+  for (const block of work) {
+    if (block.kind === "tool") toolIds.add(block.call.id)
+    else if (block.kind === "runtime_task") taskIds.add(block.task.id)
+  }
+  const hasTool = (id: string) => toolIds.has(id)
+  const hasTask = (id: string) => taskIds.has(id)
+
+  const out: Block[] = []
+  const parts = new Map<number, AssistantBlock[]>()
+  let merged = false
+  for (const block of work) {
+    if (block.kind === "assistant") {
+      let at = out.length - 1
+      while (at >= 0 && out[at]!.kind !== "assistant" && isHiddenBetweenText(out[at]!, hasTool, hasTask)) at--
+      const previous = out[at]
+      if (previous?.kind === "assistant" && previous.messageId === block.messageId && sameOrigin(previous.origin, block.origin)) {
+        const pieces = parts.get(at) ?? [previous]
+        pieces.push(block)
+        parts.set(at, pieces)
+        merged = true
+        continue
+      }
+    }
+    out.push(block)
+  }
+  if (!merged) return work
+  for (const [index, pieces] of parts) out[index] = mergeSegments(pieces)
+  return out
 }
 
 /** Keep unchanged turns referentially stable while another turn streams.
@@ -1181,7 +1311,14 @@ export function createTurnGrouper(): (blocks: Block[]) => TurnGroup[] {
 /** Only the tail of a running turn can still be streaming. Reasoning ends once
  * the provider closes it or the same segment starts its text. */
 function liveTailIds(work: readonly Block[]): Pick<TurnGroup, "liveTextId" | "liveThinkingId"> {
-  const tail = work.at(-1)
+  // Work hidden between text (a subagent's tool call) can trail the live segment.
+  let end = work.length - 1
+  if (end >= 0 && work[end]!.kind !== "assistant") {
+    const hasTool = (id: string) => work.some((block) => block.kind === "tool" && block.call.id === id)
+    const hasTask = (id: string) => work.some((block) => block.kind === "runtime_task" && block.task.id === id)
+    while (end >= 0 && work[end]!.kind !== "assistant" && isHiddenBetweenText(work[end]!, hasTool, hasTask)) end--
+  }
+  const tail = work[end]
   if (tail?.kind !== "assistant" || tail.complete) return { liveTextId: null, liveThinkingId: null }
   const hasText = !!tail.text.trim()
   return {
@@ -1243,6 +1380,7 @@ export function groupTurns(blocks: Block[]): TurnGroup[] {
       g.images = g.work.filter((block): block is Extract<Block, { kind: "image" }> => block.kind === "image")
       g.work = g.work.filter((block) => block.kind !== "image")
     }
+    g.work = joinHiddenSplits(g.work)
     // A final answer is a lifecycle fact, not a guess based on whichever
     // assistant message happened to arrive last. Until TurnCompleted, every
     // root message remains chronological narration in `work`.

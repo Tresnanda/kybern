@@ -8,6 +8,7 @@ import { ScrollView, View } from "react-native";
 import { threadReferencePart } from "../../../../packages/kybern-client/src/threadReferences";
 import { noteMentionPart, taskMentionPart } from "../../../../packages/kybern-client/src/userInput";
 import { isChildThread } from "../../../../packages/kybern-client/src/subagents";
+import { uniqueSkills } from "../../../../packages/kybern-client/src/skillSources";
 import {
   capabilityPart,
   commandText,
@@ -123,8 +124,9 @@ export function ComposerSuggestions({
     void rpc("skills.list", { project_id: projectId, provider, instance })
       .then((r) => {
         if (alive) {
-          setSkills(r.skills.filter((s) => s.enabled));
-          onCatalog(r.skills);
+          const catalog = uniqueSkills(r.skills);
+          setSkills(catalog.filter((s) => s.enabled));
+          onCatalog(catalog);
           setSkillsLoading(false);
         }
       })
