@@ -188,18 +188,14 @@ fn proc_of(pid: u32) -> Option<Proc> {
     Some(Proc { ppid: ppid.trim().parse().ok()?, command: command.trim().to_string() })
 }
 
-/// The executable a process runs, as the kernel knows it: a script named `sudo` resolves to its interpreter.
+/// The executable a process runs, as the kernel knows it: a script named `sudo` resolves to its interpreter. Linux reads
+/// `/proc/<pid>/exe` itself in [`asked_by_trusted_program`], which also has to tell "hidden" from "gone".
 #[cfg(target_os = "macos")]
 fn executable_of(pid: u32) -> Option<PathBuf> {
     let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
     // SAFETY: `buf` is a writable buffer of the length passed; the call writes at most that many bytes.
     let n = unsafe { libc::proc_pidpath(pid as libc::c_int, buf.as_mut_ptr().cast(), buf.len() as u32) };
     (n > 0).then(|| PathBuf::from(String::from_utf8_lossy(&buf[..n as usize]).into_owned()))
-}
-
-#[cfg(target_os = "linux")]
-fn executable_of(pid: u32) -> Option<PathBuf> {
-    std::fs::read_link(format!("/proc/{pid}/exe")).ok()
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -232,8 +228,112 @@ pub fn is_trusted_asker(path: &Path) -> bool {
 
 /// Whether the helper `helper_pid` was started by a real sudo, ssh or git (its direct parent, since the helper script
 /// `exec`s the CLI). Anything else, such as the agent's own shell running `kybern askpass`, may not raise a card.
-pub fn asked_by_trusted_program(helper_pid: u32) -> bool {
-    proc_of(helper_pid).and_then(|helper| executable_of(helper.ppid)).is_some_and(|path| is_trusted_asker(&path))
+///
+/// `session_token` is the capability of the session that is asking. On Linux a sudo that waits for a password runs
+/// setuid root, so the daemon may not read its `/proc/<pid>/exe`; [`linux_privileged_sudo`] then decides from
+/// `/proc/<pid>/status` and the sudo's ancestry instead.
+pub fn asked_by_trusted_program(helper_pid: u32, session_token: &str) -> bool {
+    let Some(parent) = proc_of(helper_pid).map(|helper| helper.ppid) else { return false };
+    #[cfg(target_os = "linux")]
+    {
+        match std::fs::read_link(format!("/proc/{parent}/exe")) {
+            Ok(path) => is_trusted_asker(&path),
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => linux_privileged_sudo(parent, session_token),
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = session_token;
+        executable_of(parent).is_some_and(|path| is_trusted_asker(&path))
+    }
+}
+
+/// The fields of `/proc/<pid>/status` the sudo check needs.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProcStatus {
+    name: String,
+    ppid: u32,
+    /// Real, effective, saved and file-system user ids.
+    uid: [u32; 4],
+}
+
+#[cfg(target_os = "linux")]
+fn parse_proc_status(text: &str) -> Option<ProcStatus> {
+    let mut name = None;
+    let mut ppid = None;
+    let mut uid = None;
+    for line in text.lines() {
+        let Some((key, value)) = line.split_once(':') else { continue };
+        let value = value.trim();
+        match key {
+            "Name" => name = Some(value.to_string()),
+            "PPid" => ppid = value.parse().ok(),
+            "Uid" => {
+                let ids: Vec<u32> = value.split_whitespace().filter_map(|id| id.parse().ok()).collect();
+                uid = <[u32; 4]>::try_from(ids).ok();
+            }
+            _ => {}
+        }
+    }
+    Some(ProcStatus { name: name?, ppid: ppid?, uid: uid? })
+}
+
+/// A sudo that waits for a password: the program is named `sudo`, runs as root (effective uid 0) for the daemon's own
+/// user (real uid). Without a setuid binary no process of that user can have an effective uid of 0, so the agent's
+/// own shell cannot pass for it.
+#[cfg(target_os = "linux")]
+fn is_privileged_sudo(status: &ProcStatus, daemon_uid: u32) -> bool {
+    status.name == "sudo" && status.uid[0] == daemon_uid && status.uid[1] == 0
+}
+
+/// Walk up from `start` (excluded) through at most [`MAX_ANCESTRY`] parents and report whether one of them satisfies
+/// `belongs`. `parent_of` gives a process's parent, `None` when it cannot be read.
+#[cfg(target_os = "linux")]
+fn descends_from(start: u32, parent_of: impl Fn(u32) -> Option<u32>, belongs: impl Fn(u32) -> bool) -> bool {
+    const MAX_ANCESTRY: usize = 64;
+    let mut pid = start;
+    for _ in 0..MAX_ANCESTRY {
+        match parent_of(pid) {
+            Some(parent) if parent > 1 => {
+                if belongs(parent) {
+                    return true;
+                }
+                pid = parent;
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// Whether `/proc/<pid>/environ` carries this session's askpass capability: every process the session starts (the
+/// agent's shells and their children) inherits it, and no other session's processes do.
+#[cfg(target_os = "linux")]
+fn environ_holds_token(environ: &[u8], token: &str) -> bool {
+    let wanted = format!("KYBERN_ASKPASS_TOKEN={token}");
+    !token.is_empty() && environ.split(|byte| *byte == 0).any(|entry| entry == wanted.as_bytes())
+}
+
+#[cfg(target_os = "linux")]
+fn read_proc_status(pid: u32) -> Option<ProcStatus> {
+    parse_proc_status(&std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?)
+}
+
+/// The Linux answer when the kernel hides a sudo's `exe` from the daemon: see [`asked_by_trusted_program`]. Accepts a
+/// real waiting sudo that was started inside the asking session, nothing else.
+#[cfg(target_os = "linux")]
+fn linux_privileged_sudo(pid: u32, session_token: &str) -> bool {
+    // SAFETY: getuid has no arguments and cannot fail.
+    let daemon_uid = unsafe { libc::getuid() };
+    let Some(status) = read_proc_status(pid) else { return false };
+    is_privileged_sudo(&status, daemon_uid)
+        && descends_from(
+            pid,
+            |pid| read_proc_status(pid).map(|status| status.ppid),
+            |pid| std::fs::read(format!("/proc/{pid}/environ")).is_ok_and(|environ| environ_holds_token(&environ, session_token)),
+        )
 }
 
 /// Whether process `pid` holds the client end of the loopback connection that arrived from `peer`, so the pid an askpass
@@ -414,6 +514,143 @@ mod tests {
     fn this_process_is_alive_and_a_bogus_one_is_not() {
         assert!(process_alive(std::process::id()));
         assert!(!process_alive(999_999));
+    }
+
+    #[cfg(target_os = "linux")]
+    mod linux_sudo {
+        use super::super::*;
+
+        const WAITING_SUDO: &str = "Name:\tsudo\nUmask:\t0022\nState:\tS (sleeping)\nTgid:\t4242\nPid:\t4242\nPPid:\t4100\n\
+            Uid:\t1000\t0\t0\t0\nGid:\t1000\t1000\t1000\t1000\nGroups:\t10 1000\n";
+
+        #[test]
+        fn proc_status_is_read_from_its_lines() {
+            assert_eq!(parse_proc_status(WAITING_SUDO), Some(ProcStatus { name: "sudo".into(), ppid: 4100, uid: [1000, 0, 0, 0] }));
+            // A name may hold spaces and colons; only the first colon splits.
+            let odd = "Name:\tTerminal: main\nPPid:\t7\nUid:\t501\t501\t501\t501\n";
+            assert_eq!(parse_proc_status(odd).map(|status| status.name), Some("Terminal: main".into()));
+            for broken in
+                ["", "Name:\tsudo\nPPid:\t1\n", "Name:\tsudo\nPPid:\t1\nUid:\t1000\t0\n", "Name:\tsudo\nPPid:\tx\nUid:\t1\t2\t3\t4\n"]
+            {
+                assert_eq!(parse_proc_status(broken), None, "{broken:?}");
+            }
+        }
+
+        #[test]
+        fn only_a_root_sudo_of_the_daemons_user_counts() {
+            let status = |name: &str, uid: [u32; 4]| ProcStatus { name: name.into(), ppid: 1, uid };
+            assert!(is_privileged_sudo(&status("sudo", [1000, 0, 0, 0]), 1000));
+            // The agent's own shell, a copy named sudo, someone else's sudo, and a sudo that is already root all fail.
+            assert!(!is_privileged_sudo(&status("bash", [1000, 0, 0, 0]), 1000));
+            assert!(!is_privileged_sudo(&status("sudo", [1000, 1000, 1000, 1000]), 1000));
+            assert!(!is_privileged_sudo(&status("sudo", [1001, 0, 0, 0]), 1000));
+            assert!(!is_privileged_sudo(&status("sudo", [1000, 1001, 0, 0]), 1000));
+        }
+
+        #[test]
+        fn a_sudo_must_descend_from_a_process_of_the_asking_session() {
+            // sudo 50 <- shell 40 <- agent 30 <- daemon 20 <- init 1
+            let parents = |pid: u32| match pid {
+                50 => Some(40),
+                40 => Some(30),
+                30 => Some(20),
+                20 => Some(1),
+                _ => None,
+            };
+            assert!(descends_from(50, parents, |pid| pid == 40), "its own shell");
+            assert!(descends_from(50, parents, |pid| pid == 30), "further up");
+            assert!(!descends_from(50, parents, |pid| pid == 50), "the sudo itself is not its own ancestor");
+            assert!(!descends_from(50, parents, |_| false), "another session's processes");
+            assert!(!descends_from(50, parents, |pid| pid == 1), "init is never a session");
+            assert!(!descends_from(99, parents, |_| true), "an unreadable parent ends the walk");
+            // A parent loop cannot hang the walk.
+            assert!(!descends_from(5, |pid| Some(if pid == 5 { 6 } else { 5 }), |_| false));
+        }
+
+        #[test]
+        fn the_session_is_recognised_by_its_capability_in_the_environment() {
+            let environ = b"PATH=/usr/bin\0KYBERN_ASKPASS_TOKEN=abc123\0HOME=/home/me\0";
+            assert!(environ_holds_token(environ, "abc123"));
+            assert!(!environ_holds_token(environ, "abc12"), "a prefix is not the token");
+            assert!(!environ_holds_token(environ, "other"));
+            assert!(!environ_holds_token(environ, ""), "no token matches nothing");
+            assert!(!environ_holds_token(b"X_KYBERN_ASKPASS_TOKEN=abc123\0", "abc123"));
+        }
+
+        fn sudo_runs(args: &[&str]) -> Option<std::process::Output> {
+            std::process::Command::new("sudo").args(args).stdin(std::process::Stdio::null()).output().ok()
+        }
+
+        /// A real `sudo -A` that waits on its askpass program: the case in issue #315. The askpass program only sleeps,
+        /// so no password is ever typed or needed. Skipped without sudo, as root, with passwordless sudo, or when sudo
+        /// wants a terminal.
+        #[test]
+        fn a_real_waiting_sudo_is_trusted_inside_its_session_only() {
+            // SAFETY: getuid has no arguments and cannot fail.
+            if unsafe { libc::geteuid() } == 0 {
+                eprintln!("skipped: running as root, sudo never asks");
+                return;
+            }
+            let Some(probe) = sudo_runs(&["-n", "true"]) else {
+                eprintln!("skipped: no sudo");
+                return;
+            };
+            let stderr = String::from_utf8_lossy(&probe.stderr).to_ascii_lowercase();
+            if probe.status.success() || !stderr.contains("password is required") {
+                eprintln!("skipped: sudo does not wait for a password here ({stderr:?})");
+                return;
+            }
+            let dir = std::env::temp_dir().join(format!("kybern-askpass-sudo-{}", uuid::Uuid::now_v7()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let pid_file = dir.join("helper.pid");
+            let script = dir.join("askpass");
+            std::fs::write(&script, format!("#!/bin/sh\necho $$ > '{}'\nexec sleep 60\n", pid_file.display())).unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let token = format!("test-capability-{}", uuid::Uuid::now_v7());
+            // The trailing `:` keeps the shell alive as sudo's parent, as the agent's shell is in a real session.
+            let mut shell = std::process::Command::new("sh")
+                .args(["-c", "sudo -A true; :"])
+                .env("SUDO_ASKPASS", &script)
+                .env("KYBERN_ASKPASS_TOKEN", &token)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            let helper = loop {
+                if let Some(pid) = std::fs::read_to_string(&pid_file).ok().and_then(|text| text.trim().parse::<u32>().ok()) {
+                    break Some(pid);
+                }
+                if std::time::Instant::now() > deadline {
+                    break None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            };
+            let outcome = helper.map(|helper| {
+                let sudo = proc_of(helper).unwrap().ppid;
+                (
+                    std::fs::read_link(format!("/proc/{sudo}/exe")).map_err(|error| error.kind()),
+                    asked_by_trusted_program(helper, &token),
+                    asked_by_trusted_program(helper, "another-session"),
+                    asked_by_trusted_program(helper, ""),
+                    helper,
+                )
+            });
+            if let Some((.., helper)) = &outcome {
+                // SAFETY: SIGKILL to the helper this test started; sudo then gives up and the shell ends.
+                unsafe { libc::kill(*helper as libc::pid_t, libc::SIGKILL) };
+            }
+            let _ = shell.wait();
+            let _ = std::fs::remove_dir_all(&dir);
+            let (exe, own, other, empty, _) = outcome.expect("sudo never started the askpass program");
+            assert_eq!(exe, Err(std::io::ErrorKind::PermissionDenied), "the kernel hides a waiting sudo's executable (the cause of #315)");
+            assert!(own, "the sudo of this session may ask");
+            assert!(!other, "another session's capability does not vouch for it");
+            assert!(!empty, "no capability vouches for nothing");
+            assert!(!asked_by_trusted_program(std::process::id(), &token), "this test process is not a helper of a sudo");
+        }
     }
 
     use super::*;
