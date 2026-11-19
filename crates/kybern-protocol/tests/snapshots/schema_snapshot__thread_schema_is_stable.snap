@@ -153,6 +153,18 @@ expression: schema_for!(Thread)
           "type": "null"
         }
       ]
+    },
+    "older_at": {
+      "description": "Set while the thread sits in its project's Older group: no turn ran for the `older_after` setting's time.\nOnly the daemon moves a thread there (never a pinned, busy, child or opted-out one); a new turn, \"Move out of\nOlder\" and unarchiving take it out. Older threads are listed like any other; clients group them.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "keep_out_of_older": {
+      "description": "The person chose \"Never move to Older\" for this thread.",
+      "type": "boolean"
     }
   },
   "required": [

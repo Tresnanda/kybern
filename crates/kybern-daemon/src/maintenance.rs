@@ -127,6 +127,9 @@ pub async fn sweep(state: &AppState, policy: &BackgroundSettings, allow_idle_exi
     }
     state.terminals.purge_exited(EXITED_RETENTION);
     state.orchestrator.cleanup_eligible_worktrees().await;
+    if let Err(error) = state.orchestrator.sweep_older().await {
+        tracing::warn!(%error, "could not move inactive threads to Older");
+    }
 
     let activity = activity(state).await?;
     // A first-run scan or import keeps the daemon up even with no client connected.

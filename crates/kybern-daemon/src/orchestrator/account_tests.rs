@@ -297,6 +297,8 @@ async fn permission_request_is_pending_during_active_turn_and_applies_at_idle() 
             permission_mode: Some(PermissionMode::FullAccess),
             model: None,
             effort: None,
+        keep_out_of_older: None,
+        move_out_of_older: false,
         })
         .await
         .unwrap();
@@ -463,6 +465,8 @@ async fn rejected_native_permissions_do_not_persist_or_display_requested_authori
             permission_mode: Some(PermissionMode::FullAccess),
             model: None,
             effort: None,
+        keep_out_of_older: None,
+        move_out_of_older: false,
         })
         .await;
     assert!(rejected.is_err());
@@ -583,6 +587,8 @@ async fn receiving_modes_are_explicit_target_bound_and_queued_without_reconfigur
                     permission_mode: Some(selected_mode),
                     model: None,
                     effort: None,
+                keep_out_of_older: None,
+                move_out_of_older: false,
                 })
                 .await
                 .unwrap();
@@ -701,6 +707,8 @@ async fn returning_cursor_account_exposes_compatible_legacy_id_and_accepts_its_e
             permission_mode: Some(PermissionMode::Supervised),
             model: None,
             effort: None,
+        keep_out_of_older: None,
+        move_out_of_older: false,
         })
         .await
         .unwrap();

@@ -1252,6 +1252,10 @@ pub struct ThreadsListResult {
     /// With `settled_limit`: the settled threads per project this result left out.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub omitted: Vec<ProjectThreadCount>,
+    /// Archived top-level threads per project (`threads.unarchive` brings one back), on every read that is not for
+    /// one parent's children and leaves archived threads out. Projects with none are left out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub archived: Vec<ProjectThreadCount>,
 }
 
 /// How many threads of one project a `threads.list` result left out.
@@ -1520,6 +1524,13 @@ pub struct ThreadsUpdateParams {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// "Never move to Older" (`true`) or its reversal. Setting it takes the thread out of Older.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_out_of_older: Option<bool>,
+    /// "Move out of Older": the thread goes back to the top of its project's list and its inactivity
+    /// clock starts again. Ignored when the thread is not in Older.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub move_out_of_older: bool,
 }
 method!(ThreadsUpdate, "threads.update", Some(Scope::OrchestrationOperate), ThreadsUpdateParams, Thread);
 
@@ -1528,6 +1539,15 @@ pub struct ThreadsArchiveParams {
     pub thread_id: ThreadId,
 }
 method!(ThreadsArchive, "threads.archive", Some(Scope::OrchestrationOperate), ThreadsArchiveParams, Empty);
+
+/// Bring an archived thread back: it is idle again, at the top of its project's list, and can be continued.
+/// A worktree that cleanup removed comes back with the next message. Delegated agents and subagent threads it
+/// had stay archived.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadsUnarchiveParams {
+    pub thread_id: ThreadId,
+}
+method!(ThreadsUnarchive, "threads.unarchive", Some(Scope::OrchestrationOperate), ThreadsUnarchiveParams, Thread);
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsSendParams {
@@ -5206,6 +5226,7 @@ registry!(
     ThreadsRecoverOmpAnswer,
     ThreadsUpdate,
     ThreadsArchive,
+    ThreadsUnarchive,
     ThreadsSend,
     ThreadsSteer,
     SubagentsSend,

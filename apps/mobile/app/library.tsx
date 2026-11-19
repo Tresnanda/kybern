@@ -3,10 +3,10 @@ import Animated, { useAnimatedScrollHandler, useSharedValue } from "react-native
 import { router } from "expo-router";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Platform, RefreshControl, View } from "react-native";
-import { ThreadListRow, type ThreadRowContext } from "../src/features/ThreadRows";
+import { OlderDisclosure, ThreadListRow, type ThreadRowContext } from "../src/features/ThreadRows";
 import { SpaceSwitcher, useSpaceMenuItems } from "../src/features/Spaces";
 import { useLayout } from "../src/state/layout";
-import { attentionSignals, dismissAttention, useListState } from "../src/state/listState";
+import { attentionSignals, dismissAttention, setOlderOpen, useListState } from "../src/state/listState";
 import { PROVIDER_DISPLAY_NAME, type Thread } from "../src/state/protocol";
 import { errorText, loadMoreThreads, omittedThreads, prefetchThreads, refreshAll, threadHasActivity, useApp } from "../src/state/runtime";
 import { useLists } from "../src/state/useLists";
@@ -19,6 +19,7 @@ import {
   FILTERED_FIRST_PAGE,
   groupByProject,
   isFiltering,
+  projectSection,
   SECTION_PAGE,
   sectionWindow,
   threadAgents,
@@ -39,11 +40,12 @@ import { CONTENT_MAX_WIDTH, space, useTheme } from "../src/ui/theme";
 type Item =
   | { kind: "header"; key: string; title: string; count?: number; projectId?: string; open?: boolean }
   | { kind: "row"; key: string; row: ThreadRow }
-  | { kind: "more"; key: string; projectId: string; remaining: number };
+  | { kind: "more"; key: string; projectId: string; remaining: number; older?: boolean }
+  | { kind: "older"; key: string; projectId: string; open: boolean };
 
 /** Which project groups the reader folded, kept while the app runs. */
 const foldedProjects: Record<string, boolean> = {};
-/** How many "Show more" pages each project section revealed, kept the same way. */
+/** How many "Show more" pages each project section (`id`) and its Older group (`older:id`) revealed, kept the same way. */
 const shownPages: Record<string, number> = {};
 
 /** Hairline between two thread rows; the list gives the neighbours, no lookup needed. */
@@ -84,9 +86,10 @@ export default function Library() {
     setFolded((old) => ({ ...old, [projectId]: value }));
   }, []);
   const [pages, setPages] = useState<Record<string, number>>(() => ({ ...shownPages }));
-  const showMore = useCallback((projectId: string) => {
-    shownPages[projectId] = (shownPages[projectId] ?? 0) + 1;
-    setPages((old) => ({ ...old, [projectId]: shownPages[projectId] }));
+  const showMore = useCallback((projectId: string, older?: boolean) => {
+    const key = older ? `older:${projectId}` : projectId;
+    shownPages[key] = (shownPages[key] ?? 0) + 1;
+    setPages((old) => ({ ...old, [key]: shownPages[key] }));
     // Past the threads the computer listed: its next page of older ones (#248).
     if (omittedThreads(projectId)) void loadMoreThreads(projectId).catch((e) => setError(errorText(e)));
   }, []);
@@ -109,6 +112,7 @@ export default function Library() {
   // every section so no match hides behind a fold.
   const items = useMemo<Item[]>(() => {
     const filtering = isFiltering(filter);
+    const signals = attentionSignals(list);
     const rowItems = (threads: readonly Thread[]) =>
       threadRows(threads, filter.archived ? [] : children, expanded, { now: Date.now() }).map(
         (row) => ({ kind: "row" as const, key: row.thread.id, row }),
@@ -127,23 +131,43 @@ export default function Library() {
         open,
       });
       if (open) {
+        // Inactive threads wait in a folded Older group at the bottom; a filter lists them with the rest.
+        const { recent, older } = projectSection(group.threads, filtering, signals);
         // Ten per section, then pages; a search still reaches every match.
         const { shown, remaining } = sectionWindow(
-          group.threads.length,
+          recent.length,
           pages[group.projectId] ?? 0,
           filtering ? FILTERED_FIRST_PAGE : undefined,
         );
-        out.push(...rowItems(group.threads.slice(0, shown)));
-        // Settled threads the computer has not listed yet count too; "Show more" pages them in.
-        const hidden = remaining + (filtering ? 0 : omittedThreads(group.projectId));
+        out.push(...rowItems(recent.slice(0, shown)));
+        // Settled threads the computer has not listed yet count too; "Show more" pages them in, under Older when
+        // the project has one (they are its oldest).
+        const omitted = filtering ? 0 : omittedThreads(group.projectId);
+        const hidden = remaining + (older.length ? 0 : omitted);
         if (hidden > 0)
           out.push({ kind: "more", key: `m:${group.projectId}`, projectId: group.projectId, remaining: hidden });
+        if (older.length) {
+          const olderOpen = !!list.olderOpen[group.projectId];
+          out.push({ kind: "older", key: `o:${group.projectId}`, projectId: group.projectId, open: olderOpen });
+          if (olderOpen) {
+            const page = sectionWindow(older.length, pages[`older:${group.projectId}`] ?? 0);
+            out.push(...rowItems(older.slice(0, page.shown)));
+            if (page.remaining + omitted > 0)
+              out.push({
+                kind: "more",
+                key: `mo:${group.projectId}`,
+                projectId: group.projectId,
+                remaining: page.remaining + omitted,
+                older: true,
+              });
+          }
+        }
       }
     }
     return out;
     // `app.omitted` changes with every page the computer lists.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [top, children, expanded, filter, folded, pages, lists.projects, list.projectOrder, app.omitted]);
+  }, [top, children, expanded, filter, folded, pages, lists.projects, list, app.omitted]);
   // The first rows' transcripts load ahead of a tap (#248).
   useEffect(() => {
     prefetchThreads(items.flatMap((item) => (item.kind === "row" ? [item.row.thread] : [])));
@@ -310,7 +334,9 @@ export default function Library() {
           windowSize={7}
           renderItem={({ item, index }) =>
             item.kind === "more" ? (
-              <ShowMoreRow remaining={item.remaining} onPress={() => showMore(item.projectId)} />
+              <ShowMoreRow remaining={item.remaining} onPress={() => showMore(item.projectId, item.older)} />
+            ) : item.kind === "older" ? (
+              <OlderDisclosure variant="list" open={item.open} onToggle={() => setOlderOpen(item.projectId, !item.open)} />
             ) : item.kind === "header" ? (
               <View style={{ paddingHorizontal: space.lg }}>
                 <SectionHeader

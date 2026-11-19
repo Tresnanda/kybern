@@ -5,6 +5,8 @@
 import { nestedThreadRows } from "../../../../packages/kybern-client/src/threadRows.ts";
 import { isChildThread, visibleSubagentThreads } from "../../../../packages/kybern-client/src/subagents.ts";
 import { inSpace } from "../../../../packages/kybern-client/src/spaces.ts";
+import { splitOlder } from "../../../../packages/kybern-client/src/older.ts";
+import type { AttentionSignals } from "../../../../packages/kybern-client/src/threadAttention.ts";
 import {
   isFreeChatProject,
   PROVIDER_DISPLAY_NAME,
@@ -178,6 +180,18 @@ export function groupByProject(
   const free = [...byProject.entries()].find(([id]) => isFreeChatProject(id));
   if (free) groups.push({ projectId: free[0], name: "Free chats", threads: free[1] });
   return groups;
+}
+
+/**
+ * A project section's threads: the main list, then its Older group (`splitOlder`). A filter or search lists every
+ * match in the main list, so none hides behind the fold.
+ */
+export function projectSection<T extends Thread>(
+  threads: readonly T[],
+  filtering: boolean,
+  signals: AttentionSignals,
+): { recent: T[]; older: T[] } {
+  return filtering ? { recent: [...threads], older: [] } : splitOlder(threads, signals);
 }
 
 /** Threads a project section shows before "Show more". */

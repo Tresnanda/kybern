@@ -1,7 +1,7 @@
 import { createHistoryPagingGate, HISTORY_PREFETCH_SCREENS } from "../../../../packages/kybern-client/src/historyPaging";
 import { isCoordinatorThread } from "../../../../packages/kybern-client/src/coordinator";
 import { canSteer } from "../../../../packages/kybern-client/src/steering";
-import { isSubagentThread, subagentThreadPhase } from "../../../../packages/kybern-client/src/subagents";
+import { isChildThread, isSubagentThread, subagentThreadPhase } from "../../../../packages/kybern-client/src/subagents";
 import { ChatFileContext } from "../../src/state/chatFileContext";
 import { randomUUID } from "expo-crypto";
 import {
@@ -15,6 +15,7 @@ import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import Animated, { FadeIn, FadeOut, useSharedValue } from "react-native-reanimated";
 import { ApprovalPanel, AsyncQuestions } from "../../src/features/Approvals";
 import { Composer } from "../../src/features/Composer";
+import { ArchivedBar } from "../../src/features/ArchivedBar";
 import { InspectorColumn } from "../../src/features/Inspector";
 import { TranscriptRow } from "../../src/features/Transcript";
 import { ThreadPanels } from "../../src/features/ThreadPanels";
@@ -706,31 +707,35 @@ function ThreadScreenBody() {
                 </View>
               )}
             </View>
-            <Composer
-              thread={thread}
-              onSteer={thread && !subagent && canSteer(thread.provider) ? steer : undefined}
-              disabled={
-                !connection.open ||
-                !snapshot.loaded ||
-                thread?.status === "archived" ||
-                !!thread?.moved ||
-                (subagent && !subagentWorking)
-              }
-              placeholder={
-                thread?.moved
-                  ? "This thread is moving or has moved to another machine"
-                  : subagent
-                  ? subagentWorking
-                    ? "Message this subagent…"
-                    : "This subagent has finished"
-                  : undefined
-              }
-              onStop={subagent ? undefined : stop}
-              onSend={send}
-              prompt={editPrompt}
-              promptAttachments={editAttachments}
-              onPromptConsumed={() => { setEditPrompt(""); setEditAttachments(undefined); }}
-            />
+            {thread?.status === "archived" && !isChildThread(thread) && !thread.moved ? (
+              <ArchivedBar threadId={id} disabled={!connection.open} />
+            ) : (
+              <Composer
+                thread={thread}
+                onSteer={thread && !subagent && canSteer(thread.provider) ? steer : undefined}
+                disabled={
+                  !connection.open ||
+                  !snapshot.loaded ||
+                  thread?.status === "archived" ||
+                  !!thread?.moved ||
+                  (subagent && !subagentWorking)
+                }
+                placeholder={
+                  thread?.moved
+                    ? "This thread is moving or has moved to another machine"
+                    : subagent
+                    ? subagentWorking
+                      ? "Message this subagent…"
+                      : "This subagent has finished"
+                    : undefined
+                }
+                onStop={subagent ? undefined : stop}
+                onSend={send}
+                prompt={editPrompt}
+                promptAttachments={editAttachments}
+                onPromptConsumed={() => { setEditPrompt(""); setEditAttachments(undefined); }}
+              />
+            )}
           </View>
         </ChromeBar>
       </View>
