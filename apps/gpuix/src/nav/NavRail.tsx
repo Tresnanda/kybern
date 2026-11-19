@@ -321,6 +321,7 @@ function UsageCard({ entry: global }: { entry: ProviderLimits }) {
         const used = limitUsed(limit, now)
         const left = used === null ? null : 100 - used
         const pace = limitPace(limit, now)
+        const reset = resetIn(limit.resets_at, now)
         const tone = limitTone(used)
         return (
           <div key={`${limit.window_minutes ?? ''}-${limit.name}`} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -346,16 +347,18 @@ function UsageCard({ entry: global }: { entry: ProviderLimits }) {
                 {pace && <div style={{ position: 'absolute', top: 0, bottom: 0, left: (CARD_INNER * pace.evenLeft) / 100, width: 1.5, marginLeft: -0.75, borderRadius: 1, backgroundColor: ink(t, 0.45) }} />}
               </div>
             )}
-            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
-              <Label color={small} size={13} truncate>
-                {resetIn(limit.resets_at ?? null, now)}
-              </Label>
-              {pace && (
-                <Label color={pace.short ? t.warning : small} size={13}>
-                  {pace.label}
+            {reset !== null && (
+              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
+                <Label color={small} size={13} truncate>
+                  {reset}
                 </Label>
-              )}
-            </div>
+                {pace && (
+                  <Label color={pace.short ? t.warning : small} size={13}>
+                    {pace.label}
+                  </Label>
+                )}
+              </div>
+            )}
           </div>
         )
       })}

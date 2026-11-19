@@ -574,6 +574,25 @@ fn quota_buckets_merge_by_id_and_map_the_windows() {
 }
 
 #[test]
+fn an_unstarted_window_has_no_reset_time() {
+    // Recorded 2026-11-19T14:58:55Z (Google AI Pro, nothing used): an untouched window's
+    // `resetTime` is the read time plus the window, so every read moved it again.
+    let recorded = json!({"groups": [{"buckets": [
+        {"bucketId": "3p-weekly", "displayName": "Weekly Limit Remaining", "window": "weekly", "resetTime": "2026-11-26T14:58:55Z", "remainingFraction": 1},
+        {"bucketId": "3p-5h", "displayName": "Five Hour Limit Remaining", "window": "5h", "resetTime": "2026-11-19T19:58:55Z", "remainingFraction": 1}],
+        "displayName": "Claude and GPT models",
+        "description": "Models within this group: Claude Opus 5.5, Claude Sonnet 5.5, GPT-OSS 120B"}]});
+    let limits = to_limits(&parse_quota_summary(&recorded));
+    assert_eq!(limits.len(), 2);
+    assert_eq!(limits[0].name, "Claude and GPT models · 5-hour", "the row names the models it covers");
+    assert!(limits.iter().all(|limit| limit.used_percent == 0.0 && limit.resets_at.is_none()), "{limits:?}");
+    // Once something is used the window has started, and its reset time is real.
+    let started = json!({"groups": [{"displayName": "Claude and GPT models", "buckets": [
+        {"bucketId": "3p-5h", "window": "5h", "resetTime": "2026-11-19T19:58:55Z", "remainingFraction": 0.96}]}]});
+    assert_eq!(to_limits(&parse_quota_summary(&started))[0].resets_at, Some(1_795_118_335));
+}
+
+#[test]
 fn the_project_and_plan_come_from_load_code_assist() {
     let (project, plan) = parse_load_code_assist(
         &json!({"cloudaicompanionProject": "proj-123", "paidTier": {"id": "g1-plus-tier"}, "currentTier": {"id": "free-tier"}}),

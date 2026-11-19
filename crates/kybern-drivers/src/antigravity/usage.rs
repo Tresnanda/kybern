@@ -72,7 +72,13 @@ pub struct QuotaReading {
     pub plan: Option<String>,
 }
 
-fn reset_seconds(value: Option<&Value>) -> Option<i64> {
+/// When a window resets. A window with nothing used has not started: Google then
+/// answers the time of the read plus the window (`now + 5h`, `now + 7d`), a new
+/// one on every read, so it says nothing and is left out.
+fn reset_seconds(value: Option<&Value>, used: f64) -> Option<i64> {
+    if used <= 0.0 {
+        return None;
+    }
     value.and_then(Value::as_str).and_then(|text| DateTime::parse_from_rfc3339(text).ok()).map(|at| at.timestamp())
 }
 
@@ -135,12 +141,13 @@ pub fn parse_quota_summary(body: &Value) -> Vec<QuotaBucket> {
                 .and_then(Value::as_str)
                 .map(str::to_string)
                 .unwrap_or_else(|| format!("{family}:{}", window.label()));
+            let used = (1.0 - remaining).clamp(0.0, 1.0);
             buckets.push(QuotaBucket {
                 id,
                 family: family.to_string(),
                 window,
-                used: (1.0 - remaining).clamp(0.0, 1.0),
-                resets_at: reset_seconds(bucket.get("resetTime")),
+                used,
+                resets_at: reset_seconds(bucket.get("resetTime"), used),
             });
         }
     }
@@ -155,12 +162,13 @@ fn parse_available_models(body: &Value) -> Vec<QuotaBucket> {
         for (key, window) in [("quotaInfo", QuotaWindow::Session), ("weeklyQuotaInfo", QuotaWindow::Week)] {
             let Some(info) = model.get(key) else { continue };
             let Some(remaining) = info.get("remainingFraction").and_then(Value::as_f64).filter(|value| value.is_finite()) else { continue };
+            let used = (1.0 - remaining).clamp(0.0, 1.0);
             buckets.push(QuotaBucket {
                 id: format!("{id}:{key}"),
                 family: family.clone(),
                 window,
-                used: (1.0 - remaining).clamp(0.0, 1.0),
-                resets_at: reset_seconds(info.get("resetTime")),
+                used,
+                resets_at: reset_seconds(info.get("resetTime"), used),
             });
         }
     }

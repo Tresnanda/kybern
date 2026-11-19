@@ -17,7 +17,27 @@ const LIMIT_NAME_LABELS: Record<string, string> = {
   seven_day_overage_included: "Weekly (with overage)",
 }
 
+/**
+ * The models a limit covers, when one account has several limits per window:
+ * Antigravity names them "<models> · <window>" ("Claude and GPT models · 5-hour").
+ */
+export function limitFamily(limit: NonNullable<ProviderUsage["limits"]>[number]): string | null {
+  const name = limit.name?.trim() ?? ""
+  const cut = name.lastIndexOf(" · ")
+  return cut > 0 ? name.slice(0, cut).trim() || null : null
+}
+
+/** The limit's name: its window, after the models it covers when the agent names them. */
 export function limitLabel(limit: NonNullable<ProviderUsage["limits"]>[number], provider?: ProviderKind): string {
+  const window = windowLabel(limit, provider)
+  const family = limitFamily(limit)
+  // Any other window shows its whole name already.
+  const known = limit.window_minutes === 300 || limit.window_minutes === 10080
+  return family && known ? `${family} · ${window}` : window
+}
+
+/** The window alone: "5-hour", "Weekly", Claude's "Current session". */
+export function windowLabel(limit: NonNullable<ProviderUsage["limits"]>[number], provider?: ProviderKind): string {
   // Match each vendor's own wording: Claude calls these "Current session" and
   // "This week"; Codex (and the generic case) use the window durations.
   const claude = provider === "claude-code"
@@ -108,9 +128,12 @@ export function bindingLimit(limits: readonly Limit[], now: number): { limit: Li
   return best
 }
 
-/** "Resets in 2h 14m" within a day, otherwise the weekday or date and time. */
-export function resetIn(seconds: number | null, now: number): string {
-  if (seconds === null || !Number.isFinite(seconds)) return "Reset time unavailable"
+/**
+ * "Resets in 2h 14m" within a day, otherwise the weekday or date and time; null
+ * when the agent gave no reset time, so the line is left out instead of guessed.
+ */
+export function resetIn(seconds: number | null | undefined, now: number): string | null {
+  if (seconds == null || !Number.isFinite(seconds)) return null
   if (seconds * 1000 <= now) return "Reset since last update"
   const minutes = Math.round((seconds * 1000 - now) / 60_000)
   if (minutes <= 0) return "Resets now"
