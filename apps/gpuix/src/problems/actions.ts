@@ -104,9 +104,10 @@ const updateAgent: ProblemActionHandler = {
 const openSettings: ProblemActionHandler = {
   available: () => true,
   run: (action) => {
-    void import('../settings/SettingsScreen.tsx').then(({ TABS, openSettingsTab }) => {
+    void import('../settings/SettingsScreen.tsx').then(({ TABS, openSettings }) => {
+      // The daemon's `section` names a Settings tab.
       const section = text(action, 'section') ?? 'general'
-      openSettingsTab(TABS.find((tab) => tab[0] === section)?.[0] ?? 'general')
+      openSettings({ tab: TABS.find((tab) => tab[0] === section)?.[0] ?? 'general' })
     }).catch(() => {})
   },
 }

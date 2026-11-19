@@ -2,7 +2,8 @@ import { AccountsHeaderAction } from './Accounts.tsx'
 import { ProblemLine } from '../problems/Line.tsx'
 import { useEnvironment } from '../shell/environment.ts'
 import { useGpuix } from '@gpuix/react'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { PublicInstance } from '@gpuix/react'
 import { setSettingsTitle } from './Breadcrumb.tsx'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
@@ -16,6 +17,9 @@ import { SectionEnter, settingsOverlayOwnsEscape } from './controls.tsx'
 import { SearchField } from '../kit/SearchField.tsx'
 import { Button } from '../kit/Button.tsx'
 import { refreshSettings, useSettings, useSettingsConnection } from './store.ts'
+import { aimAt, SettingsList, type SettingsSectionId } from './anchor.ts'
+import { holdListInPlace } from '../native/steadyLists.ts'
+import { toastProblem } from '../problems/toast.ts'
 import { General, Agents } from './primary.tsx'
 import { Accounts, Integrations, Computer, Background } from './secondary.tsx'
 import { Appearance } from './Appearance.tsx'
@@ -47,11 +51,16 @@ export const TABS = [
 export type Tab = typeof TABS[number][0]
 let lastTab: Tab = 'general'
 const tabListeners = new Set<() => void>()
-export function openSettingsTab(tab: Tab) {
+/** The save failure already shown, so reopening Settings doesn't show it again. */
+let toasted: unknown = null
+/** Open Settings on `tab`, scrolled to `section` when given (a stable id on its `<Section>`; `anchor.ts`). */
+export function openSettings({ tab, section }: { tab: Tab; section?: SettingsSectionId }) {
+ aimAt(section ?? null)
  lastTab = tab; setSettingsTitle(TABS.find(item => item[0] === tab)![1]);
  for (const listener of tabListeners) listener()
  if (!getNav().settingsOpen) setNav({ settingsOpen: true })
 }
+export const openSettingsTab = (tab: Tab) => openSettings({ tab })
 const GROUPS = [{ label: 'Personal', ids: ['general', 'appearance', 'notifications'] }, { label: 'Coding', ids: ['agents', 'accounts', 'integrations', 'skills', 'plugins', 'computer'] }, { label: 'System', ids: ['machines', 'devices', 'background', 'storage', 'about'] }]
 
 export function SettingsScreen() {
@@ -75,6 +84,13 @@ export function SettingsScreen() {
   const sectionEnter = useMemo(() => { let n = 0; return { play: pointerSwitch, next: () => n++ } }, [tab, pointerSwitch])
   const { settings, error } = useSettings()
   useSettingsConnection()
+  // A failed save goes back to the saved value and says so in a toast: a line above the list would push the page down.
+  const saveError = error?.action === 'read the settings' ? null : error
+  useEffect(() => { if (saveError && saveError !== toasted) { toasted = saveError; toastProblem(saveError.error, { action: saveError.action, id: 'settings-save' }) } }, [saveError])
+  // Focus returning to a control (a Select's trigger, a dialog's opener) must not scroll the page (`native/steadyLists.ts`).
+  const release = useRef<(() => void) | null>(null)
+  const listNode = useRef<PublicInstance | null>(null)
+  const holdList = useCallback((node: PublicInstance | null) => { listNode.current = node; release.current?.(); release.current = node ? holdListInPlace(node.id) : null }, [])
   useEffect(() => {
     return () => { if (previousFocus != null) queueMicrotask(() => renderer?.focusElement?.(previousFocus)) }
   }, [renderer, previousFocus])
@@ -107,13 +123,13 @@ export function SettingsScreen() {
       <div style={{ flexGrow: 1 }} /><div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 8, paddingRight: 8, paddingTop: 8 }}><div style={{ width: 6, height: 6, borderRadius: 3, flexShrink: 0, backgroundColor: ink(t, 0.58 * 0.5) }} /><Label color={t.textSecondary} size={14} lineHeight={21}>{environment.name}</Label></div>
     </div>
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, minHeight: 0 }}>
-      {error && <div style={{ padding: 16 }}><ProblemLine error={error.error} action={error.action} retry={error.action === 'read the settings' ? () => void refreshSettings() : undefined} testId="settings-problem" /></div>}
-      <SectionEnter.Provider value={sectionEnter}><virtual-list key={tab} testId="settings-content" style={{ flexGrow: 1, minHeight: 0 }}>
+      {error && !saveError && <div style={{ padding: 16 }}><ProblemLine error={error.error} action={error.action} retry={() => void refreshSettings()} testId="settings-problem" /></div>}
+      <SettingsList.Provider value={listNode}><SectionEnter.Provider value={sectionEnter}><virtual-list key={tab} ref={holdList} testId="settings-content" style={{ flexGrow: 1, minHeight: 0 }}>
         <div key="heading" paintTransform={pointerSwitch ? enterTransform('section') : undefined} style={{ display: 'flex', justifyContent: 'center', width: '100%', paddingTop: 26, paddingBottom: 34, paddingLeft: 40, paddingRight: 40 }}><div style={{ display: 'flex', flexDirection: 'column', width: '100%', maxWidth: 680, gap: 9, position: 'relative' }}><div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:16}}><Label color={t.text} size={28} lineHeight={33.6} weight={600}>{current[1]}</Label>{tab === 'accounts' && <AccountsHeaderAction/>}</div><Label color={t.textSecondary} size={14} lineHeight={22.4} style={{maxWidth:tab === 'accounts' ? 520 : undefined}}>{current[2]}</Label></div></div>
         {!settings && <div key="loading" style={{ padding: 40 }}><Label color={t.textSecondary}>Reading settings…</Label></div>}
         {settings && content}
         <div key="bottom" style={{ height: 64 }} />
-      </virtual-list></SectionEnter.Provider>
+      </virtual-list></SectionEnter.Provider></SettingsList.Provider>
     </div>
   </div>
 }

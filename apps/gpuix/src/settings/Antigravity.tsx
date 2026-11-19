@@ -17,7 +17,7 @@ import { latestError, latestSettings, updateSettings, useSettings } from './stor
 
 export function AntigravitySetup() {
   const available = useNav((s) => s.providers.some((p) => p.kind === 'antigravity'))
-  const { settings, saving } = useSettings()
+  const { settings } = useSettings()
   const accounts = useAccounts('antigravity')
   const [key, setKey] = useState('')
   const [busy, setBusy] = useState(false)
@@ -49,7 +49,7 @@ export function AntigravitySetup() {
     await updateSettings({ antigravity: { ...(latestSettings()?.antigravity ?? {}), kybern_tools } })
     // The daemon refuses the switch when another program already uses the name `kybern`; say why.
     const failed = latestError()
-    if (failed) toastProblem(failed.error, { action: 'change Kybern tools' })
+    if (failed) toastProblem(failed.error, { action: 'change Kybern tools', id: 'settings-save' })
   }
 
   return (
@@ -70,7 +70,7 @@ export function AntigravitySetup() {
         </Button>
       </Row>
       <Row title="Kybern tools" description="Lets Antigravity use Kybern's notes, tasks and agents. Kybern adds one entry, kybern, to Antigravity's MCP servers.">
-        <Switch aria-label="Kybern tools" testId="antigravity-kybern-tools" checked={toolsOn} disabled={saving} onCheckedChange={(on) => void setTools(on)} />
+        <Switch aria-label="Kybern tools" testId="antigravity-kybern-tools" checked={toolsOn} onCheckedChange={(on) => void setTools(on)} />
       </Row>
     </Section>
   )
