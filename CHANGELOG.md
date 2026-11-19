@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.25.0
+
+<!-- kybern-release-title: Inline pages that feel like the chat, an Older shelf, and harness update notices -->
+<!-- kybern-release-summary: Pages agents publish are live and full height and scroll with the conversation, inactive threads move to an Older group and archived ones can come back, and Kybern tells you when a harness has a new version and updates it on every machine. -->
+
+- Pages agents publish in a thread are live as soon as they're on screen: no "Click to interact", your first click or drag goes straight to the page, a page is as tall as its content instead of cut off at 480 px, and the wheel and trackpad scroll the conversation over it. A list inside the page still scrolls on its own. ⌘K, ⌘W and ⌘1–9 work from inside a page.
+- Threads with no turn for 7 days move to a collapsed **Older** group at the bottom of their project. Pinned, running and unread threads stay put, **Never move to Older** keeps one out, and a new message brings it back. Choose Never, 3, 7 or 30 days in Settings.
+- Archived threads can come back: each project lists them under **Archived**, they open read-only with **Unarchive**, the command palette finds them, and archiving shows **Undo** for 5 seconds. Unarchiving restores a worktree that cleanup removed. Also `kybern unarchive`.
+- Kybern checks once a day whether Claude Code, Codex, OpenCode, pi, Oh My Pi, Cursor, Antigravity or Grok Build has a newer version, using the source that matches how it was installed. A pill in the sidebar shows the harness with **Update**; **Settings → Agent providers** has **Update now** and **Update on all machines**. Each machine waits until that harness is idle.
+- Scrolling inside the panel above the composer, a request card or a long draft no longer scrolls the conversation behind it. A gesture stays with the list it started in; a new one at its end scrolls the chat. Background tasks in that panel have a stop button, and **Stop all** includes them.
+- Settings no longer jumps when you change a select or menu, and **Change in Settings** on a compaction notice opens straight at **Compaction**.
+- Replies no longer split mid-word into a stray paragraph while background agents work, and replies that were already split show whole again.
+- Link logos stay readable in both themes: a site's dark-mode icon is used when it has one, and a dark logo gets a small backing only when it would be hard to see. A link's underline is one straight line, even around code or bold, and never runs under the logo.
+- The slash menu lists each skill once. Plugin skills say **Plugin**, and a skill installed both as a plugin and as your own shows once as **Plugin · Personal**.
+- The model picker dims harnesses that aren't installed and lists them last, and marks ones that need sign-in with a dot. The delegated agents row shows each harness's logo.
+- On Linux, `sudo -A` from an agent shows the password card instead of failing.
+
 ## 0.24.0
 
 <!-- kybern-release-title: Interface size, smaller databases, and fewer tokens per Claude request -->
