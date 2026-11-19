@@ -1,9 +1,7 @@
 use super::login::parse_login;
 use super::stream::{TurnMapper, friendly_error};
 use super::tools::{exited_nonzero, find_in_transcript, normalize};
-use super::usage::{
-    merge_buckets, parse_agy_usage, parse_load_code_assist, parse_quota_summary, plan_name, read_agy_usage, to_limits, user_agent,
-};
+use super::usage::{merge_buckets, parse_agy_usage, parse_load_code_assist, parse_quota_summary, plan_name, to_limits, user_agent};
 use super::*;
 use crate::{NativeToolBridge, NativeToolRestrictions};
 use base64::Engine;
@@ -993,6 +991,7 @@ fn the_user_agent_names_the_cli_and_its_platform() {
 #[cfg(unix)]
 #[tokio::test]
 async fn agy_usage_runs_once_without_a_turn_and_is_reused() {
+    use super::usage::read_agy_usage;
     let dir = tempfile::tempdir().unwrap();
     let binary = dir.path().join("agy");
     let calls = dir.path().join("calls");
@@ -1019,6 +1018,7 @@ async fn agy_usage_runs_once_without_a_turn_and_is_reused() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_failing_agy_usage_reads_as_nothing() {
+    use super::usage::read_agy_usage;
     let dir = tempfile::tempdir().unwrap();
     let binary = dir.path().join("agy");
     kybern_protocol::process::write_executable(&binary, "#!/bin/sh\necho 'not json'\nexit 1\n").unwrap();
