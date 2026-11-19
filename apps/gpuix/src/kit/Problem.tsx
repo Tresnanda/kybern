@@ -48,7 +48,7 @@ export interface ProblemProps {
 const column = { display: 'flex', flexDirection: 'column', minWidth: 0 } as const
 
 /** The "Show details" button and, once open, the technical text with its copy button. Each part is placed by the form that uses it. */
-function useDetails(detail: string | undefined, testId: string, onReport?: () => void): { toggle: ReactNode; box: ReactNode } {
+export function useDetails(detail: string | undefined, testId: string, onReport?: () => void): { toggle: ReactNode; box: ReactNode } {
   const t = useTheme()
   const c = useControls()
   const [open, setOpen] = useState(false)

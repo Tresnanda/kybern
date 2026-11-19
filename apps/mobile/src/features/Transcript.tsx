@@ -6,6 +6,8 @@ import { Share, StyleSheet, View } from "react-native";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 import { GROUP_COPY, outsideChangeText } from "../../../../packages/kybern-client/src/groups";
 import { forkNotice, forkNoticeText } from "../../../../packages/kybern-client/src/forkMachine";
+import { hookWarningDetails, hookWarningHelp } from "../../../../packages/kybern-client/src/hookWarnings";
+import { Details } from "../ui/Problem";
 import { coordinatorCardLine } from "../../../../packages/kybern-client/src/coordinatorCards";
 import { secretRequestInput } from "../../../../packages/kybern-client/src/secretRequest";
 import { agentResultItems, threadMessagePart } from "../../../../packages/kybern-client/src/delegations";
@@ -422,6 +424,17 @@ export const TranscriptBlock = memo(function TranscriptBlock({
       return <ApprovalPanel approval={block.approval} />;
     }
     case "notice": {
+      // Every hook of a call that gave no answer is one row: the cause in a sentence, each hook behind "Show details".
+      if (block.hooks) {
+        const help = hookWarningHelp(block.hooks);
+        return (
+          <View style={{ gap: space.xs }}>
+            <T variant="footnote" tone="secondary">{block.text}</T>
+            {help ? <T variant="footnote" tone="secondary">{help}</T> : null}
+            <Details text={hookWarningDetails(block.hooks)} />
+          </View>
+        );
+      }
       // A fork notice ("Forked to satyamas") offers the new thread, on the machine that holds it.
       const fork = block.data ? forkNotice(block.data) : null;
       const open = fork?.threadId ?? null;

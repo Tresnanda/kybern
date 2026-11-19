@@ -46,7 +46,7 @@ function useFixes(problem: ProblemModel, onRetry?: () => void): Fix[] {
 }
 
 /** "Show details", and once open the technical text with its copy button. Closed by default; the text can be selected. */
-function Details({ text, center = false }: { text: string; center?: boolean }) {
+export function Details({ text, center = false }: { text: string; center?: boolean }) {
   const { colors } = useTheme();
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);

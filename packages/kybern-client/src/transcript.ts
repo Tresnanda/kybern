@@ -1,5 +1,6 @@
 import type { ProviderUsage } from "./types.ts"
 import { mediaSource } from "./responseImages.ts"
+import { hookWarningOf, hookWarningTitle, type HookWarning } from "./hookWarnings.ts"
 // Client-side transcript projection. Seeds from `threads.get`, then folds live
 // `ThreadEvent`s into blocks the views render directly.
 
@@ -70,7 +71,7 @@ export type Block =
     }
   | { kind: "runtime_task"; id: string; turnId: TurnId; at: string; seq: number; task: RuntimeTask }
   | { kind: "approval"; id: string; turnId: TurnId; at: string; seq: number; approval: ApprovalRequest; decision: ApprovalDecision | null; auto?: boolean; /** The delegating agent that answered for the user. */ answeredBy?: RequestAnswerer }
-  | { kind: "notice"; id: string; turnId: TurnId; at: string; seq: number; level: NoticeLevel; text: string; /** What the daemon attached (a fork notice carries its machine and thread). */ data?: JsonValue | null; /** What an error notice means, when the daemon could tell. */ problem?: Problem }
+  | { kind: "notice"; id: string; turnId: TurnId; at: string; seq: number; level: NoticeLevel; text: string; /** What the daemon attached (a fork notice carries its machine and thread). */ data?: JsonValue | null; /** What an error notice means, when the daemon could tell. */ problem?: Problem; /** Set on a hook warning: every hook of the call that gave no answer, folded into this one row. */ hooks?: HookWarning[] }
   | {
       kind: "turn_end"
       id: string
@@ -183,7 +184,7 @@ export function seedFromGet(res: ThreadsGetResult, prev?: ThreadState): ThreadSt
     providerCommands: res.provider_commands ?? [],
     providerUsage: res.provider_usage ?? {},
     thread: res.thread,
-    blocks: settleIdleCompactions(res.transcript.map(entryToBlock).filter((b): b is Block => !!b)),
+    blocks: settleIdleCompactions(foldHookNotices(res.transcript.map(entryToBlock).filter((b): b is Block => !!b))),
     pendingApprovals: res.pending_approvals,
     pendingQuestions: res.pending_questions ?? [],
     checkpoints: prev?.checkpoints ?? [],
@@ -273,7 +274,7 @@ function entryToBlock(e: TranscriptEntry): Block | null {
     case "notice": {
       const idle = idleCompactionData(e.data)
       if (idle) return idleCompactionBlock(e.turn_id, e.at, e.seq ?? 0, idle.contextTokens, idle.cacheExpiresAt, idle.cacheTtlSeconds)
-      return { kind: "notice", id: `notice:${e.seq}`, turnId: e.turn_id, at: e.at, seq: e.seq ?? 0, level: e.level, text: e.text, ...(e.data ? { data: e.data } : {}), ...(e.problem ? { problem: e.problem } : {}) }
+      return noticeBlock(e.turn_id, e.at, e.seq ?? 0, e.level, e.text, e.data, e.problem)
     }
     case "reverted":
       return { kind: "reverted", id: `revert:${e.seq}`, turnId: e.turn_id, at: e.at, seq: e.seq ?? 0, commit: e.commit }
@@ -629,7 +630,7 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
         if (after !== null) blocks = replaceAt(blocks, idle, { ...(blocks[idle] as IdleCompactionBlock), contextAfter: after })
         break
       }
-      blocks = [...blocks, { kind: "notice", id: `notice:${ev.seq}`, turnId, at, seq: ev.seq, level: ev.level, text: ev.text, ...(ev.data ? { data: ev.data } : {}), ...(ev.problem ? { problem: ev.problem } : {}) }]
+      blocks = appendNotice(blocks, noticeBlock(turnId, at, ev.seq, ev.level, ev.text, ev.data, ev.problem))
       break
     }
     case "checkpoint_updated": {
@@ -699,6 +700,59 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       break
   }
   return { subagentMessages: state.subagentMessages, notes, pendingQuestions, providerCommands: state.providerCommands, providerUsage: state.providerUsage, thread, blocks, pendingApprovals: pending, checkpoints, lastSeq: ev.seq, loaded: state.loaded, nextBeforeSeq: state.nextBeforeSeq, loadingEarlier: state.loadingEarlier }
+}
+
+type NoticeBlock = Extract<Block, { kind: "notice" }>
+
+function noticeBlock(turnId: TurnId, at: string, seq: number, level: NoticeLevel, text: string, data: JsonValue | null | undefined, problem: Problem | null | undefined): NoticeBlock {
+  const hook = hookWarningOf(data)
+  return {
+    kind: "notice", id: `notice:${seq}`, turnId, at, seq, level,
+    text: hook ? hookWarningTitle(1) : text,
+    ...(data ? { data } : {}), ...(problem ? { problem } : {}), ...(hook ? { hooks: [hook] } : {}),
+  }
+}
+
+/** How far back a hook warning looks for the row of the same call. */
+const HOOK_ROW_SCAN = 24
+
+/** Add a notice, folding a hook warning into the row before it: the same turn, and either the same call or nothing but that row
+ * since. Claude Code sends one warning per hook, so eight failing hooks are one row of eight, not eight rows. */
+function appendNotice(blocks: Block[], block: NoticeBlock): Block[] {
+  const hook = block.hooks?.length === 1 ? block.hooks[0]! : null
+  const target = hook ? findHookRow(blocks, block.turnId, hook.toolUseId) : -1
+  if (target < 0) return [...blocks, block]
+  const row = blocks[target] as NoticeBlock
+  const hooks = [...(row.hooks ?? []), hook!]
+  return replaceAt(blocks, target, { ...row, hooks, text: hookWarningTitle(hooks.length) })
+}
+
+/** `appendNotice` over a list of rows, for a transcript read in one piece. Blocks with no hook warning are returned as they are. */
+export function foldHookNotices(blocks: readonly Block[]): Block[] {
+  if (!blocks.some((block) => block.kind === "notice" && block.hooks)) return blocks as Block[]
+  const out: Block[] = []
+  for (const block of blocks) {
+    const hook = block.kind === "notice" && block.hooks?.length === 1 ? block.hooks[0]! : null
+    const target = hook ? findHookRow(out, block.turnId, hook.toolUseId) : -1
+    if (target < 0) out.push(block)
+    else {
+      const row = out[target] as NoticeBlock
+      const hooks = [...(row.hooks ?? []), hook!]
+      out[target] = { ...row, hooks, text: hookWarningTitle(hooks.length) }
+    }
+  }
+  return out
+}
+
+function findHookRow(blocks: readonly Block[], turnId: TurnId, toolUseId: string | undefined): number {
+  for (let i = blocks.length - 1; i >= 0 && blocks.length - i <= HOOK_ROW_SCAN; i--) {
+    const block = blocks[i]!
+    if (block.turnId !== turnId) return -1
+    if (block.kind === "notice" && block.hooks) {
+      return i === blocks.length - 1 || (toolUseId !== undefined && block.hooks.some((h) => h.toolUseId === toolUseId)) ? i : -1
+    }
+  }
+  return -1
 }
 
 function releaseNoticeText(reason: SessionReleaseReason): string | null {
