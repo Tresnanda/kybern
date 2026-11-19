@@ -240,8 +240,12 @@ async fn dispatch_part_3(state: &AppState, ctx: &ConnectionCtx, method: &str, sl
         HarnessUpdatesRun::NAME => {
             let p: HarnessUpdateParams = parse(params)?;
             let record = state.harness_updates.request(&state.store, p.kind);
-            tokio::spawn(crate::harness_updates::tick(state.clone()));
+            crate::harness_updates::spawn_tick(state);
             ok(record)
+        }
+        HarnessUpdatesRunAll::NAME => {
+            let p: HarnessUpdatesRunAllParams = parse_or_default(params)?;
+            ok(crate::network::harness_updates::run_all(state, &p.kinds).await)
         }
         DaemonUpdateStatusMethod::NAME => ok(state.daemon_updates.get()),
         DaemonUpdateCheck::NAME => ok(crate::self_update::check(state).await),
@@ -1512,7 +1516,8 @@ async fn dispatch_part_16(state: &AppState, ctx: &ConnectionCtx, method: &str, s
         | PeerRelayOpen::NAME
         | PeerRelayData::NAME
         | PeerRelayClose::NAME
-        | PeerUpdateStart::NAME => Err(RpcError::new(codes::NOT_AVAILABLE, format!("{method} is only available between machines."))),
+        | PeerUpdateStart::NAME
+        | PeerHarnessUpdatesRun::NAME => Err(RpcError::new(codes::NOT_AVAILABLE, format!("{method} is only available between machines."))),
         _ => {
             *slot = Some(params);
             Err(RpcError::method_not_found(method))

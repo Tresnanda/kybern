@@ -1,7 +1,7 @@
 // Installed agents: each line says only what Kybern has read, and the update button appears only where an updater can run.
 import { describe, expect, test } from 'bun:test'
 import type { CursorSetupStatus, HarnessUpdate, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
-import { canCheckForUpdates, checkedPhrase, cursorSdkLine, updateLine } from './installedAgentsModel.ts'
+import { canCheckForUpdates, canUpdateNow, checkedPhrase, cursorSdkLine, failureDetail, updateLine } from './installedAgentsModel.ts'
 
 const now = Date.parse('2026-11-02T12:00:00Z')
 const record = (status: HarnessUpdate['status'], message = '', checked_at: string | null = '2026-11-02T09:00:00Z'): HarnessUpdate =>
@@ -22,8 +22,28 @@ describe('update line', () => {
   })
   test('progress and reasons pass through; a failure is a warning', () => {
     expect(updateLine(record('waiting', 'Waiting for active turns and background work to finish'), now)?.text).toBe('Waiting for active turns and background work to finish')
-    expect(updateLine(record('failed', 'agy update exited with 1'), now)).toEqual({ text: 'agy update exited with 1', tone: 'warning' })
+    // The headline says what to do; the updater's own text is behind Show details.
+    expect(updateLine(record('failed', 'agy update exited with 1'), now)).toEqual({ text: 'The last update didn’t finish. Try again, or run the updater in your terminal.', tone: 'warning' })
+    expect(failureDetail(record('failed', 'agy update exited with 1'))).toBe('agy update exited with 1')
+    expect(failureDetail(record('current'))).toBeNull()
     expect(updateLine(record('updated'), now)?.text).toBe('Updated · checked 3h ago. New turns use this version.')
+  })
+})
+
+describe('a newer version', () => {
+  const newer = (patch: Partial<HarnessUpdate> = {}): HarnessUpdate => ({ ...record('current'), update_available: true, latest_version: '1.5.0', ...patch })
+  test('says it is out and offers Update now', () => {
+    expect(updateLine(newer(), now)).toEqual({ text: '1.5.0 is out', tone: 'normal' })
+    expect(canUpdateNow(provider(), newer(), false)).toBe(true)
+    expect(canUpdateNow(provider({ kind: 'cursor' }), newer({ kind: 'cursor' }), false), 'the Cursor CLI updates too').toBe(true)
+  })
+  test('not for a custom binary, a missing agent, or nothing newer', () => {
+    expect(canUpdateNow(provider(), newer(), true)).toBe(false)
+    expect(canUpdateNow(provider({ available: false }), newer(), false)).toBe(false)
+    expect(canUpdateNow(provider(), record('current'), false)).toBe(false)
+  })
+  test('while it updates, the progress shows instead', () => {
+    expect(updateLine(newer({ status: 'updating', message: 'Checking and installing updates…' }), now)?.text).toBe('Checking and installing updates…')
   })
 })
 

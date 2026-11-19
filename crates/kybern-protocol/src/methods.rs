@@ -731,6 +731,35 @@ pub struct HarnessUpdateParams {
 }
 method!(HarnessUpdatesRun, "harness_updates.run", Some(Scope::OrchestrationOperate), HarnessUpdateParams, HarnessUpdate);
 
+/// Sent with the whole list whenever a harness's update record changes: a version check found a newer
+/// version, or an update started, waited or finished.
+pub const HARNESS_UPDATES_CHANGED_NOTIFICATION: &str = "harness_updates.changed";
+
+/// `harness_updates.run_all`: update harnesses on this machine and every online member.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct HarnessUpdatesRunAllParams {
+    /// The harnesses to update. Empty: on each machine, every harness its own version check found a newer
+    /// version for.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kinds: Vec<ProviderKind>,
+}
+
+/// The harnesses one machine queued.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HarnessUpdatesStarted {
+    pub machine_id: MachineId,
+    pub kinds: Vec<ProviderKind>,
+}
+
+/// Every machine once: queued harness updates, or skipped with the reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HarnessUpdatesRunAllResult {
+    pub started: Vec<HarnessUpdatesStarted>,
+    pub skipped: Vec<NetworkUpdateSkipped>,
+}
+// Fans out to members, so it needs what `network.update_all` needs.
+method!(HarnessUpdatesRunAll, "harness_updates.run_all", Some(Scope::NetworkAdmin), HarnessUpdatesRunAllParams, HarnessUpdatesRunAllResult);
+
 // `check` asks the release feed without installing; `run` installs the newest
 // version once nothing is running, then restarts the daemon.
 method!(DaemonUpdateStatusMethod, "daemon_update.status", Some(Scope::OrchestrationRead), Empty, DaemonUpdate);
@@ -5018,6 +5047,14 @@ method!(PeerRelayClose, "peer.relay.close", Some(Scope::MachineRelay), PeerRelay
 // can turn off per machine and that is not the always-on operation sync: a machine that does not let others
 // change its settings does not let them restart it into a new version either.
 method!(PeerUpdateStart, "peer.update.start", Some(Scope::MachineSettings), PeerUpdateStartParams, PeerUpdateStartResult);
+// A member asks this machine to update its harnesses (`harness_updates.run_all`). The same scope as `peer.update.start`.
+method!(
+    PeerHarnessUpdatesRun,
+    "peer.harness_updates.run",
+    Some(Scope::MachineSettings),
+    PeerHarnessUpdatesRunParams,
+    PeerHarnessUpdatesRunResult
+);
 
 // Remote delegation and the outbox (M2, R1; payloads in outbox.rs).
 method!(OutboxList, "outbox.list", Some(Scope::OrchestrationRead), OutboxListParams, OutboxListResult);
@@ -5195,6 +5232,7 @@ registry!(
     ThreadsSwitchContinue,
     HarnessUpdatesList,
     HarnessUpdatesRun,
+    HarnessUpdatesRunAll,
     DaemonUpdateStatusMethod,
     DaemonUpdateCheck,
     DaemonUpdateRun,
@@ -5393,6 +5431,7 @@ registry!(
     PeerRelayData,
     PeerRelayClose,
     PeerUpdateStart,
+    PeerHarnessUpdatesRun,
     OutboxList,
     OutboxRetry,
     OutboxCancel,

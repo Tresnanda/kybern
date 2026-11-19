@@ -95,6 +95,7 @@ export function Agents() {
   return <>
     <Section title="Updates">
       <Row title="Update harnesses automatically" description="Check daily on this machine. Install when the agent's turns and background work are finished." shared="auto_update_harnesses"><Switch aria-label="Update harnesses automatically" testId="settings-harness-updates" checked={s.auto_update_harnesses} onCheckedChange={(auto_update_harnesses) => void updateSettings({ auto_update_harnesses })} /></Row>
+      <Row title="Show when a harness has a new version" description="Ask each harness's release feed once a day. Nothing about you is sent." shared="check_harness_versions"><Switch aria-label="Show when a harness has a new version" testId="settings-harness-versions" checked={s.check_harness_versions ?? true} onCheckedChange={(check_harness_versions) => void updateSettings({ check_harness_versions })} /></Row>
       <Row title="" description="Uses each CLI's updater or its existing Homebrew package. Custom binaries and version-managed installations stay under your control." />
       {!activeEnvironment().local && <Row title="Update the daemon automatically" description="Check the release feed daily on this machine. Install and restart when nothing is running." shared="auto_update_daemon"><Switch aria-label="Update the daemon automatically" checked={s.auto_update_daemon} onCheckedChange={(auto_update_daemon) => void updateSettings({ auto_update_daemon })} /></Row>}
       <DaemonUpdateRow />

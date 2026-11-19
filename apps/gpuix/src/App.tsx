@@ -72,6 +72,7 @@ import { Toaster } from './shell/toasts.tsx'
 import { ZoomPill } from './shell/ZoomPill.tsx'
 import { startStarPrompt } from './shell/starPromptApp.ts'
 import { AppUpdateSurface } from './platform/UpdateSurface.tsx'
+import { HarnessUpdatesFollower } from './harnessUpdates/store.ts'
 import { NetworkIntroSurface } from './machines/NetworkIntro.tsx'
 import { TranscriptReleased } from './platform/TranscriptReleased.tsx'
 import { installWindowSurface, useTranscriptReleased } from './platform/surface.ts'
@@ -276,6 +277,7 @@ function Workspace() {
       <Toaster />
       <ZoomPill />
       <AppUpdateSurface />
+      <HarnessUpdatesFollower />
       <NetworkIntroSurface />
       <SidebarDragLayer />
       <ResizeCaptureLayer />
