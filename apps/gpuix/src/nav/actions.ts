@@ -4,8 +4,10 @@
 import { errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
 import { seedFromGet } from '../../../../packages/kybern-client/src/transcript.ts'
 import type { ProviderInstance, SavedSession, Thread, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
-import { getState, projectClient, refreshLists, selectDraft, selectThread, set, threadClient } from '../state.ts'
-import { markArchived } from './live.ts'
+import { getState, projectClient, refreshLists, selectDraft, selectThread, set, threadClient, type StateThread } from '../state.ts'
+import { markArchived, markUnarchived } from './live.ts'
+import { toast } from '../shell/toasts.tsx'
+import { toastProblem } from '../problems/toast.ts'
 import { getNav, setNav } from './store.ts'
 import { addProjectToCurrentSpace } from '../spaces/add.ts'
 
@@ -25,17 +27,42 @@ function replaceThread(thread: Thread) {
   set({ threads: getState().threads.map((t) => (t.id === thread.id ? thread : t)) })
 }
 
-/** Rename or pin (`updateThread`). */
-export async function updateThread(threadId: ThreadId, patch: { title?: string; pinned?: boolean }) {
+/** Rename, pin, or move out of Older (`updateThread`). */
+export async function updateThread(threadId: ThreadId, patch: { title?: string; pinned?: boolean; keep_out_of_older?: boolean; move_out_of_older?: boolean }) {
   const thread = await rpc({ thread: threadId }).call('threads.update', { thread_id: threadId, ...patch })
   replaceThread(thread)
   // Pinned threads sort first; keep the list in the desktop's order.
   set({ threads: [...getState().threads].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updated_at.localeCompare(a.updated_at)) })
 }
 
+const byPinnedThenRecent = (a: Thread, b: Thread) => Number(b.pinned) - Number(a.pinned) || b.updated_at.localeCompare(a.updated_at)
+
+/** The sidebar's Archived row counts this machine's archived threads; it moves at once, and the next list read corrects it. */
+function countArchived(projectId: string, by: 1 | -1) {
+  const counts = { ...getState().archivedCounts }
+  const next = (counts[projectId] ?? 0) + by
+  if (next > 0) counts[projectId] = next
+  else delete counts[projectId]
+  set({ archivedCounts: counts })
+}
+
+/** Archive a thread. Nothing is deleted: a toast offers Undo for 5 s, and the project's Archived list brings it back later. */
 export async function archiveThread(threadId: ThreadId) {
-  await rpc({ thread: threadId }).call('threads.archive', { thread_id: threadId })
+  const owner = rpc({ thread: threadId })
+  const listed = getState().threads.find((t) => t.id === threadId) as StateThread | undefined
+  await owner.call('threads.archive', { thread_id: threadId })
   markArchived(threadId)
+  if (listed && !listed.machineId && !listed.parent_thread_id) countArchived(listed.project_id, 1)
+  if (!listed?.parent_thread_id) {
+    toast('Thread archived', {
+      id: `archived:${threadId}`,
+      duration: 5000,
+      action: {
+        label: 'Undo',
+        onClick: () => void unarchiveThread(threadId, owner).catch((e) => toastProblem(e, { action: 'bring the thread back', ...(listed ? { projectId: listed.project_id } : {}) })),
+      },
+    })
+  }
   set({ threads: getState().threads.filter((t) => t.id !== threadId) })
   if (getNav().children[threadId]) {
     const children = { ...getNav().children }
@@ -43,6 +70,22 @@ export async function archiveThread(threadId: ThreadId) {
     setNav({ children })
   }
   // Archiving the open thread leaves it on screen, as the desktop does; it reopens from history.
+}
+
+/** Bring an archived thread back (`threads.unarchive`): idle, at the top of its list, ready to continue. `owner` is the
+ *  machine it is on when that is not the one the user is at. */
+export async function unarchiveThread(threadId: ThreadId, owner: ReturnType<typeof rpc> = rpc({ thread: threadId })): Promise<Thread> {
+  const thread = await owner.call('threads.unarchive', { thread_id: threadId })
+  markUnarchived(threadId)
+  const local = owner === threadClient(null)
+  if (local && !thread.parent_thread_id) {
+    countArchived(thread.project_id, -1)
+    if (!getState().threads.some((t) => t.id === threadId && !(t as StateThread).machineId)) set({ threads: [thread, ...getState().threads].sort(byPinnedThenRecent) })
+    else replaceThread(thread)
+  } else {
+    void refreshLists()
+  }
+  return thread
 }
 
 /** Start a new thread with another agent, seeded with the conversation so far (`handOff`). */

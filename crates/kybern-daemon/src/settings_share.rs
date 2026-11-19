@@ -88,6 +88,7 @@ classify!(SETTINGS_FIELDS, every_settings_field_is_classified, Settings, {
     preview_allowed_folders => PerMachine,
     network => PerMachine,
     compaction => Shared,
+    older_after => Shared,
 });
 
 classify!(PROVIDER_FIELDS, every_provider_field_is_classified, ProviderSettings, {
@@ -575,6 +576,7 @@ mod tests {
             "tell_agents_about_kybern",
             "ask_deadlines",
             "compaction",
+            "older_after",
         ] {
             assert_eq!(class(shared), Sharing::Shared, "{shared}");
         }

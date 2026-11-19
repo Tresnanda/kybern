@@ -5,7 +5,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { Platform, ScrollView, StyleSheet, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLayout } from "../state/layout";
-import { attentionSignals, dismissAttention, useListState } from "../state/listState";
+import { attentionSignals, dismissAttention, setOlderOpen, useListState } from "../state/listState";
 import { PROVIDER_DISPLAY_NAME, type Thread } from "../state/protocol";
 import { threadHasActivity, useApp } from "../state/runtime";
 import { useLists } from "../state/useLists";
@@ -18,10 +18,12 @@ import {
   filterThreads,
   groupByProject,
   isFiltering,
+  projectSection,
   threadAgents,
   threadRows,
   THREAD_SCOPES,
   type ThreadFilter,
+  type ThreadRow,
 } from "../state/threadList";
 import { MenuButton } from "../ui/ActionMenu";
 import { Brand } from "../ui/Brand";
@@ -34,9 +36,34 @@ import { SpaceTile } from "../ui/SpaceTile";
 import { maxScale, radius, space, useTheme, useType } from "../ui/theme";
 import { useMachineMenuItems } from "./MachineFilter";
 import { useSpaceMenuItems } from "./Spaces";
-import { ThreadListRow, type ThreadRowContext } from "./ThreadRows";
+import { OlderDisclosure, ThreadListRow, type ThreadRowContext } from "./ThreadRows";
 
 const MAX_PROJECT_THREADS = 8;
+
+/** The first `MAX_PROJECT_THREADS` top-level rows with their children, unless `all`; `hidden` counts the top-level rest. */
+function capRows(rows: readonly ThreadRow[], all: boolean): { shown: readonly ThreadRow[]; hidden: number } {
+  if (all) return { shown: rows, hidden: 0 };
+  let counted = 0;
+  const shown = rows.filter((row) => (row.depth === 0 ? ++counted <= MAX_PROJECT_THREADS : counted <= MAX_PROJECT_THREADS));
+  return { shown, hidden: rows.filter((row) => row.depth === 0).length - shown.filter((row) => row.depth === 0).length };
+}
+
+/** "Show 4 more" under a capped run of rows. */
+function ShowMoreLink({ hidden, onPress }: { hidden: number; onPress: () => void }) {
+  return (
+    <Tap
+      label={`Show ${hidden} more threads`}
+      feedback="highlight"
+      onPress={onPress}
+      style={{ paddingStart: 12, minHeight: 32, justifyContent: "center", borderRadius: 9 }}
+    >
+      <T variant="caption" tone="accent">
+        Show {hidden} more
+      </T>
+    </Tap>
+  );
+}
+
 /** Rows sit 8 pt in from the sidebar edges so a selection reads as a rounded pill. */
 const ROW_INSET = space.sm;
 
@@ -245,6 +272,7 @@ export function Sidebar() {
   const agents = useMemo(() => threadAgents(live, filter.agent), [live, filter.agent]);
   const agentName = filter.agent ? (PROVIDER_DISPLAY_NAME[filter.agent] ?? filter.agent) : undefined;
   const filtering = isFiltering(filter);
+  const signals = useMemo(() => attentionSignals(list), [list]);
 
   const ctx = useMemo<ThreadRowContext>(
     () => ({
@@ -356,12 +384,15 @@ export function Sidebar() {
           </View>
           {groups.map((group) => {
             const open = filtering || !collapsed[group.projectId] || group.threads.some((t) => t.id === activeId);
-            const rows = threadRows(group.threads, filter.archived ? [] : children, expanded, { now: Date.now(), activeId });
-            let counted = 0;
-            const shown = showAll[group.projectId] || filtering
-              ? rows
-              : rows.filter((row) => (row.depth === 0 ? ++counted <= MAX_PROJECT_THREADS : counted <= MAX_PROJECT_THREADS));
-            const hidden = group.threads.length - shown.filter((r) => r.depth === 0).length;
+            // Inactive threads wait in a folded Older group at the bottom; a filter lists them with the rest.
+            const { recent, older } = projectSection(group.threads, filtering, signals);
+            const rows = threadRows(recent, filter.archived ? [] : children, expanded, { now: Date.now(), activeId });
+            const { shown, hidden } = capRows(rows, !!showAll[group.projectId] || filtering);
+            const olderKey = `older:${group.projectId}`;
+            const olderOpen = older.length > 0 && (!!list.olderOpen[group.projectId] || older.some((t) => t.id === activeId));
+            const olderRows = olderOpen
+              ? capRows(threadRows(older, children, expanded, { now: Date.now(), activeId }), !!showAll[olderKey])
+              : null;
             return (
               <View key={group.projectId} style={{ paddingHorizontal: 10, marginBottom: 6 }}>
                 <GroupHeader
@@ -372,16 +403,14 @@ export function Sidebar() {
                 />
                 {open && shown.map((row) => <ThreadListRow key={row.thread.id} row={row} ctx={ctx} />)}
                 {open && hidden > 0 ? (
-                  <Tap
-                    label={`Show ${hidden} more threads`}
-                    feedback="highlight"
-                    onPress={() => setShowAll((value) => ({ ...value, [group.projectId]: true }))}
-                    style={{ paddingStart: 12, minHeight: 32, justifyContent: "center", borderRadius: 9 }}
-                  >
-                    <T variant="caption" tone="accent">
-                      Show {hidden} more
-                    </T>
-                  </Tap>
+                  <ShowMoreLink hidden={hidden} onPress={() => setShowAll((value) => ({ ...value, [group.projectId]: true }))} />
+                ) : null}
+                {open && older.length > 0 ? (
+                  <OlderDisclosure variant="sidebar" open={olderOpen} onToggle={() => setOlderOpen(group.projectId, !olderOpen)} />
+                ) : null}
+                {open && olderRows ? olderRows.shown.map((row) => <ThreadListRow key={row.thread.id} row={row} ctx={ctx} />) : null}
+                {open && olderRows && olderRows.hidden > 0 ? (
+                  <ShowMoreLink hidden={olderRows.hidden} onPress={() => setShowAll((value) => ({ ...value, [olderKey]: true }))} />
                 ) : null}
               </View>
             );

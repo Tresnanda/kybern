@@ -157,6 +157,20 @@ fn append_event_in_transaction(
     Ok(ThreadEvent { seq, thread_id, turn_id, at, payload })
 }
 
+/// One thread as the Older planner sees it (`Store::older_candidates`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct OlderRow {
+    pub thread_id: ThreadId,
+    pub pinned: bool,
+    pub status: ThreadStatus,
+    pub keep_out_of_older: bool,
+    pub older_at: Option<DateTime<Utc>>,
+    /// When its inactivity clock last started: the latest turn, "Move out of Older" or unarchive, else its creation.
+    pub active_at: DateTime<Utc>,
+    /// Something waits on it: a queued message, a held or queued thread message, or an unanswered request.
+    pub waiting: bool,
+}
+
 /// What removing a project moved to Recently deleted.
 #[derive(Debug, Clone, Default)]
 pub struct ProjectRemoval {
@@ -812,6 +826,92 @@ impl Store {
             let json = moved.map(serde_json::to_string).transpose()?;
             c.execute("UPDATE threads SET moved = ?2 WHERE id = ?1", params![id.to_string(), json])?;
             Ok(c.query_row(&format!("{THREAD_SELECT} WHERE id = ?1"), [id.to_string()], row_to_thread).optional()?)
+        })
+    }
+
+    /// What the Older planner reads about every top-level thread that is not archived: no delegated, subagent,
+    /// inbound or helper child, and no Coordinator. One row each, with the latest turn start read from the events.
+    pub fn older_candidates(&self) -> Result<Vec<OlderRow>> {
+        self.with(|c| {
+            let mut st = c.prepare(
+                "SELECT t.id, t.pinned, t.status, t.keep_out_of_older, t.older_at, t.older_reset_at, t.created_at,
+                        (SELECT e.at FROM events e WHERE e.thread_id = t.id AND e.kind = 'turn_started' ORDER BY e.seq DESC LIMIT 1),
+                        EXISTS (SELECT 1 FROM queued_messages q WHERE q.thread_id = t.id AND q.pending = 1)
+                          OR EXISTS (SELECT 1 FROM thread_messages m WHERE m.to_thread_id = t.id AND m.state IN ('held', 'queued', 'steered'))
+                          OR EXISTS (SELECT 1 FROM approvals a WHERE a.thread_id = t.id AND a.resolved = 0)
+                 FROM threads t
+                 WHERE t.status != 'archived' AND t.parent_thread_id IS NULL AND t.subagent IS NULL AND t.delegation IS NULL
+                   AND t.inbound IS NULL AND t.coordinator_project_id IS NULL",
+            )?;
+            let rows = st.query_map([], |r| {
+                let status: String = r.get(2)?;
+                let created_at = parse_time(r.get(6)?)?;
+                let last_turn = r.get::<_, Option<String>>(7)?.map(parse_time).transpose()?;
+                let reset = r.get::<_, Option<String>>(5)?.map(parse_time).transpose()?;
+                Ok(OlderRow {
+                    thread_id: parse_uuid(r.get::<_, String>(0)?)?,
+                    pinned: r.get(1)?,
+                    status: serde_json::from_value(serde_json::Value::String(status)).map_err(other)?,
+                    keep_out_of_older: r.get(3)?,
+                    older_at: r.get::<_, Option<String>>(4)?.map(parse_time).transpose()?,
+                    active_at: [Some(created_at), last_turn, reset].into_iter().flatten().max().unwrap_or(created_at),
+                    waiting: r.get(8)?,
+                })
+            })?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+    }
+
+    /// Archived top-level threads per project (of one project when given), the ones a person can bring back.
+    pub fn archived_thread_counts(&self, project_id: Option<ProjectId>) -> Result<Vec<(ProjectId, u32)>> {
+        self.with(|c| {
+            let mut st = c.prepare(
+                "SELECT project_id, COUNT(*) FROM threads
+                 WHERE status = 'archived' AND parent_thread_id IS NULL AND subagent IS NULL AND delegation IS NULL
+                   AND inbound IS NULL AND (?1 IS NULL OR project_id = ?1)
+                 GROUP BY project_id ORDER BY project_id",
+            )?;
+            let rows = st.query_map([project_id.map(|id| id.to_string())], |r| Ok((parse_uuid(r.get::<_, String>(0)?)?, r.get(1)?)))?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+    }
+
+    /// Move a thread into Older (`Some`) or out of it (`None`) without restarting its inactivity clock. Returns
+    /// the thread as it is afterwards.
+    pub fn thread_set_older(&self, id: ThreadId, older_at: Option<DateTime<Utc>>) -> Result<Option<Thread>> {
+        self.with(|c| {
+            c.execute("UPDATE threads SET older_at = ?2 WHERE id = ?1", params![id.to_string(), older_at.map(|at| at.to_rfc3339())])?;
+            Ok(c.query_row(&format!("{THREAD_SELECT} WHERE id = ?1"), [id.to_string()], row_to_thread).optional()?)
+        })
+    }
+
+    /// Take a thread out of Older and restart its inactivity clock at `now`, as a turn would ("Move out of Older").
+    pub fn thread_restart_older_clock(&self, id: ThreadId, now: DateTime<Utc>) -> Result<()> {
+        self.with(|c| {
+            c.execute("UPDATE threads SET older_at = NULL, older_reset_at = ?2 WHERE id = ?1", params![id.to_string(), now.to_rfc3339()])?;
+            Ok(())
+        })
+    }
+
+    /// "Never move to Older" for one thread. Turning it on takes the thread out of Older.
+    pub fn thread_set_keep_out_of_older(&self, id: ThreadId, keep: bool) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "UPDATE threads SET keep_out_of_older = ?2, older_at = CASE WHEN ?2 THEN NULL ELSE older_at END WHERE id = ?1",
+                params![id.to_string(), keep],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Bring an archived thread back as idle, out of Older with its inactivity clock restarted at `now`. Returns
+    /// whether it was archived.
+    pub fn thread_unarchive(&self, id: ThreadId, now: DateTime<Utc>) -> Result<bool> {
+        self.with(|c| {
+            Ok(c.execute(
+                "UPDATE threads SET status = 'idle', older_at = NULL, older_reset_at = ?2 WHERE id = ?1 AND status = 'archived'",
+                params![id.to_string(), now.to_rfc3339()],
+            )? > 0)
         })
     }
 
@@ -2017,7 +2117,7 @@ fn stamp_runtime_task_sequence(payload: &mut EventPayload, seq: EventSeq) -> boo
 
 const THREAD_SELECT: &str = "SELECT id, project_id, title, provider_kind, provider_instance, model, effort, permission_mode, status,
     worktree_path, worktree_branch, cwd, provider_session_id, pinned, created_at, updated_at, last_seq,
-    parent_thread_id, coordinator_project_id, subagent, delegation, members, origin, inbound, moved FROM threads";
+    parent_thread_id, coordinator_project_id, subagent, delegation, members, origin, inbound, moved, older_at, keep_out_of_older FROM threads";
 
 const THREAD_MESSAGE_SELECT: &str = "SELECT id, operation_id, from_thread_id, to_thread_id, purpose, reply_to, body, delivery, state,
     held_reason, created_at, updated_at FROM thread_messages";
@@ -2142,6 +2242,8 @@ fn row_to_thread(r: &rusqlite::Row<'_>) -> rusqlite::Result<Thread> {
         origin: r.get::<_, Option<String>>(22)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?,
         inbound: r.get::<_, Option<String>>(23)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?,
         moved: r.get::<_, Option<String>>(24)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?,
+        older_at: r.get::<_, Option<String>>(25)?.map(parse_time).transpose()?,
+        keep_out_of_older: r.get(26)?,
     })
 }
 
@@ -2624,6 +2726,8 @@ mod tests {
             origin: None,
             inbound: None,
             moved: None,
+            older_at: None,
+            keep_out_of_older: false,
             subagent: None,
             delegation: None,
             members: Vec::new(),
@@ -2693,6 +2797,8 @@ mod tests {
             origin: None,
             inbound: None,
             moved: None,
+            older_at: None,
+            keep_out_of_older: false,
             subagent: None,
             delegation: None,
             members: Vec::new(),
@@ -2819,6 +2925,8 @@ mod tests {
             origin: None,
             inbound: None,
             moved: None,
+            older_at: None,
+            keep_out_of_older: false,
             subagent: None,
             delegation: None,
             members: Vec::new(),
@@ -2925,6 +3033,8 @@ mod tests {
             origin: None,
             inbound: None,
             moved: None,
+            older_at: None,
+            keep_out_of_older: false,
             subagent: None,
             delegation: None,
             members: Vec::new(),
@@ -3681,6 +3791,8 @@ mod orchestration_tests {
             origin: None,
             inbound: None,
             moved: None,
+            older_at: None,
+            keep_out_of_older: false,
             subagent: None,
             delegation,
             members: Vec::new(),
@@ -3761,6 +3873,57 @@ mod orchestration_tests {
         assert_eq!(conn.query_row("SELECT COUNT(*) FROM projects", [], |r| r.get::<_, i64>(0)).unwrap(), before);
         conn.query_row("SELECT COUNT(delegation) FROM threads", [], |r| r.get::<_, i64>(0)).unwrap();
         conn.query_row("SELECT COUNT(*) FROM thread_messages", [], |r| r.get::<_, i64>(0)).unwrap();
+    }
+
+    #[test]
+    fn the_older_migration_keeps_existing_threads_out_of_older_and_upserts_never_touch_its_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        schema::migrate_to(&conn, schema::migration_count() - 1).unwrap();
+        let (project, id) = (Uuid::now_v7(), Uuid::now_v7());
+        conn.execute(
+            "INSERT INTO projects(id, name, path, is_git, created_at, updated_at) VALUES (?1, 'n', '/x', 1, ?2, ?2)",
+            params![project.to_string(), "2026-01-01T00:00:00+00:00"],
+        )
+        .unwrap();
+        let created = "2026-01-01T00:00:00+00:00";
+        conn.execute(
+            "INSERT INTO threads(id, project_id, title, provider_kind, provider_instance, permission_mode, status, cwd, created_at, updated_at)
+             VALUES (?1, ?3, 't', 'claude-code', 'default', 'supervised', 'idle', '/x', ?2, ?2)",
+            params![id.to_string(), created, project.to_string()],
+        )
+        .unwrap();
+        schema::migrate(&conn).unwrap();
+        let store = Store::init(conn).unwrap();
+        let mut thread = store.thread_get(id).unwrap().unwrap();
+        assert!(thread.older_at.is_none() && !thread.keep_out_of_older, "nothing moves until the daemon's first sweep");
+        let rows = store.older_candidates().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].active_at.to_rfc3339(), created, "no turn yet: the clock starts at creation");
+
+        let moved_at = Utc::now();
+        assert!(store.thread_set_older(id, Some(moved_at)).unwrap().unwrap().older_at.is_some());
+        thread.title = "renamed".into();
+        store.thread_upsert(&thread).unwrap();
+        assert!(store.thread_get(id).unwrap().unwrap().older_at.is_some(), "an upsert of a stale copy keeps the move");
+        let found = store.search_thread_history(None, None, Some("renamed"), true, None, 10).unwrap();
+        assert!(found.threads[0].thread.older_at.is_some(), "search reads the same columns");
+
+        store.thread_restart_older_clock(id, moved_at).unwrap();
+        let after = store.thread_get(id).unwrap().unwrap();
+        assert!(after.older_at.is_none());
+        assert_eq!(store.older_candidates().unwrap()[0].active_at, moved_at);
+        store.thread_set_keep_out_of_older(id, true).unwrap();
+        assert!(store.thread_get(id).unwrap().unwrap().keep_out_of_older);
+
+        thread.status = ThreadStatus::Archived;
+        store.thread_upsert(&thread).unwrap();
+        assert!(store.older_candidates().unwrap().is_empty(), "archived threads are not candidates");
+        assert_eq!(store.archived_thread_counts(None).unwrap(), vec![(project, 1)]);
+        assert_eq!(store.archived_thread_counts(Some(Uuid::now_v7())).unwrap(), vec![]);
+        assert!(store.thread_unarchive(id, Utc::now()).unwrap());
+        assert!(!store.thread_unarchive(id, Utc::now()).unwrap(), "only an archived thread is unarchived");
+        assert_eq!(store.thread_get(id).unwrap().unwrap().status, ThreadStatus::Idle);
+        assert!(store.archived_thread_counts(None).unwrap().is_empty());
     }
 
     #[test]
@@ -4208,6 +4371,8 @@ mod coordinator_upgrade_tests {
             origin: None,
             inbound: None,
             moved: None,
+            older_at: None,
+            keep_out_of_older: false,
             subagent: None,
             delegation: None,
             members: Vec::new(),

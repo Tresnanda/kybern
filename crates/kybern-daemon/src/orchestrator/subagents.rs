@@ -261,6 +261,8 @@ impl Orchestrator {
                     origin: None,
                     inbound: None,
                     moved: None,
+                    older_at: None,
+                    keep_out_of_older: false,
                     subagent: Some(info.clone()),
                     delegation: None,
                     members: Vec::new(),

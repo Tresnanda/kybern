@@ -798,6 +798,17 @@ const MIGRATIONS: &[&str] = &[
     );
     COMMIT;
     ",
+    // Older threads. `older_at` is set while a thread sits in its project's Older group (no turn for the
+    // `older_after` setting's time), `older_reset_at` restarts that clock without a turn ("Move out of Older",
+    // unarchive), and `keep_out_of_older` is the per-thread opt-out. Only the Older code writes them; a thread
+    // upsert never touches them.
+    "
+    BEGIN;
+    ALTER TABLE threads ADD COLUMN older_at TEXT;
+    ALTER TABLE threads ADD COLUMN older_reset_at TEXT;
+    ALTER TABLE threads ADD COLUMN keep_out_of_older INTEGER NOT NULL DEFAULT 0;
+    COMMIT;
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

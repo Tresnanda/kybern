@@ -9,7 +9,8 @@ import { useState, useSyncExternalStore } from 'react'
 import { globalNotesHome, setGlobalNotesHome, watchGlobalNotesHome } from '../notes/home.ts'
 import { PERMISSION_HINT, PERMISSION_LABEL } from '../shared/lib/format.ts'
 import { AUTONOMY_OPTIONS, WORKSPACE_OPTIONS, COORDINATOR_ROLES, COORDINATOR_SETTINGS_COPY as COPY, autonomyHint, effectiveCoordinatorSettings, withGlobalRoleDefault } from '../../../../packages/kybern-client/src/coordinatorSettings.ts'
-import type { PermissionMode, ProviderKind, OrchestrationSettings, RoleDefault } from '../../../../packages/kybern-client/src/types.ts'
+import type { OlderAfter, PermissionMode, ProviderKind, OrchestrationSettings, RoleDefault } from '../../../../packages/kybern-client/src/types.ts'
+import { OLDER_AFTER_CHOICES, olderAfter } from '../../../../packages/kybern-client/src/older.ts'
 import { ROTATION_COPY, rotationBudgetChoices } from '../../../../packages/kybern-client/src/rotation.ts'
 import { ASK_DEADLINE_DEFAULTS, askDeadlineOptions } from '../../../../packages/kybern-client/src/requestCards.ts'
 import { getClient, useApp } from '../state.ts'
@@ -48,6 +49,7 @@ export function General() {
     <Section title="Worktrees"><Row title="Remove eligible archived worktrees" description="Automatically remove clean, merged worktrees after archiving. Keeps branches and conversation history; continuing restores the folder." shared="automatic_worktree_cleanup"><Switch aria-label="Remove eligible archived worktrees" testId="settings-cleanup" checked={s.automatic_worktree_cleanup ?? false} onCheckedChange={(automatic_worktree_cleanup) => void updateSettings({ automatic_worktree_cleanup })} /></Row></Section>
     <Section title="Threads">
       <Row title="Generate thread titles" description="Names the thread from its first message using the agent." shared="generate_titles"><Switch aria-label="Generate thread titles" testId="settings-titles" checked={s.generate_titles} onCheckedChange={(generate_titles) => void updateSettings({ generate_titles })} /></Row>
+      {s.older_after !== undefined && <Row title="Move inactive threads to Older" description="Threads without a new turn move to the Older group at the bottom of their project. Nothing is archived." shared="older_after"><Select label="Move inactive threads to Older" testId="settings-older-after" value={olderAfter(s)} onChange={(value) => void updateSettings({ older_after: value as OlderAfter })} options={[...OLDER_AFTER_CHOICES]} /></Row>}
       <Row title="Tell agents about Kybern" description="Adds a short guide to new agent sessions: how to show images, link notes and tasks, and reach other threads." shared="tell_agents_about_kybern"><Switch aria-label="Tell agents about Kybern" checked={s.tell_agents_about_kybern ?? true} onCheckedChange={(tell_agents_about_kybern) => void updateSettings({ tell_agents_about_kybern })} /></Row>
       <Row title="Ask before closing while threads work" description="Agents keep going after the window closes. The prompt lists them and offers to stop them."><Switch testId="settings-close-confirmation" aria-label="Ask before closing while threads work" checked={ask} onCheckedChange={value => { save('kybern.askBeforeClose', value); setAsk(value) }} /></Row>
     </Section>

@@ -22,9 +22,9 @@ import { Icon, T, Tap } from "../ui/primitives";
 import { ProviderMark } from "../ui/ProviderMark";
 import { StatusGlyph } from "../ui/TaskGlyphs";
 import { radius, space, useTheme } from "../ui/theme";
-import { showToast } from "../ui/Toast";
+import { useSettings } from "../state/settings";
 import { originLabel } from "../../../../packages/kybern-client/src/forkMachine";
-import { threadMenuItems } from "./threadActions";
+import { archiveThread, threadMenuItems } from "./threadActions";
 import { threadMachineWord } from "../state/threadMachineModel";
 
 const untitled = (thread: Thread) => thread.title.trim() || "Untitled thread";
@@ -137,6 +137,16 @@ function CompactDisclosure({ title, open, onToggle }: { title: string; open: boo
   );
 }
 
+/** A project's "Older" fold under its main threads: one tap opens or folds it. */
+export function OlderDisclosure({ variant, open, onToggle }: { variant: ThreadRowContext["variant"]; open: boolean; onToggle: () => void }) {
+  if (variant === "sidebar") return <CompactDisclosure title="Older" open={open} onToggle={onToggle} />;
+  return (
+    <View style={{ minHeight: 44, justifyContent: "center" }}>
+      <DisclosureRow title="Older" open={open} onToggle={onToggle} />
+    </View>
+  );
+}
+
 /** The agent's mark, with an accent dot when a finished turn hasn't been seen. */
 function AgentMark({ thread, unread }: { thread: Thread; unread: boolean }) {
   const { colors } = useTheme();
@@ -211,6 +221,8 @@ function ThreadListRowView({
 }) {
   const app = useApp();
   const list = useListState();
+  // A computer that groups inactive threads (0.25) reports `older_after`.
+  const older = useSettings().settings?.older_after !== undefined;
   const { thread, depth, childCount, open: childrenOpen, child } = row;
   const indent = Math.min(depth, 2) * space.lg;
   const home = ctx.machine?.(thread.id);
@@ -278,7 +290,7 @@ function ThreadListRowView({
       .filter(Boolean)
       .join(", ");
 
-    menu.push(...threadMenuItems(thread, { refresh: () => refresh(home?.machineId), onError: ctx.onError }));
+    menu.push(...threadMenuItems(thread, { refresh: () => refresh(home?.machineId), onError: ctx.onError, older }));
     if (thread.status !== "archived")
       menu.splice(1, 0, attention.unread
         ? { title: "Mark as read", icon: "checkmark.circle", onPress: () => markRead(thread.id) }
@@ -306,9 +318,7 @@ function ThreadListRowView({
             tone: "neutral",
             full: true,
             onPress: () => {
-              void mutate("threads.archive", { thread_id: thread.id })
-                .then(() => showToast("Thread archived"))
-                .catch(fail);
+              void archiveThread(thread.id).catch(fail);
             },
           },
         ],

@@ -491,6 +491,8 @@ enum Cmd {
     },
     /// Archive a thread.
     Archive { thread: String },
+    /// Bring an archived thread back so it can be continued.
+    Unarchive { thread: String },
     /// Inspect or remove an ordinary conversation’s managed worktree.
     Worktree {
         thread: String,
@@ -2486,6 +2488,10 @@ pub async fn run() -> Result<()> {
         Cmd::Archive { thread } => {
             client.call::<ThreadsArchive>(ThreadsArchiveParams { thread_id: thread.parse()? }).await?;
             println!("archived");
+        }
+        Cmd::Unarchive { thread } => {
+            client.call::<ThreadsUnarchive>(ThreadsUnarchiveParams { thread_id: thread.parse()? }).await?;
+            println!("unarchived");
         }
         Cmd::Checkpoints { thread } => {
             let r = client.call::<ThreadsCheckpoints>(ThreadsCheckpointsParams { thread_id: thread.parse()? }).await?;

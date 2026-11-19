@@ -11,15 +11,16 @@ import { STATUS_LABEL } from '@/state/tasksModel'
 // runs it, Escape closes. Opened from the search button it fades in like the
 // desktop's command dialog; opened with ⌘K it appears at once. It closes at once.
 import { useGpuix, type PublicInstance } from '@gpuix/react'
-import { useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { relativeTime } from '@/lib/format'
-import { isFreeChatProject } from '../../../../packages/kybern-client/src/types.ts'
+import { isFreeChatProject, type Thread } from '../../../../packages/kybern-client/src/types.ts'
+import { isChildThread } from '../../../../packages/kybern-client/src/subagents.ts'
 import { NotesOverlays } from '../notes/Overlays.tsx'
 import { newNote, openNote, openQuickNote, useNotes } from '../notes/store.ts'
 import { Icon } from '../icons.tsx'
 import { SearchField } from '../kit/SearchField.tsx'
 import { MatrixLoader } from '../MatrixLoader.tsx'
-import { getState, useApp } from '../state.ts'
+import { getClient, getState, useApp } from '../state.ts'
 import { renameProjectInline } from '../sidebar/renameProject.ts'
 import { GROUP_COPY, isGroupProject } from '../../../../packages/kybern-client/src/groups.ts'
 import { addGroup, addRepository } from '../groups/add.ts'
@@ -84,6 +85,23 @@ function PaletteDialog() {
   const groupsOn = useGroupsSupported()
   const [query, setQuery] = useState('')
   const [highlight, setHighlight] = useState(0)
+  // Archived threads are found by the daemon (titles and messages) once there is something to search for.
+  const [archived, setArchived] = useState<{ query: string; threads: Thread[] }>({ query: '', threads: [] })
+  useEffect(() => {
+    const q = query.trim()
+    const client = getClient()
+    if (!q || !client) return
+    let live = true
+    const timer = setTimeout(() => {
+      client
+        .call('threads.search', { all_projects: true, query: q, include_archived: true, limit: 12 })
+        .then((result) => {
+          if (live) setArchived({ query: q, threads: result.threads.map((hit) => hit.thread).filter((th) => th.status === 'archived' && !isChildThread(th)) })
+        })
+        .catch(() => {})
+    }, 180)
+    return () => { live = false; clearTimeout(timer) }
+  }, [query])
   const rowRefs = useRef(new Map<number, PublicInstance>())
   const close = () => setNav({ paletteOpen: false })
 
@@ -244,10 +262,35 @@ function PaletteDialog() {
     ]
     const all = [...actions, ...threadItems, ...noteItems, ...taskItems, ...projectItems, ...themeItems]
     const q = query.trim().toLowerCase()
-    const matched = q ? all.filter((item) => `${item.label} ${item.keywords}`.toLowerCase().includes(q)) : all
+    // The daemon matched these on their title or messages, so they skip the label filter; they follow the listed threads.
+    const archivedItems: Item[] = archived.query.toLowerCase() === q
+      ? archived.threads.filter((thread) => inSpace(thread.project_id, projects, spaceId)).map((thread) => ({
+        id: `thread:${thread.id}`,
+        label: thread.title || 'Untitled',
+        keywords: '',
+        group: 'Threads',
+        icon: <Icon source={N.archive} size={15} color={muted(t, 1)} />,
+        meta: (
+          <>
+            <div style={{ display: 'flex', width: 96, justifyContent: 'flex-end', flexShrink: 0 }}>
+              <Label color={muted(t, 0.79)} size={12} truncate>
+                {projectName(thread.project_id)}
+              </Label>
+            </div>
+            <div style={{ display: 'flex', width: 40, justifyContent: 'flex-end', flexShrink: 0 }}>
+              <Label color={muted(t, 0.79)} size={10}>
+                {relativeTime(thread.updated_at)}
+              </Label>
+            </div>
+          </>
+        ),
+        run: () => openThread(thread.id),
+      }))
+      : []
+    const matched = q ? [...all.filter((item) => `${item.label} ${item.keywords}`.toLowerCase().includes(q)), ...archivedItems] : all
     const order: Item['group'][] = ['Suggested', 'Threads', 'Notes', 'Tasks', 'Projects', 'Themes']
     return order.map((group) => ({ group, items: matched.filter((item) => item.group === group) })).filter((g) => g.items.length > 0)
-  }, [notes, threads, projects, taskMap, spaceId, spaces, spacesOn, selectedId, inSplit, history, settingsOpen, page, query, t, renamable, groupsOn, renderer])
+  }, [archived, notes, threads, projects, taskMap, spaceId, spaces, spacesOn, selectedId, inSplit, history, settingsOpen, page, query, t, renamable, groupsOn, renderer])
 
   const flat = groups.flatMap((g) => g.items)
   const active = Math.min(highlight, Math.max(0, flat.length - 1))
