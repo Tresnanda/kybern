@@ -85,7 +85,9 @@ export function pickerTabs({
   machineName?: string
 }): PickerTab[] {
   const tabs: PickerTab[] = [{ type: "starred", key: "starred", selected: starredView, label: "Starred", tooltip: "Starred models" }]
-  for (const agent of agents) {
+  // Agents that aren't installed follow the ones that are, each group in its own order, so the usable rows come first.
+  const ordered = [...agents.filter((agent) => agent.available), ...agents.filter((agent) => !agent.available)]
+  for (const agent of ordered) {
     if (machineName && !agent.available) continue
     const own = accountsOfKind(accounts, agent.kind)
     const multi = own.length > 1
