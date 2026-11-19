@@ -2377,10 +2377,16 @@ text draws it in both modes (`theme.markdown.link.underline`: `always`, `hover`;
   piece on the same line, so there is no seam.
 - `paint_link_line` snaps the line to device pixels.
 
+A leading icon's two-space slot is a flow piece of its own (`flow_tokens`), because only the piece that starts at the
+icon's byte paints it: a word that runs into the slot, such as the "(" in `([`file.rs`](path))`, used to take the slot's
+first space and leave it empty. The slot wraps together with the link's first piece.
+
 Check: `link-underline-check.ts` (lab `link-underline-lab.tsx`; macOS, Linux and Windows): a link with inline code,
-a bold link, bold and code in one link, a link wrapped onto two lines in inline flow and in a single run, and two links
-with an icon, in hover and always modes, dark and light. It finds each underline in the capture as rows of the link
-colour and asserts one 1 px row per line spanning the link's glyphs, and none under the icon.
+a bold link, bold and code in one link, a link wrapped onto two lines in inline flow and in a single run, and links
+with an icon (plain, with code inside, whose whole text is inline code as a file or web link, at the start of a
+paragraph, and right after "("), in hover and always modes, dark and light. It finds each underline in the capture
+as rows of the link colour and asserts one 1 px row per line spanning the link's glyphs, the icon's pixels in its
+slot, and no underline under the icon.
 
 ## Motion native lane (gpuix-native, 2026-10-21)
 
