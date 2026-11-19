@@ -64,6 +64,10 @@ const CHECKS: Record<string, Check> = {
     description: 'Rounded overflow clip: hit tests, painted corners, cached replay, virtual list, code scroll/wrap, dark/light x motion',
     runs: () => [{ name: 'clip', args: [native('clip-check.ts')], minutes: 25 }],
   },
+  'link-underline': {
+    description: 'One straight underline per link line: inline code, bold, bold and code, a link wrapped in inline flow and in a single run, a link with an icon (never underlined); hover and always, dark and light',
+    runs: ({ capture }) => capture === 'none' ? [] : [{ name: 'link-underline', args: [native('link-underline-check.ts')], minutes: 10 }],
+  },
   'diff-wrap': {
     description: 'Soft-wrapped <diff> (Pull requests "Wrap lines"): first-line numbers, full row tints, line clicks, no horizontal scroll, width re-measure, exact anchors inside wrapped rows, Show more; dark/light',
     runs: ({ capture }) => capture === 'none' ? [] : [{ name: 'diff-wrap', args: [native('diff-wrap-check.ts')], minutes: 10 }],

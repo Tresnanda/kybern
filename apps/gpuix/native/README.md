@@ -2340,6 +2340,27 @@ session's environment may export `NAPI_RS_NATIVE_LIBRARY_PATH` for the
 installed app's addon; `local-build.ts` then keeps it, so set the variable to
 `native/build/gpuix-native.darwin-arm64.node` explicitly when checking a build.
 
+## One straight underline per link (link-underline)
+
+A link has one underline: a 1 px line per visual line, at one height, from its first glyph to its last, whatever
+bold, italic or inline code it contains, never under a leading icon, and never under the space a line wraps at. Links
+get no GPUI run underline (that one sat at each run's own descent and ran under the icon's placeholder spaces); the
+text draws it in both modes (`theme.markdown.link.underline`: `always`, `hover`; `none` draws nothing):
+
+- Single-run text (`SelectableText::link_underline`): 2 px above the bottom of each row of the link
+  (`link_line_rects`, which trims a wrapped row's trailing space).
+- Inline flow (`markdown_inline.rs`, one fragment per word): each piece draws its slice (`FragmentUnderline`) at
+  its line's shared baseline plus the prose drop, the same 2 px above a prose line box. The flow computes each line's
+  baseline once and hands every one-line piece that exact value (`line_y`); computing it per piece from its own top
+  and baseline rounded a code piece onto the row above in f32. A piece reaches across code padding into the next
+  piece on the same line, so there is no seam.
+- `paint_link_line` snaps the line to device pixels.
+
+Check: `link-underline-check.ts` (lab `link-underline-lab.tsx`; macOS, Linux and Windows): a link with inline code,
+a bold link, bold and code in one link, a link wrapped onto two lines in inline flow and in a single run, and two links
+with an icon, in hover and always modes, dark and light. It finds each underline in the capture as rows of the link
+colour and asserts one 1 px row per line spanning the link's glyphs, and none under the icon.
+
 ## Motion native lane (gpuix-native, 2026-10-21)
 
 ### Motion latency trace
@@ -2541,7 +2562,7 @@ The root native wrapper clips all Linux client-decorated content, including popo
 
 ### Reply link context menus
 
-`<markdown onLinkContextMenu>` emits the hit-tested link URL in `value` and its window coordinates in `x`/`y` on a right click. Ordinary link clicks keep `onLinkClick`; selecting or right-clicking prose does not navigate. The JS bridge patch registers `linkContextMenu`. Reply link icons use existing `linkIcons` entries ordered by full destination length, with one fixed-size slot per link, so cached GitHub colors and favicon updates preserve the label and geometry.
+`<markdown onLinkContextMenu>` emits the hit-tested link URL in `value` and its window coordinates in `x`/`y` on a right click. Ordinary link clicks keep `onLinkClick`; selecting or right-clicking prose does not navigate. The JS bridge patch registers `linkContextMenu`. Reply link icons use existing `linkIcons` entries ordered by full destination length, with one fixed-size slot per link, so cached GitHub colors and favicon updates preserve the label and geometry. A site icon that would be hard to see (one ink, under 3:1 against the background) is drawn on a rounded plate inside the same slot; the daemon measures each icon once and serves a dark-mode variant when the site publishes one (`crates/kybern-daemon/src/link_icon.rs`, `replyFavicon` in `packages/kybern-client/src/linkIcons.ts`).
 
 ## `diff` and `patch` fences (#294)
 

@@ -31,7 +31,8 @@ pub async fn load(cache: &Path, raw: &str) -> Value {
     let directory = cache.join("link-icons");
     let file = directory.join(key);
     if let Ok(meta) = tokio::fs::metadata(&file).await
-        && meta.len() < 32_768
+        // Two icons of at most `link_icon::EDGE` px, base64, with their tones.
+        && meta.len() < 160 * 1024
         && meta.modified().ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age < Duration::from_secs(300))
         && let Ok(bytes) = tokio::fs::read(&file).await
         && let Ok(value) = serde_json::from_slice(&bytes)
@@ -41,7 +42,7 @@ pub async fn load(cache: &Path, raw: &str) -> Value {
     let value = if github {
         github_state(&url).await
     } else {
-        crate::previews::probe::public_favicon(url.as_str()).await.map(|favicon| json!({"favicon": favicon})).unwrap_or(json!({}))
+        crate::previews::probe::public_favicons(url.as_str()).await.map(|icons| icons.to_json()).unwrap_or(json!({}))
     };
     if tokio::fs::create_dir_all(&directory).await.is_ok() {
         let mut files = Vec::new();
