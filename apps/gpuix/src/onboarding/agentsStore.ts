@@ -139,7 +139,7 @@ export const setDefaultAgent = (kind: ProviderKind) => { agents.set({ userDefaul
 
 /**
  * Leaving the step writes the default agent (every ready agent stays usable). `updateSettings` reports a failure through the
- * settings store instead of throwing, and skips a write while another is saving, so the answer is whether the value stuck.
+ * settings store instead of throwing (and goes back to the saved document), so the answer is whether the value stuck.
  */
 export async function saveDefaultAgent(kind: ProviderKind | null): Promise<boolean> {
   if (!kind) return true

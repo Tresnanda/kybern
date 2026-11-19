@@ -3,7 +3,8 @@
 // a full-access token keeps those controls here.
 import { useEffect, useState } from "react";
 import type { TokenInfo } from "../../state/protocol";
-import { activeEnvironment, currentClient, errorText, rpc, useApp } from "../../state/runtime";
+import { activeEnvironment, currentClient, errorText } from "../../state/runtime";
+import { settingsClient, settingsRpc, useSettingsChoice } from "../../state/machineChoice";
 import { loadSettings, useSettings } from "../../state/settings";
 import { confirm } from "../../ui/Alert";
 import { ListRow } from "../../ui/List";
@@ -20,10 +21,11 @@ export function AccessSettings() {
 }
 
 function AccessBody() {
-  const app = useApp();
   const environment = activeEnvironment();
   const info = currentClient()?.info;
-  const manage = canManageAccess(info?.scopes);
+  // Devices and Tailscale of the machine Settings shows (`machineChoice.ts`).
+  const machine = useSettingsChoice()?.machineId;
+  const manage = canManageAccess((settingsClient() ?? currentClient())?.info?.scopes);
   return (
     <>
       <Section
@@ -36,7 +38,7 @@ function AccessBody() {
         {environment ? <ListRow title="Address" value={shortAddress(environment.url)} /> : null}
         {info ? <ListRow title="Kybern" value={info.version} /> : null}
       </Section>
-      {manage ? <ManageAccess key={app.activeId} /> : null}
+      {manage ? <ManageAccess key={machine ?? environment?.id} /> : null}
     </>
   );
 }
@@ -48,7 +50,7 @@ function ManageAccess() {
   const [error, setError] = useState("");
   useEffect(() => {
     let live = true;
-    rpc("access.tokens.list", {})
+    settingsRpc("access.tokens.list", {})
       .then((r) => live && setTokens(r.tokens.filter((t) => !t.revoked)))
       .catch((e) => live && setError(errorText(e, "load the access tokens")));
     return () => {
@@ -61,7 +63,7 @@ function ManageAccess() {
       message: "This device loses access until it pairs again.",
       confirm: "Revoke access",
       onConfirm: () => {
-        rpc("access.tokens.revoke", { token_id: token.id })
+        settingsRpc("access.tokens.revoke", { token_id: token.id })
           .then(() => setTokens((list) => list?.filter((t) => t.id !== token.id) ?? null))
           .catch((e) => setError(errorText(e, "revoke that access")));
       },
@@ -76,7 +78,7 @@ function ManageAccess() {
           disabled={busy}
           onChange={(value) => {
             setBusy(true);
-            rpc("access.exposure.set", { tailscale: value })
+            settingsRpc("access.exposure.set", { tailscale: value })
               .then(() => loadSettings())
               .catch((e) => setError(errorText(e, "change who can reach this computer")))
               .finally(() => setBusy(false));

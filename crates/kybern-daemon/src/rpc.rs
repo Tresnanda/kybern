@@ -1150,7 +1150,8 @@ async fn dispatch_part_13(state: &AppState, _ctx: &ConnectionCtx, method: &str, 
                 }
                 _ => crate::skills::list(cwd, p.provider, &provider_settings.env).await.map_err(internal)?,
             };
-            let mut skills = skills;
+            // One plugin skill that is also installed standalone, with the same contents, is one row.
+            let mut skills = tokio::task::spawn_blocking(move || crate::skills::merge_plugin_copies(skills)).await.map_err(internal)?;
             if p.include_other_agents {
                 // What the selected agent reads itself is already listed; the rest of the homes are "other agents".
                 let homes = state.skill_homes.resolve().into_iter().filter(|(home, _)| !home.readers().contains(&p.provider)).collect();

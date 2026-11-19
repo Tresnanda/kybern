@@ -1399,6 +1399,11 @@ pub struct SkillInfo {
     /// lives in. Absent on the selected agent's own skills.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub home: Option<crate::SkillHome>,
+    /// The provider plugin this skill comes from or is also installed as (`interfaces` for `interfaces:better-colors`).
+    /// On a plugin's own row the scope stays `app`; on a standalone skill whose `SKILL.md` is identical to a plugin's,
+    /// `skills.list` lists that one row and sets this. Clients say "Plugin" for it; the skill is still run as a skill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
 }
 
 fn default_true() -> bool {

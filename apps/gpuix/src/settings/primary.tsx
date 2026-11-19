@@ -35,22 +35,22 @@ import { osLabels } from '../platform/os.ts'
 import { shortcutLabel } from '../platform/keys.ts'
 
 export function General() {
-  const { settings: s, saving } = useSettings()
+  const { settings: s } = useSettings()
   const providers = useNav((s) => s.providers)
   const notesHome = useSyncExternalStore(watchGlobalNotesHome, globalNotesHome)
   const [ask, setAsk] = useState(() => load('kybern.askBeforeClose', true))
   if (!s) return null
   return <>
     <Section title="New threads">
-      <Row title="Default agent" description="Used when you start a thread from a project." shared="default_provider"><Select label="Default agent" testId="settings-default-agent" value={s.default_provider} disabled={saving} onChange={(value) => void updateSettings({ default_provider: value as ProviderKind })} options={[...providers.map((p) => ({ value: p.kind, label: p.display_name, disabled: !p.available, mark: p.kind })), ...(providers.some((p) => p.kind === s.default_provider) ? [] : [{ value: s.default_provider, label: providerLabel(s.default_provider), mark: s.default_provider }])]} /></Row>
-      <Row title="Default permissions" description={PERMISSION_HINT[s.default_permission_mode]} shared="default_permission_mode"><Select label="Default permissions" testId="settings-permissions" value={s.default_permission_mode} disabled={saving} onChange={(value) => void updateSettings({ default_permission_mode: value as PermissionMode })} options={Object.entries(PERMISSION_LABEL).map(([value, label]) => ({ value, label }))} /></Row>
-      <Row title="Use a worktree for new threads" description="Each thread gets its own branch and folder. Projects can override this." shared="worktrees_default"><Switch aria-label="Use a worktree for new threads" testId="settings-worktrees" checked={s.worktrees_default} disabled={saving} onCheckedChange={(worktrees_default) => void updateSettings({ worktrees_default })} /></Row>
+      <Row title="Default agent" description="Used when you start a thread from a project." shared="default_provider"><Select label="Default agent" testId="settings-default-agent" value={s.default_provider} onChange={(value) => void updateSettings({ default_provider: value as ProviderKind })} options={[...providers.map((p) => ({ value: p.kind, label: p.display_name, disabled: !p.available, mark: p.kind })), ...(providers.some((p) => p.kind === s.default_provider) ? [] : [{ value: s.default_provider, label: providerLabel(s.default_provider), mark: s.default_provider }])]} /></Row>
+      <Row title="Default permissions" description={PERMISSION_HINT[s.default_permission_mode]} shared="default_permission_mode"><Select label="Default permissions" testId="settings-permissions" value={s.default_permission_mode} onChange={(value) => void updateSettings({ default_permission_mode: value as PermissionMode })} options={Object.entries(PERMISSION_LABEL).map(([value, label]) => ({ value, label }))} /></Row>
+      <Row title="Use a worktree for new threads" description="Each thread gets its own branch and folder. Projects can override this." shared="worktrees_default"><Switch aria-label="Use a worktree for new threads" testId="settings-worktrees" checked={s.worktrees_default} onCheckedChange={(worktrees_default) => void updateSettings({ worktrees_default })} /></Row>
     </Section>
-    <Section title="Worktrees"><Row title="Remove eligible archived worktrees" description="Automatically remove clean, merged worktrees after archiving. Keeps branches and conversation history; continuing restores the folder." shared="automatic_worktree_cleanup"><Switch aria-label="Remove eligible archived worktrees" testId="settings-cleanup" checked={s.automatic_worktree_cleanup ?? false} disabled={saving} onCheckedChange={(automatic_worktree_cleanup) => void updateSettings({ automatic_worktree_cleanup })} /></Row></Section>
+    <Section title="Worktrees"><Row title="Remove eligible archived worktrees" description="Automatically remove clean, merged worktrees after archiving. Keeps branches and conversation history; continuing restores the folder." shared="automatic_worktree_cleanup"><Switch aria-label="Remove eligible archived worktrees" testId="settings-cleanup" checked={s.automatic_worktree_cleanup ?? false} onCheckedChange={(automatic_worktree_cleanup) => void updateSettings({ automatic_worktree_cleanup })} /></Row></Section>
     <Section title="Threads">
-      <Row title="Generate thread titles" description="Names the thread from its first message using the agent." shared="generate_titles"><Switch aria-label="Generate thread titles" testId="settings-titles" checked={s.generate_titles} disabled={saving} onCheckedChange={(generate_titles) => void updateSettings({ generate_titles })} /></Row>
-      {s.older_after !== undefined && <Row title="Move inactive threads to Older" description="Threads without a new turn move to the Older group at the bottom of their project. Nothing is archived." shared="older_after"><Select label="Move inactive threads to Older" testId="settings-older-after" value={olderAfter(s)} disabled={saving} onChange={(value) => void updateSettings({ older_after: value as OlderAfter })} options={[...OLDER_AFTER_CHOICES]} /></Row>}
-      <Row title="Tell agents about Kybern" description="Adds a short guide to new agent sessions: how to show images, link notes and tasks, and reach other threads." shared="tell_agents_about_kybern"><Switch aria-label="Tell agents about Kybern" checked={s.tell_agents_about_kybern ?? true} disabled={saving} onCheckedChange={(tell_agents_about_kybern) => void updateSettings({ tell_agents_about_kybern })} /></Row>
+      <Row title="Generate thread titles" description="Names the thread from its first message using the agent." shared="generate_titles"><Switch aria-label="Generate thread titles" testId="settings-titles" checked={s.generate_titles} onCheckedChange={(generate_titles) => void updateSettings({ generate_titles })} /></Row>
+      {s.older_after !== undefined && <Row title="Move inactive threads to Older" description="Threads without a new turn move to the Older group at the bottom of their project. Nothing is archived." shared="older_after"><Select label="Move inactive threads to Older" testId="settings-older-after" value={olderAfter(s)} onChange={(value) => void updateSettings({ older_after: value as OlderAfter })} options={[...OLDER_AFTER_CHOICES]} /></Row>}
+      <Row title="Tell agents about Kybern" description="Adds a short guide to new agent sessions: how to show images, link notes and tasks, and reach other threads." shared="tell_agents_about_kybern"><Switch aria-label="Tell agents about Kybern" checked={s.tell_agents_about_kybern ?? true} onCheckedChange={(tell_agents_about_kybern) => void updateSettings({ tell_agents_about_kybern })} /></Row>
       <Row title="Ask before closing while threads work" description="Agents keep going after the window closes. The prompt lists them and offers to stop them."><Switch testId="settings-close-confirmation" aria-label="Ask before closing while threads work" checked={ask} onCheckedChange={value => { save('kybern.askBeforeClose', value); setAsk(value) }} /></Row>
     </Section>
     <FilesSection />
@@ -75,9 +75,9 @@ function FilesSection() {
 /** Folders outside a project that the user allowed Preview to serve files from (`PreviewFoldersRow`). */
 function PreviewFolders() {
   const t = useTheme()
-  const { settings, saving } = useSettings()
+  const { settings } = useSettings()
   const folders = settings?.preview_allowed_folders ?? []
-  return <Section title="Preview"><Row title="Allowed folders" description={folders.length > 0 ? 'Pages in these folders can open in Preview. Files inside your projects never need this.' : 'None yet. Kybern asks the first time a page outside your projects opens in Preview.'}>{folders.length > 0 && <div testId="preview-folders" style={{ display: 'flex', flexDirection: 'column', gap: 4, width: 320, maxWidth: '100%' }}>{folders.map((folder, index) => <div key={folder} testId={`preview-folder-${index}`} style={{ display: 'flex', alignItems: 'center', gap: 4, height: 28, paddingLeft: 10, paddingRight: 4, borderRadius: 6, backgroundColor: t.v('--color-background-elevated-secondary') }}><Label color={ink(t, 0.85)} size={11} lineHeight={16} font={FONT_MONO} truncate style={{ flexGrow: 1 }}>{startTruncate(folder)}</Label><Button testId={`preview-folder-remove-${index}`} size="sm" variant="ghost" label={`Remove ${folder}`} disabled={saving} onClick={() => void updateSettings({ preview_allowed_folders: folders.filter((p) => p !== folder) })}>Remove</Button></div>)}</div>}</Row></Section>
+  return <Section title="Preview"><Row title="Allowed folders" description={folders.length > 0 ? 'Pages in these folders can open in Preview. Files inside your projects never need this.' : 'None yet. Kybern asks the first time a page outside your projects opens in Preview.'}>{folders.length > 0 && <div testId="preview-folders" style={{ display: 'flex', flexDirection: 'column', gap: 4, width: 320, maxWidth: '100%' }}>{folders.map((folder, index) => <div key={folder} testId={`preview-folder-${index}`} style={{ display: 'flex', alignItems: 'center', gap: 4, height: 28, paddingLeft: 10, paddingRight: 4, borderRadius: 6, backgroundColor: t.v('--color-background-elevated-secondary') }}><Label color={ink(t, 0.85)} size={11} lineHeight={16} font={FONT_MONO} truncate style={{ flexGrow: 1 }}>{startTruncate(folder)}</Label><Button testId={`preview-folder-remove-${index}`} size="sm" variant="ghost" label={`Remove ${folder}`} onClick={() => void updateSettings({ preview_allowed_folders: folders.filter((p) => p !== folder) })}>Remove</Button></div>)}</div>}</Row></Section>
 }
 
 /** The desktop truncates the start of a path (`dir="rtl"`), so the folder's own name stays visible. */
@@ -85,7 +85,7 @@ const startTruncate = (path: string, max = 34) => path.length > max ? `…${path
 
 export function Agents() {
   const t = useTheme()
-  const { settings: s, saving } = useSettings()
+  const { settings: s } = useSettings()
   const providers = useNav((s) => s.providers)
   const cursor = useCursorSetup()
   if (!s) return null
@@ -94,24 +94,24 @@ export function Agents() {
   const change = (patch: Partial<OrchestrationSettings>) => void updateSettings({ orchestration: { ...latestSettings()!.orchestration, ...patch } })
   return <>
     <Section title="Updates">
-      <Row title="Update harnesses automatically" description="Check daily on this machine. Install when the agent's turns and background work are finished." shared="auto_update_harnesses"><Switch aria-label="Update harnesses automatically" testId="settings-harness-updates" checked={s.auto_update_harnesses} disabled={saving} onCheckedChange={(auto_update_harnesses) => void updateSettings({ auto_update_harnesses })} /></Row>
+      <Row title="Update harnesses automatically" description="Check daily on this machine. Install when the agent's turns and background work are finished." shared="auto_update_harnesses"><Switch aria-label="Update harnesses automatically" testId="settings-harness-updates" checked={s.auto_update_harnesses} onCheckedChange={(auto_update_harnesses) => void updateSettings({ auto_update_harnesses })} /></Row>
       <Row title="" description="Uses each CLI's updater or its existing Homebrew package. Custom binaries and version-managed installations stay under your control." />
-      {!activeEnvironment().local && <Row title="Update the daemon automatically" description="Check the release feed daily on this machine. Install and restart when nothing is running." shared="auto_update_daemon"><Switch aria-label="Update the daemon automatically" checked={s.auto_update_daemon} disabled={saving} onCheckedChange={(auto_update_daemon) => void updateSettings({ auto_update_daemon })} /></Row>}
+      {!activeEnvironment().local && <Row title="Update the daemon automatically" description="Check the release feed daily on this machine. Install and restart when nothing is running." shared="auto_update_daemon"><Switch aria-label="Update the daemon automatically" checked={s.auto_update_daemon} onCheckedChange={(auto_update_daemon) => void updateSettings({ auto_update_daemon })} /></Row>}
       <DaemonUpdateRow />
     </Section>
     <OmpProfiles />
     <Section title="Delegation">
-      <Row title="Active agents per thread" description="How many delegated agents one thread can have working at once. At the limit, the thread waits for one to finish before delegating again." shared="orchestration"><NumberField label="Active agents per thread" testId="settings-max-agents" unit="agents" min={1} max={16} value={current.max_active_children} disabled={saving} onCommit={(max_active_children) => change({ max_active_children })} /></Row>
-      <Row title="Active agents per Coordinator" description="The same limit for a project's Coordinator, which usually runs more agents at once than an ordinary thread."><NumberField label="Active agents per Coordinator" unit="agents" min={1} max={16} value={current.lead_max_children} disabled={saving} onCommit={(lead_max_children) => change({ lead_max_children })} /></Row>
-      <Row title={ROTATION_COPY.settingTitle} description={ROTATION_COPY.settingDetail} shared="orchestration"><Select label={ROTATION_COPY.settingTitle} testId="settings-rotation-budget" compact value={String(effective.rotation_budget_tokens)} options={rotationBudgetChoices(effective.rotation_budget_tokens)} disabled={saving} onChange={(v) => change({ rotation_budget_tokens: Number(v) })} /></Row>
-      <Row title="Delegation depth" description="1 lets only top-level threads delegate. 2 also lets their agents delegate again."><NumberField label="Delegation depth" unit="levels" min={1} max={4} value={current.max_depth} disabled={saving} onCommit={(max_depth) => change({ max_depth })} /></Row>
+      <Row title="Active agents per thread" description="How many delegated agents one thread can have working at once. At the limit, the thread waits for one to finish before delegating again." shared="orchestration"><NumberField label="Active agents per thread" testId="settings-max-agents" unit="agents" min={1} max={16} value={current.max_active_children} onCommit={(max_active_children) => change({ max_active_children })} /></Row>
+      <Row title="Active agents per Coordinator" description="The same limit for a project's Coordinator, which usually runs more agents at once than an ordinary thread."><NumberField label="Active agents per Coordinator" unit="agents" min={1} max={16} value={current.lead_max_children} onCommit={(lead_max_children) => change({ lead_max_children })} /></Row>
+      <Row title={ROTATION_COPY.settingTitle} description={ROTATION_COPY.settingDetail} shared="orchestration"><Select label={ROTATION_COPY.settingTitle} testId="settings-rotation-budget" compact value={String(effective.rotation_budget_tokens)} options={rotationBudgetChoices(effective.rotation_budget_tokens)} onChange={(v) => change({ rotation_budget_tokens: Number(v) })} /></Row>
+      <Row title="Delegation depth" description="1 lets only top-level threads delegate. 2 also lets their agents delegate again."><NumberField label="Delegation depth" unit="levels" min={1} max={4} value={current.max_depth} onCommit={(max_depth) => change({ max_depth })} /></Row>
     </Section>
     <CompactionSection />
     <AskDeadlineSection />
     <Section title={COPY.defaultsSection}>
-      <Row title={COPY.autonomy} description={autonomyHint(effective.lead_autonomy)}><Select label={COPY.autonomy} value={effective.lead_autonomy} options={AUTONOMY_OPTIONS} disabled={saving} onChange={(v) => change({ lead_autonomy: v as OrchestrationSettings['lead_autonomy'] })} /></Row>
-      <Row title={COPY.workspace} description="Where the Coordinator's agents edit when it doesn't choose. An own worktree keeps parallel work apart."><Select label={COPY.workspace} value={effective.lead_workspace} options={WORKSPACE_OPTIONS} disabled={saving} onChange={(v) => change({ lead_workspace: v as OrchestrationSettings['lead_workspace'] })} /></Row>
-      <Row title={COPY.push} description={COPY.pushDetail}><Switch aria-label={COPY.push} checked={effective.lead_push_without_asking} disabled={saving} onCheckedChange={(lead_push_without_asking) => change({ lead_push_without_asking })} /></Row>
+      <Row title={COPY.autonomy} description={autonomyHint(effective.lead_autonomy)}><Select label={COPY.autonomy} value={effective.lead_autonomy} options={AUTONOMY_OPTIONS} onChange={(v) => change({ lead_autonomy: v as OrchestrationSettings['lead_autonomy'] })} /></Row>
+      <Row title={COPY.workspace} description="Where the Coordinator's agents edit when it doesn't choose. An own worktree keeps parallel work apart."><Select label={COPY.workspace} value={effective.lead_workspace} options={WORKSPACE_OPTIONS} onChange={(v) => change({ lead_workspace: v as OrchestrationSettings['lead_workspace'] })} /></Row>
+      <Row title={COPY.push} description={COPY.pushDetail}><Switch aria-label={COPY.push} checked={effective.lead_push_without_asking} onCheckedChange={(lead_push_without_asking) => change({ lead_push_without_asking })} /></Row>
       <Row title={COPY.models} description="When the Coordinator delegates without choosing a model. Each project can override these in its Project tab." />
       {COORDINATOR_ROLES.map(({ role, label }) => <RoleRow key={role} label={label} value={current.role_defaults?.[role]} onChange={(value) => void updateSettings({ orchestration: withGlobalRoleDefault(latestSettings()!.orchestration, role, value) })} />)}
     </Section>
@@ -124,13 +124,13 @@ export function Agents() {
 
 /** Questions with a deadline (`kybern_ask_user`): whether agents may set one, and the longest wait. Never on approvals. */
 export function AskDeadlineSection() {
-  const { settings: s, saving } = useSettings()
+  const { settings: s } = useSettings()
   if (!s) return null
   const deadlines = s.ask_deadlines ?? ASK_DEADLINE_DEFAULTS
   return (
     <Section title="Questions">
-      <Row title="Let agents answer for you after a deadline" description="An agent may set a default and a wait. Kybern shows the countdown and picks the default when it ends. Off, questions wait for you." shared="ask_deadlines"><Switch aria-label="Let agents answer for you after a deadline" testId="settings-ask-deadlines" checked={deadlines.enabled} disabled={saving} onCheckedChange={(enabled) => void updateSettings({ ask_deadlines: { ...(latestSettings()!.ask_deadlines ?? ASK_DEADLINE_DEFAULTS), enabled } })} /></Row>
-      <Row title="Longest wait an agent can set" description="Shorter requests keep their own time."><Select label="Longest wait an agent can set" testId="settings-ask-deadline-max" value={String(deadlines.max_seconds)} disabled={saving || !deadlines.enabled} options={askDeadlineOptions(deadlines.max_seconds)} onChange={(value) => void updateSettings({ ask_deadlines: { ...(latestSettings()!.ask_deadlines ?? ASK_DEADLINE_DEFAULTS), max_seconds: Number(value) } })} /></Row>
+      <Row title="Let agents answer for you after a deadline" description="An agent may set a default and a wait. Kybern shows the countdown and picks the default when it ends. Off, questions wait for you." shared="ask_deadlines"><Switch aria-label="Let agents answer for you after a deadline" testId="settings-ask-deadlines" checked={deadlines.enabled} onCheckedChange={(enabled) => void updateSettings({ ask_deadlines: { ...(latestSettings()!.ask_deadlines ?? ASK_DEADLINE_DEFAULTS), enabled } })} /></Row>
+      <Row title="Longest wait an agent can set" description="Shorter requests keep their own time."><Select label="Longest wait an agent can set" testId="settings-ask-deadline-max" value={String(deadlines.max_seconds)} disabled={!deadlines.enabled} options={askDeadlineOptions(deadlines.max_seconds)} onChange={(value) => void updateSettings({ ask_deadlines: { ...(latestSettings()!.ask_deadlines ?? ASK_DEADLINE_DEFAULTS), max_seconds: Number(value) } })} /></Row>
     </Section>
   )
 }
@@ -143,21 +143,19 @@ function DaemonUpdateRow() {
  const [error, setError] = useState('')
  const status = update.data
  const act = async () => {setBusy(true);setError('');try {await getClient()!.call(status?.status === 'available' ? 'daemon_update.run' : 'daemon_update.check', {});update.refresh()} catch(e) {setError(problemSentence(e, { action: 'update the daemon' }))} finally {setBusy(false)}}
- return <Row title="kybernd" description={activeEnvironment().local ? 'Bundled with the app and updated with it.' : info.data ? `${info.data.hostname} · ${info.data.os} ${info.data.arch}` : '…'}><div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:8}}><div style={{display:'flex',alignItems:'center',gap:12}}><Label color={t.textSecondary} size={14}>{info.data?.version??'…'}</Label>{!activeEnvironment().local && <Button disabled={busy} onClick={()=>void act()}>{busy?'Checking…':status?.status==='available'&&status.latest_version?`Update to ${status.latest_version}`:'Check for updates'}</Button>}</div>{error&&<Label color={t.red} size={12}>{error}</Label>}</div></Row>
+ return <Row title="kybernd" description={activeEnvironment().local ? 'Bundled with the app and updated with it.' : info.data ? `${info.data.hostname} · ${info.data.os} ${info.data.arch}` : '…'}><div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:8}}><div style={{display:'flex',alignItems:'center',gap:12}}><Label color={t.textSecondary} size={14}>{info.data?.version??'…'}</Label>{!activeEnvironment().local && <Button testId="settings-daemon-check" disabled={busy} onClick={()=>void act()}>{busy?'Checking…':status?.status==='available'&&status.latest_version?`Update to ${status.latest_version}`:'Check for updates'}</Button>}</div>{error&&<Label color={t.red} size={12}>{error}</Label>}</div></Row>
 }
 
 function RoleRow({ label, value, onChange }: { label: string; value?: RoleDefault; onChange: (value: RoleDefault | null) => void }) {
   const providers = useNav((s) => s.providers)
-  const { saving } = useSettings()
   const chosen = providers.find((p) => p.kind === value?.provider?.kind)
-  return <Row title={label}><div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Select label={`${label} agent`} value={value?.provider?.kind ?? ''} disabled={saving} onChange={(kind) => onChange(kind ? { provider: { kind: kind as ProviderKind, instance: 'default' } } : null)} options={[{ value: '', label: COPY.sameAsCoordinator }, ...providers.filter((p) => p.available).map((p) => ({ value: p.kind, label: p.display_name, mark: p.kind }))]} />{chosen && <Select label={`${label} model`} value={value?.model ?? ''} disabled={saving} onChange={(model) => onChange({ ...value, model: model || null })} options={[{ value: '', label: 'Default model' }, ...(chosen.models ?? []).map((m) => ({ value: m.id, label: m.display_name || m.id }))]} />}{chosen?.supported_efforts?.length ? <Select label={`${label} effort`} value={value?.effort ?? ''} disabled={saving} onChange={(effort) => onChange({ ...value, effort: effort || null })} options={[{ value: '', label: 'Default effort' }, ...chosen.supported_efforts.map((value) => ({ value, label: value }))]} /> : null}</div></Row>
+  return <Row title={label}><div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Select label={`${label} agent`} value={value?.provider?.kind ?? ''} onChange={(kind) => onChange(kind ? { provider: { kind: kind as ProviderKind, instance: 'default' } } : null)} options={[{ value: '', label: COPY.sameAsCoordinator }, ...providers.filter((p) => p.available).map((p) => ({ value: p.kind, label: p.display_name, mark: p.kind }))]} />{chosen && <Select label={`${label} model`} value={value?.model ?? ''} onChange={(model) => onChange({ ...value, model: model || null })} options={[{ value: '', label: 'Default model' }, ...(chosen.models ?? []).map((m) => ({ value: m.id, label: m.display_name || m.id }))]} />}{chosen?.supported_efforts?.length ? <Select label={`${label} effort`} value={value?.effort ?? ''} onChange={(effort) => onChange({ ...value, effort: effort || null })} options={[{ value: '', label: 'Default effort' }, ...chosen.supported_efforts.map((value) => ({ value, label: value }))]} /> : null}</div></Row>
 }
 
 function ProfileField({ value, onSave, inherit }: { value?: string; onSave: (value: string) => void; inherit: string }) {
-  const { saving } = useSettings()
   const [naming, setNaming] = useState(false)
   const [draft, setDraft] = useState(value ?? '')
-  return <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Select label="OMP profile source" value={naming || (value && value !== 'default') ? 'named' : value === 'default' ? 'default' : 'inherit'} disabled={saving} options={[{ value: 'inherit', label: inherit }, { value: 'default', label: 'OMP default' }, { value: 'named', label: 'Named profile' }]} onChange={(mode) => { setNaming(mode === 'named'); if (mode !== 'named') onSave(mode === 'inherit' ? '' : 'default') }} />{(naming || (value && value !== 'default')) && <TextField label="Profile name" value={draft} onChange={setDraft} disabled={saving} placeholder="Profile name" onBlur={() => { if (draft.trim() && draft.trim() !== value) onSave(draft.trim()) }} onSubmit={() => { if (draft.trim()) onSave(draft.trim()) }} />}</div>
+  return <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Select label="OMP profile source" value={naming || (value && value !== 'default') ? 'named' : value === 'default' ? 'default' : 'inherit'} options={[{ value: 'inherit', label: inherit }, { value: 'default', label: 'OMP default' }, { value: 'named', label: 'Named profile' }]} onChange={(mode) => { setNaming(mode === 'named'); if (mode !== 'named') onSave(mode === 'inherit' ? '' : 'default') }} />{(naming || (value && value !== 'default')) && <TextField label="Profile name" value={draft} onChange={setDraft} placeholder="Profile name" onBlur={() => { if (draft.trim() && draft.trim() !== value) onSave(draft.trim()) }} onSubmit={() => { if (draft.trim()) onSave(draft.trim()) }} />}</div>
 }
 
 function OmpProfiles() {
@@ -183,24 +181,24 @@ export { About } from './About.tsx'
 
 /** Server names come from native configuration; toggles persist a machine-local allowlist. */
 export function CoordinatorMcpTools() {
-  const { settings: s, saving } = useSettings()
+  const { settings: s } = useSettings()
   const projectId = useApp((s) => s.open.thread?.project_id ?? s.draft.projectId)
   const catalog = useResource('providers.list', projectId ? { project_id: projectId } : {})
   const servers = catalog.data?.coordinator_mcp_servers ?? {}
   if (!s || !Object.values(servers).some((names) => names?.length)) return null
-  return <CoordinatorMcpToolsView servers={servers} allowed={s.coordinator_mcp_servers ?? {}} saving={saving} onChange={(provider, name, checked) => {
+  return <CoordinatorMcpToolsView servers={servers} allowed={s.coordinator_mcp_servers ?? {}} onChange={(provider, name, checked) => {
     const current = latestSettings()!.coordinator_mcp_servers ?? {}
     const allowed = current[provider] ?? []
     void updateSettings({ coordinator_mcp_servers: { ...current, [provider]: checked ? [...new Set([...allowed, name])] : allowed.filter((server) => server !== name) } })
   }} />
 }
 
-export function CoordinatorMcpToolsView({ servers, allowed, saving, onChange }: { servers: Partial<Record<ProviderKind, string[]>>; allowed: Partial<Record<ProviderKind, string[]>>; saving: boolean; onChange: (provider: ProviderKind, name: string, checked: boolean) => void }) {
+export function CoordinatorMcpToolsView({ servers, allowed, onChange }: { servers: Partial<Record<ProviderKind, string[]>>; allowed: Partial<Record<ProviderKind, string[]>>; onChange: (provider: ProviderKind, name: string, checked: boolean) => void }) {
   if (!Object.values(servers).some((names) => names?.length)) return null
   return <Section title="Tools the Coordinator may use">
     {Object.entries(servers).map(([provider, names]) => <div key={provider}>
       <Row title={providerLabel(provider as ProviderKind)} />
-      {(names ?? []).map((name) => <Row key={name} title={name}><Switch aria-label={name} testId={"settings-coordinator-mcp-" + provider + "-" + name} disabled={saving} checked={allowed[provider as ProviderKind]?.includes(name) ?? false} onCheckedChange={(checked) => onChange(provider as ProviderKind, name, checked)} /></Row>)}
+      {(names ?? []).map((name) => <Row key={name} title={name}><Switch aria-label={name} testId={"settings-coordinator-mcp-" + provider + "-" + name} checked={allowed[provider as ProviderKind]?.includes(name) ?? false} onCheckedChange={(checked) => onChange(provider as ProviderKind, name, checked)} /></Row>)}
     </div>)}
   </Section>
 }

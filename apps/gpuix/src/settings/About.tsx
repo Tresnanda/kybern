@@ -60,7 +60,7 @@ const isDevBuild = (version: string | null) => !!version && /^v?\d+\.\d+\.\d+-/.
  * itself read it. Leaving Dev never downgrades; the status line says so.
  */
 function UpdateTrackRow() {
-  const { settings, saving } = useSettings()
+  const { settings } = useSettings()
   const appVersion = useAppUpdate(s => s.appVersion)
   if (!settings) return null
   const track: UpdateTrack = settings.update_track === 'dev' ? 'dev' : 'stable'
@@ -74,7 +74,7 @@ function UpdateTrackRow() {
     void updateSettings({ update_track: next }).then(() => { if (latestSettings()?.update_track === next) updateTrackChanged(next) })
   }
   return <Row title="Update track" description="Dev gets new features first and may have rough edges. Stable gets them once they have settled." status={status} shared="update_track">
-    <Segmented testId="about-update-track" aria-label="Update track" options={TRACK_OPTIONS} value={track} busy={saving} onChange={choose} />
+    <Segmented testId="about-update-track" aria-label="Update track" options={TRACK_OPTIONS} value={track} onChange={choose} />
   </Row>
 }
 

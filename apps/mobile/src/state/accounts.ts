@@ -6,6 +6,7 @@ import type { AccountSummary, KybernClient, ProviderKind, Settings } from "./pro
 import { errorText, rawErrorMessage, onClientAttach, onEnvironmentReset } from "./runtime";
 import { attachLate } from "./lateAttach";
 import { saveSettings } from "./settings";
+import { onSettingsMachineChange, settingsClient } from "./machineChoice";
 
 type State = { accounts: AccountSummary[]; loaded: boolean; unsupported: boolean; error: string };
 let state: State = { accounts: [], loaded: false, unsupported: false, error: "" };
@@ -26,6 +27,11 @@ function attach(next: KybernClient) {
   });
 }
 onClientAttach(attach);
+onSettingsMachineChange(() => {
+  inflight = null;
+  publish({ accounts: [], loaded: false, unsupported: false, error: "" });
+  void loadAccounts();
+});
 onEnvironmentReset(() => {
   client = null;
   inflight = null;
@@ -34,29 +40,32 @@ onEnvironmentReset(() => {
 
 /** Read the list; concurrent asks share one call. */
 export function loadAccounts(): Promise<void> {
-  const active = client;
+  // The machine Settings shows (`machineChoice.ts`).
+  const active = settingsClient() ?? client;
   if (!active) return Promise.resolve();
   if (inflight) return inflight;
-  inflight = active
+  const request: Promise<void> = active
     .call("providers.accounts.list", {})
     .then((result) => {
-      if (client === active) publish({ accounts: result.accounts, loaded: true, unsupported: false, error: "" });
+      if ((settingsClient() ?? client) === active) publish({ accounts: result.accounts, loaded: true, unsupported: false, error: "" });
     })
     .catch((e) => {
-      if (client !== active) return;
+      if ((settingsClient() ?? client) !== active) return;
       if (/method not found|-32601/i.test(rawErrorMessage(e))) publish({ loaded: true, unsupported: true, error: "" });
       else publish({ error: errorText(e, "load your accounts") });
     })
     .finally(() => {
-      if (client === active) inflight = null;
+      if (inflight === request) inflight = null;
     });
-  return inflight;
+  inflight = request;
+  return request;
 }
 
 /** Rename or recolour an account. Throws the daemon's error for the caller to word. */
 export async function updateAccount(account: AccountSummary, patch: { name?: string; color?: string }) {
-  if (!client) throw new Error("Connect to your computer to continue.");
-  const updated = await client.call("providers.accounts.update", {
+  const active = settingsClient() ?? client;
+  if (!active) throw new Error("Connect to your computer to continue.");
+  const updated = await active.call("providers.accounts.update", {
     kind: account.provider.kind,
     instance: account.provider.instance,
     ...patch,

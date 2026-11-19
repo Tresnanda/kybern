@@ -543,7 +543,7 @@ fn apply_transcript_event(
                         complete: true,
                     });
                 } else {
-                    let last_is_tail = segments.last().is_some_and(|index| *index + 1 == out.len());
+                    let last_is_tail = segments.last().is_some_and(|index| only_hidden_after(out, *index));
                     let trailing_text = (!last_is_tail)
                         .then(|| assistant_field_suffix(out, &segments, text, AssistantField::Text))
                         .flatten()
@@ -906,12 +906,53 @@ fn assistant_scope(
     Some((turn_id, message_id))
 }
 
-/// The open segment must be the last row. Any tool, task launch, notice,
-/// approval, or other assistant message closes it without changing its key.
+/// Whether the row at `index` is drawn nowhere between two pieces of the same
+/// message: clients nest it under the tool or task that owns it, or show it
+/// above or beside the turn. Text that continues across such a row stays one
+/// segment, so a word is never cut in two Markdown documents. This mirrors
+/// `drawsBetweenText` in `packages/kybern-client/src/transcript.ts`.
+fn hidden_between_text(out: &[TranscriptEntry], index: usize) -> bool {
+    let before = &out[..index];
+    match &out[index] {
+        // A subagent's own tool call is drawn under its task, wherever it ran.
+        TranscriptEntry::ToolCall { origin, call, .. } => {
+            !origin.is_root()
+                || call.parent_id.as_ref().is_some_and(|parent| {
+                    *parent != call.id
+                        && before.iter().any(|entry| matches!(entry, TranscriptEntry::ToolCall { call: other, .. } if other.id == *parent))
+                })
+        }
+        // A task is drawn under the tool that launched it, or under its parent task.
+        TranscriptEntry::RuntimeTask { task, .. } => {
+            task.tool_call_id
+                .as_ref()
+                .is_some_and(|id| before.iter().any(|entry| matches!(entry, TranscriptEntry::ToolCall { call, .. } if call.id == *id)))
+                || task.parent_id.as_ref().is_some_and(|parent| {
+                    *parent != task.id
+                        && before
+                            .iter()
+                            .any(|entry| matches!(entry, TranscriptEntry::RuntimeTask { task: other, .. } if other.id == *parent))
+                })
+        }
+        // Published pages sit above the turn, and outside-repo notes under it.
+        TranscriptEntry::Visual { .. } | TranscriptEntry::OutsideRepoChanged { .. } => true,
+        _ => false,
+    }
+}
+
+/// Whether every row after `index` is hidden between text.
+fn only_hidden_after(out: &[TranscriptEntry], index: usize) -> bool {
+    (index + 1..out.len()).all(|later| hidden_between_text(out, later))
+}
+
+/// The open segment of this message that new text continues: the last row that
+/// is drawn, ignoring rows that are hidden between text. A tool, notice,
+/// approval or other assistant message drawn after it closes it without
+/// changing its key.
 fn tail_open_assistant<'a>(out: &'a mut [TranscriptEntry], id: MessageId, origin: &EventOrigin) -> Option<&'a mut TranscriptEntry> {
-    let entry = out.last_mut()?;
+    let index = (0..out.len()).rev().find(|&index| !hidden_between_text(out, index))?;
     let is_match = matches!(
-        &*entry,
+        &out[index],
         TranscriptEntry::Assistant {
             id: candidate,
             origin: candidate_origin,
@@ -919,7 +960,7 @@ fn tail_open_assistant<'a>(out: &'a mut [TranscriptEntry], id: MessageId, origin
             ..
         } if *candidate == id && candidate_origin == origin
     );
-    if is_match { Some(entry) } else { None }
+    if is_match { Some(&mut out[index]) } else { None }
 }
 
 fn next_segment(out: &[TranscriptEntry], id: MessageId, origin: &EventOrigin, lookup: &TranscriptLookup) -> u32 {
@@ -1452,6 +1493,82 @@ mod tests {
             .collect();
 
         assert_eq!(rendered, vec!["assistant:1:0:Let me look. :true", "tool:call-1", "assistant:4:1:Here is the answer.:true"]);
+    }
+
+    /// `"\n- Har"`, then `between`, then `"nesses that need sign-in"`, all one root message.
+    fn text_split_by(between: Vec<EventPayload>) -> Vec<String> {
+        let thread_id = Uuid::from_u128(1);
+        let turn_id = Uuid::from_u128(2);
+        let message_id = Uuid::from_u128(3);
+        let at = Utc.timestamp_opt(1_700_000_000, 0).single().unwrap();
+        let ev = |seq, payload| ThreadEvent { seq, thread_id, turn_id: Some(turn_id), at, payload };
+        let delta = |text: &str| EventPayload::AssistantTextDelta { message_id, origin: EventOrigin::Root, delta: text.into() };
+        let mut payloads = vec![delta("\n- Har")];
+        payloads.extend(between);
+        payloads.push(delta("nesses that need sign-in"));
+        let events: Vec<_> = payloads.into_iter().enumerate().map(|(index, payload)| ev(index as i64 + 1, payload)).collect();
+        project_transcript(&events)
+            .iter()
+            .map(|entry| match entry {
+                TranscriptEntry::Assistant { segment, text, .. } => format!("assistant:{segment}:{text}"),
+                TranscriptEntry::ToolCall { call, .. } => format!("tool:{}", call.id),
+                TranscriptEntry::RuntimeTask { .. } => "task".into(),
+                _ => "other".into(),
+            })
+            .collect()
+    }
+
+    fn bash(id: &str, origin: EventOrigin) -> EventPayload {
+        EventPayload::ToolCallStarted {
+            call: ToolCall { id: id.into(), name: "bash".into(), input: serde_json::Value::Null, parent_id: None },
+            origin,
+        }
+    }
+
+    #[test]
+    fn a_background_subagents_tool_calls_do_not_split_a_streamed_word() {
+        let agent = || EventOrigin::Agent { task_id: "task-1".into(), provider_thread_id: None };
+        let rendered = text_split_by(vec![bash("call-b", agent()), bash("call-c", agent())]);
+        assert_eq!(rendered, vec!["assistant:0:\n- Harnesses that need sign-in", "tool:call-b", "tool:call-c"]);
+    }
+
+    #[test]
+    fn a_launched_agents_tool_call_and_task_updates_do_not_split_a_streamed_word() {
+        // The sequence stored behind the bug: the Agent launch, a delta, the
+        // subagent's own tool call, two task updates, then the rest of the word.
+        let thread_id = Uuid::from_u128(1);
+        let turn_id = Uuid::from_u128(2);
+        let message_id = Uuid::from_u128(3);
+        let at = Utc.timestamp_opt(1_700_000_000, 0).single().unwrap();
+        let ev = |seq, payload| ThreadEvent { seq, thread_id, turn_id: Some(turn_id), at, payload };
+        let delta = |text: &str| EventPayload::AssistantTextDelta { message_id, origin: EventOrigin::Root, delta: text.into() };
+        let launch = ToolCall { id: "launch".into(), name: "Agent".into(), input: serde_json::Value::Null, parent_id: None };
+        let mut task = runtime_task("task-1", RuntimeTaskKind::Agent, RuntimeTaskStatus::Running, 0);
+        task.tool_call_id = Some("launch".into());
+        let agent = EventOrigin::Agent { task_id: "task-1".into(), provider_thread_id: None };
+        let events = vec![
+            ev(1, EventPayload::ToolCallStarted { call: launch, origin: EventOrigin::Root }),
+            ev(2, EventPayload::RuntimeTaskStarted { task: task.clone() }),
+            ev(3, delta("\n- Har")),
+            ev(4, bash("call-b", agent)),
+            ev(5, EventPayload::RuntimeTaskUpdated { task: task.clone() }),
+            ev(6, EventPayload::RuntimeTaskUpdated { task }),
+            ev(7, delta("nesses that need sign-in")),
+        ];
+        let texts: Vec<String> = project_transcript(&events)
+            .iter()
+            .filter_map(|entry| match entry {
+                TranscriptEntry::Assistant { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, vec!["\n- Harnesses that need sign-in"]);
+    }
+
+    #[test]
+    fn a_root_tool_call_between_deltas_still_splits() {
+        let rendered = text_split_by(vec![bash("call-b", EventOrigin::Root)]);
+        assert_eq!(rendered, vec!["assistant:0:\n- Har", "tool:call-b", "assistant:1:nesses that need sign-in"]);
     }
 
     #[test]

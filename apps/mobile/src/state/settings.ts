@@ -10,6 +10,7 @@ import {
   onSubscriptionReady,
 } from "./runtime";
 import { attachLate } from "./lateAttach";
+import { choiceTarget, onSettingsMachineChange, settingsChoice, settingsClient } from "./machineChoice";
 
 export const SETTINGS_CHANGED_NOTIFICATION = "settings.changed";
 
@@ -31,7 +32,8 @@ function attach(next: KybernClient, current: () => boolean) {
   isCurrent = current;
   next.onNotification(SETTINGS_CHANGED_NOTIFICATION, (params) => {
     const settings = (params as { settings?: Settings } | null)?.settings;
-    if (!current() || !settings) return;
+    // Another machine's settings are on screen: the computer the phone is at announces only its own.
+    if (!current() || !settings || choiceTarget(settingsChoice())) return;
     revision++;
     publish({ settings, error: "" });
   });
@@ -46,15 +48,17 @@ onEnvironmentReset(() => {
 
 /** Read the settings again; a newer `settings.changed` or save wins over this read. */
 export async function loadSettings() {
-  const active = client;
+  const own = client;
+  // The machine Settings shows (`machineChoice.ts`): the computer the phone is at, or another one.
+  const active = settingsClient() ?? own;
   if (!active) return;
   const at = revision;
   try {
     const settings = await active.call("settings.get", {});
-    if (client === active && isCurrent() && revision === at)
+    if (client === own && (settingsClient() ?? own) === active && isCurrent() && revision === at)
       publish({ settings, error: "" });
   } catch (e) {
-    if (client === active && isCurrent())
+    if (client === own && (settingsClient() ?? own) === active && isCurrent())
       publish({ error: errorText(e, "load your settings") });
   }
 }
@@ -64,7 +68,7 @@ export async function loadSettings() {
  * previous one back and says why. Resolves false when nothing was saved.
  */
 export async function saveSettings(next: Settings): Promise<boolean> {
-  const active = client;
+  const active = settingsClient() ?? client;
   const previous = state.settings;
   if (!active || !previous) return false;
   revision++;
@@ -72,17 +76,17 @@ export async function saveSettings(next: Settings): Promise<boolean> {
   publish({ settings: next, saving: true, error: "" });
   try {
     const saved = await active.call("settings.update", { settings: next });
-    if (client === active && revision === at) publish({ settings: saved });
+    if ((settingsClient() ?? client) === active && revision === at) publish({ settings: saved });
     return true;
   } catch (e) {
-    if (client === active && revision === at)
+    if ((settingsClient() ?? client) === active && revision === at)
       publish({
         settings: previous,
         error: errorText(e, "save that setting"),
       });
     return false;
   } finally {
-    if (client === active) publish({ saving: false });
+    publish({ saving: false });
   }
 }
 
@@ -108,3 +112,8 @@ export function useSettings() {
 }
 
 attachLate(attach, () => void loadSettings());
+onSettingsMachineChange(() => {
+  revision++;
+  publish({ settings: null, error: "" });
+  void loadSettings();
+});

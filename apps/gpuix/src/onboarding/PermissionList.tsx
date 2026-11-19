@@ -43,7 +43,7 @@ const TINT_OUT: Exit = { to: { opacity: 0 }, duration: 0.25, ease: EASE.out }
 
 let target: PermissionMode | null = null
 let running = false
-/** Write the newest pick; the store drops a write made while another is saving, so wait and ask again (at most a few times). */
+/** Write the newest pick; a failed write goes back to the saved value, so ask again (at most a few times). */
 async function persist(mode: PermissionMode) {
   target = mode
   if (running) return
