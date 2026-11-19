@@ -594,7 +594,8 @@ export interface UploadedAsset {
 /** `uploadFile`: POST the bytes to the daemon's `/assets`. */
 export async function uploadPath(path: string, threadId?: ThreadId, machineId?: MachineId): Promise<UploadedAsset> {
   const file = Bun.file(path)
-  const name = path.split('/').pop() ?? 'file'
+  // A Windows path uses `\`; on other systems a backslash is part of the file's name.
+  const name = path.split(process.platform === 'win32' ? /[\\/]/ : '/').pop() || 'file'
   return uploadBytes(name, file.type || 'application/octet-stream', await file.arrayBuffer(), threadId, machineId)
 }
 

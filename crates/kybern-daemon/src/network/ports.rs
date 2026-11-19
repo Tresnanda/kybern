@@ -534,6 +534,12 @@ async fn bind_local(remote: u16, local: Option<u16>) -> Result<TcpListener, RpcE
     bind_first_free(remote, local, |port| TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port)))).await
 }
 
+/// A port to skip when none was asked for. Windows answers `PermissionDenied` (WSAEACCES) for a port another program
+/// holds exclusively or that the system reserves (Hyper-V and WinNAT exclusion ranges), not `AddrInUse`.
+fn port_unavailable(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::AddrInUse || (cfg!(windows) && error.kind() == std::io::ErrorKind::PermissionDenied)
+}
+
 /// The port choice of `bind_local`, with the bind passed in so it can be tested without real ports:
 /// the asked-for local port or nothing, else the remote port number or the first free one above it.
 async fn bind_first_free<T, F, Fut>(remote: u16, local: Option<u16>, mut bind: F) -> Result<T, RpcError>
@@ -546,7 +552,7 @@ where
     for port in start..=end {
         match bind(port).await {
             Ok(listener) => return Ok(listener),
-            Err(error) if local.is_none() && error.kind() == std::io::ErrorKind::AddrInUse => continue,
+            Err(error) if local.is_none() && port_unavailable(&error) => continue,
             Err(error) => return Err(RpcError::new(codes::CONFLICT, format!("Could not use that local port: {error}"))),
         }
     }
@@ -916,9 +922,13 @@ mod tests {
         assert_eq!(bind_first_free(5173, Some(4000), bind).await.unwrap(), 4000, "an asked-for local port is used as is");
         assert_eq!(bind_first_free(5173, Some(5174), bind).await.unwrap_err().code, codes::CONFLICT, "and never replaced");
         assert_eq!(bind_first_free(u16::MAX, None, bind).await.unwrap_err().code, codes::CONFLICT);
-        // Any error other than "in use" is reported, not skipped.
+        // Any error other than "in use" is reported, not skipped; on Windows a denied port counts as in use.
         let denied = |_port: u16| async { Err::<u16, _>(std::io::Error::from(std::io::ErrorKind::PermissionDenied)) };
         assert_eq!(bind_first_free(3000, None, denied).await.unwrap_err().code, codes::CONFLICT);
+        let reserved_range =
+            |port: u16| async move { if port < 3010 { Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied)) } else { Ok(port) } };
+        let skipped = bind_first_free(3000, None, reserved_range).await;
+        assert_eq!(skipped.ok(), cfg!(windows).then_some(3010), "only Windows steps over a port it will not let a program bind");
 
         // And with real sockets, on a port this test holds: an asked-for port is refused, and an
         // automatic choice moves above it.

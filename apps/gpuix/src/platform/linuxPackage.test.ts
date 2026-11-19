@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { imageDirWritable, linuxInstall, packageCommand, stageAppImageCommands } from './linuxPackage.ts'
 
+const linuxOnly = test.skipIf(process.platform === 'win32') // AppImage mounts and XDG folders are POSIX paths; the code under test only runs on Linux
 let root = ''
 afterEach(() => { if (root) rmSync(root, { recursive: true, force: true }) })
 
@@ -28,7 +29,7 @@ test('reads the format each package records, and nothing for source runs or macO
   expect(linuxInstall({ KYBERN_GPUIX_RESOURCES: resources }, exe, 'linux')).toBeNull()
 })
 
-test('an AppImage replaces its image only while running from that image’s mount', () => {
+linuxOnly('an AppImage replaces its image only while running from that image’s mount', () => {
   const { exe, resources } = tree('appimage')
   const image = path.join(root, 'Kybern.AppImage')
   const mount = path.join(root, 'mount')
@@ -47,7 +48,7 @@ test('copies kybernd and kybern out of the image once per version', () => {
   const staged = stageAppImageCommands(app, '0.16.0', data)!
   expect(staged).toEqual({ kybernd: path.join(data, 'kybern-gpuix/bin/kybernd'), kybern: path.join(data, 'kybern-gpuix/bin/kybern') })
   expect(readFileSync(staged.kybernd, 'utf8')).toBe('daemon 1')
-  expect(statSync(staged.kybern).mode & 0o777).toBe(0o755)
+  if (process.platform !== 'win32') expect(statSync(staged.kybern).mode & 0o777).toBe(0o755) // Windows has no mode bits
   // Same version and sizes: the copies (and the running daemon's file) are left alone.
   const before = statSync(staged.kybernd).ino
   expect(stageAppImageCommands(app, '0.16.0', data)).toEqual(staged)

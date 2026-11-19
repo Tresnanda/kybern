@@ -8,6 +8,13 @@ use std::{path::PathBuf, time::Duration};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use uuid::Uuid;
 
+/// Where tests that need a folder the previews may grant create it: the build's `target` folder, not the system temp
+/// folder (macOS's `/private/var` is a system folder that previews refuse to grant). A Windows temp folder is
+/// an ordinary user folder, and a checkout inside a hidden folder such as `~/.kybern/worktrees` is never grantable.
+fn scratch_base() -> PathBuf {
+    if cfg!(windows) { std::env::temp_dir() } else { PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target") }
+}
+
 pub(crate) struct Host {
     pub(crate) state: crate::state::AppState,
     pub(crate) url: String,
@@ -2165,7 +2172,7 @@ async fn previews_open_serve_grant_and_close_over_rpc_and_http() {
         .await;
     assert!(in_data.is_err(), "the data directory (daemon.token) is never a preview root");
     // Work in a project folder outside the data directory from here on.
-    let project = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target").join(format!("preview-e2e-project-{}", Uuid::now_v7()));
+    let project = scratch_base().join(format!("preview-e2e-project-{}", Uuid::now_v7()));
     std::fs::create_dir_all(&project).unwrap();
     let project = project.canonicalize().unwrap();
     thread.cwd = project.to_string_lossy().into_owned();
@@ -2237,7 +2244,7 @@ async fn previews_open_serve_grant_and_close_over_rpc_and_http() {
     // Outside the project: a card first, then a persisted grant.
     // Under the build's target folder, not the system temp folder: macOS's `/private/var` is a system
     // folder that previews (rightly) refuse to grant.
-    let outside = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target").join(format!("preview-e2e-{}", Uuid::now_v7()));
+    let outside = scratch_base().join(format!("preview-e2e-{}", Uuid::now_v7()));
     std::fs::create_dir_all(outside.join("deeper")).unwrap();
     let outside = outside.canonicalize().unwrap();
     std::fs::write(outside.join("page.html"), "<p>outside</p>").unwrap();
@@ -2784,7 +2791,7 @@ async fn files_outside_the_workspace_open_read_only_after_the_desktop_allows_the
     phone.call::<DaemonInfoMethod>(Empty {}).await.unwrap();
 
     // Under the build's target folder rather than the system temp folder, like the preview test above.
-    let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target").join(format!("outside-e2e-{}", Uuid::now_v7()));
+    let base = scratch_base().join(format!("outside-e2e-{}", Uuid::now_v7()));
     let workspace = base.join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     std::fs::create_dir_all(base.join("elsewhere")).unwrap();

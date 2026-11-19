@@ -69,7 +69,7 @@ const COMMANDS: { id: string; name: string; command: string; args: (file: string
   { id: 'webstorm', name: 'WebStorm', command: 'webstorm', args: (file, line) => ['--line', String(line), file] },
 ]
 const DEFAULT_APP: Editor = { id: 'default', name: 'Default app', app: '' }
-const onPath = (command: string, dirs: string[], exists: (file: string) => boolean) => dirs.map((dir) => path.join(dir, executableName(command, process.platform))).find(exists)
+const onPath = (command: string, dirs: string[], exists: (file: string) => boolean, platform: NodeJS.Platform) => dirs.map((dir) => path.join(dir, executableName(command, platform))).find(exists)
 
 /** Where Linux editors may be: what `pathPlan` knows (`~/.local/bin`, `/snap/bin`, version managers) plus the login shell's PATH once it has answered. */
 function linuxDirs(login: string[]): string[] {
@@ -85,7 +85,7 @@ export function detectEditors(platform: NodeJS.Platform, env: Record<string, str
     })
     return [...found, DEFAULT_APP]
   }
-  return [...COMMANDS.flatMap((known) => { const app = onPath(known.command, dirs, exists); return app ? [{ id: known.id, name: known.name, app }] : [] }), DEFAULT_APP]
+  return [...COMMANDS.flatMap((known) => { const app = onPath(known.command, dirs, exists, platform); return app ? [{ id: known.id, name: known.name, app }] : [] }), DEFAULT_APP]
 }
 
 let found: Editor[] | null = null

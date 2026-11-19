@@ -919,7 +919,8 @@ impl Orchestrator {
             })
             .max_by_key(|candidate| candidate.members.len());
         let reuse = existing.first().map(|project| project.path.clone()).or_else(|| partial.map(|c| c.project.path.clone()));
-        let mut suggested = reuse.as_ref().map(PathBuf::from).unwrap_or_else(|| parent.join(&base));
+        // A reused project may be stored in the verbatim `\\?\` form (a group added on Windows); people are shown the plain one.
+        let mut suggested = reuse.as_ref().map(|path| kybern_git::simplify_path(Path::new(path))).unwrap_or_else(|| parent.join(&base));
         if reuse.is_none() {
             for n in 2..50 {
                 let check = check_path(&suggested, &params.repos, &params.members, &params.name).await;

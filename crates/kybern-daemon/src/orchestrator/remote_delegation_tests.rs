@@ -347,7 +347,9 @@ async fn a_worktree_child_starts_from_the_parents_uncommitted_changes_without_pu
 
     let started = p.delegate(json!({"task": "Continue my edits", "workspace": "worktree"})).await;
     let task_id = task_id_of(&started);
-    assert_eq!(started["remote_state"], "running", "{started}");
+    // The call waits a few seconds for the other machine to start the task. Snapshotting and sending the checkout can
+    // take longer where git is slow (Windows), and the task is then queued: the child below shows when it started.
+    assert!(matches!(started["remote_state"].as_str(), Some("running" | "pending")), "{started}");
     let child = eventually(|| async { p.child_on_b(task_id) }).await;
     let worktree = child.worktree.clone().expect("a worktree");
     assert!(worktree.branch.starts_with("kybern/"), "{worktree:?}");

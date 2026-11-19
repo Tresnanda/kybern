@@ -22,7 +22,7 @@ function sources(dir: string): string[] {
 
 /** Lines that name `getClient` outside a comment. */
 export function offenders(source: string): number[] {
-  return source.split('\n').flatMap((line, index) => (/\bgetClient\b/.test(line.replace(/\/\/.*$/, '')) ? [index + 1] : []))
+  return source.split(/\r?\n/).flatMap((line, index) => (/\bgetClient\b/.test(line.replace(/\/\/.*$/, '')) ? [index + 1] : []))
 }
 
 test('thread-scoped folders never use getClient()', () => {

@@ -55,7 +55,7 @@ test('downloads', () => {
   expect(appConfigDir('x', { ...linux, env: { XDG_CONFIG_HOME: '.config' } })).toBe('/home/ada/.config/x')
   expect(appCacheDir('x', { ...linux, env: { XDG_CACHE_HOME: 'cache' } })).toBe('/home/ada/.cache/x')
 })
-test('Linux asks user-dirs.dirs for a translated Downloads folder', () => {
+test.skipIf(process.platform === 'win32')('Linux asks user-dirs.dirs for a translated Downloads folder', () => {
   expect(userDirsDownload('# comment\nXDG_DESKTOP_DIR="$HOME/Bureau"\nXDG_DOWNLOAD_DIR="$HOME/Téléchargements"\n', '/home/ada')).toBe('/home/ada/Téléchargements')
   expect(userDirsDownload('XDG_DOWNLOAD_DIR="/data/dl"', '/home/ada')).toBe('/data/dl')
   expect(userDirsDownload('XDG_DOWNLOAD_DIR="relative"', '/home/ada')).toBeNull()

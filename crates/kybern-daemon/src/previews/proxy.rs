@@ -597,7 +597,9 @@ mod tests {
             l.local_addr().unwrap().port()
         };
         let ticket = rig.ticket(closed);
-        assert_eq!(http().get(rig.url(&ticket, "/")).send().await.unwrap().status(), 502);
+        // Windows takes about as long to refuse a closed loopback port as the connect timeout, so it may answer 504.
+        let status = http().get(rig.url(&ticket, "/")).send().await.unwrap().status();
+        assert!(status == 502 || (cfg!(windows) && status == 504), "{status}");
         // The daemon token is never a credential for this route.
         assert_eq!(
             http().get(rig.url("daemon-token", "/")).header("authorization", "Bearer daemon-token").send().await.unwrap().status(),
