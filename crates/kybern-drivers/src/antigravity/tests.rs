@@ -230,6 +230,78 @@ fn the_result_text_is_authoritative() {
     assert_eq!(silent.one_shot_answer().as_deref(), Some("just this"));
 }
 
+/// agy 1.5.12, recorded: a first turn that failed (here a model the run could not
+/// load; in the field, a `NOT_FOUND (code 404)` from the model API) writes an
+/// `error_message` step.
+const FAILED_TURN: &str = r#"
+{"event":"init","conversation_id":"3769f60d-02b2-4146-ad16-e8ce648d976d","init":{"cwd":"/work","permission_mode":"always-proceed","tools":["run_command","view_file"]}}
+{"event":"step_update","step_update":{"conversation_id":"3769f60d-02b2-4146-ad16-e8ce648d976d","step_index":0,"state":"DONE","step_type":"user_input"}}
+{"event":"step_update","step_update":{"conversation_id":"3769f60d-02b2-4146-ad16-e8ce648d976d","step_index":1,"state":"DONE","step_type":"error_message"}}
+{"event":"result","result":{"conversation_id":"3769f60d-02b2-4146-ad16-e8ce648d976d","status":"ERROR","response":"","error":"failed to construct executor: plan model not specified; you must specify a valid model","duration_seconds":0,"num_turns":1,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0},"finished_reason":"error"}}
+"#;
+
+/// The next turn of that conversation, recorded: it answers and `agy` exits 0, yet
+/// the result repeats the first turn's error. Every later turn does the same.
+const ANSWERED_AFTER_A_FAILED_TURN: &str = r#"
+{"event":"init","conversation_id":"3769f60d-02b2-4146-ad16-e8ce648d976d","init":{"model":"gemini-4-neon-low","cwd":"/work","permission_mode":"always-proceed","tools":["run_command","view_file"]}}
+{"event":"step_update","step_update":{"conversation_id":"3769f60d-02b2-4146-ad16-e8ce648d976d","step_index":2,"state":"DONE","step_type":"user_input"}}
+{"event":"step_update","step_update":{"conversation_id":"3769f60d-02b2-4146-ad16-e8ce648d976d","step_index":3,"state":"DONE","step_type":"system_message","duration_seconds":0.000115952}}
+{"event":"step_update","step_update":{"conversation_id":"3769f60d-02b2-4146-ad16-e8ce648d976d","step_index":4,"state":"ACTIVE","step_type":"agent_response","text_delta":"hi"}}
+{"event":"step_update","step_update":{"conversation_id":"3769f60d-02b2-4146-ad16-e8ce648d976d","step_index":4,"state":"DONE","step_type":"agent_response","text_delta":"\n","duration_seconds":3.636149031,"usage":{"input_tokens":13097,"output_tokens":22,"thinking_tokens":20,"cache_read_tokens":0,"total_tokens":13119}}}
+{"event":"result","result":{"conversation_id":"3769f60d-02b2-4146-ad16-e8ce648d976d","status":"ERROR","response":"hi\n","error":"failed to construct executor: plan model not specified; you must specify a valid model","duration_seconds":10.773591171,"num_turns":2,"usage":{"input_tokens":13097,"output_tokens":22,"thinking_tokens":20,"cache_read_tokens":0,"total_tokens":13119},"finished_reason":"error"}}
+"#;
+
+#[test]
+fn a_failed_turn_with_an_error_step_still_fails() {
+    let mut mapper = TurnMapper::new(None);
+    feed(&mut mapper, FAILED_TURN);
+    let events = mapper.finish(Some(3), None, false);
+    assert!(matches!(&events[..], [DriverEvent::TurnFailed { error, .. }] if error.contains("plan model not specified")), "{events:?}");
+    // The field case: the model API's 404 on the first turn.
+    let mut field = TurnMapper::new(None);
+    feed(
+        &mut field,
+        &FAILED_TURN.replace(
+            "failed to construct executor: plan model not specified; you must specify a valid model",
+            "NOT_FOUND (code 404): Requested entity was not found.",
+        ),
+    );
+    let events = field.finish(Some(1), None, false);
+    assert!(matches!(&events[..], [DriverEvent::TurnFailed { error, .. }] if error.contains("NOT_FOUND")), "{events:?}");
+}
+
+#[test]
+fn an_earlier_turns_error_repeated_after_an_answer_does_not_fail_the_turn() {
+    let mut mapper = TurnMapper::resumed(None, Some("3769f60d-02b2-4146-ad16-e8ce648d976d".into()));
+    let mut events = feed(&mut mapper, ANSWERED_AFTER_A_FAILED_TURN);
+    events.extend(mapper.finish(Some(0), None, false));
+    assert!(!events.iter().any(|event| matches!(event, DriverEvent::TurnFailed { .. })), "{events:?}");
+    assert!(events.iter().any(|event| matches!(event, DriverEvent::MessageCompleted { text, .. } if text == "hi\n")));
+    let Some(DriverEvent::TurnCompleted { stop_reason, usage, .. }) = events.last() else { panic!("{events:?}") };
+    assert_eq!(*stop_reason, StopReason::Completed);
+    assert_eq!((usage.input_tokens, usage.output_tokens), (13097, 42));
+
+    // The same error with an error step of this turn's own is a real failure.
+    let mut own = TurnMapper::new(None);
+    let with_step = ANSWERED_AFTER_A_FAILED_TURN.replace(
+        r#""step_index":3,"state":"DONE","step_type":"system_message""#,
+        r#""step_index":3,"state":"DONE","step_type":"error_message""#,
+    );
+    feed(&mut own, &with_step);
+    assert!(matches!(&own.finish(Some(1), None, false)[..], [DriverEvent::TurnFailed { .. }]));
+    // A partial answer cut off by `--print-timeout` is not a complete answer.
+    let mut timed_out = TurnMapper::new(None);
+    feed(&mut timed_out, &ANSWERED_AFTER_A_FAILED_TURN.replace(r#""finished_reason":"error""#, r#""finished_reason":"print_timeout""#));
+    assert!(matches!(&timed_out.finish(Some(1), None, false)[..], [DriverEvent::TurnFailed { .. }]));
+    // An error with no answer at all still fails.
+    let mut empty = TurnMapper::new(None);
+    feed(
+        &mut empty,
+        r#"{"event":"result","result":{"conversation_id":"c","status":"ERROR","response":"","error":"boom","finished_reason":"error"}}"#,
+    );
+    assert!(matches!(&empty.finish(Some(1), None, false)[..], [DriverEvent::TurnFailed { .. }]));
+}
+
 #[test]
 fn tool_names_and_inputs_are_normalised_with_the_original_kept() {
     let none = |_: &str| None;

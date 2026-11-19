@@ -38,6 +38,8 @@ pub(crate) struct TurnMapper {
     usage: Usage,
     outcome: Option<Outcome>,
     error_event: Option<String>,
+    /// This turn wrote an `error_message` step, `agy`'s record of a run that failed.
+    error_step: bool,
 }
 
 impl TurnMapper {
@@ -59,6 +61,7 @@ impl TurnMapper {
             usage: Usage::default(),
             outcome: None,
             error_event: None,
+            error_step: false,
         }
     }
 
@@ -129,6 +132,10 @@ impl TurnMapper {
         let done = state == Some("DONE");
         match update.get("step_type").and_then(Value::as_str) {
             Some("agent_response") => self.agent_response(update, index, done),
+            Some("error_message") => {
+                self.error_step = true;
+                Vec::new()
+            }
             // A tool that fails ends in ERROR, not DONE: it still needs its result card.
             Some("tool") => self.tool(update, index, done || matches!(state, Some("ERROR" | "FAILED" | "CANCELED" | "CANCELLED"))),
             _ => Vec::new(),
@@ -210,18 +217,34 @@ impl TurnMapper {
             self.conversation = result.get("conversation_id").and_then(Value::as_str).map(str::to_string);
         }
         let status = result.get("status").and_then(Value::as_str).unwrap_or("");
+        let response = result.get("response").and_then(Value::as_str).unwrap_or("");
+        let error = result.get("error").and_then(Value::as_str).unwrap_or("").trim();
         self.outcome = Some(if status.eq_ignore_ascii_case("SUCCESS") {
-            Outcome::Success { response: result.get("response").and_then(Value::as_str).unwrap_or("").to_string() }
+            Outcome::Success { response: response.to_string() }
+        } else if self.stale_error(result, response, error) {
+            // `agy` (1.5.12) repeats the error of an earlier turn on every later turn of
+            // that conversation, even one that answered and exited 0. This turn wrote no
+            // error step, so the error is not its own: the answer stands.
+            tracing::warn!(target: "kybern::antigravity", error, "agy repeated an earlier turn's error after a complete answer; ignoring it");
+            Outcome::Success { response: response.to_string() }
+        } else if error.eq_ignore_ascii_case("interrupted") {
+            Outcome::Interrupted
+        } else if error.is_empty() {
+            Outcome::Failed(result.get("finished_reason").and_then(Value::as_str).unwrap_or("").to_string())
         } else {
-            let error = result.get("error").and_then(Value::as_str).unwrap_or("").trim();
-            if error.eq_ignore_ascii_case("interrupted") {
-                Outcome::Interrupted
-            } else if error.is_empty() {
-                Outcome::Failed(result.get("finished_reason").and_then(Value::as_str).unwrap_or("").to_string())
-            } else {
-                Outcome::Failed(error.to_string())
-            }
+            Outcome::Failed(error.to_string())
         });
+    }
+
+    /// An `error` result whose error belongs to an earlier turn: this turn answered,
+    /// ended for `error` (not a timeout or an interrupt) and wrote no error step.
+    fn stale_error(&self, result: &Value, response: &str, error: &str) -> bool {
+        let reason = result.get("finished_reason").and_then(Value::as_str).unwrap_or("");
+        !self.error_step
+            && reason.eq_ignore_ascii_case("error")
+            && !error.is_empty()
+            && !error.eq_ignore_ascii_case("interrupted")
+            && !response.trim().is_empty()
     }
 
     /// The events that end the turn, once the process has gone.
