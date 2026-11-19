@@ -36,7 +36,9 @@ import { T } from '../transcript/glyphs.ts'
 import { reportError } from '../transcript/store.ts'
 import { markTreeOpen, TICK_GAP, TreeGroup, TreeItem, TreeLines, useTreeSlot, type TreeShape } from '../tree/Tree.tsx'
 import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
-import { controlSubagent, showDock } from './Activity.tsx'
+import { controlSubagent, showDock, stopRuntimeTask, stoppableTasks } from './Activity.tsx'
+import { isActiveTask } from '../dock/Activity.tsx'
+import { Spinner } from '../kit/Spinner.tsx'
 import { Button } from '../kit/Button.tsx'
 import { IconButton } from '../kit/IconButton.tsx'
 
@@ -102,7 +104,13 @@ export function ComposerTray({ data, divided = false }: { data: TrayData; divide
 function TrayHeader({ counts, subagents, tasks, open, onToggle }: { counts: TrayCounts; subagents: readonly Thread[]; tasks: readonly RuntimeTask[]; open: boolean; onToggle: (keyboard: boolean) => void }) {
   const t = useTheme()
   const segments = traySummary(counts)
+  // Every row the tray can stop: working subagents and running background tasks.
   const stoppable = stoppableSubagents(subagents)
+  const stoppableTaskRows = stoppableTasks(tasks)
+  const stopAll = () => {
+    for (const child of stoppable) void controlSubagent(child, 'stop')
+    for (const task of stoppableTaskRows) void stopRuntimeTask(task)
+  }
   const working = counts.subagents.working > 0 || tasks.length > 0 || counts.helpers.working > 0
   const state = working ? 'working' : counts.subagents.failed > 0 ? 'failed' : counts.subagents.done + counts.subagents.stopped > 0 ? 'done' : 'queued'
   const label = segments.map(s => s.text).join(', ')
@@ -137,7 +145,7 @@ function TrayHeader({ counts, subagents, tasks, open, onToggle }: { counts: Tray
           </div>
         </SwapOnChange>
       </div>
-      {open && stoppable.length >= 2 && <Button size="sm" testId="subagents-stop-all" onClick={() => { for (const child of stoppable) void controlSubagent(child, 'stop') }}>Stop all</Button>}
+      {open && stoppable.length + stoppableTaskRows.length >= 2 && <Button size="sm" testId="subagents-stop-all" onClick={stopAll}>Stop all</Button>}
       <div testId="composer-tray-chevron" onClick={toggle} style={{ display: 'flex', alignItems: 'center', height: 36, paddingLeft: 8, paddingRight: 8, flexShrink: 0, cursor: 'pointer' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20 }}>
           <Chevron open={open} source={T.chevronDown} turn={180} size={12} color={ink(t, 0.45)} />
@@ -276,15 +284,15 @@ function useRowFocus() {
 }
 
 /** The shared row frame: a 16px glyph column, the text, and a right column that trades its value for actions on hover or
- *  keyboard focus. */
-function Row({ glyph, children, trailing, actions, onOpen, testId, hoverable = true }: { glyph: ReactNode; children: ReactNode; trailing?: ReactNode; actions?: ReactNode; onOpen?: () => void; testId?: string; hoverable?: boolean }) {
+ *  keyboard focus (`pinned`: they stay, as a stopping task's spinner does). */
+function Row({ glyph, children, trailing, actions, pinned = false, onOpen, testId, hoverable = true }: { glyph: ReactNode; children: ReactNode; trailing?: ReactNode; actions?: ReactNode; pinned?: boolean; onOpen?: () => void; testId?: string; hoverable?: boolean }) {
   const t = useTheme()
   const [hover, setHover] = useState(false)
   // Focused children, counted: Tab from one action to the next may focus the new one before blurring the old.
   const focusCount = useRef(0)
   const [focused, setFocused] = useState(false)
   const report = useMemo(() => (on: boolean) => { focusCount.current = Math.max(0, focusCount.current + (on ? 1 : -1)); setFocused(focusCount.current > 0) }, [])
-  const reveal = !!actions && (hover || focused)
+  const reveal = !!actions && (hover || focused || pinned)
   return (
     <RowFocus.Provider value={report}>
       <div
@@ -334,9 +342,13 @@ function Clock({ startedAt, endedAt }: { startedAt: number; endedAt: number | nu
   const t = useTheme()
   return <Elapsed startedAt={startedAt} endedAt={endedAt} size={12} tabular color={ink(t, 0.42)} />
 }
-function IconAction({ label, glyph, size = 12, onClick, testId }: { label: string; glyph: string; size?: number; onClick: () => void; testId: string }) {
+function IconAction({ label, glyph, size = 12, onClick, busy = false, testId }: { label: string; glyph: string; size?: number; onClick: () => void; busy?: boolean; testId: string }) {
+  const t = useTheme()
   const focus = useRowFocus()
-  return <IconButton testId={testId} label={label} icon={glyph} glyph={size} size="sm" onClick={onClick} {...focus} />
+  // Busy: the same button, disabled, with a spinner in place of its glyph.
+  return busy
+    ? <IconButton testId={testId} label={label} icon={glyph} size="sm" disabled {...focus}><Spinner size={12} color={ink(t, 0.45)} /></IconButton>
+    : <IconButton testId={testId} label={label} icon={glyph} glyph={size} size="sm" onClick={onClick} {...focus} />
 }
 
 const SubagentRow = memo(function SubagentRow({ thread }: { thread: Thread }) {
@@ -376,8 +388,17 @@ const TaskRow = memo(function TaskRow({ task, threadId }: { task: RuntimeTask; t
   const process = task.kind === 'process'
   const summary = process ? commandSummary(task.title) : { text: task.title, folder: null }
   const started = Date.parse(task.started_at)
+  // Asked to stop: held until the task reports `stopping` or leaves the tray, and dropped again if the request failed.
+  const [asked, setAsked] = useState(false)
+  const stopping = asked || task.status === 'stopping'
+  const name = summary.text || 'background task'
+  const stop = () => { setAsked(true); void stopRuntimeTask(task).then(ok => { if (!ok) setAsked(false) }) }
+  const actions = stopping || (task.capabilities.stop && isActiveTask(task))
+    ? <IconAction testId={`runtime-task-stop-${task.id}`} label={`${stopping ? 'Stopping' : 'Stop'} ${name}`} glyph={G.stop} size={9} busy={stopping} onClick={stop} />
+    : undefined
   return (
     <Row testId={`runtime-task-${task.id}`} onOpen={() => showDock(threadId, 'activity')} glyph={<Icon source={process ? G.terminal : task.kind === 'agent' ? T.robot : G.workflow} size={14} color={ink(t, 0.5)} />}
+      actions={actions} pinned={stopping}
       trailing={Number.isFinite(started) ? <Clock startedAt={started} endedAt={null} /> : undefined}>
       <Title mono={process}>{summary.text || 'Background task'}</Title>
       {summary.folder && <Meta>{`in ${summary.folder}`}</Meta>}

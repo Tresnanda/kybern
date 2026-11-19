@@ -5,7 +5,8 @@ import { accountNeedsSignIn } from '../shared/lib/accountUi.ts'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { observeElementBounds } from '../native/layout.ts'
 import { type ReactNode, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Thread, ThreadMessageRecord } from '../../../../packages/kybern-client/src/types.ts'
+import type { RuntimeTask, Thread, ThreadMessageRecord } from '../../../../packages/kybern-client/src/types.ts'
+import { toastProblem } from '../problems/toast.ts'
 import { heldHeadline, messageSenderName, plainLine, purposeLabel } from '../../../../packages/kybern-client/src/delegations.ts'
 import { stripSubagents } from '../../../../packages/kybern-client/src/subagents.ts'
 import { useRuntimeTasks, isActiveTask } from '../dock/Activity.tsx'
@@ -13,7 +14,7 @@ import { chooseTab, setDock } from '../dock/store.ts'
 import { onLiveEvent } from '../nav/live.ts'
 import { setNav, useNav } from '../nav/store.ts'
 import { activeEnvironment } from '../shell/environment.ts'
-import { machineOfThreadId, threadClient, useApp, type StateThread } from '../state.ts'
+import { machineOfThreadId, requireThreadClient, threadClient, useApp, type StateThread } from '../state.ts'
 import { loadTarget, useComposer } from '../composer/store.ts'
 import { Para, muted } from '../transcript/kit.tsx'
 import { Button } from '../kit/Button.tsx'
@@ -88,6 +89,15 @@ export function ActivityPanels({ threadId, data }: { threadId: string; data: Ret
 export async function controlSubagent(thread: StateThread, action: 'stop' | 'background') {
   try { await threadClient(thread.id, thread.machineId)!.call(action === 'stop' ? 'tasks.stop' : 'tasks.background', { thread_id: thread.id }) }
   catch (e) { reportError(`Unable to ${action === 'stop' ? 'stop subagent' : 'run in background'}`, e) }
+}
+
+/** Background tasks the tray can stop: still running, and the harness can stop them. */
+export const stoppableTasks = (tasks: readonly RuntimeTask[]) => tasks.filter(task => isActiveTask(task) && task.status !== 'stopping' && task.capabilities.stop)
+
+/** `tasks.stop` for one background task. `true` once the daemon took the request. */
+export async function stopRuntimeTask(task: RuntimeTask): Promise<boolean> {
+  try { await requireThreadClient(task.thread_id).call('tasks.stop', { thread_id: task.thread_id, task_id: task.id }); return true }
+  catch (e) { toastProblem(e, { action: 'stop that task' }); return false }
 }
 // Measure visible rows so a short card has no blank tail; long held-message
 // lists still mount only the rows inside the capped viewport.

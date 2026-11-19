@@ -87,3 +87,32 @@ test('a scrolling tray ends halfway down the row nearest seven and a half rows',
   // A later label never takes the cut: the half row after it does.
   expect(peekHeight([label('a', 29), ...rows(6), label('b', 35), ...rows(3, 6)], 7 * 28 + 29 + 14)).toBe(29 + 6 * 28 + 35 + 14)
 })
+
+const task = (id: string, extra: Record<string, unknown> = {}) => ({ id, thread_id: 'parent', origin_turn_id: 'turn', started_seq: 1, updated_seq: 1, kind: 'process', status: 'running', title: 'sleep 600', backgrounded: true, stats: {}, capabilities: { stop: true }, started_at: at, updated_at: at, ...extra }) as never
+
+test('a background task the harness can stop gets a stop action named for it; one it cannot stop gets none', () => {
+  const h = harness()
+  h.render(<ThemeProvider><ComposerTray data={{ threadId: 'parent', subagents: [], tasks: [task('t1'), task('t2', { capabilities: { stop: false } })], helpers: [], queued: [] }} /></ThemeProvider>)
+  const ids = h.testIds()
+  expect(ids).toContain('runtime-task-stop-t1')
+  expect(ids).not.toContain('runtime-task-stop-t2')
+})
+
+;(PATCHED_NATIVE ? test : test.skip)('a stopping task keeps its busy stop action showing without hover', () => {
+  const h = harness()
+  h.render(<ThemeProvider><ComposerTray data={{ threadId: 'parent', subagents: [], tasks: [task('t1'), task('t2', { status: 'stopping' })], helpers: [], queued: [] }} /></ThemeProvider>)
+  expect(h.transformAbove(h.find('runtime-task-stop-t1')).animate.opacity).toBe(0)
+  expect(h.transformAbove(h.find('runtime-task-stop-t2')).animate.opacity).toBe(1)
+})
+
+test('"Stop all" counts every row the tray can stop: subagents and background tasks', async () => {
+  const { stoppableTasks } = await import('./Activity.tsx')
+  expect(stoppableTasks([task('a'), task('b', { status: 'stopping' }), task('c', { capabilities: { stop: false } }), task('d', { status: 'completed' })]).map((t: { id: string }) => t.id)).toEqual(['a'])
+  const h = harness()
+  // One subagent and one task: two stoppable rows.
+  h.render(<ThemeProvider><ComposerTray data={{ threadId: 'parent', subagents: [working], tasks: [task('t1')], helpers: [], queued: [] }} /></ThemeProvider>)
+  expect(h.testIds()).toContain('subagents-stop-all')
+  // A single stoppable row: its own action is enough.
+  h.render(<ThemeProvider><ComposerTray data={{ threadId: 'parent', subagents: [], tasks: [task('t1'), task('t2', { status: 'stopping' })], helpers: [], queued: [] }} /></ThemeProvider>)
+  expect(h.testIds()).not.toContain('subagents-stop-all')
+})
