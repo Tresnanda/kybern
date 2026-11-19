@@ -55,11 +55,16 @@ pub async fn plugin_skills(roots: Vec<(String, PathBuf)>) -> Result<Vec<SkillInf
             visit(&root.path, &root, 0, &mut visited, &mut budget, &mut found);
             for skill in &mut found[start..] {
                 skill.name = format!("{namespace}:{}", skill.name);
+                skill.plugin = Some(namespace.clone());
             }
             if budget.entries >= MAX_ENTRIES || budget.bytes >= MAX_TOTAL_BYTES {
                 break;
             }
         }
+        // Claude lists a plugin once per scope and version it is installed in; each root carries the same
+        // `namespace:name`, and the first one is what Claude lists first.
+        let mut seen = HashSet::new();
+        found.retain(|skill| seen.insert(skill.name.to_ascii_lowercase()));
         found
     })
     .await?)
@@ -309,6 +314,7 @@ fn visit(directory: &Path, root: &Root, depth: usize, visited: &mut HashSet<Path
                 scope: effective_scope(&skill_path, root.scope),
                 enabled: true,
                 home: None,
+                plugin: plugin_in_path(&skill_path),
             });
         }
     }
@@ -323,6 +329,61 @@ fn visit(directory: &Path, root: &Root, depth: usize, visited: &mut HashSet<Path
         }
         visit(&child, root, depth + 1, visited, budget, found);
     }
+}
+
+/// The plugin a skill file sits in when it lives in a Codex or `.agents` plugin cache
+/// (`…/plugins/cache/<marketplace>/<plugin>/<version>/skills/…`); `None` for everything else.
+fn plugin_in_path(path: &Path) -> Option<String> {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    let rest = ["/.codex/plugins/", "/.agents/plugins/"].iter().find_map(|marker| normalized.split_once(marker).map(|(_, rest)| rest))?;
+    let mut parts = rest.split('/').filter(|part| !part.is_empty());
+    let first = parts.next()?;
+    let name = if first == "cache" { parts.nth(1)? } else { first };
+    Some(name.to_string())
+}
+
+/// What `skills.list` shows when a skill is installed twice, once as a plugin and once as a standalone skill (plugins only
+/// reach some agents, so people keep the standalone copy for the rest). Identical `SKILL.md` files are one row, the
+/// standalone one, which then names the plugin; different files stay two rows. Standalone skills in another agent's
+/// folder (`home` set) are not what the selected agent loads, so they never replace a plugin row.
+pub fn merge_plugin_copies(skills: Vec<SkillInfo>) -> Vec<SkillInfo> {
+    let mut seen = HashSet::new();
+    let mut skills: Vec<SkillInfo> =
+        skills.into_iter().filter(|skill| skill.plugin.is_none() || seen.insert(skill.name.to_ascii_lowercase())).collect();
+    let mut standalone: BTreeMap<String, usize> = BTreeMap::new();
+    for (index, skill) in skills.iter().enumerate() {
+        if skill.plugin.is_none() && skill.home.is_none() && skill.scope != SkillScope::Plugin {
+            standalone.entry(skill.name.to_ascii_lowercase()).or_insert(index);
+        }
+    }
+    let mut hashes: std::collections::HashMap<String, Option<[u8; 32]>> = Default::default();
+    let mut hash_of = |path: &str| *hashes.entry(path.to_string()).or_insert_with(|| content_hash(Path::new(path)));
+    let mut dropped = HashSet::new();
+    // The plugin rows as listed, before a standalone row takes a plugin's name.
+    let plugin_rows: Vec<usize> =
+        (0..skills.len()).filter(|&index| skills[index].plugin.is_some() && skills[index].scope != SkillScope::Plugin).collect();
+    for index in plugin_rows {
+        let Some(plugin) = skills[index].plugin.clone() else { continue };
+        let base = skills[index].name.rsplit(':').next().unwrap_or_default().to_ascii_lowercase();
+        let Some(&other) = standalone.get(&base) else { continue };
+        let (Some(theirs), Some(ours)) = (hash_of(&skills[other].path), hash_of(&skills[index].path)) else { continue };
+        if theirs == ours {
+            skills[other].plugin = Some(plugin);
+            dropped.insert(index);
+        }
+    }
+    let mut index = 0;
+    skills.retain(|_| {
+        index += 1;
+        !dropped.contains(&(index - 1))
+    });
+    skills
+}
+
+fn content_hash(path: &Path) -> Option<[u8; 32]> {
+    use sha2::{Digest, Sha256};
+    let text = std::fs::read_to_string(path).ok()?;
+    Some(Sha256::digest(text.replace("\r\n", "\n").trim().as_bytes()).into())
 }
 
 fn effective_scope(path: &Path, fallback: SkillScope) -> SkillScope {
@@ -514,6 +575,95 @@ mod tests {
         super::visit(&root.path, &root, 0, &mut Default::default(), &mut Default::default(), &mut found);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].home, None);
+    }
+
+    fn write_skill(root: &std::path::Path, name: &str, body: &str) -> PathBuf {
+        let folder = root.join(name);
+        std::fs::create_dir_all(&folder).expect("skill folder");
+        std::fs::write(folder.join("SKILL.md"), format!("---\nname: {name}\ndescription: Checks {name}\n---\n{body}")).expect("skill file");
+        folder.join("SKILL.md")
+    }
+
+    fn standalone(
+        path: &std::path::Path,
+        name: &str,
+        scope: kybern_protocol::SkillScope,
+        home: Option<SkillHome>,
+    ) -> kybern_protocol::SkillInfo {
+        kybern_protocol::SkillInfo {
+            name: name.into(),
+            display_name: None,
+            description: None,
+            path: path.to_string_lossy().into(),
+            scope,
+            enabled: true,
+            home,
+            plugin: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_plugin_installed_in_two_places_lists_each_skill_once() {
+        let tree = TempTree::new();
+        for version in ["1.0.0", "1.1.0"] {
+            write_skill(&tree.0.join(version).join("skills"), "better-colors", "Body");
+        }
+        let roots = vec![("interfaces".to_string(), tree.0.join("1.0.0")), ("interfaces".to_string(), tree.0.join("1.1.0"))];
+        let found = super::plugin_skills(roots).await.expect("plugin skills");
+        assert_eq!(found.iter().map(|skill| skill.name.as_str()).collect::<Vec<_>>(), ["interfaces:better-colors"]);
+        assert_eq!(found[0].plugin.as_deref(), Some("interfaces"));
+        assert_eq!(found[0].scope, kybern_protocol::SkillScope::App);
+    }
+
+    #[tokio::test]
+    async fn a_plugin_skill_with_an_identical_standalone_copy_is_one_row_that_names_the_plugin() {
+        let tree = TempTree::new();
+        let plugin = write_skill(&tree.0.join("plugin/skills"), "better-colors", "Same body");
+        let own = write_skill(&tree.0.join("own"), "better-colors", "Same body");
+        let other = write_skill(&tree.0.join("own"), "better-layout", "Not a plugin skill");
+        let mut skills = super::plugin_skills(vec![("interfaces".into(), tree.0.join("plugin"))]).await.expect("plugin skills");
+        assert_eq!(skills[0].path, plugin.canonicalize().unwrap().to_string_lossy());
+        skills.push(standalone(&own, "better-colors", kybern_protocol::SkillScope::User, None));
+        skills.push(standalone(&other, "better-layout", kybern_protocol::SkillScope::User, None));
+        let merged = super::merge_plugin_copies(skills);
+        let rows: Vec<_> = merged.iter().map(|skill| (skill.name.as_str(), skill.scope, skill.plugin.as_deref())).collect();
+        assert_eq!(
+            rows,
+            [
+                ("better-colors", kybern_protocol::SkillScope::User, Some("interfaces")),
+                ("better-layout", kybern_protocol::SkillScope::User, None)
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_plugin_skill_whose_standalone_copy_differs_keeps_both_rows() {
+        let tree = TempTree::new();
+        write_skill(&tree.0.join("plugin/skills"), "better-colors", "Plugin body");
+        let own = write_skill(&tree.0.join("own"), "better-colors", "My own edit");
+        let mut skills = super::plugin_skills(vec![("interfaces".into(), tree.0.join("plugin"))]).await.expect("plugin skills");
+        skills.push(standalone(&own, "better-colors", kybern_protocol::SkillScope::User, None));
+        let merged = super::merge_plugin_copies(skills);
+        let rows: Vec<_> = merged.iter().map(|skill| (skill.name.as_str(), skill.plugin.as_deref())).collect();
+        assert_eq!(rows, [("interfaces:better-colors", Some("interfaces")), ("better-colors", None)]);
+    }
+
+    #[tokio::test]
+    async fn a_copy_in_another_agents_folder_does_not_replace_the_plugin_row() {
+        let tree = TempTree::new();
+        write_skill(&tree.0.join("plugin/skills"), "better-colors", "Same body");
+        let elsewhere = write_skill(&tree.0.join("agents"), "better-colors", "Same body");
+        let mut skills = super::plugin_skills(vec![("interfaces".into(), tree.0.join("plugin"))]).await.expect("plugin skills");
+        skills.push(standalone(&elsewhere, "better-colors", kybern_protocol::SkillScope::User, Some(SkillHome::Agents)));
+        assert_eq!(super::merge_plugin_copies(skills).len(), 2);
+    }
+
+    #[test]
+    fn codex_plugin_cache_skills_name_their_plugin() {
+        let path = |value: &str| super::plugin_in_path(std::path::Path::new(value));
+        assert_eq!(path("/home/a/.codex/plugins/cache/openai-curated/github/1.2/skills/triage/SKILL.md").as_deref(), Some("github"));
+        assert_eq!(path("/home/a/.agents/plugins/tools/skills/x/SKILL.md").as_deref(), Some("tools"));
+        assert_eq!(path("/home/a/.agents/skills/x/SKILL.md"), None);
     }
 
     #[test]

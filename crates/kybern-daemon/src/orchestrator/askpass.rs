@@ -82,7 +82,14 @@ fn cancelled(message: &str) -> PromptReply {
 
 impl Orchestrator {
     /// A prompt from `pid`, a helper process of this session. Waits for the user.
-    pub(crate) async fn ask_prompt(&self, thread_id: ThreadId, session_instance_id: Uuid, prompt: String, pid: u32) -> PromptReply {
+    pub(crate) async fn ask_prompt(
+        &self,
+        thread_id: ThreadId,
+        session_instance_id: Uuid,
+        prompt: String,
+        pid: u32,
+        session_token: String,
+    ) -> PromptReply {
         let live = self.inner.sessions.lock().await.get(&thread_id).cloned();
         let Some(live) = live.filter(|live| live.session_instance_id == session_instance_id) else {
             return cancelled("This agent session has ended, so nobody can answer. Run the command again from a live session.");
@@ -96,7 +103,7 @@ impl Orchestrator {
         // Only a real sudo, ssh or git may ask: the agent's own shell running `kybern askpass` could fake a sudo prompt.
         // Tests stand in for sudo with their own process.
         let trusted = (cfg!(test) && pid == std::process::id())
-            || tokio::task::spawn_blocking(move || askpass::asked_by_trusted_program(pid)).await.unwrap_or(false);
+            || tokio::task::spawn_blocking(move || askpass::asked_by_trusted_program(pid, &session_token)).await.unwrap_or(false);
         if !trusted {
             return cancelled(
                 "Kybern only shows a password prompt that sudo, ssh or git asked for. Run the real command (for example `sudo -A …`) instead.",
