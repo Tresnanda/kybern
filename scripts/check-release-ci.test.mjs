@@ -113,7 +113,7 @@ test('every required job is a job of ci.yml, with manual full runs and tested pa
 test('GPUIX bundles both macOS targets from dist binaries without compiling the daemon', async () => {
   const { readFileSync } = await import('node:fs')
   const workflow = readFileSync(new URL('../.github/workflows/desktop.yml', import.meta.url), 'utf8')
-  const gpuix = workflow.split('\n  gpuix:\n')[1].split('\n  gpuix-linux:')[0]
+  const gpuix = workflow.split('\n  gpuix:\n')[1].split('\n  gpuix-wpe:')[0]
   assert.match(gpuix, /- target: aarch64-apple-darwin\n\s+os: macos-15/)
   assert.match(gpuix, /- target: x86_64-apple-darwin\n\s+os: macos-15/)
   // Linux and Windows are jobs of their own; nothing about them lives in the macOS matrix.
@@ -143,7 +143,7 @@ test('the release Mac builds and the desktop dry run use the same supported macO
   }
 })
 
-test('the Linux GPUIX beta is its own job: dist\'s musl binaries on the ubuntu-22.04 glibc floor, and its failure cannot skip the manifest', async () => {
+test('the Linux GPUIX beta is its own job: dist\'s musl binaries on the ubuntu-22.04 glibc floor', async () => {
   const { readFileSync } = await import('node:fs')
   const workflow = readFileSync(new URL('../.github/workflows/desktop.yml', import.meta.url), 'utf8')
   const linux = workflow.split('\n  gpuix-linux:\n')[1].split('\n  gpuix-windows:')[0]
@@ -153,13 +153,13 @@ test('the Linux GPUIX beta is its own job: dist\'s musl binaries on the ubuntu-2
   assert.match(linux, /dist-binaries\.mjs --target "\$KYBERN_DIST_TARGET"/)
   assert.match(linux, /--pattern "kybern-\$KYBERN_DIST_TARGET\.\*"/)
   assert.match(linux, /scripts\/bundle-gpuix-linux\.sh/)
-  assert.doesNotMatch(linux, /cargo build|continue-on-error/)
+  assert.doesNotMatch(linux, /cargo build/)
+  // No step is let off: a broken package fails the job before its upload.
+  assert.doesNotMatch(linux, /^ {8}continue-on-error/m)
   assert.match(linux, /name: desktop-gpuix-x86_64-unknown-linux-gnu/)
-  const manifest = workflow.split('\n  manifest:\n')[1]
-  assert.match(manifest, /\(needs\.gpuix-linux\.result == 'success' \|\| needs\.gpuix-linux\.result == 'failure'\)/)
 })
 
-test('the Windows GPUIX beta is its own job: its failure cannot skip the manifest, and its installer is checked before upload', async () => {
+test('the Windows GPUIX beta is its own job, and its installer is checked before upload', async () => {
   const { readFileSync } = await import('node:fs')
   const workflow = readFileSync(new URL('../.github/workflows/desktop.yml', import.meta.url), 'utf8')
   const windows = workflow.split('\n  gpuix-windows:\n')[1].split('\n  manifest:')[0]
@@ -175,12 +175,56 @@ test('the Windows GPUIX beta is its own job: its failure cannot skip the manifes
   const checkStep = windows.slice(windows.lastIndexOf('      - name:', check), upload)
   assert.doesNotMatch(checkStep, /continue-on-error/)
   assert.match(windows.slice(upload), /name: Launch the installed app\n\s+continue-on-error: true/)
-  assert.doesNotMatch(windows.slice(0, upload), /continue-on-error/)
-  // The manifest needs the macOS job to succeed and takes the Linux and Windows jobs either way.
-  const manifest = workflow.split('\n  manifest:\n')[1]
-  assert.match(manifest, /needs: \[gpuix, gpuix-linux, gpuix-windows\]/)
-  assert.match(manifest, /needs\.gpuix\.result == 'success'/)
-  assert.match(manifest, /\(needs\.gpuix-windows\.result == 'success' \|\| needs\.gpuix-windows\.result == 'failure'\)/)
+  assert.doesNotMatch(windows.slice(0, upload), /^ {8}continue-on-error/m)
+})
+
+test('a Linux or Windows bundle failure only drops its latest.json entry: it cannot fail the desktop workflow that host waits for', async () => {
+  const { readFileSync } = await import('node:fs')
+  const read = file => readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), 'utf8')
+  const workflow = read('desktop.yml')
+  const jobs = Object.fromEntries(workflow.split('\njobs:\n')[1].split(/\n(?=  [\w-]+:\n)/).map(job => [job.match(/^  ([\w-]+):/)[1], job]))
+  assert.deepEqual(Object.keys(jobs), ['binaries', 'keychain-helper', 'gpuix', 'gpuix-wpe', 'gpuix-linux', 'gpuix-windows', 'manifest'])
+  const jobLevel = job => jobs[job].match(/^ {4}continue-on-error: (.*)$/m)?.[1]
+  // dist's generated host publishes only when custom-desktop (this whole workflow) succeeded.
+  const { allowed } = await releaseJobs()
+  assert.equal(allowed('custom-desktop', 'success'), true)
+  assert.equal(allowed('custom-desktop', 'failure'), false)
+  // So the betas must not fail it: job-level continue-on-error, and WPE through its `optional` input.
+  for (const job of ['gpuix-linux', 'gpuix-windows']) assert.equal(jobLevel(job), 'true', job)
+  assert.match(jobs['gpuix-wpe'], /uses: \.\/\.github\/workflows\/gpuix-wpe\.yml\n\s+with:\n\s+optional: true\n/)
+  const wpe = read('gpuix-wpe.yml')
+  assert.match(wpe, /\n {6}optional:\n(?: {8}.*\n)*? {8}default: false\n/)
+  assert.match(wpe, /\n {4}continue-on-error: \$\{\{ inputs\.optional == true \}\}\n/)
+  // The on-screen checks keep a failed WPE build fatal.
+  assert.doesNotMatch(read('gpuix-platforms.yml'), /optional:/)
+  // Everything publication needs still fails it, and the manifest needs the Macs, whatever the betas did.
+  for (const job of ['binaries', 'keychain-helper', 'gpuix', 'manifest']) assert.equal(jobLevel(job), undefined, job)
+  assert.match(jobs.manifest, /needs: \[gpuix, gpuix-linux, gpuix-windows\]\n/)
+  assert.match(jobs.manifest, /\n {4}if: \$\{\{ !cancelled\(\) && needs\.gpuix\.result == 'success' \}\}\n/)
+  assert.match(jobs.manifest, /name: artifacts-desktop[\s\S]*if-no-files-found: error/)
+})
+
+test('every apt-get in CI and the release goes through the retrying helper', async () => {
+  const { readFileSync, readdirSync } = await import('node:fs')
+  const root = new URL('../.github/', import.meta.url)
+  const files = [
+    ...readdirSync(new URL('workflows/', root)).map(file => new URL(`workflows/${file}`, root)),
+    ...readdirSync(new URL('actions/', root)).map(dir => new URL(`actions/${dir}/action.yml`, root)),
+  ]
+  let calls = 0
+  for (const file of files) {
+    const text = readFileSync(file, 'utf8').replace(/#.*$/gm, '')
+    assert.doesNotMatch(text, /apt-get|\bapt install/, file.pathname)
+    calls += text.match(/scripts\/ci-apt-install\.sh /g)?.length ?? 0
+  }
+  assert.ok(calls >= 10, `only ${calls} calls to scripts/ci-apt-install.sh`)
+  const helper = readFileSync(new URL('./ci-apt-install.sh', import.meta.url), 'utf8')
+  assert.match(helper, /Acquire::Retries=5/)
+  assert.match(helper, /Acquire::https?::Timeout=/)
+  // The fallback leaves the runner's mirror list for the Ubuntu archive and security hosts.
+  assert.match(helper, /mirror\\\+file:\/etc\/apt\/apt-mirrors\\\.txt/)
+  assert.match(helper, /http:\/\/archive\.ubuntu\.com\/ubuntu\//)
+  assert.match(helper, /http:\/\/security\.ubuntu\.com\/ubuntu\//)
 })
 
 test('actions in the GPUIX workflows are pinned to a commit, setup-python included', async () => {

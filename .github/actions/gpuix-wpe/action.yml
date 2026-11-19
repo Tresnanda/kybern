@@ -36,8 +36,7 @@ runs:
         echo "WPE WebKit: $(du -sh apps/gpuix/native/build/wpe | cut -f1)"
         # build-wpe.sh's list covers the headers and every system library WPE links; the rest is a desktop's runtime.
         deps=$(apps/gpuix/native/wpe/build-wpe.sh deps)
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends $deps libegl1 libgles2
+        scripts/ci-apt-install.sh $deps libegl1 libgles2
     - name: AppArmor profile for Kybern's bwrap (what the .deb's postinst installs on Ubuntu 23.10+)
       if: inputs.apparmor == 'true'
       shell: bash
