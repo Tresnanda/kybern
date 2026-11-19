@@ -192,7 +192,8 @@ pub(super) async fn measure(root: &Path, html: &str, widths: &[u32], fragment: &
         }
         let measured =
             cdp.call("Runtime.evaluate", json!({"expression":SETTLE_AND_MEASURE,"awaitPromise":true,"returnByValue":true})).await?;
-        let height = measured.pointer("/result/value").and_then(Value::as_u64).unwrap_or(80).clamp(80, u64::from(super::MAX_FIT_HEIGHT)) as u32;
+        let height =
+            measured.pointer("/result/value").and_then(Value::as_u64).unwrap_or(80).clamp(80, u64::from(super::MAX_FIT_HEIGHT)) as u32;
         heights.push(VisualHeight { width, height });
     }
     session.shutdown().await;
