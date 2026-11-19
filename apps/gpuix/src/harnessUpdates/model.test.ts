@@ -8,10 +8,10 @@ const record = (kind: ProviderKind, patch: Partial<HarnessUpdate> = {}): Harness
 const newer = (kind: ProviderKind, latest: string, patch: Partial<HarnessUpdate> = {}) => record(kind, { update_available: true, latest_version: latest, ...patch })
 
 describe('pill', () => {
-  test('names the harness and version when one has an update', () => {
+  test('shows the harness name, and says the version to a screen reader', () => {
     const shown = pill([newer('claude-code', '2.1.330'), record('codex')], {}, false)
     expect(shown?.text).toBe('Claude Code 2.1.330 is out')
-    expect(shown?.label).toBe('Claude Code 2.1.330')
+    expect(shown?.label).toBe('Claude Code')
     expect(shown?.action).toBe('Update Claude Code')
     expect(kindsOf(shown!)).toEqual(['claude-code'])
   })

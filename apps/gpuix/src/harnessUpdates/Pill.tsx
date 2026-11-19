@@ -1,4 +1,4 @@
-// The sidebar's harness update pill: the harness's logo and "Claude Code 2.1.330" (read as "… is out") with Update, or the
+// The sidebar's harness update pill: the harness's logo and "Claude Code" (read as "Claude Code 2.1.330 is out") with Update, or the
 // overlapping logos and "3 updates" for several (read as "Updates for …"), above the machines footer. Shown only while
 // automatic updates are off; dismissing it hides it until a newer version. It appears in place, without an entrance: it is
 // a quiet notice, not an event.
