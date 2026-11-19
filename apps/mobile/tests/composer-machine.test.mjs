@@ -38,3 +38,11 @@ test("pickers and space counts never read the paired computer's lists alone", ()
   assert.doesNotMatch(source("src/features/ScopeBar.tsx"), /useProjects\(/);
   assert.doesNotMatch(source("src/features/Composer.tsx"), /useProjects\(/);
 });
+
+test("a space logo loads from the machine the spaces came from, and falls back to initials", () => {
+  const tile = source("src/ui/SpaceTile.tsx");
+  assert.match(tile, /useSpaces\(\)\.from/);
+  assert.match(tile, /onError=\{\(\) => setFailed\(image\.uri\)\}/);
+  const spaces = source("src/state/spaces.ts");
+  assert.match(spaces, /memberConnection\(hub\.primaryMachineId\)\?\.record\.machineId/);
+});

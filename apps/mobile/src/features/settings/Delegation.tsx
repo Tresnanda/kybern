@@ -12,7 +12,7 @@ import {
 } from "../../../../../packages/kybern-client/src/coordinatorSettings";
 import type { OrchestrationSettings } from "../../state/protocol";
 import { count } from "../../state/format";
-import { useApp } from "../../state/runtime";
+import { useSettingsProviders } from "../../state/machineProviders";
 import { saveSettings, useSettings } from "../../state/settings";
 import { ListRow } from "../../ui/List";
 import { ProviderMark } from "../../ui/ProviderMark";
@@ -28,7 +28,7 @@ export function DelegationSettings() {
 }
 
 function DelegationBody() {
-  const app = useApp();
+  const providers = useSettingsProviders();
   const { settings: current } = useSettings();
   const settings = current!;
   const orchestration = settings.orchestration;
@@ -96,7 +96,7 @@ function DelegationBody() {
         footer="Used when the Coordinator delegates without choosing a model. Each project can override these."
       >
         {COORDINATOR_ROLES.map(({ role, label }) => {
-          const chip = roleChip(role, orchestration, null, app.providers, "global");
+          const chip = roleChip(role, orchestration, null, providers, "global");
           return (
             <ListRow
               key={role}

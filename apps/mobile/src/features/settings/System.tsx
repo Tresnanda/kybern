@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { View } from "react-native";
 import type { BackgroundSettings, DaemonActivity, DaemonUpdate } from "../../state/protocol";
 import { count } from "../../state/format";
-import { errorText, rpc, useApp } from "../../state/runtime";
+import { errorText } from "../../state/runtime";
+import { settingsRpc, useSettingsChoice } from "../../state/machineChoice";
 import { saveSettings, useSettings } from "../../state/settings";
 import { ListRow } from "../../ui/List";
 import { Button, ErrorBanner } from "../../ui/primitives";
@@ -37,7 +38,8 @@ export function limitValueLabel(value: number, unit: "minutes" | "sessions") {
 }
 
 function SystemBody() {
-  const app = useApp();
+  // The machine Settings shows (`machineChoice.ts`).
+  const machine = useSettingsChoice()?.machineId;
   const { settings: current } = useSettings();
   const settings = current!;
   const [activity, setActivity] = useState<DaemonActivity>();
@@ -46,7 +48,7 @@ function SystemBody() {
   const [error, setError] = useState("");
   useEffect(() => {
     let live = true;
-    Promise.all([rpc("daemon.activity", {}), rpc("daemon_update.status", {})])
+    Promise.all([settingsRpc("daemon.activity", {}), settingsRpc("daemon_update.status", {})])
       .then(([a, u]) => {
         if (!live) return;
         setActivity(a);
@@ -56,11 +58,11 @@ function SystemBody() {
     return () => {
       live = false;
     };
-  }, [app.activeId]);
+  }, [machine]);
   const daemonAction = () => {
     setBusy(true);
     setError("");
-    rpc(update?.status === "available" ? "daemon_update.run" : "daemon_update.check", {})
+    settingsRpc(update?.status === "available" ? "daemon_update.run" : "daemon_update.check", {})
       .then(setUpdate)
       .catch((e) => setError(errorText(e, "update Kybern")))
       .finally(() => setBusy(false));
@@ -84,7 +86,7 @@ function SystemBody() {
       </Section>
       <BackgroundLimits />
       <Section title="Kybern on the computer" footer={update?.message || null}>
-        <ListRow title="Version" value={update?.current_version ?? app.status} />
+        <ListRow title="Version" value={update?.current_version ?? "…"} />
         {update ? (
           <ListRow
             title="Status"
