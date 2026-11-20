@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.25.6
+
+<!-- kybern-release-title: 0.25.5 for Windows -->
+<!-- kybern-release-summary: Windows gets the 0.25.5 changes: Antigravity limits that stay current, Antigravity in Add an account, and previews that close their port forwards. -->
+
+- Windows gets everything in 0.25.5. Its installer didn't build for 0.25.5 because Microsoft replaced the WebView2 setup program Kybern bundles; the new one is checked and pinned.
+
 ## 0.25.5
 
 <!-- kybern-release-title: Antigravity limits stay current, and previews close their ports -->
