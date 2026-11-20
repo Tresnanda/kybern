@@ -573,10 +573,27 @@ impl Orchestrator {
                     return Ok(plan);
                 }
             }
-            plan.blocked = Some(format!(
-                "{} has no git commits here yet, so there is nothing to copy. Commit once, then add it to {}.",
-                project.name, target.name
-            ));
+            // In a group, name the repositories that have nothing yet: the rest of the group is fine.
+            let empty: Vec<String> = repos
+                .iter()
+                .filter(|repo| repo.identity.is_empty() || repo.commit.is_none())
+                .map(|repo| project.members.iter().find(|m| m.path == repo.rel).map_or_else(|| repo.rel.clone(), |m| m.name.clone()))
+                .collect();
+            plan.blocked = Some(if project.kind.is_single() || empty.is_empty() {
+                format!(
+                    "{} has no git commits here yet, so there is nothing to copy. Commit once, then add it to {}.",
+                    project.name, target.name
+                )
+            } else {
+                format!(
+                    "{} {} no git commits on this machine yet, so there is nothing to copy. Pull {} from {} remote or commit once, then add it to {}.",
+                    empty.join(", "),
+                    if empty.len() == 1 { "has" } else { "have" },
+                    if empty.len() == 1 { "it" } else { "them" },
+                    if empty.len() == 1 { "its" } else { "their" },
+                    target.name
+                )
+            });
             return Ok(plan);
         }
         if let Some(features) = &target.features

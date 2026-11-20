@@ -130,6 +130,29 @@ test("group projects merge only with a group of the same repositories; free chat
   assert.equal(merged[0].instances.length, 2);
 });
 
+test("a group member with no commits yet merges with a full clone of its remote (tubesite on the Mac, cloned on fedora)", () => {
+  const group = (id, repos) => project(id, "BeMe Main Repos", repos[0], { kind: "group", repos });
+  const core = { root_commit: "48a0", remote: "github.com/beme/core" };
+  const forge = { root_commit: "c8d4", remote: "github.com/beme/rel-port" };
+  const merged = mergeProjects(
+    maps({
+      mac: [group("g1", [core, forge, { remote: "github.com/beme/tubesite" }])],
+      fedora: [group("g2", [core, forge, { root_commit: "0a17", remote: "github.com/beme/tubesite" }])],
+    }),
+  );
+  assert.deepEqual(merged.map((p) => p.key), ["group:root:0a17+root:48a0+root:c8d4"]);
+  assert.equal(merged[0].instances.length, 2);
+});
+
+test("a group still never merges with a different set of repositories", () => {
+  const group = (id, repos) => project(id, "mono", repos[0], { kind: "group", repos });
+  const a = { root_commit: "r1", remote: "h/a" };
+  const merged = mergeProjects(
+    maps({ mac: [group("g1", [a, { remote: "h/b" }])], pc: [group("g2", [a, { root_commit: "r3", remote: "h/c" }])] }),
+  );
+  assert.equal(merged.length, 2);
+});
+
 test("the name and space come from the machine the user is at, else the first instance", () => {
   const input = maps({
     mac: [project("a", "kybern (mac)", { root_commit: "r1" }, { space_id: "s-mac" })],

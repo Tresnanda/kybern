@@ -1550,6 +1550,14 @@ impl Orchestrator {
         for project in projects.iter().filter(|project| project.is_git && project.repo.is_none()) {
             self.spawn_repo_identity(project.id);
         }
+        // The same for a group member: one with no commits yet is known by its remote only, and other machines'
+        // full clones of it would keep the group split in the sidebar until the periodic pass.
+        for group in groups
+            .iter()
+            .filter(|group| group.repos.len() < group.members.len() || group.repos.iter().any(|repo| repo.roots().next().is_none()))
+        {
+            self.spawn_repo_identity(group.id);
+        }
         if changed {
             self.publish_projects();
         }
