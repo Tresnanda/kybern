@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.25.4
+
+<!-- kybern-release-title: Group projects stay one project on every machine -->
+<!-- kybern-release-summary: A group whose new repository has no commits yet on one machine no longer shows up twice, and its other machines stay available. -->
+
+- A group project stays one project when one of its repositories has no commits yet on one machine (a new folder linked to its remote) while another machine has a full clone. It used to show twice, the other machines said "No checkout", and chats couldn't move there.
+- **Add to machine** names the repository that has no commits yet instead of the whole group, and says to pull it or commit once.
+
 ## 0.25.3
 
 <!-- kybern-release-title: Group projects stay the same on every machine -->
