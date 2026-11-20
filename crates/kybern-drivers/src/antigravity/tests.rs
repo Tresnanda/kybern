@@ -1040,7 +1040,7 @@ fn a_signed_out_agy_is_told_from_its_output() {
 }
 
 /// A home with `agy`'s token file, expiring `hours` from now (negative: already expired).
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 fn home_with_token(hours: i64) -> tempfile::TempDir {
     let home = tempfile::tempdir().unwrap();
     let dir = home.path().join(".gemini/antigravity-cli");
@@ -1053,7 +1053,7 @@ fn home_with_token(hours: i64) -> tempfile::TempDir {
 /// A fake `agy` that logs each call and answers `/usage` from `$HOME/answer.json`, or
 /// with the signed-out prompt (and then waits, as the real one does) while `$HOME/signed-out` exists.
 /// `agy models` lists a model, or says to sign in while `$HOME/signed-out` exists.
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 fn fake_agy(dir: &std::path::Path, calls: &std::path::Path) -> std::path::PathBuf {
     let binary = dir.join("agy");
     kybern_protocol::process::write_executable(
@@ -1073,19 +1073,19 @@ fn fake_agy(dir: &std::path::Path, calls: &std::path::Path) -> std::path::PathBu
     binary
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 fn env_for(home: &std::path::Path) -> std::collections::BTreeMap<String, String> {
     std::collections::BTreeMap::from([("HOME".to_string(), home.display().to_string())])
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 /// How many times `agy -p /usage` ran.
 fn call_count(calls: &std::path::Path) -> usize {
     std::fs::read_to_string(calls).map(|log| log.lines().filter(|line| line.contains("/usage")).count()).unwrap_or(0)
 }
 
 /// How many times `agy models` ran.
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 fn models_count(calls: &std::path::Path) -> usize {
     std::fs::read_to_string(calls).map(|log| log.lines().filter(|line| line.ends_with(" models")).count()).unwrap_or(0)
 }
