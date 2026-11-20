@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.25.2
+
+<!-- kybern-release-title: Attached files reach the agent -->
+<!-- kybern-release-summary: Documents you attach or paste into the composer, such as a Markdown file or a PDF, now reach the agent as a file it can read. -->
+
+- Agents can now read files you attach or paste into the composer. A Markdown file, PDF or other document used to arrive as its name only; now the agent gets the file on the machine running the chat, including a chat on another machine. Images were not affected.
+
 ## 0.25.1
 
 <!-- kybern-release-title: Gemini usage for Antigravity, one place for updates, and fixes -->
