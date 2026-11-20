@@ -4,8 +4,7 @@
 //! checks the request and starts nothing, and each `send_message` starts
 //! `agy -p= --input-format stream-json`, writes the prompt as one NDJSON line
 //! on stdin, closes stdin, and maps the NDJSON that comes back. Turns after the
-//! first pass `--conversation <id>`. The design and every measured wire fact
-//! are in `docs/design/ade-111-antigravity.md`.
+//! first pass `--conversation <id>`.
 //!
 //! Antigravity only runs in Full access (`--dangerously-skip-permissions`):
 //! Kybern has no way to approve or limit its tools. Kybern's own tools reach it

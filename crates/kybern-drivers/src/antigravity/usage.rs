@@ -15,10 +15,12 @@
 //! never writes to `agy`'s storage. The endpoints are undocumented and may change or be
 //! refused without notice, so every failure is quiet.
 //!
-//! A signed-out `agy` answers `/usage` by opening Google's sign-in page in the browser,
-//! so that state is read once and then remembered ([`LimitsStale::SignedOut`], paused for
-//! `MAX_BACKOFF`) instead of retried every minute. Where the login can be read and none
-//! exists (macOS), `agy` is not started at all.
+//! A signed-out `agy` answers `/usage` by opening Google's sign-in page in the browser, so
+//! `agy models` (which only prints "Please sign in") is asked first unless `/usage` answered
+//! for the account in the last ten minutes. A signed-out account reads as
+//! [`LimitsStale::SignedOut`] and is asked again after `FAILURE_BACKOFF`, or as soon as a
+//! login can be read. Where the login can be read and none exists (macOS), `agy` is not
+//! started at all.
 //!
 //! Google answers the quota summary per client: the plain `antigravity/<version>`
 //! User-Agent gets only the "Claude and GPT models" group, the CLI's own
@@ -357,6 +359,33 @@ pub(crate) fn agy_signed_out(stdout: &[u8], stderr: &[u8]) -> bool {
     text.contains("authentication required") || text.contains("authentication failed or timed out")
 }
 
+/// After `/usage` answered for an account, it is trusted to still be signed in this long
+/// without asking `agy models` first.
+const SIGNED_IN_FRESH: Duration = Duration::from_secs(10 * 60);
+/// How long `agy models` may take to say whether it is signed in.
+const MODELS_CHECK_TIMEOUT: Duration = Duration::from_secs(8);
+
+fn recently_read(key: &AccountKey) -> bool {
+    AGY_USAGE.lock().ok().and_then(|cached| cached.get(key).map(|(at, _)| at.elapsed() < SIGNED_IN_FRESH)).unwrap_or(false)
+}
+
+/// Whether what `agy models` wrote says it has no login ("Please sign in to view available models").
+pub(crate) fn models_signed_out(stdout: &[u8], stderr: &[u8]) -> bool {
+    let text = format!("{}\n{}", String::from_utf8_lossy(stderr), String::from_utf8_lossy(stdout)).to_lowercase();
+    text.contains("please sign in")
+}
+
+/// `agy models` answers a signed-out account with a line and exits, without opening a browser.
+/// Only that answer counts as signed out; a failure or timeout leaves the decision to `/usage`.
+async fn models_say_signed_out(binary: &Path, env: &BTreeMap<String, String>, home: &Path) -> bool {
+    let mut command = crate::binary::command(binary).no_window();
+    command.arg("models").current_dir(home).envs(env);
+    match crate::process_tree::output_within(&mut command, MODELS_CHECK_TIMEOUT, models_signed_out).await {
+        Ok(output) => models_signed_out(&output.stdout, &output.stderr),
+        Err(_) => false,
+    }
+}
+
 /// `agy -p "/usage" --output-format json`: Google's own answer for the account,
 /// with no agent turn and no quota spent. Reused for `AGY_USAGE_FRESH`.
 pub(crate) async fn run_agy_usage(binary: Option<&PathBuf>, env: &BTreeMap<String, String>, home: &Path) -> AgyUsage {
@@ -509,7 +538,16 @@ async fn read_with_agy(
     home: &Path,
     why: &str,
 ) -> Result<(Vec<UsageLimit>, Option<String>), UsageUnread> {
-    match run_agy_usage(binary, env, home).await {
+    // A signed-out `/usage` opens Google's sign-in page in the browser; `agy models` only says so.
+    // Ask it first unless `/usage` answered for this account a short while ago. (The fast path's
+    // Gemini top-up skips this: a token Google accepted means `agy` is signed in.)
+    let signed_out = !recently_read(key)
+        && match crate::binary::resolve(kybern_protocol::ProviderKind::Antigravity, binary) {
+            Ok(resolved) => models_say_signed_out(&resolved, env, home).await,
+            Err(_) => false,
+        };
+    let answer = if signed_out { AgyUsage::SignedOut } else { run_agy_usage(binary, env, home).await };
+    match answer {
         AgyUsage::Read(buckets) => {
             clear_pause(key);
             let limits = to_limits(&buckets);
@@ -520,7 +558,9 @@ async fn read_with_agy(
             Ok((limits, None))
         }
         AgyUsage::SignedOut => {
-            pause(key, MAX_BACKOFF, true);
+            // `agy models` tells a signed-out account without opening anything, so it is asked again soon:
+            // the caption clears within a couple of minutes of signing in.
+            pause(key, FAILURE_BACKOFF, true);
             Err(unread(LimitsStale::SignedOut, "Antigravity is signed out"))
         }
         AgyUsage::Failed => {

@@ -1052,13 +1052,18 @@ fn home_with_token(hours: i64) -> tempfile::TempDir {
 
 /// A fake `agy` that logs each call and answers `/usage` from `$HOME/answer.json`, or
 /// with the signed-out prompt (and then waits, as the real one does) while `$HOME/signed-out` exists.
+/// `agy models` lists a model, or says to sign in while `$HOME/signed-out` exists.
 #[cfg(unix)]
 fn fake_agy(dir: &std::path::Path, calls: &std::path::Path) -> std::path::PathBuf {
     let binary = dir.join("agy");
     kybern_protocol::process::write_executable(
         &binary,
         format!(
-            "#!/bin/sh\necho \"$HOME $*\" >> '{}'\n[ \"$*\" = '-p /usage --output-format json' ] || exit 3\n\
+            "#!/bin/sh\necho \"$HOME $*\" >> '{}'\n\
+             if [ \"$*\" = 'models' ]; then echo 'Fetching available models...'; \
+             if [ -e \"$HOME/signed-out\" ]; then echo 'Error: Please sign in to view available models.'; \
+             else printf 'gemini-4-neon-high\\tGemini 4 Neon\\n'; fi; exit 0; fi\n\
+             [ \"$*\" = '-p /usage --output-format json' ] || exit 3\n\
              if [ -e \"$HOME/signed-out\" ]; then printf '%s' '{}' >&2; exec sleep 30; fi\ncat \"$HOME/answer.json\"\n",
             calls.display(),
             AGY_SIGNED_OUT_STDERR.replace('\'', "")
@@ -1074,8 +1079,15 @@ fn env_for(home: &std::path::Path) -> std::collections::BTreeMap<String, String>
 }
 
 #[cfg(unix)]
+/// How many times `agy -p /usage` ran.
 fn call_count(calls: &std::path::Path) -> usize {
-    std::fs::read_to_string(calls).map(|log| log.lines().count()).unwrap_or(0)
+    std::fs::read_to_string(calls).map(|log| log.lines().filter(|line| line.contains("/usage")).count()).unwrap_or(0)
+}
+
+/// How many times `agy models` ran.
+#[cfg(unix)]
+fn models_count(calls: &std::path::Path) -> usize {
+    std::fs::read_to_string(calls).map(|log| log.lines().filter(|line| line.ends_with(" models")).count()).unwrap_or(0)
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -1155,14 +1167,14 @@ async fn a_signed_out_agy_is_asked_once_and_remembered_until_a_login_appears() {
     let home = tempfile::tempdir().unwrap();
     std::fs::write(home.path().join("signed-out"), "").unwrap();
     std::fs::write(home.path().join("answer.json"), agy_usage_json().to_string()).unwrap();
-    let started = std::time::Instant::now();
     let first = read_account_usage(home.path(), Some(&binary), &env_for(home.path())).await.unwrap_err();
     assert_eq!(first.reason, LimitsStale::SignedOut);
-    assert!(started.elapsed() < std::time::Duration::from_secs(6), "the sign-in prompt ends the wait, not agy's minute");
-    // `agy` opens a browser sign-in each time it runs signed out, so it is not started again.
+    // A signed-out `/usage` opens a browser sign-in: `agy models` said so first, so `/usage` never ran.
+    assert_eq!(models_count(&calls), 1);
+    assert_eq!(call_count(&calls), 0);
     let again = read_account_usage(home.path(), Some(&binary), &env_for(home.path())).await.unwrap_err();
     assert_eq!(again.reason, LimitsStale::SignedOut);
-    assert_eq!(call_count(&calls), 1);
+    assert_eq!(models_count(&calls), 1, "remembered: not asked again right away");
     // Signing in leaves a token file (expired here, so `agy` is asked once more): the pause lifts.
     std::fs::remove_file(home.path().join("signed-out")).unwrap();
     let dir = home.path().join(".gemini/antigravity-cli");
@@ -1171,5 +1183,16 @@ async fn a_signed_out_agy_is_asked_once_and_remembered_until_a_login_appears() {
         .unwrap();
     let (limits, _) = read_account_usage(home.path(), Some(&binary), &env_for(home.path())).await.unwrap();
     assert_eq!(limits.len(), 5);
-    assert_eq!(call_count(&calls), 2);
+    assert_eq!(call_count(&calls), 1);
+}
+
+#[test]
+fn a_signed_out_agy_models_is_told_from_its_output() {
+    use super::usage::models_signed_out;
+    assert!(models_signed_out(
+        b"Fetching available models...\nError: Please sign in to view available models. Launch the CLI without arguments to sign in.\n",
+        b""
+    ));
+    assert!(!models_signed_out(b"Fetching available models...\ngemini-4-neon-high\tGemini 4 Neon\n", b""));
+    assert!(!models_signed_out(b"", b"dial tcp: lookup failed"));
 }
