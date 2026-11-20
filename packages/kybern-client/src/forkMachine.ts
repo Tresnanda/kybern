@@ -2,7 +2,7 @@
 // what the sheet asks, how the three transcript notices read and how `kybern://thread/<machine>/<thread>` links
 // resolve. The daemon does the work (`threads.fork_note`, `threads.fork_to_machine`); the target gets a new
 // thread whose `origin.kind` is `fork`, and the source gets a notice when the fork arrives, waits or fails.
-import { groupRepoKeys } from "./machineMerge.ts";
+import { sameGroupRepos } from "./machineMerge.ts";
 import type { JsonValue, MachineId, Origin, PermissionMode, Project, ProviderKind, ThreadId, ThreadsForkToMachineParams } from "./types.ts";
 
 // ---- links ----
@@ -147,9 +147,7 @@ export function sameForkProject(source: ForkProjectShape | undefined, candidate:
   if (source.kind !== "group") return candidate?.kind !== "group";
   if (candidate?.kind !== "group") return false;
   if (candidate.members?.some((member) => member.status !== "ok")) return false;
-  const wanted = groupRepoKeys(source);
-  const have = groupRepoKeys(candidate);
-  return wanted.length > 0 && wanted.length === have.length && wanted.every((key, index) => key === have[index]);
+  return sameGroupRepos(source, candidate);
 }
 
 /**

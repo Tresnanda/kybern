@@ -126,3 +126,11 @@ test("a generated host name gives way to Tailscale's name, a chosen name does no
   assert.equal(friendlyMachineName("satyamas", "desktop-abc"), "satyamas");
   assert.equal(friendlyMachineName("Treshnandas-Macbook.local", "other"), "Treshnandas-Macbook");
 });
+
+test("a group whose member has no commits yet can still go to a machine with a full clone of it", () => {
+  const ok = [{ path: "a", name: "a", status: "ok" }];
+  const source = { kind: "group", repos: [{ root_commit: "r1" }, { remote: "github.com/me/site" }], members: ok };
+  const fedora = { kind: "group", repos: [{ root_commit: "r1" }, { root_commit: "r9", remote: "github.com/me/site" }], members: ok };
+  assert.equal(sameForkProject(source, fedora), true);
+  assert.equal(sameForkProject(source, { ...fedora, repos: [{ root_commit: "r1" }, { root_commit: "r9", remote: "github.com/me/other" }] }), false);
+});

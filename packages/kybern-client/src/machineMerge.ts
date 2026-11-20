@@ -71,12 +71,40 @@ export function groupRepoKeys(project: Pick<Project, "repos">): string[] {
   return [...new Set((project.repos ?? []).map(identityKey).filter((k): k is string => !!k))].sort();
 }
 
+/**
+ * Whether two checkouts are the same repository, as the daemon pairs them (`git_transfer::same_repo`): a shared root
+ * commit when both know theirs, else the same remote. A checkout with no commits yet, or a shallow one, is known by
+ * its remote only and still matches a full clone of that remote.
+ */
+export function sameRepository(a: RepoIdentity | null | undefined, b: RepoIdentity | null | undefined): boolean {
+  const mine = rootsOf(a);
+  const theirs = rootsOf(b);
+  if (mine.length && theirs.length) return mine.some((root) => theirs.includes(root));
+  return !!a?.remote && a.remote === b?.remote;
+}
+
+/** Whether two groups hold the same repositories, each member paired with one of the other's ([`sameRepository`]). */
+export function sameGroupRepos(a: Pick<Project, "repos">, b: Pick<Project, "repos">): boolean {
+  const mine = (a.repos ?? []).filter((r) => identityKey(r));
+  const theirs = (b.repos ?? []).filter((r) => identityKey(r));
+  if (!mine.length || mine.length !== theirs.length) return false;
+  const used = new Set<number>();
+  return mine.every((repo) => {
+    const index = theirs.findIndex((other, i) => !used.has(i) && sameRepository(repo, other));
+    if (index < 0) return false;
+    used.add(index);
+    return true;
+  });
+}
+
 interface Entry {
   machineId: MachineId;
   project: Project;
   roots: string[];
   remote?: string;
   key?: string;
+  /** A group's member identities; its key is made once every machine's roots are known. */
+  group?: RepoIdentity[];
 }
 
 /**
@@ -103,8 +131,8 @@ export function mergeProjects(
       const entry: Entry = { machineId, project, roots: [] };
       if (isFreeChatProject(project.id)) entry.key = `local:${machineId}:${project.id}`;
       else if (project.kind === "group") {
-        const members = groupRepoKeys(project);
-        entry.key = members.length ? `group:${members.join("+")}` : `local:${machineId}:${project.id}`;
+        entry.group = (project.repos ?? []).filter((repo) => identityKey(repo));
+        if (!entry.group.length) entry.key = `local:${machineId}:${project.id}`;
       } else {
         entry.roots = rootsOf(project.repo);
         entry.remote = project.repo?.remote || undefined;
@@ -121,24 +149,41 @@ export function mergeProjects(
     parent.set(root, top);
     return top;
   };
+  // A group member's roots join the same sets, so a member and a single checkout of one repository agree on its key.
+  const allRoots = (entry: Entry) => [entry.roots, ...(entry.group ?? []).map(rootsOf)]
   for (const entry of entries)
-    for (const root of entry.roots) if (!parent.has(root)) parent.set(root, root);
+    for (const roots of allRoots(entry)) for (const root of roots) if (!parent.has(root)) parent.set(root, root);
   for (const entry of entries)
-    for (const root of entry.roots.slice(1)) {
-      const a = find(entry.roots[0]!);
-      const b = find(root);
-      if (a !== b) parent.set(a < b ? b : a, a < b ? a : b);
-    }
+    for (const roots of allRoots(entry))
+      for (const root of roots.slice(1)) {
+        const a = find(roots[0]!);
+        const b = find(root);
+        if (a !== b) parent.set(a < b ? b : a, a < b ? a : b);
+      }
   const rootKey = (root: string) => find(root);
 
   // Which root commits each remote is known under.
   const rootsOfRemote = new Map<string, Set<string>>();
+  const learn = (roots: string[], remote: string | null | undefined) => {
+    if (!roots.length || !remote) return;
+    const known = rootsOfRemote.get(remote) ?? new Set<string>();
+    known.add(rootKey(roots[0]!));
+    rootsOfRemote.set(remote, known);
+  };
+  for (const entry of entries) {
+    learn(entry.roots, entry.remote);
+    for (const repo of entry.group ?? []) learn(rootsOf(repo), repo.remote);
+  }
+  // A member known by its remote only (no commits yet, or a shallow clone) takes the root another checkout of that
+  // remote has, when exactly one is known: the same rule as a single repository below.
+  const memberKey = (repo: RepoIdentity): string => {
+    const roots = rootsOf(repo);
+    if (roots.length) return `root:${rootKey(roots[0]!)}`;
+    const known = repo.remote ? rootsOfRemote.get(repo.remote) : undefined;
+    return known?.size === 1 ? `root:${[...known][0]}` : `remote:${repo.remote}`;
+  };
   for (const entry of entries)
-    if (entry.roots.length && entry.remote) {
-      const roots = rootsOfRemote.get(entry.remote) ?? new Set<string>();
-      roots.add(rootKey(entry.roots[0]!));
-      rootsOfRemote.set(entry.remote, roots);
-    }
+    if (!entry.key && entry.group) entry.key = `group:${[...new Set(entry.group.map(memberKey))].sort().join("+")}`;
   for (const entry of entries) {
     if (entry.key) continue;
     if (entry.roots.length) entry.key = `root:${rootKey(entry.roots[0]!)}`;
