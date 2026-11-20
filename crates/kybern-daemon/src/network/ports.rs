@@ -7,8 +7,12 @@
 //!
 //! * The target refuses the ports of its own kybernd (its listeners and the default port): a forward is
 //!   never a way to reach another machine's daemon without a token.
-//! * A forward with no connection for [`super::Timing::ports_idle`] (30 min) closes, and a daemon holds
+//! * A manual forward with no connection for [`super::Timing::ports_idle`] (30 min) closes, and a daemon holds
 //!   at most 16.
+//! * A preview forward (#350) has a lease instead: [`super::Timing::ports_first_lease`] (2 min) when it opens, renewed for
+//!   [`super::Timing::ports_lease`] (30 s) by `ports.keep` from every app that shows it, by a live preview ticket on its port
+//!   (a phone viewing it) and by asking for it again. When the lease runs out it closes, even with connections open: a
+//!   hot-reload WebSocket or a keep-alive socket no longer holds it forever.
 //! * A preview of a dev server on another machine (`kybern_preview_open { machine }`) starts a forward
 //!   and shows `http://localhost:<local>`: the page, its assets and its hot-reload WebSocket are plain
 //!   TCP to the browser, so nothing in the page changes.
@@ -87,8 +91,12 @@ struct Forward {
     via: std::sync::Mutex<Option<(PortRouteVia, Arc<direct::Route>)>>,
     /// A route choice ([`hop::choose`]) runs.
     choosing: std::sync::atomic::AtomicBool,
-    /// Opened for a preview (stopped by the app when the page's last tab closes) until someone asks for it by hand.
+    /// Opened for a preview (closed when its lease runs out) until someone asks for it by hand.
     preview: std::sync::atomic::AtomicBool,
+    /// When a preview forward's lease runs out; manual forwards ignore it.
+    lease_until: std::sync::Mutex<Instant>,
+    /// Why the forward was cancelled from outside its accept loop, for the log: `ports.stop` and who asked.
+    stopped_by: std::sync::OnceLock<String>,
 }
 
 impl Forward {
@@ -98,6 +106,32 @@ impl Forward {
 
     fn caches(&self) -> bool {
         self.caching
+    }
+
+    fn is_preview(&self) -> bool {
+        self.preview.load(Ordering::Relaxed)
+    }
+
+    fn origin_name(&self) -> &'static str {
+        if self.is_preview() { "preview" } else { "manual" }
+    }
+
+    /// Extend the lease to at least `lease` from now; a renewal never shortens it.
+    fn renew(&self, lease: Duration) {
+        let until = Instant::now() + lease;
+        let mut held = self.lease_until.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *held < until {
+            *held = until;
+        }
+    }
+
+    fn lease_expired(&self) -> bool {
+        Instant::now() >= *self.lease_until.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// The loopback ports a browser reaches this forward on: the plain one and the HTTPS one, once it exists.
+    fn local_ports(&self) -> (u16, Option<u16>) {
+        (self.local_port, self.https.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_ref().map(|(port, _)| *port))
     }
 
     fn via_now(&self) -> Option<PortRouteVia> {
@@ -121,7 +155,7 @@ impl Forward {
             https_certificate_sha256: https.as_ref().map(|(_, cert)| cert.sha256.clone()),
             route_via: self.via_now(),
             loading: self.load.view(),
-            origin: if self.preview.load(Ordering::Relaxed) { PortForwardOrigin::Preview } else { PortForwardOrigin::Manual },
+            origin: if self.is_preview() { PortForwardOrigin::Preview } else { PortForwardOrigin::Manual },
         }
     }
 }
@@ -136,6 +170,8 @@ pub struct Forwards {
     /// Which route each target's forwards take.
     book: hop::Book,
     certs: std::sync::OnceLock<tls::CertStore>,
+    /// The daemon's preview tickets: a live `Proxy` ticket on a preview forward's port renews its lease.
+    tickets: std::sync::OnceLock<Arc<crate::previews::tickets::PreviewTickets>>,
 }
 
 impl Forwards {
@@ -148,6 +184,30 @@ impl Forwards {
     /// The certificate of the HTTPS (Fast) listeners, created on first use.
     pub fn certificate(&self) -> anyhow::Result<Arc<tls::PreviewCert>> {
         self.certs.get().ok_or_else(|| anyhow::anyhow!("no data directory for the preview certificate"))?.get()
+    }
+
+    /// Let live preview tickets renew the forwards they show (the daemon's state does this once).
+    pub fn attach_tickets(&self, tickets: Arc<crate::previews::tickets::PreviewTickets>) {
+        let _ = self.tickets.set(tickets);
+    }
+
+    /// A live preview ticket shows one of these ports.
+    fn ticket_shows(&self, ports: (u16, Option<u16>)) -> bool {
+        self.tickets
+            .get()
+            .is_some_and(|tickets| tickets.live_proxy_ports().into_iter().any(|port| port == ports.0 || Some(port) == ports.1))
+    }
+
+    /// Renew the lease of the listed preview forwards; returns those renewed.
+    fn keep(&self, ids: &[Uuid], lease: Duration) -> Vec<Uuid> {
+        let list = self.lock();
+        list.iter()
+            .filter(|forward| forward.is_preview() && ids.contains(&forward.id))
+            .map(|forward| {
+                forward.renew(lease);
+                forward.id
+            })
+            .collect()
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Arc<Forward>>> {
@@ -195,12 +255,19 @@ pub fn list(state: &AppState) -> PortsListResult {
     PortsListResult { forwards: state.network.ports.views() }
 }
 
-/// `ports.stop`.
-pub fn stop(state: &AppState, id: Uuid) -> Result<PortsListResult, RpcError> {
+/// `ports.stop`, asked for by the client named `by` (its connection label, for the log).
+pub fn stop(state: &AppState, id: Uuid, by: &str) -> Result<PortsListResult, RpcError> {
     let forward = state.network.ports.remove(id).ok_or_else(|| RpcError::not_found("port forward"))?;
+    let _ = forward.stopped_by.set(by.to_string());
     forward.cancel.cancel();
     announce(&state.network);
     Ok(list(state))
+}
+
+/// `ports.keep`: renew the lease of the listed preview forwards ([`super::Timing::ports_lease`] from now).
+pub fn keep(state: &AppState, params: PortsKeepParams) -> PortsKeepResult {
+    let network = &state.network;
+    PortsKeepResult { kept: network.ports.keep(&params.ids, network.timing.ports_lease) }
 }
 
 /// `ports.forward`: bind a loopback port here that leads to a loopback port of `machine`. A second call
@@ -222,7 +289,9 @@ pub async fn forward(state: &AppState, params: PortsForwardParams) -> Result<Por
 }
 
 /// [`forward`] for a machine already resolved; the agent's preview tool comes through here too (`origin: Preview`).
-/// A manual ask for a forward a preview opened makes it manual: it then stays when the preview closes.
+/// A manual ask for a forward a preview opened makes it manual: it then leaves its lease and stays until it is stopped or idle.
+/// A preview asking again renews the lease for [`super::Timing::ports_first_lease`], so an app that opens or reloads a page
+/// keeps its forward even before (or without) `ports.keep`.
 #[allow(clippy::too_many_arguments)]
 pub async fn forward_to(
     network: &Arc<Network>,
@@ -242,14 +311,21 @@ pub async fn forward_to(
         .lock()
         .iter()
         .find(|forward| {
-            forward.machine_id == machine_id
+            // One whose lease just ran out is closing: it is not handed out again.
+            !forward.cancel.is_cancelled()
+                && forward.machine_id == machine_id
                 && forward.remote_port == remote_port
                 && local_port.is_none_or(|port| port == forward.local_port)
         })
         .cloned();
     if let Some(existing) = existing {
-        if origin.is_manual() && existing.preview.swap(false, Ordering::Relaxed) {
-            announce(network);
+        if origin.is_manual() {
+            if existing.preview.swap(false, Ordering::Relaxed) {
+                tracing::info!(target: TARGET, id = %existing.id, machine = %existing.machine_id, port = existing.remote_port, "a preview forward was asked for by hand; it stays until it is stopped");
+                announce(network);
+            }
+        } else if existing.is_preview() {
+            existing.renew(network.timing.ports_first_lease);
         }
         if https {
             start_https(network, &existing).await?;
@@ -305,6 +381,8 @@ pub async fn forward_to(
         via: std::sync::Mutex::new(None),
         choosing: Default::default(),
         preview: std::sync::atomic::AtomicBool::new(origin == PortForwardOrigin::Preview),
+        lease_until: std::sync::Mutex::new(Instant::now() + network.timing.ports_first_lease),
+        stopped_by: std::sync::OnceLock::new(),
         connections: AtomicU32::new(0),
         cancel,
     });
@@ -335,6 +413,8 @@ pub async fn forward_to(
     announce(network);
     tracing::info!(
         target: TARGET,
+        id = %id,
+        origin = forward.origin_name(),
         machine = machine_id,
         remote_port,
         local_port = bound,
@@ -592,11 +672,11 @@ pub fn parse_server_target(target: &str) -> Result<(u16, String), String> {
 async fn accept_loop(network: Arc<Network>, shutdown: CancellationToken, forward: Arc<Forward>, listener: TcpListener) {
     let idle_limit = network.timing.ports_idle;
     let mut idle_since = Instant::now();
-    let tick = (idle_limit / 4).clamp(Duration::from_millis(50), Duration::from_secs(30));
-    loop {
+    let tick = (idle_limit.min(network.timing.ports_lease) / 4).clamp(Duration::from_millis(50), Duration::from_secs(30));
+    let reason = loop {
         tokio::select! {
-            _ = forward.cancel.cancelled() => break,
-            _ = shutdown.cancelled() => break,
+            _ = forward.cancel.cancelled() => break if forward.stopped_by.get().is_some() { "stopped" } else { "shutdown" },
+            _ = shutdown.cancelled() => break "shutdown",
             accepted = listener.accept() => {
                 let Ok((socket, _)) = accepted else { continue };
                 idle_since = Instant::now();
@@ -605,16 +685,36 @@ async fn accept_loop(network: Arc<Network>, shutdown: CancellationToken, forward
                 tokio::spawn(async move { connection(network, forward, socket).await });
             }
             _ = tokio::time::sleep(tick) => {
-                if forward.connections.load(Ordering::Relaxed) > 0 {
+                if forward.is_preview() {
+                    // A preview forward lives by its lease alone: open connections do not hold it.
+                    if network.ports.ticket_shows(forward.local_ports()) {
+                        forward.renew(network.timing.ports_lease);
+                    }
+                    if forward.lease_expired() {
+                        break "lease_expired";
+                    }
+                    idle_since = Instant::now();
+                } else if forward.connections.load(Ordering::Relaxed) > 0 {
                     idle_since = Instant::now();
                 } else if idle_since.elapsed() >= idle_limit {
-                    tracing::info!(target: TARGET, machine = %forward.machine_id, port = forward.remote_port, "closing an idle port forward");
-                    break;
+                    break "idle";
                 }
             }
         }
-    }
+    };
     forward.cancel.cancel();
+    tracing::info!(
+        target: TARGET,
+        id = %forward.id,
+        machine = %forward.machine_id,
+        port = forward.remote_port,
+        local_port = forward.local_port,
+        origin = forward.origin_name(),
+        reason,
+        by = forward.stopped_by.get().map(String::as_str),
+        connections = forward.connections.load(Ordering::Relaxed),
+        "closed a port forward"
+    );
     if forward.prepared
         && let Some(link) = network.peers.link(&forward.machine_id)
     {
@@ -973,6 +1073,8 @@ mod tests {
             via: std::sync::Mutex::new(None),
             choosing: Default::default(),
             preview: Default::default(),
+            lease_until: std::sync::Mutex::new(Instant::now()),
+            stopped_by: std::sync::OnceLock::new(),
             connections: AtomicU32::new(0),
             cancel: CancellationToken::new(),
         };

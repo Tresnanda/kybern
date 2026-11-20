@@ -99,7 +99,7 @@ expression: schema_for!(PortForward)
       ]
     },
     "origin": {
-      "description": "A preview's forward, stopped when the page's last tab closes; absent for a manual one.",
+      "description": "A preview's forward, closed when its lease runs out; absent for a manual one.",
       "$ref": "#/$defs/PortForwardOrigin"
     }
   },
@@ -190,7 +190,7 @@ expression: schema_for!(PortForward)
           "const": "manual"
         },
         {
-          "description": "Opened to show a page in a preview: the app that showed it stops it when the page's last tab closes.",
+          "description": "Opened to show a page in a preview: it has a lease ([`PORT_FORWARD_FIRST_LEASE_SECS`] at first) that the apps\nshowing it renew with `ports.keep`, and it closes when the lease runs out, even with connections open.",
           "type": "string",
           "const": "preview"
         }

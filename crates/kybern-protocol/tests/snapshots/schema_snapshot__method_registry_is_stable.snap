@@ -295,6 +295,7 @@ expression: names
 - ports.forward
 - ports.list
 - ports.stop
+- ports.keep
 - clipboard.set
 - clipboard.get
 - clipboard.status

@@ -170,6 +170,7 @@ impl AppState {
         let previews = Arc::new(crate::previews::tickets::PreviewTickets::new());
         // The network comes first: remote delegation reaches other machines through it.
         let network = Arc::new(crate::network::Network::new(&paths.root, &store, &environment_id, tailscale, timing));
+        network.ports.attach_tickets(previews.clone());
         daemon_updates.attach_network(&network);
         let shutdown = CancellationToken::new();
         let hub = crate::network::outbox::NetworkHub::new(network.clone(), shutdown.clone());

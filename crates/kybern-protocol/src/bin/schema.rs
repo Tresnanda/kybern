@@ -370,6 +370,7 @@ fn main() {
     method::<PortsForward>(&mut methods);
     method::<PortsList>(&mut methods);
     method::<PortsStop>(&mut methods);
+    method::<PortsKeep>(&mut methods);
     method::<ClipboardSet>(&mut methods);
     method::<ClipboardGet>(&mut methods);
     method::<ClipboardStatusMethod>(&mut methods);

@@ -4476,8 +4476,9 @@ export interface SkillCopyPayload { name: string; from_home: SkillHome; homes: S
 
 /** `https`: also serve the forward as `https://localhost:<https_port>` with HTTP/2 (Fast mode) for Kybern's web views. */
 export interface PortsForwardParams { machine: string; remote_port: number; local_port?: number | null; https?: boolean; origin?: PortForwardOrigin }
-/** Why a forward exists. `preview`: opened to show a page, and stopped when that page's last tab closes. Absent (every forward
- *  of a daemon before 0.21.5) means `manual`: it stays until someone stops it. */
+/** Why a forward exists. `preview`: opened to show a page; it has a lease that the apps showing it renew (`ports.keep`), and
+ *  it closes when the lease runs out. Absent (every forward of a daemon before 0.21.5) means `manual`: it stays until someone
+ *  stops it. */
 export type PortForwardOrigin = 'manual' | 'preview'
 export interface PortForward {
   id: Uuid;
@@ -4508,6 +4509,9 @@ export interface PortRouteVia { machine_id: MachineId; machine_name: string }
 /** What a forward has fetched for the page loading now; `expected_bytes` is what its previous complete load transferred. */
 export interface PortLoad { received_bytes: number; cached_bytes?: number; expected_bytes?: number; bytes_per_second: number; open_requests: number; elapsed_ms: number }
 export interface PortsListResult { forwards: PortForward[] }
+/** `ports.keep`: renew the lease of these preview forwards for 30 s; the result lists the ones renewed. */
+export interface PortsKeepParams { ids: Uuid[] }
+export interface PortsKeepResult { kept: Uuid[] }
 export interface PeerPortsPrepareParams { forward_id: string; port: number; direct_version?: number }
 export interface PeerPortsDirect { port: number; token: string; version?: number }
 export interface PeerPortsPrepareResult { direct?: PeerPortsDirect }
@@ -5189,6 +5193,7 @@ export interface Methods {
   "ports.forward": [PortsForwardParams, PortForward];
   "ports.list": [Empty, PortsListResult];
   "ports.stop": [{ id: Uuid }, PortsListResult];
+  "ports.keep": [PortsKeepParams, PortsKeepResult];
   "clipboard.set": [ClipboardSetParams, ClipboardSetResult];
   "clipboard.get": [ClipboardGetParams, ClipboardGetResult];
   "clipboard.status": [Empty, ClipboardStatus];

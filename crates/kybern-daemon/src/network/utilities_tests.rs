@@ -884,6 +884,109 @@ async fn a_forward_records_whether_a_preview_or_a_person_opened_it() {
     assert!(after.iter().any(|forward| forward.id == hand.id));
 }
 
+fn forward_params(b: &Node, remote_port: u16, origin: PortForwardOrigin) -> PortsForwardParams {
+    PortsForwardParams { machine: b.id(), remote_port, local_port: None, https: false, origin }
+}
+
+fn holds_forward(node: &Node, id: Uuid) -> bool {
+    node.state.network.ports.views().iter().any(|forward| forward.id == id)
+}
+
+/// Past the first lease and a renewal of `Timing::fast`, with room for a slow runner.
+const PAST_LEASES: Duration = Duration::from_millis(3500);
+
+/// Check `condition` every 100 ms until `long` has passed; it must hold every time.
+async fn holds_for(what: &str, long: Duration, mut condition: impl FnMut() -> bool) {
+    let start = std::time::Instant::now();
+    let mut every = tokio::time::interval(Duration::from_millis(100));
+    while start.elapsed() < long {
+        every.tick().await;
+        assert!(condition(), "{what} stopped holding after {:?}", start.elapsed());
+    }
+}
+
+/// #350: a preview forward lives by its lease. Nothing renews this one, so it closes when its first lease runs out.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_preview_forward_nobody_keeps_closes_when_its_first_lease_runs_out() {
+    let Some((_cluster, a, b)) = pair().await else { return };
+    let client = admin(&a).await;
+    let forward = client.call::<PortsForward>(forward_params(&b, echo_server().await, PortForwardOrigin::Preview)).await.unwrap();
+    assert!(holds_forward(&a, forward.id));
+    eventually("the unrenewed preview forward closes", WAIT, || !holds_forward(&a, forward.id)).await;
+    assert!(tokio::net::TcpStream::connect(("127.0.0.1", forward.local_port)).await.is_err());
+}
+
+/// #350: `ports.keep` renews a preview forward past its first lease; once the renewals stop, it closes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ports_keep_keeps_a_preview_forward_open() {
+    let Some((_cluster, a, b)) = pair().await else { return };
+    let client = admin(&a).await;
+    let forward = client.call::<PortsForward>(forward_params(&b, echo_server().await, PortForwardOrigin::Preview)).await.unwrap();
+    let start = std::time::Instant::now();
+    let mut every = tokio::time::interval(Duration::from_millis(200));
+    while start.elapsed() < PAST_LEASES {
+        every.tick().await;
+        let kept = client.call::<PortsKeep>(PortsKeepParams { ids: vec![forward.id, Uuid::now_v7()] }).await.unwrap();
+        assert_eq!(kept.kept, vec![forward.id], "after {:?}", start.elapsed());
+    }
+    assert!(holds_forward(&a, forward.id));
+    eventually("the forward closes once nothing keeps it", WAIT, || !holds_forward(&a, forward.id)).await;
+}
+
+/// #350: a hot-reload WebSocket or keep-alive socket no longer holds a preview forward: it closes at the end of its lease
+/// with the connection open, and the connection ends with it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_preview_forward_closes_at_its_lease_even_with_a_connection_open() {
+    let Some((_cluster, a, b)) = pair().await else { return };
+    let client = admin(&a).await;
+    let forward = client.call::<PortsForward>(forward_params(&b, echo_server().await, PortForwardOrigin::Preview)).await.unwrap();
+    let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", forward.local_port)).await.unwrap();
+    socket.write_all(b"ping").await.unwrap();
+    let mut got = [0u8; 4];
+    tokio::time::timeout(Duration::from_secs(10), socket.read_exact(&mut got)).await.expect("no echo").unwrap();
+    assert_eq!(client_connections(&a), 1);
+    eventually("the preview forward closes with its connection open", WAIT, || !holds_forward(&a, forward.id)).await;
+    let mut rest = Vec::new();
+    let ended = tokio::time::timeout(Duration::from_secs(10), socket.read_to_end(&mut rest)).await.expect("the connection stayed open");
+    assert!(ended.is_err() || rest.is_empty(), "{ended:?}");
+}
+
+/// #350: a manual forward has no lease. With a connection open it stays past any lease, `ports.keep` leaves it alone, and a
+/// preview forward asked for by hand leaves its lease too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_manual_forward_ignores_the_preview_lease() {
+    let Some((_cluster, a, b)) = pair().await else { return };
+    let client = admin(&a).await;
+    let manual_port = echo_server().await;
+    let _socket = open_echo_connection(&a, &b, &client, manual_port).await;
+    let manual = a.state.network.ports.views()[0].clone();
+    assert_eq!(manual.origin, PortForwardOrigin::Manual);
+    let kept = client.call::<PortsKeep>(PortsKeepParams { ids: vec![manual.id] }).await.unwrap();
+    assert!(kept.kept.is_empty());
+    let upgraded_port = echo_server().await;
+    let upgraded = client.call::<PortsForward>(forward_params(&b, upgraded_port, PortForwardOrigin::Preview)).await.unwrap();
+    let mut held = tokio::net::TcpStream::connect(("127.0.0.1", upgraded.local_port)).await.unwrap();
+    held.write_all(b"ping").await.unwrap();
+    let mut got = [0u8; 4];
+    tokio::time::timeout(Duration::from_secs(10), held.read_exact(&mut got)).await.expect("no echo").unwrap();
+    let asked = client.call::<PortsForward>(forward_params(&b, upgraded_port, PortForwardOrigin::Manual)).await.unwrap();
+    assert_eq!((asked.id, asked.origin), (upgraded.id, PortForwardOrigin::Manual));
+    holds_for("both manual forwards", PAST_LEASES, || holds_forward(&a, manual.id) && holds_forward(&a, upgraded.id)).await;
+}
+
+/// #350: a phone views a forwarded page through a preview ticket and never calls `ports.keep`: a live ticket on the forward's
+/// port keeps it open, and once the ticket is closed the lease runs out.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_live_preview_ticket_keeps_a_preview_forward_open() {
+    let Some((_cluster, a, b)) = pair().await else { return };
+    let client = admin(&a).await;
+    let forward = client.call::<PortsForward>(forward_params(&b, echo_server().await, PortForwardOrigin::Preview)).await.unwrap();
+    let ticket = a.state.previews.mint_server(forward.local_port, Uuid::now_v7());
+    holds_for("the ticket's forward", PAST_LEASES, || holds_forward(&a, forward.id)).await;
+    assert!(a.state.previews.revoke(&ticket));
+    eventually("the forward closes once its ticket is closed", WAIT, || !holds_forward(&a, forward.id)).await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_forwarded_port_carries_tcp_both_ways_refuses_kybernd_ports_and_closes_when_idle() {
     let Some((_cluster, a, b)) = pair().await else { return };

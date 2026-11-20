@@ -5204,6 +5204,7 @@ method!(PeerFilesAbort, "peer.files.abort", Some(Scope::MachineFiles), PeerFiles
 method!(PortsForward, "ports.forward", Some(Scope::OrchestrationOperate), PortsForwardParams, PortForward);
 method!(PortsList, "ports.list", Some(Scope::OrchestrationRead), Empty, PortsListResult);
 method!(PortsStop, "ports.stop", Some(Scope::OrchestrationOperate), PortsStopParams, PortsListResult);
+method!(PortsKeep, "ports.keep", Some(Scope::OrchestrationOperate), PortsKeepParams, PortsKeepResult);
 method!(ClipboardSet, "clipboard.set", Some(Scope::OrchestrationOperate), ClipboardSetParams, ClipboardSetResult);
 method!(ClipboardGet, "clipboard.get", Some(Scope::OrchestrationOperate), ClipboardGetParams, ClipboardGetResult);
 method!(ClipboardStatusMethod, "clipboard.status", Some(Scope::OrchestrationRead), Empty, ClipboardStatus);
@@ -5543,6 +5544,7 @@ registry!(
     PortsForward,
     PortsList,
     PortsStop,
+    PortsKeep,
     ClipboardSet,
     ClipboardGet,
     ClipboardStatusMethod,
