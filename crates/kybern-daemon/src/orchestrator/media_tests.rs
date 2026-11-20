@@ -83,3 +83,43 @@ fn a_moved_or_forked_thread_carries_no_media_reference() {
     let message = UserMessage { parts: vec![ContentPart::Text { text: "see ".into() }, ContentPart::Media { media }] };
     assert_eq!(message.plain_text(), "see [image]");
 }
+
+#[tokio::test]
+async fn an_attached_document_reaches_the_agent_as_a_readable_file_and_stays_a_chip_in_the_thread() {
+    let fixture = Fixture::new();
+    let thread = fixture.thread(ThreadStatus::Idle);
+    fixture.store.thread_upsert(&thread).unwrap();
+    let (_live, _, messages) = fixture.park_recording(&thread, Instant::now()).await;
+    // What the desktop's upload leaves on the machine that runs the chat (`POST /assets`).
+    let id = Uuid::now_v7();
+    let assets = &fixture.orchestrator.inner.paths.assets;
+    std::fs::create_dir_all(assets).unwrap();
+    std::fs::write(assets.join(id.to_string()), "# Handoff\n").unwrap();
+    let info = methods::AssetInfo { id, name: "HANDOFF.md".into(), media_type: "text/markdown".into(), size: 10, created_at: chrono::Utc::now() };
+    fixture.store.asset_insert(&info).unwrap();
+    let attachment = ContentPart::Attachment { asset_id: id, name: info.name.clone(), media_type: info.media_type.clone(), size: info.size };
+    let message = UserMessage { parts: vec![ContentPart::Text { text: "continue from this".into() }, attachment.clone()] };
+    fixture
+        .orchestrator
+        .send_client_message(methods::ThreadsSendParams { thread_id: thread.id, message, message_id: None })
+        .await
+        .unwrap();
+    eventually(|| async { (!messages.lock().await.is_empty()).then_some(()) }).await;
+    // The agent gets a path it can open, named with the file's own extension.
+    let ContentPart::Text { text } = &messages.lock().await[0].parts[1] else { panic!("expected the file's path") };
+    let path = assets.join(format!("{id}.md"));
+    assert!(text.contains("HANDOFF.md") && text.contains(&path.display().to_string()), "{text}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "# Handoff\n");
+    // The thread keeps the chip.
+    let stored = fixture
+        .store
+        .events_for_thread(thread.id)
+        .unwrap()
+        .into_iter()
+        .find_map(|event| match event.payload {
+            EventPayload::TurnStarted { message, .. } => Some(message),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(stored.parts[1], attachment);
+}

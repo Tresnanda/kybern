@@ -772,14 +772,38 @@ impl Orchestrator {
             },
         };
         let (store, assets) = (&self.inner.store, &self.inner.paths.assets);
-        match crate::chips::expand(&items, |id| {
+        let chips = match crate::chips::expand(&items, |id| {
             let id: AssetId = id.parse().ok()?;
             store.asset_get(id).ok().flatten()?;
             Some(assets.join(id.to_string()))
         }) {
             Some(expanded) => std::borrow::Cow::Owned(expanded),
             None => items,
+        };
+        match self.expand_file_attachments(&chips) {
+            Some(expanded) => std::borrow::Cow::Owned(expanded),
+            None => chips,
         }
+    }
+
+    /// An attached file the daemon did not inline (a document, not an image) becomes its path on this machine, so the
+    /// agent can read it; drivers alone only know its name. One whose upload is gone keeps the name.
+    fn expand_file_attachments(&self, message: &UserMessage) -> Option<UserMessage> {
+        if !message.parts.iter().any(|part| matches!(part, ContentPart::Attachment { .. })) {
+            return None;
+        }
+        let parts = message
+            .parts
+            .iter()
+            .map(|part| match part {
+                ContentPart::Attachment { asset_id, name, .. } => match self.asset_file(*asset_id) {
+                    Some(path) => ContentPart::Text { text: format!("\n[attached file {name}, read it at {}]\n", path.display()) },
+                    None => part.clone(),
+                },
+                other => other.clone(),
+            })
+            .collect();
+        Some(UserMessage { parts })
     }
 }
 
@@ -3064,21 +3088,23 @@ impl Orchestrator {
             return None;
         }
         if let Some(id) = attachment.asset_id {
-            let info = self.inner.store.asset_get(id).ok().flatten()?;
-            let path = self.inner.paths.assets.join(id.to_string());
-            if !path.is_file() {
-                return None;
-            }
-            // Agents tell an image by its extension (Claude's Read does), and assets are stored by id alone: hand over a
-            // hard link named `<id>.<ext>` beside it.
-            let named = asset_extension(&info.name, &info.media_type).map(|ext| self.inner.paths.assets.join(format!("{id}.{ext}")));
-            if let Some(named) = named.filter(|named| named.is_file() || std::fs::hard_link(&path, named).is_ok()) {
-                return Some(named.to_string_lossy().into_owned());
-            }
-            return Some(path.to_string_lossy().into_owned());
+            return self.asset_file(id).map(|path| path.to_string_lossy().into_owned());
         }
         let path = std::path::Path::new(attachment.path.as_deref()?);
         (path.is_absolute() && path.exists()).then(|| path.to_string_lossy().into_owned())
+    }
+
+    /// An uploaded asset's file on this machine, for an agent to read with its own tools.
+    fn asset_file(&self, id: AssetId) -> Option<std::path::PathBuf> {
+        let info = self.inner.store.asset_get(id).ok().flatten()?;
+        let path = self.inner.paths.assets.join(id.to_string());
+        if !path.is_file() {
+            return None;
+        }
+        // Agents tell a file's kind by its extension (Claude's Read does), and assets are stored by id alone: hand over a
+        // hard link named `<id>.<ext>` beside it.
+        let named = asset_extension(&info.name, &info.media_type).map(|ext| self.inner.paths.assets.join(format!("{id}.{ext}")));
+        Some(named.filter(|named| named.is_file() || std::fs::hard_link(&path, named).is_ok()).unwrap_or(path))
     }
 
     async fn restore_running_after_approval(&self, thread_id: ThreadId, live: &LiveSession) -> Result<()> {
