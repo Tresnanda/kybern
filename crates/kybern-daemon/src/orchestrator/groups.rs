@@ -634,6 +634,7 @@ impl Orchestrator {
             agents_md: folder.join("AGENTS.md").is_file(),
             claude_md: folder.join("CLAUDE.md").is_file(),
             copy_candidates: copy_candidates(&project),
+            pending: Vec::new(),
         })
     }
 

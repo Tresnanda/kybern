@@ -396,6 +396,26 @@ pub(crate) fn strip_credentials(url: &str) -> String {
 }
 
 /// Remove anything that looks like a credential from git's own words.
+/// Clone `url` into `dir`, whose parent exists and which does not, with this machine's own git credentials and
+/// no prompt (ssh in batch mode unless the user set their own ssh command). A failed clone leaves no folder;
+/// the error is git's text without credentials.
+pub(crate) async fn clone_remote(dir: &Path, url: &str) -> Result<(), String> {
+    let parent = dir.parent().ok_or_else(|| "That folder has no parent.".to_string())?;
+    let name = dir.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+    let ssh_set = std::env::var_os("GIT_SSH_COMMAND").is_some() || Repo::new(parent).config_get("core.sshCommand").await.is_some();
+    let env: Vec<(&str, &str)> = if ssh_set { Vec::new() } else { vec![("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")] };
+    let out = Repo::new(parent).output_env(&["clone", "--quiet", "--", url, &name], &env, Some(CLONE_TIMEOUT)).await;
+    let result = match out {
+        Ok(out) if out.success => Ok(()),
+        Ok(out) => Err(redact(out.stderr.trim())),
+        Err(error) => Err(redact(&format!("{error:#}"))),
+    };
+    if result.is_err() && dir.exists() {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    result
+}
+
 fn redact(text: &str) -> String {
     text.split_whitespace()
         .map(|word| if word.contains("://") && word.contains('@') { strip_credentials(word) } else { word.to_string() })
@@ -1017,18 +1037,9 @@ impl Orchestrator {
             let parent = dir.parent().ok_or_else(|| conflict("That folder has no parent."))?.to_path_buf();
             std::fs::create_dir_all(&parent).map_err(|error| conflict(format!("Kybern could not create {}: {error}", parent.display())))?;
             if let Some(url) = params.remote_url.as_deref() {
-                let name = dir.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-                let ssh_set =
-                    std::env::var_os("GIT_SSH_COMMAND").is_some() || Repo::new(&parent).config_get("core.sshCommand").await.is_some();
-                let env: Vec<(&str, &str)> = if ssh_set { Vec::new() } else { vec![("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")] };
-                let out = Repo::new(&parent).output_env(&["clone", "--quiet", "--", url, &name], &env, Some(CLONE_TIMEOUT)).await;
-                match out {
-                    Ok(out) if out.success => cloned = true,
-                    Ok(out) => clone_error = Some(redact(out.stderr.trim())),
-                    Err(error) => clone_error = Some(redact(&format!("{error:#}"))),
-                }
-                if !cloned && dir.exists() {
-                    let _ = std::fs::remove_dir_all(&dir);
+                match clone_remote(&dir, url).await {
+                    Ok(()) => cloned = true,
+                    Err(error) => clone_error = Some(error),
                 }
             }
             if !cloned {

@@ -1097,6 +1097,12 @@ enum ProjectsCmd {
         /// Replace the top-level entries copied into new worktrees (comma-separated; "" clears).
         #[arg(long, value_delimiter = ',')]
         copy: Option<Vec<String>>,
+        /// Add now the repositories another machine added to this group that this machine couldn't add.
+        #[arg(long)]
+        retry: bool,
+        /// With --retry: also copy repositories over 200 MB from another machine.
+        #[arg(long, requires = "retry")]
+        copy_large: bool,
     },
     /// Show the project map: repositories, layout, commands, busy areas and recent removals, stamped with HEAD.
     Map {
@@ -2013,8 +2019,11 @@ pub async fn run() -> Result<()> {
                     .await?;
                 if json { println!("{}", serde_json::to_string_pretty(&result)?) } else { render::scan(&result) }
             }
-            ProjectsCmd::Members { project, set, copy } => {
+            ProjectsCmd::Members { project, set, copy, retry, copy_large } => {
                 let project_id = resolve_project(&client, &project, false).await?;
+                if retry {
+                    client.call::<ProjectsMembersRetry>(ProjectsMembersRetryParams { project_id, copy_large }).await?;
+                }
                 if set.is_some() || copy.is_some() {
                     client
                         .call::<ProjectsUpdate>(ProjectsUpdateParams {

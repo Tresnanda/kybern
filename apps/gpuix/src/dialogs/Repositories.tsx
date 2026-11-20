@@ -16,19 +16,21 @@ import {
   memberSelectionError,
   orderMemberPaths,
 } from '../../../../packages/kybern-client/src/groups.ts'
-import type { MemberState, Project, ProjectMember, RepoCandidate } from '../../../../packages/kybern-client/src/types.ts'
+import type { MemberState, PendingMember, Project, ProjectMember, RepoCandidate } from '../../../../packages/kybern-client/src/types.ts'
 import { Badge } from '../kit/Badge.tsx'
 import { useEscapeLayer } from '../kit/AlertDialog.tsx'
 import { Button } from '../kit/Button.tsx'
 import { RADIUS, useControls } from '../kit/controls.ts'
 import { IconButton } from '../kit/IconButton.tsx'
+import { ProblemRow } from '../kit/Problem.tsx'
+import { Spinner } from '../kit/Spinner.tsx'
 import { TokenChip } from '../kit/TokenChip.tsx'
 import { Checklist, ChecklistHeader } from '../groups/Checklist.tsx'
 import { copyChoices, folderName, isSelectable, mergeCandidates, nonMembers, orderCandidates, relativeInside, remoteSlug, tildify, toggled } from '../groups/model.ts'
 import { loadMemberStatus, updateGroup, useMemberStatus } from '../groups/store.ts'
 import { Icon } from '../icons.tsx'
 import { Rise } from '../motion/kit.tsx'
-import { problemLine } from '../problems/describe.ts'
+import { describe, problemLine } from '../problems/describe.ts'
 import { N } from '../nav/glyphs.ts'
 import { Dialog, DialogHeader, Menu, MenuItem, MenuSeparator, useDialogClose } from '../nav/overlay.tsx'
 import { activeEnvironment } from '../shell/environment.ts'
@@ -76,6 +78,24 @@ function MemberList({ project, close, onAdd }: { project: Project; close: () => 
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => { void loadMemberStatus(project.id, true) }, [project.id])
   useEffect(() => () => { if (undoTimer.current) clearTimeout(undoTimer.current) }, [])
+  // Repositories another machine added: cloning ones show until they land, failed ones offer Try again.
+  const pending = status?.pending ?? []
+  const adding = pending.some((m) => !m.problem)
+  useEffect(() => {
+    if (!adding) return
+    const timer = setInterval(() => void loadMemberStatus(project.id, true), 3000)
+    return () => clearInterval(timer)
+  }, [adding, project.id])
+  const [retrying, setRetrying] = useState(false)
+  const retryPending = async (copyLarge: boolean) => {
+    const client = getClient()
+    if (!client || retrying) return
+    setRetrying(true); setError('')
+    try {
+      await client.call('projects.members.retry', { project_id: project.id, ...(copyLarge ? { copy_large: true } : {}) })
+      await loadMemberStatus(project.id, true)
+    } catch (e) { setError(problemLine(e, { action: 'add the repositories' })) } finally { setRetrying(false) }
+  }
 
   const members = project.members ?? []
   const paths = members.map((m) => m.path)
@@ -149,7 +169,22 @@ function MemberList({ project, close, onAdd }: { project: Project; close: () => 
               onOwnProject={() => void addProjectToCurrentSpace(absolute(member.path)).catch((e) => setError(problemLine(e, { action: 'add this project' })))}
             />
           ))}
+          {pending.map((member) => <PendingRow key={`pending-${member.path}`} member={member} />)}
         </div>
+        {pending.filter((m) => m.problem).map((member) => {
+          const view = describe({ data: { problem: member.problem } }, { action: `add ${member.name}` })
+          return (
+            <ProblemRow
+              key={`pending-problem-${member.path}`}
+              tone="warning"
+              title={view.title}
+              body={view.body}
+              primary={{ label: view.action?.label ?? 'Try again', busy: retrying, onClick: () => void retryPending(view.action?.params?.copy_large === true), testId: `repositories-pending-retry-${member.path}` }}
+              detail={view.detail}
+              testId={`repositories-pending-problem-${member.path}`}
+            />
+          )
+        })}
         <div style={{ display: 'flex' }}>
           <Button testId="repositories-add" variant="ghost" size="sm" icon={N.plus} onClick={onAdd}>{GROUP_COPY.addRepositories}</Button>
         </div>
@@ -211,6 +246,26 @@ function Section({ title, detail, children }: { title: string; detail?: string; 
         {detail && <Label color={t.textTertiary} size={12} lineHeight={17}>{detail}</Label>}
       </div>
       {children}
+    </div>
+  )
+}
+
+/** A repository another machine added to this group: cloning here, or waiting for Try again. Never first in the list. */
+function PendingRow({ member }: { member: PendingMember }) {
+  const t = useTheme()
+  return (
+    <div testId={`repositories-pending-${member.path}`} style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 50, paddingLeft: 12, paddingRight: 12, paddingTop: 7, paddingBottom: 7, borderTopWidth: 1, borderColor: t.borderLight }}>
+      <Icon source={member.problem ? N.alert : N.repo} size={16} color={member.problem ? t.warning : t.textTertiary} />
+      <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}>
+        <Label color={t.textSecondary} size={13} lineHeight={18} weight={500} truncate>{member.name}</Label>
+        <Label color={t.textTertiary} size={11.5} lineHeight={16} font={FONT_MONO} truncate>{remoteSlug(member.remote_url) ?? member.path}</Label>
+      </div>
+      {!member.problem && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+          <Spinner size={12} color={t.textTertiary} />
+          <Label color={t.textTertiary} size={12} lineHeight={16}>{GROUP_COPY.addingHere}</Label>
+        </div>
+      )}
     </div>
   )
 }

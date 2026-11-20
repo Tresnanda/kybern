@@ -1825,6 +1825,18 @@ export interface ProjectsMembersStatusResult {
   claude_md: boolean;
   /** Entries for "Also copy into worktrees", sorted by name. */
   copy_candidates?: CopyCandidate[];
+  /** Repositories another machine added to this group that this machine is still adding, or could not add. */
+  pending?: PendingMember[];
+}
+
+/** A repository another machine added to the same group, on its way to this machine. */
+export interface PendingMember {
+  /** Where it goes inside the group folder. */
+  path: string;
+  name: string;
+  remote_url?: string | null;
+  /** Set when the last try failed; absent while it is being added. Its `retry` is `projects.members.retry`. */
+  problem?: Problem | null;
 }
 
 /** One repository of the project as the map saw it. */
@@ -4986,6 +4998,7 @@ export interface Methods {
   "projects.remove": [ProjectsRemoveParams, Empty];
   "projects.scan_repos": [ProjectsScanReposParams, ProjectsScanReposResult];
   "projects.members.status": [{ project_id: ProjectId }, ProjectsMembersStatusResult];
+  "projects.members.retry": [{ project_id: ProjectId; copy_large?: boolean }, Empty];
   "projects.map": [{ project_id: ProjectId }, ProjectsMapResult];
   "projects.instructions.create": [{ project_id: ProjectId }, ProjectsInstructionsCreateResult];
   "spaces.list": [Empty, SpacesListResult];
@@ -4993,6 +5006,8 @@ export interface Methods {
   "peer.spaces.sync": [PeerSpacesSyncParams, PeerSpacesSyncResult];
   "peer.harness_updates.run": [PeerHarnessUpdatesRunParams, PeerHarnessUpdatesRunResult];
   "peer.preferences.sync": [PeerSpacesSyncParams, PeerSpacesSyncResult];
+  "peer.groups.sync": [PeerSpacesSyncParams, PeerSpacesSyncResult];
+  "peer.groups.bundle": [{ lineage: string; repo: RepoIdentity; offset: number }, { total: number; sha256: string; data: string; ref_name: string; branch?: string | null }];
   "peer.lists.snapshot": [Empty, NetworkListSnapshot];
   "peer.items.edit": [{ operation_id: string; method: string; params: unknown; expected_updated_at: string }, unknown];
   "peer.spaces.logo": [PeerSpaceLogoParams, PeerSpaceLogoResult];

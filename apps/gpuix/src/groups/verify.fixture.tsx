@@ -55,6 +55,28 @@ const statusResult = (): ProjectsMembersStatusResult => ({
     { name: '.env', is_dir: false }, { name: '.git', is_dir: true }, { name: 'Makefile', is_dir: false }, { name: 'api', is_dir: true },
     { name: 'docker-compose.yml', is_dir: false }, { name: 'infra', is_dir: true }, { name: 'scripts', is_dir: true }, { name: 'web', is_dir: true },
   ],
+  // Repositories another machine added: one cloning here, one this machine couldn't clone.
+  ...(variant('pending') ? {
+    pending: [
+      { path: 'docs', name: 'docs', remote_url: 'git@github.com:acme/docs.git' },
+      {
+        path: 'assets', name: 'assets',
+        problem: {
+          kind: 'conflict' as const, subject: 'group_member', title: 'Couldn’t add assets to this group here',
+          hint: 'It’s 850 MB, so Kybern didn’t copy it from another machine by itself.', retryable: true,
+          action: { id: 'retry', label: 'Copy it (850 MB)', params: { project_id: state.groupProjectId, copy_large: true } },
+        },
+      },
+      {
+        path: 'billing', name: 'billing', remote_url: 'git@github.com:acme/billing.git',
+        problem: {
+          kind: 'signed_out' as const, subject: 'group_member', title: 'Couldn’t add billing to this group here',
+          hint: 'Sign in to github.com with git on this machine, then try again.', detail: 'git@github.com: Permission denied (publickey).', retryable: true,
+          action: { id: 'retry', label: 'Try again', params: { project_id: state.groupProjectId } },
+        },
+      },
+    ],
+  } : {}),
 })
 
 const scanResult = (include: string[] = []): ProjectsScanReposResult => ({
@@ -155,6 +177,7 @@ function Fixture() {
         return scanResult(params.include ?? [])
       }
       if (method === 'projects.members.status') return statusResult()
+      if (method === 'projects.members.retry') return {}
       if (method === 'projects.instructions.create') { created = true; return { created: ['AGENTS.md', 'CLAUDE.md'] } }
       if (method === 'git.branches' && params.project_id === state.groupProjectId) {
         const current = params.repo === 'web' ? 'feat/login' : 'main'

@@ -143,6 +143,7 @@ fn main() {
     method::<ProjectsRemove>(&mut methods);
     method::<ProjectsScanRepos>(&mut methods);
     method::<ProjectsMembersStatus>(&mut methods);
+    method::<ProjectsMembersRetry>(&mut methods);
     method::<ProjectsMap>(&mut methods);
     method::<ProjectsInstructionsCreate>(&mut methods);
     method::<SpacesList>(&mut methods);
@@ -299,6 +300,8 @@ fn main() {
     method::<EventsRange>(&mut methods);
     method::<NetworkCachedLists>(&mut methods);
     method::<PeerPreferencesSync>(&mut methods);
+    method::<PeerGroupsSync>(&mut methods);
+    method::<PeerGroupBundle>(&mut methods);
     method::<PeerListSnapshot>(&mut methods);
     method::<NetworkStatusMethod>(&mut methods);
     method::<NetworkSetEnabled>(&mut methods);

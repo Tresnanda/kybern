@@ -12,6 +12,13 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+# The SDK comes from the chosen Xcode too: a runner image that sets SDKROOT to a newer SDK would otherwise win over
+# DEVELOPER_DIR (the xcode-27 image of 2026-11-19 linked Xcode 27.0's linker against the 27.2 SDK).
+if [[ -n "${DEVELOPER_DIR:-}" ]]; then
+  SDKROOT="$(env -u SDKROOT xcrun --sdk macosx --show-sdk-path)"
+  export SDKROOT
+  echo "SDK: $SDKROOT"
+fi
 
 build_version() { otool -arch arm64 -l "$1" | awk '/cmd LC_BUILD_VERSION/ { found = 1 } found && /sdk|version/ { printf "%s %s ", $1, $2 } found && /version/ { exit }'; }
 cp kybern-keychain "$WORK/committed"

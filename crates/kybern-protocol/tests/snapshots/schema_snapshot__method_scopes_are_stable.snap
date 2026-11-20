@@ -92,6 +92,8 @@ expression: scopes
   - "orchestration:operate"
 - - projects.update
   - "orchestration:operate"
+- - projects.members.retry
+  - "orchestration:operate"
 - - projects.remove
   - "orchestration:operate"
 - - projects.scan_repos
@@ -412,6 +414,10 @@ expression: scopes
   - "machine:tools"
 - - peer.preferences.sync
   - "machine:settings"
+- - peer.groups.sync
+  - "machine:settings"
+- - peer.groups.bundle
+  - "machine:delegate"
 - - network.status
   - "network:read"
 - - network.set_enabled

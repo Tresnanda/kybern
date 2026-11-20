@@ -26,6 +26,9 @@ pub const WELL_KNOWN_PROOF_DOMAIN: &str = "kybern-wk-v1\0";
 /// Feature names a daemon lists in `DaemonInfo.features` and `peer.presence`.
 pub mod features {
     pub const PREFERENCES_SYNC_V1: &str = "preferences.sync.v1";
+    /// `peer.groups.sync` and `peer.groups.bundle`: group projects keep the same member repositories on every machine,
+    /// copied from another machine when this one can't clone them.
+    pub const GROUPS_SYNC_V1: &str = "groups.sync.v1";
     pub const OFFLINE_LISTS_V1: &str = "network.offline_lists.v1";
     pub const SPACES_SYNC_V1: &str = "spaces.sync.v1";
     pub const NETWORK_V1: &str = "network.v1";
@@ -87,7 +90,7 @@ pub mod features {
     pub const REMOVAL_PROOF_V1: &str = "removal.proof.v1";
 
     /// Every feature the network design names, in design order.
-    pub const ALL: [&str; 31] = [
+    pub const ALL: [&str; 32] = [
         NETWORK_V1,
         SPACES_SYNC_V1,
         RELAY_V1,
@@ -115,6 +118,7 @@ pub mod features {
         HARNESS_UPDATE_V1,
         GROUP_V1,
         PROVISION_V1,
+        GROUPS_SYNC_V1,
         SKILLS_SYNC_V1,
         PLUGINS_SYNC_V1,
         RELAY_PAGE_V1,

@@ -23,6 +23,7 @@ pub mod federated;
 pub mod files_push;
 pub mod forward;
 pub mod git_transfer;
+pub mod group_sync;
 pub mod harness_updates;
 pub mod item_edits;
 pub mod join;
@@ -264,6 +265,8 @@ pub struct Network {
     pub join: join::JoinState,
     store: Store,
     pub(crate) spaces_lock: tokio::sync::Mutex<()>,
+    /// Group member sync: its lock and the groups adding repositories right now.
+    pub(crate) group_sync: group_sync::Local,
     /// The daemon's token-revocation channel, so tokens revoked by a removal close their sockets.
     revoked: OnceLock<broadcast::Sender<uuid::Uuid>>,
     listen: Mutex<ListenInfo>,
@@ -350,6 +353,7 @@ impl Network {
             join: Default::default(),
             store: store.clone(),
             spaces_lock: Default::default(),
+            group_sync: Default::default(),
             revoked: OnceLock::new(),
             tailscale,
             timing,
@@ -436,6 +440,7 @@ impl Network {
             features::CLIPBOARD_V1.to_string(),
             features::GROUP_V1.to_string(),
             features::PROVISION_V1.to_string(),
+            features::GROUPS_SYNC_V1.to_string(),
             features::SKILLS_SYNC_V1.to_string(),
             features::PLUGINS_SYNC_V1.to_string(),
             features::REMOVAL_PROOF_V1.to_string(),

@@ -328,7 +328,14 @@ async fn dispatch_part_3(state: &AppState, ctx: &ConnectionCtx, method: &str, sl
         }
         ProjectsMembersStatus::NAME => {
             let p: ProjectsMembersStatusParams = parse(params)?;
-            ok(state.orchestrator.members_status(p.project_id).await?)
+            let mut status = state.orchestrator.members_status(p.project_id).await?;
+            status.pending = crate::network::group_sync::pending(state, p.project_id);
+            ok(status)
+        }
+        ProjectsMembersRetry::NAME => {
+            let p: ProjectsMembersRetryParams = parse(params)?;
+            crate::network::group_sync::retry(state, p.project_id, p.copy_large).await?;
+            ok(Empty {})
         }
         ProjectsMap::NAME => ok(state.orchestrator.projects_map(parse(params)?).await.map_err(bad)?),
         ProjectsInstructionsCreate::NAME => {
@@ -382,6 +389,8 @@ async fn dispatch_part_4(state: &AppState, _ctx: &ConnectionCtx, method: &str, s
             state.store.project_update(&project).map_err(internal)?;
             if let Some(members) = members {
                 state.store.project_set_members(p.project_id, &members).map_err(internal)?;
+                // The other machines' copies of this group follow at once, not on the next pass.
+                state.network.wake();
             }
             state.orchestrator.publish_projects();
             ok(state.store.project_get(p.project_id).map_err(internal)?.unwrap_or(project))
