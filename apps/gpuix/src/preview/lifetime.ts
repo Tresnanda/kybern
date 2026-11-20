@@ -1,12 +1,14 @@
 // A browser tab's lifetime (ADE-128). Closing a thread's last browser tab ends its page: the page, its history, relays,
-// tickets, web view and Fast choices go at once, so the next browser tab starts at the servers list. A forward that was opened
-// for a preview (the daemon marks it `origin: 'preview'`) is stopped `FORWARD_GRACE_MS` after no open browser shows it any
-// more; a browser that shows it again within that time keeps it. Manual forwards, and every forward of a daemon that does not
-// mark them (before 0.21.5), are never stopped here, and neither is a forward no browser of this app has shown.
-// Nothing here touches React, the daemon or the tab stores: `PreviewIntegration` passes them in.
+// tickets, web view and Fast choices go at once, so the next browser tab starts at the servers list.
+// A forward opened for a preview (the daemon marks it `origin: 'preview'`) has a lease on the daemon (#350): every
+// `FORWARD_KEEP_MS` this app renews (`ports.keep`) the preview forwards its own open browsers show, and once more as soon as a
+// forward starts being shown. The daemon closes a forward nobody renews, so a quit, crash, closed window or lost connection
+// never leaves one open, and a window never stops a forward that another window still shows. Manual forwards are never renewed
+// or stopped here. Nothing here touches React, the daemon or the tab stores: `PreviewIntegration` passes them in.
 import type { PortForward } from '../../../../packages/kybern-client/src/types.ts'
 
-export const FORWARD_GRACE_MS = 10_000
+/** How often the preview forwards this app shows are renewed; the daemon's lease is three times this (30 s). */
+export const FORWARD_KEEP_MS = 10_000
 
 /** What one thread's browser shows: the forwarded servers it names (machine and remote port) and the loopback ports it loads. */
 export interface PreviewUse { machines: { id: string; port: number }[]; ports: number[] }
@@ -52,42 +54,45 @@ export interface LifetimeDeps {
   uses(): readonly PreviewUse[]
   /** This machine's forwards (`ports.list`, kept current by `ports.changed`). */
   forwards(): readonly PortForward[]
-  stop(id: string): Promise<unknown>
+  /** Renew these preview forwards' leases (`ports.keep`). */
+  keep(ids: string[]): Promise<unknown>
   /** Calls `listener` when tabs, browsers or forwards change. */
   subscribe(listener: () => void): () => void
-  graceMs?: number
-  now?: () => number
+  keepMs?: number
   setTimer?: (run: () => void, ms: number) => unknown
   clearTimer?: (timer: unknown) => void
 }
 
+/** The preview forwards an open browser shows. */
+const shownForwards = (forwards: readonly PortForward[], uses: readonly PreviewUse[]): string[] =>
+  forwards.filter(forward => forward.origin === 'preview' && forwardInUse(forward, uses)).map(forward => forward.id)
+
 /** Start watching; returns the way to stop. Changes are handled together on the next tick, so a tab moved between groups (taken
  *  out of one and put in another in the same update) never reads as closed. */
 export function watchPreviewLifetime(deps: LifetimeDeps): () => void {
-  const grace = deps.graceMs ?? FORWARD_GRACE_MS, now = deps.now ?? Date.now
+  const every = deps.keepMs ?? FORWARD_KEEP_MS
   const setTimer = deps.setTimer ?? ((run, ms) => setTimeout(run, ms)), clearTimer = deps.clearTimer ?? (timer => clearTimeout(timer as ReturnType<typeof setTimeout>))
-  /** Preview forwards an open browser of this app has shown, and since when none shows them. */
-  const shown = new Set<string>(), unusedSince = new Map<string, number>()
+  /** The preview forwards shown at the last check, to renew one as soon as it starts being shown. */
+  let showing = new Set<string>()
   let pending: unknown, due: unknown, stopped = false
+  // A daemon before #350 has no `ports.keep`; its preview forwards close when idle.
+  const keep = (ids: string[]) => { if (ids.length) void deps.keep(ids).catch(() => {}) }
+  const renewSoon = () => { if (due === undefined && !stopped && showing.size) due = setTimer(renew, every) }
+  const renew = () => {
+    due = undefined
+    if (stopped) return
+    showing = new Set(shownForwards(deps.forwards(), deps.uses()))
+    keep([...showing])
+    renewSoon()
+  }
   const check = () => {
     pending = undefined
     if (stopped) return
     for (const threadId of deps.threads()) if (!deps.open(threadId)) deps.dispose(threadId)
-    const forwards = deps.forwards(), uses = deps.uses(), at = now()
-    const live = new Set(forwards.map(forward => forward.id))
-    for (const id of [...shown]) if (!live.has(id)) { shown.delete(id); unusedSince.delete(id) }
-    let next = Infinity
-    for (const forward of forwards) {
-      if (forward.origin !== 'preview') { shown.delete(forward.id); unusedSince.delete(forward.id); continue }
-      if (forwardInUse(forward, uses)) { shown.add(forward.id); unusedSince.delete(forward.id); continue }
-      if (!shown.has(forward.id)) continue
-      const since = unusedSince.get(forward.id) ?? at
-      unusedSince.set(forward.id, since)
-      if (at - since >= grace) { shown.delete(forward.id); unusedSince.delete(forward.id); void deps.stop(forward.id).catch(() => {}) }
-      else next = Math.min(next, since + grace)
-    }
-    if (due !== undefined) { clearTimer(due); due = undefined }
-    if (next !== Infinity) due = setTimer(() => { due = undefined; schedule() }, next - at)
+    const shown = shownForwards(deps.forwards(), deps.uses())
+    keep(shown.filter(id => !showing.has(id)))
+    showing = new Set(shown)
+    renewSoon()
   }
   const schedule = () => { if (pending === undefined && !stopped) pending = setTimer(check, 0) }
   const off = deps.subscribe(schedule)

@@ -106,7 +106,8 @@ export function PreviewChrome({ threadId }: { threadId: string }) {
         {environment.local && forwardFrom.length > 0 && <MenuItem id="forward" testId="preview-forward-open" label="Forward a port from…" icon={N.globe} onSelect={() => setPreview(threadId, { forwardOpen: true, forwardMachine: entry.machine?.id })} />}
         {ports.forwards.length > 0 && <>
           <MenuLabel>Forwarded ports</MenuLabel>
-          {ports.forwards.map(f => <MenuItem key={f.id} id={`port-${f.id}`} testId={`preview-port-${f.local_port}`} label={portLabel(f)} icon={N.x} onSelect={() => void ports.stop(f.id).catch(e => toastProblem(e, { action: 'stop the forward' }))} />)}
+          {/* A manual forward stays until it is stopped; a preview's closes by itself once no browser shows it (#350). */}
+          {ports.forwards.map(f => <MenuItem key={f.id} id={`port-${f.id}`} testId={`preview-port-${f.local_port}`} label={portLabel(f)} icon={N.x} trailing={f.origin === 'preview' ? undefined : <Tip label="Stays open until you stop it" size={14}><div testId={`preview-port-pinned-${f.local_port}`} style={{ display: 'flex', flexShrink: 0 }}><Icon source={ICONS.pin} size={14} color={t.textSecondary} /></div></Tip>} onSelect={() => void ports.stop(f.id).catch(e => toastProblem(e, { action: 'stop the forward' }))} />)}
           <MenuSeparator />
         </>}
         <MenuItem id="close" testId="preview-close" label="Close page" icon={N.x} onSelect={() => closePreview(threadId)} />

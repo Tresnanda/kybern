@@ -66,7 +66,7 @@ export interface OpenOptions { proxy?: boolean; retry?: boolean; suffix?: string
   /** The forward's Fast mode; `raw` is then its `https://localhost` address and `fast.plain` the one to show and copy. */ fast?: FastMode; trust?: { sha256: string; pem: string }
   /** Open through the thread machine's own preview ticket, not a forward (the forward could not be opened). */ ticketRoute?: boolean
   /** Who asks for the forward: "Forward a port…" opens a `manual` one that stays; every other open asks for a `preview` one,
-   *  which ends with the browser's last tab (ADE-128). */ origin?: PortForwardOrigin }
+   *  which closes once no browser renews it (#350, `lifetime.ts`). */ origin?: PortForwardOrigin }
 /** A server of a thread that runs on another machine: forwarded to this machine over the direct route when the machine is in
  * this machine's network (keep-alive TCP, no relay hop), else `undefined` and the page goes through that machine's ticket. */
 function threadServer(id: string, raw: string, options: OpenOptions): RemoteServer | undefined {

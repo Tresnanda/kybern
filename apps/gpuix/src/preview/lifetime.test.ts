@@ -3,18 +3,18 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { PortForward } from '../../../../packages/kybern-client/src/types.ts'
-import { FORWARD_GRACE_MS, forwardInUse, loopbackPort, previewUse, watchPreviewLifetime, type UseSource } from './lifetime.ts'
+import { FORWARD_KEEP_MS, forwardInUse, loopbackPort, previewUse, watchPreviewLifetime, type UseSource } from './lifetime.ts'
 
 const forward = (id: string, patch: Partial<PortForward> = {}): PortForward => ({ id, machine_id: 'instabox', machine_name: 'instabox', remote_port: 3000, local_port: 3000, connections: 0, created_at: '2026-11-03T10:00:00Z', origin: 'preview', ...patch })
 const shown = (port = 3000): UseSource => ({ entries: [{ address: `http://localhost:${port}`, url: `http://localhost:${port}`, machine: { id: 'instabox', port: 3000 } }] })
 
-/** A browser per thread, its tab, the daemon's forwards, and a clock the test moves. */
-function world(forwards: PortForward[]) {
+/** A browser per thread, its tab, the daemon's forwards, and a clock the test moves. `kept` lists each `ports.keep` call. */
+function world(forwards: PortForward[], options: { failKeep?: boolean } = {}) {
   let now = 0
   const timers = new Map<number, { at: number; run: () => void }>()
   let serial = 0
   const browsers = new Map<string, UseSource>(), tabs = new Set<string>(), listeners = new Set<() => void>()
-  const stopped: string[] = [], disposed: string[] = []
+  const kept: string[][] = [], disposed: string[] = []
   const changed = () => { for (const listener of listeners) listener() }
   const stopWatching = watchPreviewLifetime({
     threads: () => [...browsers.keys()],
@@ -22,9 +22,8 @@ function world(forwards: PortForward[]) {
     dispose: id => { disposed.push(id); browsers.delete(id) },
     uses: () => [...browsers.values()].map(previewUse),
     forwards: () => forwards,
-    stop: async id => { stopped.push(id); forwards = forwards.filter(f => f.id !== id); changed() },
+    keep: async ids => { kept.push(ids); if (options.failKeep) throw new Error('Method not found') },
     subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener) } },
-    now: () => now,
     setTimer: (run, ms) => { timers.set(++serial, { at: now + ms, run }); return serial },
     clearTimer: id => { timers.delete(id as number) },
   })
@@ -42,83 +41,79 @@ function world(forwards: PortForward[]) {
     open(id: string, source: UseSource = shown()) { tabs.add(id); browsers.set(id, source); changed() },
     close(id: string) { tabs.delete(id); changed() },
     setForwards(next: PortForward[]) { forwards = next; changed() },
-    advance, stopped, disposed, browsers, stopWatching,
+    advance, kept, disposed, browsers, stopWatching, timers,
   }
 }
 
-test('a preview forward stops 10 s after its last browser tab closes, and the page goes at once', () => {
+test('a shown preview forward is renewed at once, then every 10 s, and no longer once its last tab closes', () => {
   const w = world([forward('f1')])
   w.open('thread-a'); w.advance(0)
+  expect(w.kept).toEqual([['f1']])
+  w.advance(FORWARD_KEEP_MS - 1)
+  expect(w.kept).toEqual([['f1']])
+  w.advance(1)
+  expect(w.kept).toEqual([['f1'], ['f1']])
+  w.advance(FORWARD_KEEP_MS * 2)
+  expect(w.kept.length).toBe(4)
   w.close('thread-a'); w.advance(0)
   expect(w.disposed).toEqual(['thread-a'])
-  w.advance(FORWARD_GRACE_MS - 1)
-  expect(w.stopped).toEqual([])
-  w.advance(1)
-  expect(w.stopped).toEqual(['f1'])
+  w.advance(FORWARD_KEEP_MS * 3)
+  expect(w.kept.length).toBe(4)
+  // The app never stops a preview forward itself: the daemon's lease ends it.
+  expect(w.timers.size).toBe(0)
 })
 
-test('a forward is kept while another thread still shows it, and stops after that one closes too', () => {
+test('one renewal covers every shown forward, and a forward shown later is renewed when it appears', () => {
+  const w = world([forward('f1'), forward('f2', { remote_port: 5173, local_port: 5173 })])
+  w.open('thread-a'); w.advance(0)
+  expect(w.kept).toEqual([['f1']])
+  w.advance(4000)
+  w.open('thread-b', shown(5173)); w.advance(0)
+  expect(w.kept).toEqual([['f1'], ['f2']])
+  w.advance(FORWARD_KEEP_MS - 4000)
+  expect(w.kept.at(-1)).toEqual(['f1', 'f2'])
+})
+
+test('a forward is renewed while another thread still shows it', () => {
   const w = world([forward('f1')])
   w.open('thread-a'); w.open('thread-b'); w.advance(0)
-  w.close('thread-a'); w.advance(FORWARD_GRACE_MS * 2)
-  expect(w.stopped).toEqual([])
-  w.close('thread-b'); w.advance(FORWARD_GRACE_MS)
-  expect(w.stopped).toEqual(['f1'])
+  w.close('thread-a'); w.advance(FORWARD_KEEP_MS)
+  expect(w.kept.at(-1)).toEqual(['f1'])
+  const before = w.kept.length
+  w.close('thread-b'); w.advance(FORWARD_KEEP_MS * 2)
+  expect(w.kept.length).toBe(before)
 })
 
-test('a browser that shows the forward again within the grace period keeps it', () => {
+test('a browser that is opening the server already keeps its forward', () => {
   const w = world([forward('f1')])
-  w.open('thread-a'); w.advance(0)
-  w.close('thread-a'); w.advance(4000)
-  // A new tab opens the same server: while it opens, the server it is opening already counts.
-  w.open('thread-a', { entries: [], attemptedMachine: { id: 'instabox', port: 3000 } }); w.advance(FORWARD_GRACE_MS * 3)
-  expect(w.stopped).toEqual([])
-  w.close('thread-a'); w.advance(FORWARD_GRACE_MS)
-  expect(w.stopped).toEqual(['f1'])
+  w.open('thread-a', { entries: [], attemptedMachine: { id: 'instabox', port: 3000 } }); w.advance(0)
+  expect(w.kept).toEqual([['f1']])
 })
 
 test('a tab moved between groups in one update never reads as closed', () => {
   const w = world([forward('f1')])
   w.open('thread-a'); w.advance(0)
   // Taken out of one group and put in another before the next tick.
-  w.close('thread-a'); w.open('thread-a', w.browsers.get('thread-a')); w.advance(FORWARD_GRACE_MS * 2)
+  w.close('thread-a'); w.open('thread-a', w.browsers.get('thread-a')); w.advance(FORWARD_KEEP_MS)
   expect(w.disposed).toEqual([])
-  expect(w.stopped).toEqual([])
+  expect(w.kept).toEqual([['f1'], ['f1']])
 })
 
-test('a manual forward is never stopped, even after a preview showed it', () => {
-  const w = world([forward('f1', { origin: undefined })])
-  w.open('thread-a'); w.advance(0)
-  w.close('thread-a'); w.advance(FORWARD_GRACE_MS * 3)
-  expect(w.disposed).toEqual(['thread-a'])
-  expect(w.stopped).toEqual([])
-  const explicit = world([forward('f2', { origin: 'manual' })])
-  explicit.open('thread-a'); explicit.advance(0); explicit.close('thread-a'); explicit.advance(FORWARD_GRACE_MS * 3)
-  expect(explicit.stopped).toEqual([])
+test("manual forwards and an older daemon's forwards (no origin) are never renewed", () => {
+  const w = world([forward('f1', { origin: undefined }), forward('f2', { origin: 'manual' })])
+  w.open('thread-a'); w.advance(FORWARD_KEEP_MS * 3)
+  expect(w.kept).toEqual([])
+  // A preview forward made manual while its tab is open stops being renewed.
+  const made = world([forward('f3')])
+  made.open('thread-a'); made.advance(0)
+  made.setForwards([forward('f3', { origin: undefined })]); made.advance(FORWARD_KEEP_MS * 3)
+  expect(made.kept).toEqual([['f3']])
 })
 
-test('a preview forward made manual while its tab was open is kept', () => {
-  const w = world([forward('f1')])
-  w.open('thread-a'); w.advance(0)
-  w.setForwards([forward('f1', { origin: undefined })])
-  w.close('thread-a'); w.advance(FORWARD_GRACE_MS * 3)
-  expect(w.stopped).toEqual([])
-})
-
-test("an older daemon's forwards (no origin) are never stopped", () => {
-  const { origin: _origin, ...old } = forward('f1')
-  const w = world([old as PortForward])
-  w.open('thread-a'); w.advance(0)
-  w.close('thread-a'); w.advance(FORWARD_GRACE_MS * 3)
-  expect(w.stopped).toEqual([])
-})
-
-test('a preview forward no browser of this app showed is left alone', () => {
-  // Another client's preview, or one opened before this app started.
-  const w = world([forward('f1', { remote_port: 5173, local_port: 5173 })])
-  w.open('thread-a'); w.advance(0)
-  w.close('thread-a'); w.advance(FORWARD_GRACE_MS * 3)
-  expect(w.stopped).toEqual([])
+test('a daemon without ports.keep is asked again on the next renewal and nothing breaks', () => {
+  const w = world([forward('f1')], { failKeep: true })
+  w.open('thread-a'); w.advance(FORWARD_KEEP_MS)
+  expect(w.kept).toEqual([['f1'], ['f1']])
 })
 
 test('the agent opens a forward by its local address, and Fast mode loads its HTTPS port', () => {
@@ -129,19 +124,17 @@ test('the agent opens a forward by its local address, and Fast mode loads its HT
   expect(forwardInUse(fast, [previewUse({ entries: [{ address: 'https://example.com', url: 'https://example.com' }] })])).toBe(false)
   expect(loopbackPort('http://127.0.0.1:41000')).toBe(41000)
   expect(loopbackPort('/Users/me/index.html')).toBeNull()
-  // A page left within the grace period stops once the agent's preview tab closes.
   const w = world([agent])
   w.open('thread-a', { entries: [{ address: 'http://localhost:41000/app', url: 'http://localhost:41000/app' }] }); w.advance(0)
-  w.close('thread-a'); w.advance(FORWARD_GRACE_MS)
-  expect(w.stopped).toEqual(['f1'])
+  expect(w.kept).toEqual([['f1']])
 })
 
-test('stopping the watcher cancels a pending stop', () => {
+test('stopping the watcher stops the renewals', () => {
   const w = world([forward('f1')])
   w.open('thread-a'); w.advance(0)
-  w.close('thread-a'); w.advance(1000)
-  w.stopWatching(); w.advance(FORWARD_GRACE_MS * 2)
-  expect(w.stopped).toEqual([])
+  w.stopWatching(); w.advance(FORWARD_KEEP_MS * 2)
+  expect(w.kept).toEqual([['f1']])
+  expect(w.timers.size).toBe(0)
 })
 
 test('a closed browser tab leaves nothing for the next one: page, history, relay, ticket and Fast choice', async () => {
