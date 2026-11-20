@@ -1024,3 +1024,152 @@ async fn a_failing_agy_usage_reads_as_nothing() {
     kybern_protocol::process::write_executable(&binary, "#!/bin/sh\necho 'not json'\nexit 1\n").unwrap();
     assert!(read_agy_usage(Some(&binary), &std::collections::BTreeMap::new(), dir.path()).await.is_empty());
 }
+
+/// What a signed-out `agy 1.5.13 -p /usage --output-format json` writes (sign-in URL cut short).
+const AGY_SIGNED_OUT_STDERR: &str = "Authentication required. Please visit the URL to log in:\n  https://accounts.google.com/o/oauth2/auth?access_type=offline&state=x\n\nWaiting for authentication (timeout 60s)...\nOr, paste the authorization code here and press Enter:\n";
+const AGY_SIGNED_OUT_STDOUT: &str = r#"{"conversation_id":"","status":"ERROR","response":"","error":"authentication failed or timed out","duration_seconds":0,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0},"finished_reason":"error"}"#;
+
+#[test]
+fn a_signed_out_agy_is_told_from_its_output() {
+    use super::usage::agy_signed_out;
+    // The sign-in prompt arrives at once; the JSON error only after agy's own minute.
+    assert!(agy_signed_out(b"", AGY_SIGNED_OUT_STDERR.as_bytes()));
+    assert!(agy_signed_out(AGY_SIGNED_OUT_STDOUT.as_bytes(), b""));
+    assert!(!agy_signed_out(agy_usage_json().to_string().as_bytes(), b""));
+    assert!(!agy_signed_out(b"", b"dial tcp: lookup failed"));
+}
+
+/// A home with `agy`'s token file, expiring `hours` from now (negative: already expired).
+#[cfg(unix)]
+fn home_with_token(hours: i64) -> tempfile::TempDir {
+    let home = tempfile::tempdir().unwrap();
+    let dir = home.path().join(".gemini/antigravity-cli");
+    std::fs::create_dir_all(&dir).unwrap();
+    let expiry = (chrono::Utc::now() + chrono::Duration::hours(hours)).to_rfc3339();
+    std::fs::write(dir.join("oauth_creds.json"), json!({"access_token": "ya29.test", "expiry": expiry}).to_string()).unwrap();
+    home
+}
+
+/// A fake `agy` that logs each call and answers `/usage` from `$HOME/answer.json`, or
+/// with the signed-out prompt (and then waits, as the real one does) while `$HOME/signed-out` exists.
+#[cfg(unix)]
+fn fake_agy(dir: &std::path::Path, calls: &std::path::Path) -> std::path::PathBuf {
+    let binary = dir.join("agy");
+    kybern_protocol::process::write_executable(
+        &binary,
+        format!(
+            "#!/bin/sh\necho \"$HOME $*\" >> '{}'\n[ \"$*\" = '-p /usage --output-format json' ] || exit 3\n\
+             if [ -e \"$HOME/signed-out\" ]; then printf '%s' '{}' >&2; exec sleep 30; fi\ncat \"$HOME/answer.json\"\n",
+            calls.display(),
+            AGY_SIGNED_OUT_STDERR.replace('\'', "")
+        ),
+    )
+    .unwrap();
+    binary
+}
+
+#[cfg(unix)]
+fn env_for(home: &std::path::Path) -> std::collections::BTreeMap<String, String> {
+    std::collections::BTreeMap::from([("HOME".to_string(), home.display().to_string())])
+}
+
+#[cfg(unix)]
+fn call_count(calls: &std::path::Path) -> usize {
+    std::fs::read_to_string(calls).map(|log| log.lines().count()).unwrap_or(0)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[tokio::test]
+async fn an_expired_token_reads_the_limits_from_agy_instead_of_going_stale() {
+    use super::usage::read_account_usage;
+    let tools = tempfile::tempdir().unwrap();
+    let calls = tools.path().join("calls");
+    let binary = fake_agy(tools.path(), &calls);
+    let home = home_with_token(-1);
+    std::fs::write(home.path().join("answer.json"), agy_usage_json().to_string()).unwrap();
+    let (limits, plan) = read_account_usage(home.path(), Some(&binary), &env_for(home.path())).await.unwrap();
+    assert_eq!(limits.len(), 5);
+    assert_eq!(limits[0].name, "Gemini Models · 5-hour");
+    // `/usage` has no plan: the daemon keeps the last known one when this is `None`.
+    assert_eq!(plan, None);
+    assert_eq!(call_count(&calls), 1);
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[tokio::test]
+async fn a_token_kybern_cannot_find_reads_the_limits_from_agy_too() {
+    use super::usage::read_account_usage;
+    let tools = tempfile::tempdir().unwrap();
+    let calls = tools.path().join("calls");
+    let binary = fake_agy(tools.path(), &calls);
+    // The login lives in a keyring Kybern doesn't read: no token file at all.
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(home.path().join("answer.json"), agy_usage_json().to_string()).unwrap();
+    let (limits, _) = read_account_usage(home.path(), Some(&binary), &env_for(home.path())).await.unwrap();
+    assert_eq!(limits.len(), 5);
+    assert_eq!(call_count(&calls), 1);
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[tokio::test]
+async fn accounts_keep_their_own_agy_answers_and_pauses() {
+    use super::usage::read_account_usage;
+    use kybern_protocol::methods::LimitsStale;
+    let tools = tempfile::tempdir().unwrap();
+    let calls = tools.path().join("calls");
+    let binary = fake_agy(tools.path(), &calls);
+    let (first, second) = (home_with_token(-1), home_with_token(-1));
+    let mut one = agy_usage_json();
+    one.pointer_mut("/command/data/groups/0/buckets/1/remaining_fraction").unwrap().clone_from(&json!(0.5));
+    std::fs::write(first.path().join("answer.json"), one.to_string()).unwrap();
+    std::fs::write(second.path().join("answer.json"), agy_usage_json().to_string()).unwrap();
+    let (a, _) = read_account_usage(first.path(), Some(&binary), &env_for(first.path())).await.unwrap();
+    let (b, _) = read_account_usage(second.path(), Some(&binary), &env_for(second.path())).await.unwrap();
+    assert_ne!(a[0].used_percent, b[0].used_percent, "one account's cached answer must not serve the other");
+    assert_eq!(call_count(&calls), 2);
+    // A repeat inside a minute is served from the account's own cache.
+    read_account_usage(first.path(), Some(&binary), &env_for(first.path())).await.unwrap();
+    assert_eq!(call_count(&calls), 2);
+    // One account failing must not pause the other: `fake_agy` exits 3 for any other arguments,
+    // so a third account with no answer file fails, and the first two still read.
+    let third = tempfile::tempdir().unwrap();
+    let failed = read_account_usage(third.path(), Some(&binary), &env_for(third.path())).await.unwrap_err();
+    assert_eq!(failed.reason, LimitsStale::Unavailable);
+    let paused = read_account_usage(third.path(), Some(&binary), &env_for(third.path())).await.unwrap_err();
+    assert_eq!(paused.reason, LimitsStale::Throttled);
+    std::fs::remove_file(second.path().join("answer.json")).unwrap();
+    assert!(
+        read_account_usage(second.path(), Some(&binary), &env_for(second.path())).await.is_ok(),
+        "cached, and not paused by the third account"
+    );
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[tokio::test]
+async fn a_signed_out_agy_is_asked_once_and_remembered_until_a_login_appears() {
+    use super::usage::read_account_usage;
+    use kybern_protocol::methods::LimitsStale;
+    let tools = tempfile::tempdir().unwrap();
+    let calls = tools.path().join("calls");
+    let binary = fake_agy(tools.path(), &calls);
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(home.path().join("signed-out"), "").unwrap();
+    std::fs::write(home.path().join("answer.json"), agy_usage_json().to_string()).unwrap();
+    let started = std::time::Instant::now();
+    let first = read_account_usage(home.path(), Some(&binary), &env_for(home.path())).await.unwrap_err();
+    assert_eq!(first.reason, LimitsStale::SignedOut);
+    assert!(started.elapsed() < std::time::Duration::from_secs(6), "the sign-in prompt ends the wait, not agy's minute");
+    // `agy` opens a browser sign-in each time it runs signed out, so it is not started again.
+    let again = read_account_usage(home.path(), Some(&binary), &env_for(home.path())).await.unwrap_err();
+    assert_eq!(again.reason, LimitsStale::SignedOut);
+    assert_eq!(call_count(&calls), 1);
+    // Signing in leaves a token file (expired here, so `agy` is asked once more): the pause lifts.
+    std::fs::remove_file(home.path().join("signed-out")).unwrap();
+    let dir = home.path().join(".gemini/antigravity-cli");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("oauth_creds.json"), json!({"access_token": "ya29.test", "expiry": "2020-01-01T00:00:00Z"}).to_string())
+        .unwrap();
+    let (limits, _) = read_account_usage(home.path(), Some(&binary), &env_for(home.path())).await.unwrap();
+    assert_eq!(limits.len(), 5);
+    assert_eq!(call_count(&calls), 2);
+}

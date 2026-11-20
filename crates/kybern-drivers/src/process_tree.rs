@@ -293,6 +293,70 @@ pub(crate) async fn output(command: &mut tokio::process::Command) -> std::io::Re
     result
 }
 
+/// What a command wrote until it ended, or until it was stopped.
+pub(crate) struct Partial {
+    /// `None` when the command was stopped before it exited.
+    pub status: Option<std::process::ExitStatus>,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+/// Like [`output`], but keeps what the command wrote even when it has to be stopped:
+/// at `limit`, or as soon as `stop_early` says the output so far is enough. The stop
+/// is the same graceful one a cancelled [`output`] gets.
+pub(crate) async fn output_within(
+    command: &mut tokio::process::Command,
+    limit: Duration,
+    stop_early: impl Fn(&[u8], &[u8]) -> bool,
+) -> std::io::Result<Partial> {
+    use std::sync::{Arc, Mutex};
+    use tokio::io::AsyncReadExt;
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(false);
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command.spawn().map_err(|error| crate::binary::explain_spawn_error(error, command.as_std().get_program()))?;
+    let tree = ProcessTree::new(child.id().expect("spawned provider command"));
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let stderr = Arc::new(Mutex::new(Vec::new()));
+    fn pump<R: tokio::io::AsyncRead + Unpin + Send + 'static>(pipe: Option<R>, into: Arc<Mutex<Vec<u8>>>) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let Some(mut pipe) = pipe else { return };
+            let mut chunk = [0u8; 4096];
+            while let Ok(read) = pipe.read(&mut chunk).await {
+                if read == 0 {
+                    break;
+                }
+                into.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).extend_from_slice(&chunk[..read]);
+            }
+        })
+    }
+    let readers = [pump(child.stdout.take(), stdout.clone()), pump(child.stderr.take(), stderr.clone())];
+    let snapshot = |buffer: &Arc<Mutex<Vec<u8>>>| buffer.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+    let deadline = tokio::time::Instant::now() + limit;
+    let mut status = None;
+    loop {
+        tokio::select! {
+            exited = child.wait() => {
+                status = exited.ok();
+                break;
+            }
+            _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                if tokio::time::Instant::now() >= deadline || stop_early(&snapshot(&stdout), &snapshot(&stderr)) {
+                    break;
+                }
+            }
+        }
+    }
+    drop(tree);
+    // A stopped command closes its pipes with it; a grandchild that kept them open is not waited for.
+    for mut reader in readers {
+        if tokio::time::timeout(Duration::from_millis(500), &mut reader).await.is_err() {
+            reader.abort();
+        }
+    }
+    Ok(Partial { status, stdout: snapshot(&stdout), stderr: snapshot(&stderr) })
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;

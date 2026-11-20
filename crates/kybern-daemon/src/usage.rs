@@ -537,8 +537,8 @@ impl UsageMonitor {
             if entry.source != Some(LimitsSource::Live) {
                 entry.source = Some(LimitsSource::Session);
             }
-            // A running turn means the provider renewed its login; the next read can run.
-            if entry.stale.is_some_and(|(reason, _)| reason == LimitsStale::LoginRefresh) {
+            // A running turn means the provider has a login, renewed or new; the next read can run.
+            if entry.stale.is_some_and(|(reason, _)| matches!(reason, LimitsStale::LoginRefresh | LimitsStale::SignedOut)) {
                 entry.stale = None;
             }
         }
@@ -693,8 +693,9 @@ impl UsageMonitor {
                 .flatten()
                 .map(|usage| (usage.limits, usage.plan))
                 .ok_or_else(|| unavailable("Cursor reported no usage")),
-            // Read with the token `agy` already refreshed; an expired one reads as stale (`LoginRefresh`).
-            // 20 s: the HTTP reads, then `agy /usage` (2-3 s) when the summary has no Gemini group.
+            // The token `agy` already refreshed, else `agy /usage` (which renews it); no plan from the
+            // second, so `apply_read` keeps the last one.
+            // 20 s: the HTTP reads, then `agy /usage` (2-3 s) when the token is unusable or the summary has no Gemini group.
             ProviderKind::Antigravity => {
                 tokio::time::timeout(Duration::from_secs(20), kybern_drivers::antigravity::read_account_usage(home, binary.as_ref(), env))
                     .await
@@ -909,6 +910,9 @@ mod tests {
         assert_eq!(monitor.snapshot().providers[0].stale, Some(LimitsStale::LoginRefresh));
         monitor.observe(claude, &[limit("Current session", 20.0, Some(300), None)]);
         assert_eq!(monitor.snapshot().providers[0].stale, None, "a running turn renewed the login");
+        monitor.lock().providers.get_mut(&claude).unwrap().stale = Some((LimitsStale::SignedOut, None));
+        monitor.observe(claude, &[limit("Current session", 25.0, Some(300), None)]);
+        assert_eq!(monitor.snapshot().providers[0].stale, None, "a running turn means the provider is signed in");
 
         let retry_at = Utc::now() + chrono::Duration::minutes(5);
         monitor.lock().providers.get_mut(&claude).unwrap().stale = Some((LimitsStale::Throttled, Some(retry_at)));
@@ -916,6 +920,24 @@ mod tests {
         let snapshot = monitor.snapshot();
         assert_eq!(snapshot.providers[0].stale, Some(LimitsStale::Throttled), "a turn does not lift throttling");
         assert_eq!(snapshot.providers[0].retry_at, Some(retry_at));
+    }
+
+    #[test]
+    fn a_read_without_a_plan_keeps_the_last_known_plan_and_values_stay_when_signed_out() {
+        // `agy /usage` has no plan name: the plan from the earlier token read stays.
+        let mut entry = Entry::default();
+        apply_read(
+            &mut entry,
+            ProviderKind::Antigravity,
+            Ok((vec![limit("Gemini Models · 5-hour", 10.0, Some(300), None)], Some("Google AI Plus".into()))),
+        );
+        apply_read(&mut entry, ProviderKind::Antigravity, Ok((vec![limit("Gemini Models · 5-hour", 20.0, Some(300), None)], None)));
+        assert_eq!(entry.plan.as_deref(), Some("Google AI Plus"));
+        assert_eq!(entry.limits[0].used_percent, 20.0);
+        let signed_out = UsageUnread { reason: LimitsStale::SignedOut, retry_at: None, detail: "signed out".into() };
+        apply_read(&mut entry, ProviderKind::Antigravity, Err(signed_out));
+        assert_eq!(entry.stale, Some((LimitsStale::SignedOut, None)));
+        assert_eq!(entry.limits[0].used_percent, 20.0, "the last values stay");
     }
 
     #[tokio::test]

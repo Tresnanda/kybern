@@ -2477,8 +2477,12 @@ pub enum LimitsStale {
     LoginRefresh,
     /// The provider is limiting how often usage can be read.
     Throttled,
-    /// The read failed: not signed in, unreachable, or an unexpected answer.
+    /// The read failed: unreachable, or an unexpected answer.
     Unavailable,
+    /// The provider itself is signed out, so there is no login to read limits
+    /// with. Only signing in again fixes it. Absent from older daemons, whose
+    /// clients show no caption for a value they don't know.
+    SignedOut,
     /// Read from the cache file of an earlier daemon run, and no live read has
     /// succeeded since. Shown until the first one does.
     FromLastRun,

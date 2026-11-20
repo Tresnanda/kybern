@@ -3082,7 +3082,11 @@ export interface UsageLimitsParams {
 /** Where a provider's current limits came from. */
 export type LimitsSource = "live" | "session" | "stored";
 /** Why a provider's live read did not update its limits. */
-export type LimitsStale = "login_refresh" | "throttled" | "unavailable" | "from_last_run";
+/**
+ * Why a provider's live read left its limits as they were. `signed_out` (the provider itself has no login)
+ * is newer than the others: older daemons never send it, and a client that doesn't know it shows no reason.
+ */
+export type LimitsStale = "login_refresh" | "throttled" | "unavailable" | "signed_out" | "from_last_run";
 export interface ProviderLimits {
   provider: ProviderKind;
   limits: NonNullable<ProviderUsage["limits"]>;
