@@ -41,7 +41,7 @@ fn checkouts(project: &Project) -> Vec<PathBuf> {
 }
 
 /// The identity of one checkout, reusing the cached root commit when there is one.
-async fn identity_for(path: &std::path::Path, cached: Option<&RepoIdentity>) -> RepoIdentity {
+pub(crate) async fn identity_for(path: &std::path::Path, cached: Option<&RepoIdentity>) -> RepoIdentity {
     let repo = kybern_git::Repo::new(path);
     // A cached identity from before roots were listed has no `root_commits`, and a shallow clone
     // cached its cut point as a root: both are read again.

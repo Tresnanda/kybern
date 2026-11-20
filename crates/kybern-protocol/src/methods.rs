@@ -920,6 +920,16 @@ pub struct ProjectsUpdateParams {
     pub instructions_offer_dismissed: Option<bool>,
 }
 method!(ProjectsUpdate, "projects.update", Some(Scope::OrchestrationOperate), ProjectsUpdateParams, Project);
+/// Add now the repositories another machine added to this group (`PendingMember`), without waiting for the
+/// next try. Answers at once; the adding goes on in the background and `projects.changed` follows.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectsMembersRetryParams {
+    pub project_id: ProjectId,
+    /// Also copy repositories over the automatic size from another machine (the "Copy it" button).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub copy_large: bool,
+}
+method!(ProjectsMembersRetry, "projects.members.retry", Some(Scope::OrchestrationOperate), ProjectsMembersRetryParams, Empty);
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProjectsRemoveParams {
@@ -1033,6 +1043,22 @@ pub struct ProjectsMembersStatusResult {
     /// Entries the "Also copy into worktrees" picker offers, sorted by name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub copy_candidates: Vec<CopyCandidate>,
+    /// Repositories another machine added to this group that this machine is still adding, or could not add.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending: Vec<PendingMember>,
+}
+/// A repository another machine added to the same group, on its way to this machine.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PendingMember {
+    /// Where it goes inside the group folder.
+    pub path: String,
+    pub name: String,
+    /// The `origin` this machine clones from, without credentials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_url: Option<String>,
+    /// Set when the last try failed; absent while it is being added.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub problem: Option<crate::rpc::Problem>,
 }
 method!(
     ProjectsMembersStatus,
@@ -5006,6 +5032,33 @@ pub struct TaskItemsChangedNotification {
 
 method!(NetworkCachedLists, "network.cached_lists", Some(Scope::NetworkRead), NetworkCachedListsParams, NetworkCachedListsResult);
 method!(PeerPreferencesSync, "peer.preferences.sync", Some(Scope::MachineSettings), PeerSpacesSyncParams, PeerSpacesSyncResult);
+// Group project member lists (signed registers, `groups.sync.v1`): a repository added to or removed from a group
+// on one machine reaches that group on every machine.
+method!(PeerGroupsSync, "peer.groups.sync", Some(Scope::MachineSettings), PeerSpacesSyncParams, PeerSpacesSyncResult);
+/// One chunk of a git bundle of a group member this machine has, for a machine of the same group that couldn't
+/// clone it. Only repositories of a synced group are served.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerGroupBundleParams {
+    /// The group's lineage (`group:<key>`).
+    pub lineage: String,
+    pub repo: RepoIdentity,
+    /// Offset 0 makes the bundle anew; later offsets read the same file.
+    pub offset: u64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerGroupBundleResult {
+    /// The whole bundle's size and SHA-256.
+    pub total: u64,
+    pub sha256: String,
+    /// Standard base64 of this chunk.
+    pub data: String,
+    /// The ref the bundle carries the checked-out commit under.
+    pub ref_name: String,
+    /// The branch that commit is on, when the checkout is on one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+}
+method!(PeerGroupBundle, "peer.groups.bundle", Some(Scope::MachineDelegate), PeerGroupBundleParams, PeerGroupBundleResult);
 method!(PeerListSnapshot, "peer.lists.snapshot", Some(Scope::MachineTools), Empty, NetworkListSnapshot);
 method!(NetworkStatusMethod, "network.status", Some(Scope::NetworkRead), Empty, NetworkStatus);
 method!(NetworkSetEnabled, "network.set_enabled", Some(Scope::NetworkAdmin), NetworkSetEnabledParams, NetworkStatus);
@@ -5242,6 +5295,7 @@ registry!(
     ProjectsBrowse,
     ProjectsAdd,
     ProjectsUpdate,
+    ProjectsMembersRetry,
     ProjectsRemove,
     ProjectsScanRepos,
     ProjectsMembersStatus,
@@ -5402,6 +5456,8 @@ registry!(
     NetworkCachedLists,
     PeerListSnapshot,
     PeerPreferencesSync,
+    PeerGroupsSync,
+    PeerGroupBundle,
     NetworkStatusMethod,
     NetworkSetEnabled,
     NetworkAdd,

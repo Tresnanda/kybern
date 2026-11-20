@@ -157,6 +157,13 @@ pub fn members(r: &ProjectsMembersStatusResult, project: Option<&Project>) {
         let instructions = m.instructions.as_deref().map(|f| format!("  {f}")).unwrap_or_default();
         println!("  {:<24} {:<20} {state}{dirty}{instructions}", m.path, m.name);
     }
+    for m in &r.pending {
+        let state = match &m.problem {
+            Some(problem) => format!("not added: {}", problem.hint.as_deref().unwrap_or("try again with --retry")),
+            None => "adding from another machine".into(),
+        };
+        println!("  {:<24} {:<20} {state}", m.path, m.name);
+    }
     let shared: Vec<&str> =
         [("AGENTS.md", r.agents_md), ("CLAUDE.md", r.claude_md)].into_iter().filter(|(_, on)| *on).map(|(f, _)| f).collect();
     println!("shared instructions: {}", if shared.is_empty() { "none".to_string() } else { shared.join(", ") });

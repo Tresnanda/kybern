@@ -5409,7 +5409,7 @@ fn sentence_case(title: &str) -> String {
 
 /// What `kybern askpass` gets back for a prompt.
 pub(crate) use askpass::PromptReply;
-pub(crate) use groups::{member_dir, pr_repo_dir};
+pub(crate) use groups::{member_dir, pr_repo_dir, probe_member};
 
 /// The wait budget of the summoned-card tools (sign-in, question, permission, terminal).
 pub(crate) fn request_call_budget(name: &str, arguments: &serde_json::Value) -> Option<Duration> {

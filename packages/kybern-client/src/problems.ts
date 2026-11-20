@@ -87,6 +87,17 @@ function copyFor(problem: Problem, message: string, context: ProblemContext): Co
   const goal = context.goal ?? context.action
   const plain = plainSentence(message)
   const subject = problem.subject
+  // A repository another machine added to a group, which this machine couldn't clone: the daemon words it,
+  // since only it knows the repository, its host and why.
+  if (subject === "group_member")
+    return {
+      title: problem.title ?? "Couldn't add a repository to this group",
+      body: plainSentence(problem.hint ?? "") ?? "Try again. If it keeps happening, copy the details and report them.",
+      // "Copy it (850 MB)" carries `copy_large`; otherwise Try again.
+      action: problem.action?.id === "retry" ? { id: "retry", label: problem.action.label, ...(problem.action.params ? { params: problem.action.params as { [key: string]: JsonValue } } : {}) } : retry("Try again"),
+      secondary: copyDetail,
+      retryable: true,
+    }
   switch (problem.kind) {
     case "tool_missing": {
       if (!subject) {

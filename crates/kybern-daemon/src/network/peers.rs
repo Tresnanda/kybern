@@ -852,6 +852,8 @@ pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, para
     let network = &state.network;
     match method {
         PeerPreferencesSync::NAME => ok(super::preferences::serve(state, parse(params)?).await?),
+        PeerGroupsSync::NAME => ok(super::group_sync::serve(state, parse(params)?).await?),
+        PeerGroupBundle::NAME => ok(super::group_sync::serve_bundle(state, &link.machine_id, parse(params)?).await?),
         PeerItemEdit::NAME => super::item_edits::serve(state, &link.machine_id, parse(params)?),
         PeerListSnapshot::NAME => ok(super::list_cache::local(state)?),
         PeerSpacesSync::NAME => ok(super::spaces::serve(state, link, parse(params)?).await?),
@@ -1464,10 +1466,14 @@ pub async fn run(state: AppState) {
         let spaces = async {
             super::list_cache::refresh(&state).await;
             super::spaces::reconcile(&state).await;
+            // Group members twice: this machine's own edits go out, then what the others sent is applied.
+            super::group_sync::reconcile(&state).await;
             for link in network.peers.links() {
                 super::spaces::sync(&state, &link, false).await;
                 super::preferences::sync(&state, &link).await;
+                super::group_sync::sync(&state, &link).await;
             }
+            super::group_sync::reconcile(&state).await;
         };
         if tokio::time::timeout(SPACES_LIMIT, spaces).await.is_err() {
             tracing::warn!(target: SESSION_TARGET, "syncing spaces with the other machines ran past its limit; going on");

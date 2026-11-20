@@ -102,3 +102,35 @@ test("plainSentence keeps sentences and drops method-prefixed and one-word messa
   assert.equal(plainSentence("threads.rename: save thread: database is locked"), null);
   assert.equal(plainSentence("boom"), null);
 });
+
+test("a repository another machine added to a group keeps the daemon's wording and offers Try again", () => {
+  const problem = {
+    kind: "signed_out",
+    subject: "group_member",
+    title: "Couldn't add docs to this group here",
+    hint: "Sign in to github.com with git on this machine, then try again.",
+    action: { id: "retry", label: "Try again", params: { project_id: "p" } },
+    detail: "git@github.com: Permission denied (publickey).",
+    retryable: true,
+  };
+  const view = describeProblem({ message: "", data: { problem } }, { action: "add the repository" });
+  assert.equal(view.title, "Couldn't add docs to this group here");
+  assert.equal(view.body, "Sign in to github.com with git on this machine, then try again.");
+  assert.equal(view.action?.id, "retry");
+  assert.equal(view.detail, "git@github.com: Permission denied (publickey).");
+  assert.doesNotMatch(view.title, JARGON);
+});
+
+test("a large group repository offers its own copy button", () => {
+  const problem = {
+    kind: "conflict",
+    subject: "group_member",
+    title: "Couldn't add assets to this group here",
+    hint: "It's 850 MB, so Kybern didn't copy it from another machine by itself.",
+    action: { id: "retry", label: "Copy it (850 MB)", params: { project_id: "p", copy_large: true } },
+    retryable: true,
+  };
+  const view = describeProblem({ message: "", data: { problem } }, { action: "add the repository" });
+  assert.equal(view.action?.label, "Copy it (850 MB)");
+  assert.equal(view.action?.params?.copy_large, true);
+});

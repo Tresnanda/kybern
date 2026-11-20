@@ -1,6 +1,6 @@
 // Walks every group-project surface in the real window (`verify.fixture.tsx`) and saves screenshots:
 //
-//   bun src/groups/verify.ts [light|dark|both] [variant…]     # variants: missing, slow, empty, git (one run each)
+//   bun src/groups/verify.ts [light|dark|both] [variant…]     # variants: missing, slow, empty, git, pending (one run each)
 //   bun src/groups/verify.ts down                             # stop the scratch daemon and delete its folder
 //
 // A scratch daemon (the installed kybernd, data under …/ade-gpuix-scratch/groups-<slot>) holds two single projects and
@@ -99,6 +99,12 @@ for (const mode of modes) {
       await wait('group-sheet'); await Bun.sleep(300)
       if (variants.includes('git')) { await click('group-candidate-.'); await click('group-candidate-api') }
       await shot('02-sheet')
+      continue
+    }
+    if (variants.includes('pending')) {
+      await click(`project-${state.groupProjectId}`, { button: 2 }); await click('project-menu-repositories')
+      await wait('repositories-pending-docs'); await wait('repositories-pending-problem-billing'); await shot('03-repositories')
+      await click('repositories-done'); await Bun.sleep(400)
       continue
     }
     if (variants.includes('missing')) {

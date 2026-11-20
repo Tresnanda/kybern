@@ -1906,3 +1906,32 @@ there is no supported custom preference to apply live. Appearance remains local.
 The register namespace admits at most 65 names, including retained tombstones;
 new names at capacity are left local rather than evicting deletion clocks and
 resurrecting deleted files. Existing names continue syncing at capacity.
+
+## Group member sync (groups.sync.v1)
+
+A repository added to a group project on one machine is cloned into that group on every other machine that
+has it; one removed is removed there too, and its folder stays on disk. `network/group_sync.rs` keeps the member
+lists as signed registers on their own exchange, `peer.groups.sync`, with the Spaces signature domain and
+Lamport ordering (the preference files' shape, with a digest round so equal sets cost one small call).
+
+- **Lineage.** One `group` register per lineage lists the group keys (sorted repository identities, the key
+  clients merge projects by) the group has had. A machine whose group equals any of them joins that lineage,
+  so one that was offline across several edits still catches up. A group no lineage knows starts one named
+  after its key, so machines with the same group start the same one. A group with a different set of
+  repositories is never joined: nothing is cloned into a group that was not the same group.
+- **Members.** One `member` register per repository, last writer wins per repository, so concurrent adds on two
+  machines both survive. Each machine keeps the identities it last synced (`base`, in `meta`); its difference
+  to the group now is this machine's edit, written out; the registers' difference to the group is the others'
+  edits, applied. A group whose members changed between reading and locking waits for the next pass.
+- **Adding** clones from the member's `origin` with this machine's own git credentials, in the background.
+  When that fails (no access, no remote, a transport-helper URL), it copies the repository from a machine of
+  the same lineage that has it: `peer.groups.bundle` (`machine:delegate`, as provisioning) serves 512 KiB chunks
+  of a full bundle of the checked-out commit, only for members of a synced group; the receiver checks the
+  SHA-256, makes the folder a repository on the same branch and sets `origin` when the URL is a plain remote.
+  Logins never move. Up to 200 MB this happens by itself; above it the `Problem` offers "Copy it (N MB)"
+  (`copy_large` on `projects.members.retry`), up to the 2 GiB provisioning cap. Failures carry a `Problem`
+  (`subject: group_member`) and retry after 30 minutes or on `projects.members.retry`;
+  `projects.members.status` lists them under `pending`. A group never shrinks below two members by sync, and
+  the group folder's own repository (`.`) is never added.
+- Groups that already differed before both machines ran this version are different lineages; one Add to
+  machine (provisioning) brings them together.

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.25.3
+
+<!-- kybern-release-title: Group projects stay the same on every machine -->
+<!-- kybern-release-summary: Add a repository to a group project on one machine and every machine with that group gets it too. -->
+
+- Group projects stay the same on every machine. Add a repository to a group on one machine and every other machine with that group clones it into its own group folder; remove one and it leaves the group everywhere, with its folder left on disk. Every machine needs 0.25.3.
+- A machine that can't clone the repository (no access, or no remote yet) copies it from a machine that has it. Repositories over 200 MB wait for **Copy it** in **Repositories**. Logins never leave their machine.
+- **Repositories** shows repositories on their way from another machine, and any that couldn't be added with what to do and **Try again**. Also `kybern projects members <project> --retry`.
+
 ## 0.25.2
 
 <!-- kybern-release-title: Attached files reach the agent -->

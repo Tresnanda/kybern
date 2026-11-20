@@ -333,6 +333,8 @@ export const GROUP_COPY = {
   removed: (name: string) => `Removed ${name} from the group.`,
   undo: "Undo",
   locate: "Locate…",
+  /** A repository another machine added to the group, being cloned here. */
+  addingHere: "Adding…",
   done: "Done",
   addRepositoriesTitle: (projectName: string) => `Add repositories to ${projectName}`,
   addRepositoriesBody: (folder: string) => `Repositories in ${folder} that aren’t in the group yet. New chats get them; existing chats don’t.`,
