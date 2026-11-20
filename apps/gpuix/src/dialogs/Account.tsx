@@ -20,10 +20,12 @@ import {
   supportsBrowserLogin,
   supportsDeviceCode,
   supportsPasteCode,
-  withoutSignIn,
   type AccountColor,
   type SheetStep,
 } from '../shared/lib/accounts.ts'
+import { requestAntigravitySignIn } from '../antigravity/notice.ts'
+import { showDialog } from './store.ts'
+import { accountPickerOptions, type AccountPickerOption } from './accountPicker.ts'
 import { PROVIDER_NAMES } from '../shared/lib/providerUsage.ts'
 import type { AccountLoginMode, ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
@@ -79,9 +81,11 @@ export function Account({ close, provider, instance }: { close: () => void; prov
   // Signing in again: opened for an account, or "Sign in again to Work" from the duplicate step.
   const reauthInstance = login?.instance ?? instance
   const reauth = !!reauthInstance
-  // Antigravity and Grok Build have one account per machine: no pick step, no name or colour, and nothing to add.
+  // Antigravity and Grok Build have one account per machine: no name or colour, and nothing to add.
+  const directSingle = provider === 'antigravity' || provider === 'grok-build'
   const single = (kind ?? provider) === 'antigravity' || (kind ?? provider) === 'grok-build'
-  const accounts = useAccounts(kind)
+  const allAccounts = useAccounts()
+  const accounts = useMemo(() => (kind ? allAccounts.filter((account) => account.provider.kind === kind) : allAccounts), [allAccounts, kind])
   const { settings } = useSettings()
   const environment = activeEnvironment()
   const remote = !environment.local
@@ -110,7 +114,7 @@ export function Account({ close, provider, instance }: { close: () => void; prov
   const forcedDefault = namedCount === 0 && !providerSettings?.default_account
   const defaultOn = forcedDefault || makeDefault
 
-  const step: SheetStep | null = failure ? 'error' : api.legacyTerminal ? 'terminal' : (instance || single) && !login ? null : stepFor(login)
+  const step: SheetStep | null = failure ? 'error' : api.legacyTerminal ? 'terminal' : (instance || directSingle) && !login ? null : stepFor(login)
   const verifying = login?.phase === 'verifying'
   const modeFor = (k: ProviderKind): AccountLoginMode => initialLoginMode(k, remote)
 
@@ -118,18 +122,18 @@ export function Account({ close, provider, instance }: { close: () => void; prov
     if (!kind) return
     const mode = patch.mode ?? modeFor(kind)
     if (reauth && legacy) { await api.signInLegacy({ kind, instance: reauthInstance! }); return }
-    await api.start({ kind, mode, ...(reauth ? { instance: reauthInstance } : {}), ...(!reauth && folder.trim() ? { directory: folder.trim() } : {}) })
+    await api.start({ kind, mode, ...(reauth ? { instance: reauthInstance } : {}), ...(!reauth && !single && folder.trim() ? { directory: folder.trim() } : {}) })
   }
 
-  // Signing in again starts straight away, with no pick step.
+  // Signing in again (or opened directly for a single-account agent) starts straight away, with no pick step.
   const started = useRef(false)
   useEffect(() => {
-    if (!(reauth || single) || !kind || started.current) return
+    if (!(reauth || directSingle) || !kind || started.current) return
     started.current = true
     void begin()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-  useEffect(() => { if ((instance || single) && provider && !kind) setKind(provider) }, [instance, provider, kind, single])
+  useEffect(() => { if ((instance || directSingle) && provider && !kind) setKind(provider) }, [instance, provider, kind, directSingle])
 
   const finish = async (): Promise<boolean> => {
     const client = getClient()
@@ -191,17 +195,28 @@ export function Account({ close, provider, instance }: { close: () => void; prov
   const showTerminal = () => void api.restart({ mode: 'terminal' })
   const tryAgain = () => (reauth && legacy ? begin() : api.retry())
 
+  const pickerOptions = useMemo(() => accountPickerOptions(providers, allAccounts, legacy), [providers, allAccounts, legacy])
+  const selectedOption = kind ? pickerOptions.find((p) => p.kind === kind) : undefined
+  const startPicked = () => {
+    if (kind === 'antigravity') {
+      requestAntigravitySignIn(() => showDialog({ kind: 'account', provider: 'antigravity' }))
+      return
+    }
+    void begin()
+  }
+
   let body: ReactNode
   let footer: ReactNode
-  if (step === 'pick' || (!step && !reauth)) {
-    const ready = !!kind && providers.some((p) => p.kind === kind && p.available)
-    // Antigravity signs in with `agy` on its own sheet; omp has no account (it runs on the providers set up inside it).
-    body = <PickStep providers={providers.filter((p) => p.kind !== 'antigravity' && p.kind !== 'grok-build' && !withoutSignIn(p.kind))} kind={kind} onKind={(next) => {
-      const status = providers.find((p) => p.kind === next)
-      if (status && !status.available) { setNav({ settingsOpen: true }); close(); void import('../settings/SettingsScreen.tsx').then((m) => m.openSettingsTab('agents')); return }
+  if (step === 'pick' || (!step && !reauth && !directSingle)) {
+    const ready = !!selectedOption && selectedOption.available && !selectedOption.disabled
+    // omp has no account (it runs on the providers set up inside it); Antigravity is listed and disabled once signed in.
+    body = <PickStep providers={pickerOptions} kind={selectedOption?.disabled ? undefined : kind} onKind={(next) => {
+      const option = pickerOptions.find((p) => p.kind === next)
+      if (option?.disabled) return
+      if (option && !option.available) { setNav({ settingsOpen: true }); close(); void import('../settings/SettingsScreen.tsx').then((m) => m.openSettingsTab('agents')); return }
       setKind(next)
     }} folder={folder} onFolder={setFolder} advancedOpen={advancedOpen} onAdvancedOpen={setAdvancedOpen} remote={remote} />
-    footer = <><Button size="lg" testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button><Button size="lg" testId="account-start" variant="primary" disabled={!ready || starting} onClick={() => void begin()}>{kind && supportsBrowserLogin(kind) && !remote ? 'Continue in browser' : 'Continue'}</Button></>
+    footer = <><Button size="lg" testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button><Button size="lg" testId="account-start" variant="primary" disabled={!ready || starting} onClick={startPicked}>{kind && supportsBrowserLogin(kind) && !remote ? 'Continue in browser' : 'Continue'}</Button></>
   } else if (step === 'waiting' && login && kind) {
     const url = loginHost(login.url)
     const canCode = supportsPasteCode(kind) || supportsDeviceCode(kind)
@@ -375,7 +390,7 @@ function ColorSwatches({ value, onChange }: { value: AccountColor; onChange: (co
   </div>
 }
 
-function PickStep(props: { providers: { kind: ProviderKind; display_name: string; available: boolean }[]; kind: ProviderKind | undefined; onKind: (kind: ProviderKind) => void; folder: string; onFolder: (value: string) => void; advancedOpen: boolean; onAdvancedOpen: (open: boolean) => void; remote: boolean }) {
+export function PickStep(props: { providers: AccountPickerOption[]; kind: ProviderKind | undefined; onKind: (kind: ProviderKind) => void; folder: string; onFolder: (value: string) => void; advancedOpen: boolean; onAdvancedOpen: (open: boolean) => void; remote: boolean }) {
   const t = useTheme()
   const c = useControls()
   const { providers, kind, remote } = props
@@ -390,16 +405,19 @@ function PickStep(props: { providers: { kind: ProviderKind; display_name: string
     <Body gap={16} top={4}>
       <div testId="account-provider" role="radiogroup" aria-label="Agent" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
         {providers.map((p) => {
-          const selected = p.kind === kind
-          return <div key={p.kind} testId={`account-provider-${p.kind}`} role="radio" aria-checked={selected} tabIndex={0} onClick={() => props.onKind(p.kind)} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') props.onKind(p.kind) }}
-            style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 8, width: TILE, minWidth: 0, padding: 12, borderWidth: 1, borderColor: selected ? c.accent : t.border, borderRadius: 12, backgroundColor: selected ? c.optionSelected : 'transparent', opacity: p.available ? 1 : 0.55, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
+          const disabled = !!p.disabled
+          const selected = !disabled && p.kind === kind
+          const activate = () => { if (!disabled) props.onKind(p.kind) }
+          return <div key={p.kind} testId={`account-provider-${p.kind}`} role="radio" aria-checked={selected} aria-disabled={disabled || undefined} tabIndex={disabled ? -1 : 0} onClick={disabled ? undefined : activate} onKeyDown={disabled ? undefined : (e) => { if (e.key === 'enter' || e.key === 'space') activate() }}
+            style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 8, width: TILE, minWidth: 0, padding: 12, borderWidth: 1, borderColor: selected ? c.accent : t.border, borderRadius: 12, backgroundColor: selected ? c.optionSelected : disabled ? c.disabled.bg : 'transparent', opacity: !p.available || disabled ? 0.55 : 1, cursor: disabled ? 'default' : 'pointer', ...(disabled ? {} : { hover: { backgroundColor: t.buttonSecondaryHover } }) }}>
             <ProviderMark kind={p.kind} size={18} />
             <Label color={t.text} size={14} lineHeight={21} weight={500} truncate>{p.display_name}</Label>
             {!p.available && <Label color={t.textSecondary} size={13} lineHeight={19.5} style={{ marginTop: -6 }}>Not installed</Label>}
+            {p.available && p.disabledReason && <Label color={t.textSecondary} size={13} lineHeight={19.5} style={{ marginTop: -6, width: '100%' }}>{p.disabledReason}</Label>}
           </div>
         })}
       </div>
-      {kind && kind !== 'opencode' && kind !== 'pi' && <div style={{ display: 'flex', flexDirection: 'column' }}>
+      {kind && kind !== 'opencode' && kind !== 'pi' && kind !== 'antigravity' && <div style={{ display: 'flex', flexDirection: 'column' }}>
         <Button testId="account-advanced" variant="ghost" size="sm" label="Advanced" trailing={<Chevron open={props.advancedOpen} size={12} color={t.textSecondary} />} onClick={() => props.onAdvancedOpen(!props.advancedOpen)} style={{ alignSelf: 'flex-start', marginLeft: -8 }}>Advanced</Button>
         {props.advancedOpen && <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 12, paddingBottom: 4 }}>
           <Label color={t.text} size={14} lineHeight={21} weight={500}>Folder</Label>
