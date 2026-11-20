@@ -6,17 +6,26 @@ const forward = (id: string, local: number, at = '2026-10-29T10:00:00Z'): PortFo
 
 function fake(initial: PortForward[]) {
   const handlers = new Set<(params: unknown) => void>()
-  const calls: string[] = []
+  const calls: string[] = [], kept: string[][] = []
   const client = {
-    call: async (method: string, params: { id?: string }) => {
+    call: async (method: string, params: { id?: string; ids?: string[] }) => {
       calls.push(method)
+      if (method === 'ports.keep') { kept.push(params.ids ?? []); return { kept: params.ids ?? [] } }
       if (method === 'ports.stop') return { forwards: initial.filter((f) => f.id !== params.id) }
       return { forwards: initial }
     },
     onNotification: (_method: string, handler: (params: unknown) => void) => { handlers.add(handler); return () => { handlers.delete(handler) } },
   } as unknown as PortsClient
-  return { client, handlers, calls }
+  return { client, handlers, calls, kept }
 }
+
+test('the store renews preview forwards with ports.keep', async () => {
+  const { client, kept } = fake([forward('a', 4000)])
+  const store = createPortsStore(client)
+  await store.keep(['a', 'b'])
+  expect(kept).toEqual([['a', 'b']])
+  store.dispose()
+})
 
 test('the store reads the list, follows ports.changed and stops a forward', async () => {
   const { client, handlers, calls } = fake([forward('b', 4001, '2026-10-29T11:00:00Z'), forward('a', 4000)])

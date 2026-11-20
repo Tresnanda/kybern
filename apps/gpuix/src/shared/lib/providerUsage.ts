@@ -185,11 +185,19 @@ export function staleReason(entry: Pick<ProviderLimits, "provider" | "stale" | "
     }
     case "unavailable":
       return "Couldn’t read the latest limits."
+    case "signed_out":
+      return `Sign in to ${name} to update limits.`
     case "from_last_run":
       return "From the last time Kybern ran."
     default:
       return null
   }
+}
+
+/** The fix for a signed-out provider: the `sign_in` problem action (the account dialog, for that account when it is one). Undefined for every other state, which have no button. */
+export function staleFix(entry: Pick<ProviderLimits, "provider" | "stale" | "instance">): { id: string; label: string; params: { provider: string; instance?: string } } | undefined {
+  if (entry.stale !== "signed_out") return undefined
+  return { id: "sign_in", label: "Sign in", params: { provider: entry.provider, ...(entry.instance ? { instance: entry.instance } : {}) } }
 }
 
 /** "Last updated 2 h ago. Waiting for Claude Code to refresh its sign-in.": the caption of a stale ring. */

@@ -154,7 +154,7 @@ export function resetsLabel(resetsAt: number | null, now: number): string | null
 }
 
 /** Why the numbers may be old, in plain words; null when they are live. */
-export function staleLabel(stale: LimitsStale | undefined): string | null {
+export function staleLabel(stale: LimitsStale | undefined, signIn?: { agent: string; computer?: string | null }): string | null {
   switch (stale) {
     case "login_refresh":
       return "Sign in again on your computer to update these.";
@@ -162,6 +162,9 @@ export function staleLabel(stale: LimitsStale | undefined): string | null {
       return "Updated less often for now.";
     case "unavailable":
       return "Couldn't read the latest numbers.";
+    case "signed_out":
+      // The phone never signs an agent in remotely: it says where to do it.
+      return `Sign in to ${signIn?.agent ?? "the agent"} on ${signIn?.computer || "your computer"} to update limits.`;
     case "from_last_run":
       return "From the last run.";
     default:

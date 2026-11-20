@@ -1,13 +1,14 @@
 // Forwarded ports (U3): the forwards this machine's daemon holds, read once and kept current by `ports.changed`. The Preview
 // panel's More menu lists them and stops one on a click.
 import { useEffect, useState } from 'react'
-import { PORTS_CHANGED_NOTIFICATION, type PortForward, type PortsListResult } from '../../../../packages/kybern-client/src/types.ts'
+import { PORTS_CHANGED_NOTIFICATION, type PortForward, type PortsKeepResult, type PortsListResult } from '../../../../packages/kybern-client/src/types.ts'
 import { localClient } from '../state.ts'
 
 /** The slice of a client the store needs. */
 export interface PortsClient {
   call(method: 'ports.list', params: Record<string, never>): Promise<PortsListResult>
   call(method: 'ports.stop', params: { id: string }): Promise<PortsListResult>
+  call(method: 'ports.keep', params: { ids: string[] }): Promise<PortsKeepResult>
   onNotification(method: string, handler: (params: unknown) => void): () => void
 }
 
@@ -15,6 +16,8 @@ export interface PortsStore {
   get(): PortForward[]
   subscribe(listener: () => void): () => void
   stop(id: string): Promise<void>
+  /** Renew the leases of preview forwards (`lifetime.ts`). */
+  keep(ids: string[]): Promise<void>
   dispose(): void
 }
 
@@ -35,6 +38,7 @@ export function createPortsStore(client: PortsClient): PortsStore {
     get: () => forwards,
     subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener) } },
     stop: async (id) => { const result = await client.call('ports.stop', { id }); if (!disposed) set(result.forwards) },
+    keep: async (ids) => { await client.call('ports.keep', { ids }) },
     dispose: () => { disposed = true; off(); listeners.clear() },
   }
 }

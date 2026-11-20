@@ -1389,12 +1389,7 @@ async fn dispatch_part_15(state: &AppState, ctx: &ConnectionCtx, method: &str, s
 
 /// The machine utilities (M4): sending files, forwarding ports. Its own slice so a lane that adds methods
 /// elsewhere does not touch it.
-async fn dispatch_part_utilities(
-    state: &AppState,
-    _ctx: &ConnectionCtx,
-    method: &str,
-    slot: &mut Option<Value>,
-) -> Result<Value, RpcError> {
+async fn dispatch_part_utilities(state: &AppState, ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
     let params = slot.take().unwrap_or_default();
     match method {
         FilesSend::NAME => ok(crate::network::files_push::send(state, parse(params)?)?),
@@ -1405,8 +1400,9 @@ async fn dispatch_part_utilities(
         PortsList::NAME => ok(crate::network::ports::list(state)),
         PortsStop::NAME => {
             let p: PortsStopParams = parse(params)?;
-            ok(crate::network::ports::stop(state, p.id)?)
+            ok(crate::network::ports::stop(state, p.id, &ctx.principal.label)?)
         }
+        PortsKeep::NAME => ok(crate::network::ports::keep(state, parse(params)?)),
         _ => {
             *slot = Some(params);
             Err(RpcError::method_not_found(method))

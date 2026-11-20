@@ -466,7 +466,7 @@ export function ContextMenu({
   )
 }
 
-/** A menu row: optional 16px icon, label, trailing shortcut or detail. */
+/** A menu row: optional 16px icon, label, trailing shortcut, detail or `trailing` node (a status glyph with its own `Tip`). */
 export function MenuItem({
   id,
   icon,
@@ -481,11 +481,14 @@ export function MenuItem({
   keepOpen = false,
   onSelect,
   testId,
+  trailing,
 }: {
   id: string
   icon?: string
   iconNode?: ReactNode
   label: string
+  /** After the label and detail: a small status glyph. It keeps the pointer, so a `Tip` around it can say what it means. */
+  trailing?: ReactNode
   /** A second, muted line that says what the item does (the Projects "+" menu); the icon then sits on the first line. */
   description?: string
   shortcut?: string
@@ -555,6 +558,7 @@ export function MenuItem({
           {shortcutLabel(shortcut)}
         </Label>
       )}
+      {trailing}
       {checked !== undefined && (
         <div style={{ display: 'flex', width: 12, height: 12, flexShrink: 0 }}>
           {checked && <Icon source={N.check} size={12} color={t.text} />}

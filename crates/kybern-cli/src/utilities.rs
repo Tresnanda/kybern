@@ -53,6 +53,12 @@ pub enum PortsCmd {
         /// A forward id from `kybern ports list`.
         id: uuid::Uuid,
     },
+    /// Renew preview forwards for 30 seconds, the way an app that shows them does.
+    Keep {
+        /// Forward ids from `kybern ports list`.
+        #[arg(required = true)]
+        ids: Vec<uuid::Uuid>,
+    },
 }
 
 fn describe_bytes(bytes: u64) -> String {
@@ -120,7 +126,7 @@ fn render_forwards(forwards: &[PortForward]) {
     for forward in forwards {
         let https = forward.https_port.map(|port| format!("  https://localhost:{port} (HTTP/2)")).unwrap_or_default();
         let rtt = forward.rtt_ms.map(|ms| format!("  {ms} ms")).unwrap_or_default();
-        let preview = if forward.origin == PortForwardOrigin::Preview { "  (preview: stops when its tab closes)" } else { "" };
+        let preview = if forward.origin == PortForwardOrigin::Preview { "  (preview: closes unless a preview keeps it)" } else { "" };
         println!(
             "{}  127.0.0.1:{} -> {}:{}  {} connection(s){rtt}{https}{preview}",
             forward.id, forward.local_port, forward.machine_name, forward.remote_port, forward.connections
@@ -139,6 +145,18 @@ pub async fn run_ports(client: &Client, cmd: PortsCmd, json: bool) -> Result<()>
         PortsCmd::List => {
             let list = client.call::<PortsList>(Empty {}).await?;
             if json { println!("{}", serde_json::to_string_pretty(&list)?) } else { render_forwards(&list.forwards) }
+        }
+        PortsCmd::Keep { ids } => {
+            let kept = client.call::<PortsKeep>(PortsKeepParams { ids }).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&kept)?)
+            } else if kept.kept.is_empty() {
+                println!("No preview forward with those ids. `kybern ports list` shows them.");
+            } else {
+                for id in &kept.kept {
+                    println!("Kept {id} open for 30 more seconds.");
+                }
+            }
         }
         PortsCmd::Stop { id } => {
             let before = client.call::<PortsList>(Empty {}).await?;

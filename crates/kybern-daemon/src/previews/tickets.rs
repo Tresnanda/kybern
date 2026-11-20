@@ -110,6 +110,20 @@ impl PreviewTickets {
         Some(entry.info.clone())
     }
 
+    /// The ports of the live `Proxy` tickets, without sliding their expiry: a preview forward on one of them is in use
+    /// (a phone showing it, #350).
+    pub fn live_proxy_ports(&self) -> Vec<u16> {
+        let now = Instant::now();
+        self.lock()
+            .values()
+            .filter(|entry| self.live(entry, now))
+            .filter_map(|entry| match entry.info.kind {
+                TicketKind::Proxy { port } => Some(port),
+                TicketKind::Files { .. } => None,
+            })
+            .collect()
+    }
+
     /// Revoke one ticket. Idempotent; returns whether it existed.
     pub fn revoke(&self, ticket: &str) -> bool {
         self.lock().remove(ticket).is_some()

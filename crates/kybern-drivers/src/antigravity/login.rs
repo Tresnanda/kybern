@@ -6,7 +6,9 @@
 //! is signed in and when the access token expires, and to call the quota
 //! endpoints with the token `agy` already refreshed. It never refreshes the
 //! token, never writes to `agy`'s storage, and never lets the token leave this
-//! module's callers: [`StoredLogin`] redacts it from `Debug`.
+//! module's callers: [`StoredLogin`] redacts it from `Debug`. Where the token
+//! can't be read (the Linux and Windows keyrings) or has expired, `usage.rs`
+//! reads the limits from `agy -p "/usage"` instead, and `agy` renews its own token.
 
 use std::path::{Path, PathBuf};
 

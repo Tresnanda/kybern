@@ -2477,8 +2477,12 @@ pub enum LimitsStale {
     LoginRefresh,
     /// The provider is limiting how often usage can be read.
     Throttled,
-    /// The read failed: not signed in, unreachable, or an unexpected answer.
+    /// The read failed: unreachable, or an unexpected answer.
     Unavailable,
+    /// The provider itself is signed out, so there is no login to read limits
+    /// with. Only signing in again fixes it. Absent from older daemons, whose
+    /// clients show no caption for a value they don't know.
+    SignedOut,
     /// Read from the cache file of an earlier daemon run, and no live read has
     /// succeeded since. Shown until the first one does.
     FromLastRun,
@@ -5204,6 +5208,7 @@ method!(PeerFilesAbort, "peer.files.abort", Some(Scope::MachineFiles), PeerFiles
 method!(PortsForward, "ports.forward", Some(Scope::OrchestrationOperate), PortsForwardParams, PortForward);
 method!(PortsList, "ports.list", Some(Scope::OrchestrationRead), Empty, PortsListResult);
 method!(PortsStop, "ports.stop", Some(Scope::OrchestrationOperate), PortsStopParams, PortsListResult);
+method!(PortsKeep, "ports.keep", Some(Scope::OrchestrationOperate), PortsKeepParams, PortsKeepResult);
 method!(ClipboardSet, "clipboard.set", Some(Scope::OrchestrationOperate), ClipboardSetParams, ClipboardSetResult);
 method!(ClipboardGet, "clipboard.get", Some(Scope::OrchestrationOperate), ClipboardGetParams, ClipboardGetResult);
 method!(ClipboardStatusMethod, "clipboard.status", Some(Scope::OrchestrationRead), Empty, ClipboardStatus);
@@ -5543,6 +5548,7 @@ registry!(
     PortsForward,
     PortsList,
     PortsStop,
+    PortsKeep,
     ClipboardSet,
     ClipboardGet,
     ClipboardStatusMethod,

@@ -588,6 +588,8 @@ expression: scopes
   - "orchestration:read"
 - - ports.stop
   - "orchestration:operate"
+- - ports.keep
+  - "orchestration:operate"
 - - clipboard.set
   - "orchestration:operate"
 - - clipboard.get

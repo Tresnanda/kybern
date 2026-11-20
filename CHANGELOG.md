@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.25.5
+
+<!-- kybern-release-title: Antigravity limits stay current, and previews close their ports -->
+<!-- kybern-release-summary: Antigravity's limits keep updating between turns, Antigravity shows up in Add an account, and a preview of another machine's server stops forwarding its port soon after you close it. -->
+
+- Antigravity's limits keep updating between turns, including usage from outside Kybern. They used to freeze for hours with "Waiting for Antigravity to refresh its sign-in" once its sign-in expired. On Linux and Windows, where Kybern can't read Antigravity's login, they now show at all.
+- When Antigravity is signed out, its limits say **Sign in to Antigravity to update limits** with a **Sign in** button.
+- Antigravity appears in **Add an account**. It allows one account per computer, so the tile signs this computer in, or says so when it already is.
+- Closing a preview of a server on another machine stops its port forward within about 30 seconds, including when you quit Kybern, close the window or lose the connection. An open hot-reload connection no longer keeps it open for up to 30 minutes.
+- In the Browser's **More** menu, forwarded ports you opened yourself show a pin: they stay open until you stop them.
+- The daemon log records each forward's origin and why it closed, including who stopped it.
+
 ## 0.25.4
 
 <!-- kybern-release-title: Group projects stay one project on every machine -->

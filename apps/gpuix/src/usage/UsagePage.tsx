@@ -1,9 +1,10 @@
 import { N } from '../nav/glyphs.ts'
 import { ProblemLine } from '../problems/Line.tsx'
+import { resolveAction } from '../problems/actions.ts'
 import { asError } from '../../../../packages/kybern-client/src/problem.ts'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { tokens, usd } from '@/lib/format'
-import { PROVIDER_NAMES, limitLabel, limitLeftLabel, limitPace, limitUsed, limitTone, resetIn, staleCaption, updatedAgo } from '@/lib/providerUsage'
+import { PROVIDER_NAMES, limitLabel, limitLeftLabel, limitPace, limitUsed, limitTone, resetIn, staleCaption, staleFix, updatedAgo } from '@/lib/providerUsage'
 import { accountsOfKind, limitsForAccount } from '@/lib/accountUi'
 import type { AccountSummary, UsageLimitsResult, UsageGroup, UsageRow, UsageSummaryResult, ProviderLimits } from '../../../../packages/kybern-client/src/types.ts'
 import { getClient, useApp } from '../state.ts'
@@ -166,11 +167,11 @@ function Heading({ title, detail }: { title: string; detail?: string }) { const 
 /** A headline number. When the range changes by pointer the old figure leaves while the new one rises in (`Swap kind="text"`); `salt` changes for a keyboard change, which remounts the swap and shows the figure at once. */
 function Stat({ label, value, note, salt }: { label: string; value: string; note: string; salt: number }) { const t = useTheme(); return <div style={{ ...column, flexBasis: 0, flexGrow: 1, gap: 8 }}><Label color={t.textSecondary} size={12} lineHeight={18}>{label}</Label><SwapOnChange key={salt} active={value} style={{ justifyContent: 'flex-start' }}><Label color={t.text} size={34} lineHeight={40.8} weight={500}>{value}</Label></SwapOnChange><Label color={t.textSecondary} size={12} lineHeight={18}>{note}</Label></div> }
 function LimitCard({ entry, account, showDefault, play }: { entry: ProviderLimits; account?: AccountSummary; showDefault: boolean; /** The bars grow in when the page was opened by pointer. */ play: boolean }) {
-  const t = useTheme(); const now = Date.now()
+  const t = useTheme(); const now = Date.now(); const signIn = resolveAction(staleFix(entry), {}, 'usage-sign-in')
   return <div style={{ ...column, flexBasis: 248, flexGrow: 1, gap: 16, padding: 16, borderWidth: 1, borderColor: t.border, borderRadius: 12 }}><div style={row}><ProviderMark kind={entry.provider} size={20} /><Label color={t.text} size={13} weight={500} style={{ flexGrow: 1 }}>{account?.name ?? 'CLI account'}</Label>{showDefault && account?.is_default && <Label color={t.textSecondary} size={11}>Default</Label>}<Label color={t.textSecondary} size={12}>{entry.plan ?? account?.identity?.plan ?? ''}</Label></div>{entry.limits.map((limit, i) => {
     const used = limitUsed(limit, now); const pace = limitPace(limit, now); const reset = resetIn(limit.resets_at, now)
     return <div key={i} style={{ ...column, gap: 7 }}><div style={{ ...row, justifyContent: 'space-between' }}><Label color={t.text} size={12}>{limitLabel(limit, entry.provider)}</Label><Label color={t.textSecondary} size={12}>{limitLeftLabel(limit, now)}</Label></div>{used !== null && <div style={{ position: 'relative', height: 4, backgroundColor: ink(t, .1), borderRadius: 2 }}><LimitFill left={Math.max(0, 100 - used)} play={play} color={limitTone(used) === 'critical' ? t.red : limitTone(used) === 'warning' ? t.warning : ink(t, .65)} />{pace && <div style={{ position: 'absolute', left: 0, top: -3, height: 10, width: `${pace.evenLeft}%`, borderRightWidth: 1, borderColor: ink(t, .45) }} />}</div>}{reset !== null && <div style={{ ...row, justifyContent: 'space-between' }}><Label color={t.textSecondary} size={11}>{reset}</Label>{pace && <Label color={pace.short ? t.warning : t.textSecondary} size={11}>{pace.label}</Label>}</div>}</div>
-  })}{staleCaption(entry, now) && <Label color={t.textSecondary} size={11}>{staleCaption(entry, now)}</Label>}</div>
+  })}{staleCaption(entry, now) && <Label color={t.textSecondary} size={11}>{staleCaption(entry, now)}</Label>}{signIn && <div testId={signIn.testId} onClick={signIn.onClick} style={{ alignSelf: 'flex-start', cursor: 'pointer' }}><Label color={t.text} size={12} weight={500}>{signIn.label}</Label></div>}</div>
 }
 
 const storedPlan = Number(load('usage.plan-cost', null))

@@ -4,7 +4,7 @@ import type { ProviderLimits, UsageSummaryResult } from "../../state/protocol";
 import { PROVIDER_DISPLAY_NAME } from "../../state/protocol";
 import { useAccounts, loadAccounts } from "../../state/accounts";
 import { count } from "../../state/format";
-import { errorText } from "../../state/runtime";
+import { activeEnvironment, currentClient, errorText } from "../../state/runtime";
 import { settingsRpc, useSettingsChoice, useSettingsLive } from "../../state/machineChoice";
 import { limitCards, loadUsageLimits, useUsageLimits } from "../../state/usage";
 import { ListRow, SectionHeader } from "../../ui/List";
@@ -21,7 +21,10 @@ type Group = "provider" | "model" | "day";
 
 export function UsageSettings() {
   const online = useSettingsLive();
-  const machine = useSettingsChoice()?.machineId;
+  const choice = useSettingsChoice();
+  const machine = choice?.machineId;
+  // The computer these limits are read on: the one Settings shows, else the one the phone is at.
+  const computer = choice?.name ?? activeEnvironment()?.name ?? currentClient()?.info?.hostname;
   const { limits, error, loading } = useUsageLimits();
   const { accounts } = useAccounts();
   useEffect(() => {
@@ -41,7 +44,7 @@ export function UsageSettings() {
   const footer = (card: ProviderLimits) =>
     limits?.refreshing?.includes(card.provider)
       ? "Updating…"
-      : (staleLabel(card.stale) ?? (card.updated_at ? `Updated ${new Date(card.updated_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : null));
+      : (staleLabel(card.stale, { agent: PROVIDER_DISPLAY_NAME[card.provider] ?? card.provider, computer }) ?? (card.updated_at ? `Updated ${new Date(card.updated_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : null));
   return (
     <>
       <ErrorBanner error={error} onRetry={() => void loadUsageLimits(true)} />

@@ -29,8 +29,12 @@ pub const MAX_PUSH_FILES: usize = 20_000;
 pub const MAX_PORT_FORWARDS: usize = 16;
 /// The credit window of a relay or port stream between two machines that both list `relay.frames.v2`.
 pub const RELAY_WINDOW_V2: i64 = 4 * 1024 * 1024;
-/// A forward with no connection for this long closes (§8.3).
+/// A manual forward with no connection for this long closes (§8.3).
 pub const PORT_FORWARD_IDLE_SECS: u64 = 30 * 60;
+/// A preview forward's first lease, from when it opens: long enough for the app to show it and renew it.
+pub const PORT_FORWARD_FIRST_LEASE_SECS: u64 = 2 * 60;
+/// What one `ports.keep` adds to a preview forward's lease, from the call.
+pub const PORT_FORWARD_LEASE_SECS: u64 = 30;
 
 /// Notification: a send's bytes moved. Params: [`FilesProgress`].
 pub const FILES_PROGRESS_NOTIFICATION: &str = "files.progress";
@@ -206,8 +210,9 @@ pub struct PortsForwardParams {
     /// web views, which trust the certificate in [`PortForward::https_certificate`] and nothing else does.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub https: bool,
-    /// Who opens the forward: a preview opens one for its page and stops it when its last tab closes; any other forward
-    /// (the default) stays until it is stopped. Asking again for a preview forward by hand makes it manual.
+    /// Who opens the forward: a preview opens one for its page, and it stays only while it is renewed (`ports.keep`, a live
+    /// preview ticket on its port, or this request again); any other forward (the default) stays until it is stopped or
+    /// idle. Asking again for a preview forward by hand makes it manual.
     #[serde(default, skip_serializing_if = "PortForwardOrigin::is_manual")]
     pub origin: PortForwardOrigin,
 }
@@ -219,7 +224,8 @@ pub enum PortForwardOrigin {
     /// Forwarded by hand ("Forward a port…", `kybern ports forward`): it stays until it is stopped.
     #[default]
     Manual,
-    /// Opened to show a page in a preview: the app that showed it stops it when the page's last tab closes.
+    /// Opened to show a page in a preview: it has a lease ([`PORT_FORWARD_FIRST_LEASE_SECS`] at first) that the apps
+    /// showing it renew with `ports.keep`, and it closes when the lease runs out, even with connections open.
     Preview,
 }
 
@@ -262,7 +268,7 @@ pub struct PortForward {
     /// A page load in progress over this forward, while it is still fetching. Absent when nothing is loading.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loading: Option<PortLoad>,
-    /// A preview's forward, stopped when the page's last tab closes; absent for a manual one.
+    /// A preview's forward, closed when its lease runs out; absent for a manual one.
     #[serde(default, skip_serializing_if = "PortForwardOrigin::is_manual")]
     pub origin: PortForwardOrigin,
 }
@@ -302,6 +308,19 @@ pub struct PortsListResult {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PortsStopParams {
     pub id: Uuid,
+}
+
+/// `ports.keep`: renew the lease of preview forwards for [`PORT_FORWARD_LEASE_SECS`] from now. An app sends the forwards its
+/// open browsers show every few seconds; ids that are not preview forwards here are ignored.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PortsKeepParams {
+    pub ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PortsKeepResult {
+    /// The preview forwards that were renewed.
+    pub kept: Vec<Uuid>,
 }
 
 /// `peer.ports.open`: the target connects a stream to a loopback port of its own.

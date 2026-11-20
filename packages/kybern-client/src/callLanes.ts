@@ -32,6 +32,7 @@ export const CONTROL_METHODS: readonly string[] = [
   "terminals.unsubscribe",
   "previews.close",
   "ports.stop",
+  "ports.keep",
 ];
 
 /** Methods that run a subprocess, probe the network or wait on another machine. */

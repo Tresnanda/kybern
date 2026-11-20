@@ -54,6 +54,11 @@ test("reset and stale copy", () => {
   assert.equal(resetsLabel(null, now), null);
   assert.equal(staleLabel(undefined), null);
   assert.ok(staleLabel("login_refresh")?.includes("Sign in"));
+  assert.equal(
+    staleLabel("signed_out", { agent: "Antigravity", computer: "Studio Mac" }),
+    "Sign in to Antigravity on Studio Mac to update limits.",
+  );
+  assert.equal(staleLabel("signed_out", { agent: "Antigravity" }), "Sign in to Antigravity on your computer to update limits.");
 });
 
 test("the computer switcher and Settings name a connection the same way", () => {

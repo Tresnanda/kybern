@@ -178,7 +178,8 @@ export function PreviewIntegration({ insetBottom = 0 }: { insetBottom?: number }
     const offs = [...clients].map(client => client.onNotification('previews.open_requested', payload => { const request = payload as PreviewOpenRequestedNotification; showPreview(request.thread_id, true); void openPreview(request.thread_id, request.target) }))
     return () => { for (const off of offs) off() }
   }, [connected, id])
-  // A closed browser tab ends its page, and a forward it opened ends 10 s after no browser shows it (ADE-128, `lifetime.ts`).
+  // A closed browser tab ends its page (ADE-128), and the preview forwards open browsers show are renewed every 10 s; the
+  // daemon closes the ones nobody renews (#350, `lifetime.ts`).
   useEffect(() => {
     const client = connected ? localClient() : null
     if (!client) return
@@ -189,7 +190,7 @@ export function PreviewIntegration({ insetBottom = 0 }: { insetBottom?: number }
       dispose: disposePreview,
       uses: previewUses,
       forwards: ports.get,
-      stop: forwardId => ports.stop(forwardId),
+      keep: ids => ports.keep(ids),
       subscribe: listener => { const offs = [subscribeTabs(listener), subscribePreviews(listener), ports.subscribe(listener)]; return () => { for (const off of offs) off() } },
     })
     return () => { stop(); ports.dispose() }

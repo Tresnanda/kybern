@@ -15,6 +15,7 @@ import {
   limitsStale,
   resetIn,
   staleCaption,
+  staleFix,
   updatedAgo,
 } from '@/lib/providerUsage'
 import type { ProviderKind, ProviderLimits } from '../../../../packages/kybern-client/src/types.ts'
@@ -29,6 +30,7 @@ import { muted, Tip } from './overlay.tsx'
 import { useHover } from '../kit/hover.tsx'
 import { getNav, setNav, useNav, type Page } from './store.ts'
 import { openSettingsTab } from '../settings/SettingsScreen.tsx'
+import { resolveAction } from '../problems/actions.ts'
 import { showDialog } from '../dialogs/store.ts'
 import { RailUpdateButton } from '../platform/UpdateSurface.tsx'
 import { CardAccounts, useCardEntry } from '../usage/CardAccounts.tsx'
@@ -302,6 +304,7 @@ function UsageCard({ entry: global }: { entry: ProviderLimits }) {
   }, [entry.provider])
   const name = PROVIDER_NAMES[entry.provider] ?? entry.provider
   const caption = staleCaption(entry, now)
+  const signIn = refreshing ? null : resolveAction(staleFix(entry), {}, 'usage-card-sign-in')
   const ago = updatedAgo(entry.updated_at, now)
   const freshness = refreshing ? 'Updating…' : ago ? (limitsStale(entry, now) ? `Last updated ${ago}` : `Updated ${ago}`) : ''
   const small = muted(t, 1)
@@ -365,6 +368,11 @@ function UsageCard({ entry: global }: { entry: ProviderLimits }) {
       <Label color={small} size={13}>
         {!refreshing && caption ? caption : freshness}
       </Label>
+      {signIn && (
+        <div testId={signIn.testId} onClick={signIn.onClick} style={{ ...cardRow, alignSelf: 'flex-start', ...pressRow(t, t.buttonSecondaryHover) }}>
+          <Label color={t.text} size={13} weight={500}>{signIn.label}</Label>
+        </div>
+      )}
       <div style={{ height: 1, marginLeft: -4, marginRight: -4, backgroundColor: ink(t, 0.07) }} />
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginTop: -4, marginBottom: -4 }}>
         <div testId="usage-card-accounts" onClick={() => openSettingsTab('accounts')} style={{ ...cardRow, ...pressRow(t, t.buttonSecondaryHover) }}>

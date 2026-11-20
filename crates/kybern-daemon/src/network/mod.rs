@@ -134,8 +134,12 @@ pub struct Timing {
     pub found_ttl: Duration,
     /// A relayed stream with no traffic for this long is closed, the main `/ws` stream excepted.
     pub relay_idle: Duration,
-    /// A port forward with no connection for this long closes (§8.3).
+    /// A manual port forward with no connection for this long closes (§8.3).
     pub ports_idle: Duration,
+    /// A preview forward's lease when it opens (#350).
+    pub ports_first_lease: Duration,
+    /// What renewing a preview forward (`ports.keep`, a live preview ticket) adds to its lease, from now.
+    pub ports_lease: Duration,
     /// The window of a handshake request's `at`, and of a well-known proof.
     pub clock_window: Duration,
     /// Join machines of the same Tailscale user on discovery (§2.4a). Always on in a daemon; a test
@@ -176,6 +180,8 @@ impl Default for Timing {
             found_ttl: Duration::from_secs(10 * 60),
             relay_idle: Duration::from_secs(30),
             ports_idle: Duration::from_secs(kybern_protocol::PORT_FORWARD_IDLE_SECS),
+            ports_first_lease: Duration::from_secs(kybern_protocol::PORT_FORWARD_FIRST_LEASE_SECS),
+            ports_lease: Duration::from_secs(kybern_protocol::PORT_FORWARD_LEASE_SECS),
             clock_window: Duration::from_secs(60),
             auto_join: true,
             // Two discovery ticks at the idle pace, so a machine that is merely slow to notice us
@@ -206,6 +212,8 @@ impl Timing {
             found_ttl: Duration::from_millis(300),
             relay_idle: Duration::from_secs(30),
             ports_idle: Duration::from_millis(900),
+            ports_first_lease: Duration::from_secs(2),
+            ports_lease: Duration::from_secs(1),
             clock_window: Duration::from_secs(60),
             auto_join: true,
             lone_wait: Duration::from_secs(3),
