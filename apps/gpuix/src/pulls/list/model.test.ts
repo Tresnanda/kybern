@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { Project, PullRequest } from '../../../../../packages/kybern-client/src/types.ts'
-import { ALL_PROJECTS, chooseRepo, groupRows, inScope, pickProject, readRepoMemory, rememberRepos, REPO_MEMORY_LIMIT, repoHue, scopeTargets, toggleRepo, validRepos, type Row } from './model.ts'
+import { ALL_PROJECTS, chooseRepo, groupRows, inScope, mixedRepos, pickProject, readRepoMemory, rememberRepos, REPO_MEMORY_LIMIT, repoHue, scopeTargets, toggleRepo, validRepos, type Row } from './model.ts'
 
 const now = '2026-10-28T10:00:00Z'
 const member = (path: string, status: 'ok' | 'missing' = 'ok') => ({ path, name: path, status })
@@ -9,6 +9,18 @@ const single = { id: 's', name: 'Kybern', path: '/s', is_git: true, brief_in_all
 const folder = { ...single, id: 'f', is_git: false } as Project
 const pr = (over: Partial<PullRequest>): PullRequest => ({ number: 1, title: 't', url: '', state: 'OPEN', head: 'a', base: 'main', is_draft: false, author: 'x', updated_at: now, ...over })
 const rows = (project: Project, ...prs: Partial<PullRequest>[]): Row[] => prs.map(p => ({ project, pr: pr(p) }))
+
+describe('mixedRepos', () => {
+  test('is false for no rows, one project and one member repository', () => {
+    expect(mixedRepos([])).toBe(false)
+    expect(mixedRepos(rows(single, { number: 1 }, { number: 2 }))).toBe(false)
+    expect(mixedRepos(rows(group, { number: 1, repo: 'core' }, { number: 2, repo: 'core' }))).toBe(false)
+  })
+  test('is true across member repositories or projects', () => {
+    expect(mixedRepos(rows(group, { number: 1, repo: 'core' }, { number: 2, repo: 'tele' }))).toBe(true)
+    expect(mixedRepos([...rows(single, { number: 1 }), ...rows(folder, { number: 1 })])).toBe(true)
+  })
+})
 
 describe('groupRows', () => {
   test('orders open pull requests by readiness and drops empty groups', () => {

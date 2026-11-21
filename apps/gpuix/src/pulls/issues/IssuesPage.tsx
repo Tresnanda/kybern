@@ -140,7 +140,6 @@ export function IssuesPage() {
   const people = useMemo(() => assigneeChoices(issues, assignee), [issues, assignee])
   const filtered = !!(search || labels.length || assignee)
   const failure = shown?.error
-  const repoName = choice?.repo ? choice.name.split(' / ').pop()! : choice?.name ?? ''
   const move = (at: number, keyName: string) => {
     const next = keyName === 'down' ? Math.min(issues.length - 1, at + 1) : keyName === 'up' ? Math.max(0, at - 1) : keyName === 'home' ? 0 : keyName === 'end' ? issues.length - 1 : -1
     if (next >= 0) setFocused(issues[next]!.number)
@@ -183,7 +182,7 @@ export function IssuesPage() {
           </Menu>
         </div>
       </div>
-      <virtual-list {...PR_SCROLL_LAYOUT} testId="issues-list" estimatedItemHeight={72} style={{ flexGrow: 1, minHeight: 0 }}>
+      <virtual-list {...PR_SCROLL_LAYOUT} testId="issues-list" estimatedItemHeight={52} style={{ flexGrow: 1, minHeight: 0 }}>
         {failure ? <div key="error" style={{ padding: 20 }}><Problem error={failure} projectId={choice.projectId} noun="issues" refresh={() => refresh(n => n + 1)} /></div>
           : !shown ? <div key="loading" style={{ padding: 24 }}><PrLoading label="Loading issues…" kind="list" rows={5} /></div>
           : <>
@@ -192,7 +191,7 @@ export function IssuesPage() {
               <Label color={t.textSecondary} size={13} lineHeight={20}>{filtered ? 'Change or clear the filters to see more issues.' : `Issues of ${choice.name} appear here.`}</Label>
               {filtered && <Button size="sm" style={{ alignSelf: 'flex-start' }} onClick={() => { setQuery(''); setLabels([]); setAssignee('') }}>Clear filters</Button>}
             </div>}
-            {issues.map(issue => <IssueRow key={issue.number} issue={issue} repoName={repoName} projectId={choice.projectId} selected={selected === issue.number} focused={focused === issue.number} onOpen={() => select(issue.number)} onFocus={() => setFocused(issue.number)} onKey={k => move(issues.findIndex(x => x.number === issue.number), k)} />)}
+            {issues.map(issue => <IssueRow key={issue.number} issue={issue} selected={selected === issue.number} focused={focused === issue.number} onOpen={() => select(issue.number)} onFocus={() => setFocused(issue.number)} onKey={k => move(issues.findIndex(x => x.number === issue.number), k)} />)}
             {shown.hasMore && issues.length < MAX_ISSUES && <div key="more" style={{ ...row, justifyContent: 'center', padding: 12 }}><Button size="sm" testId="issues-more" busy={paging} disabled={paging} onClick={more}>Show more</Button></div>}
             {shown.hasMore && issues.length >= MAX_ISSUES && <div key="cap" style={{ padding: 16, paddingLeft: 20 }}><Label color={t.textTertiary} size={12} lineHeight={16}>Showing the newest 300 issues. Search or filter by label to find older ones.</Label></div>}
           </>}

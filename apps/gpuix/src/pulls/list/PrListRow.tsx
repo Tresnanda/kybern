@@ -10,14 +10,15 @@ import { RADIUS } from '../../kit/controls.ts'
 import { HoverCard } from '../../kit/HoverCard.tsx'
 import { ink, Label, useTheme } from '../../ui.tsx'
 import { column, row } from '../../usage/controls.tsx'
-import { DiffStat, Reason, RepoBadge } from './parts.tsx'
+import { DiffStat, Reason, RepoTag, showsReason } from './parts.tsx'
 import { memberName, type Row } from './model.ts'
 
 /**
- * One pull request: the title (two lines at most) with its number, then the repository, why it is where it is, and the
- * diff size. The author is not drawn (it is in the tooltip and the detail), so the second line never truncates it away.
+ * One pull request in two steady lines: the title (one line, the full title in the hover card and the detail) with its
+ * number, then why it is where it is, leading, and the quiet metadata trailing: the repository when the list mixes
+ * repositories, and the diff size. Every row is the same height, so the reasons line up in a column a scan can follow.
  */
-export const PrListRow = memo(function PrListRow({ item: { pr, project }, selected, focused, onOpen, onFocus, onKey, onOpenInTab }: { onOpenInTab?: () => void; item: Row; selected: boolean; focused: boolean; onOpen: () => void; onFocus: () => void; onKey: (key: string) => void }) {
+export const PrListRow = memo(function PrListRow({ item: { pr, project }, showRepo = true, selected, focused, onOpen, onFocus, onKey, onOpenInTab }: { onOpenInTab?: () => void; item: Row; showRepo?: boolean; selected: boolean; focused: boolean; onOpen: () => void; onFocus: () => void; onKey: (key: string) => void }) {
   const t = useTheme(); const { renderer } = useGpuix(); const ref = useRef<PublicInstance | null>(null)
   useEffect(() => { if (focused && ref.current) renderer?.focusElement?.(ref.current.id) }, [focused, renderer])
   const [hovered, setHovered] = useState(false)
@@ -32,22 +33,23 @@ export const PrListRow = memo(function PrListRow({ item: { pr, project }, select
     <HoverCard testId="pr-card-row" side="right" align="start" sideOffset={10} rootStyle={{ flexGrow: 1 }} style={{ padding: 10, gap: 2, maxWidth: 320 }} trigger={
       <div ref={ref} testId={pr.repo ? `pr-row-${pr.repo}-${pr.number}` : `pr-row-${pr.number}`} role="button" aria-current={selected ? 'page' : undefined} aria-label={`${repo ? `${repo}: ` : ''}${pr.title} #${pr.number}, ${reason.label}`} tabIndex={0} onFocus={onFocus} onClick={e => { if (onOpenInTab && isPrimary(e.modifiers)) onOpenInTab(); else onOpen() }}
         onAuxClick={e => { if (onOpenInTab && (e.isRightClick || e.button === 2)) setAt({ x: e.x ?? 0, y: e.y ?? 0 }) }} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onOpen(); else onKey(e.key ?? '') }}
-        style={{ ...column, flexGrow: 1, gap: 5, paddingLeft: 10, paddingRight: 10, paddingTop: 8, paddingBottom: 9, borderRadius: RADIUS.md, backgroundColor: selected ? ink(t, .07) : hovered ? t.hover : 'transparent', hover: { backgroundColor: selected ? ink(t, .07) : t.hover } }}>
-        <div style={{ ...row, alignItems: 'flex-start', gap: 8 }}>
-          <Label color={t.text} size={13} lineHeight={18} weight={500} style={{ flexGrow: 1, minWidth: 0, lineClamp: 2, textOverflow: 'ellipsis' }}>{pr.title}</Label>
+        style={{ ...column, flexGrow: 1, gap: 3, paddingLeft: 10, paddingRight: 10, paddingTop: 7, paddingBottom: 8, borderRadius: RADIUS.md, backgroundColor: selected ? ink(t, .07) : hovered ? t.hover : 'transparent', hover: { backgroundColor: selected ? ink(t, .07) : t.hover } }}>
+        <div style={{ ...row, gap: 8 }}>
+          <Label color={t.text} size={13} lineHeight={18} truncate style={{ flexGrow: 1, minWidth: 0 }}>{pr.title}</Label>
           <div style={{ flexShrink: 0, minWidth: onOpenInTab ? 24 : undefined, height: 18 }}>
             <Label color={t.textTertiary} size={12} lineHeight={18} style={{ opacity: showActions ? 0 : 1 }}>{`#${pr.number}`}</Label>
           </div>
         </div>
-        <div style={{ ...row, gap: 6 }}>
-          <RepoBadge testId="pr-badge-repo" name={badge} projectId={project.id} {...(pr.repo ? { repo: pr.repo } : {})} />
-          <Reason testId="pr-badge-reason" reason={reason} />
+        <div style={{ ...row, gap: 10, height: 16 }}>
+          {showsReason(reason) && <Reason testId="pr-badge-reason" reason={reason} />}
+          <div style={{ flexGrow: 1 }} />
+          {showRepo && <RepoTag testId="pr-badge-repo" name={badge} projectId={project.id} {...(pr.repo ? { repo: pr.repo } : {})} />}
           <DiffStat additions={pr.additions} deletions={pr.deletions} />
         </div>
       </div>
     }>
-      <Label color={t.textTertiary} size={12} lineHeight={16}>{`#${pr.number}`}</Label>
-      <Label color={t.text} size={13} lineHeight={18} weight={500}>{pr.author || 'Unknown author'}</Label>
+      <Label color={t.text} size={13} lineHeight={18} weight={500}>{pr.title}</Label>
+      <Label color={t.textTertiary} size={12} lineHeight={16}>{`#${pr.number} · ${pr.author || 'Unknown author'}`}</Label>
       <Label color={t.textSecondary} size={12} lineHeight={16}>{`${pr.head} → ${pr.base}`}</Label>
       <Label color={t.textTertiary} size={12} lineHeight={16}>{`Updated ${relativeTime(pr.updated_at)}`}</Label>
     </HoverCard>

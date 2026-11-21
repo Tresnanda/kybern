@@ -1,4 +1,4 @@
-// Small pieces of the pull request list: the repository badge, the readiness reason and the diff stat.
+// Small pieces of the pull request list: the repository badge and tag, the readiness reason and the diff stat.
 import {
   Alert02Icon, CancelCircleIcon, CheckmarkCircle02Icon, Clock01Icon, FlashIcon, GitMergeIcon, GitPullRequestClosedIcon,
   GitPullRequestDraftIcon, GitPullRequestIcon, Loading03Icon, MessageEdit01Icon,
@@ -77,21 +77,38 @@ export function RepoBadge({ name, projectId, repo, maxWidth = 120, testId }: { n
   </div>
 }
 
-/** A 12 px tone glyph and a short reason; the label truncates before the glyph does. */
+/**
+ * Whether a row states its reason. "Open" says nothing about an open pull request, and "Draft" repeats the Drafts
+ * heading, so those rows leave the slot empty and the reasons that matter stand out.
+ */
+export const showsReason = (reason: RowReason) => reason.label !== 'Open' && reason.label !== 'Draft'
+
+/**
+ * A 12 px tone glyph and a short reason; the label truncates before the glyph does. A reason that needs action (failing
+ * checks, conflicts, changes requested) is set in its tone at medium weight, so it is the first thing a scan finds.
+ */
 export function Reason({ reason, testId }: { reason: RowReason; testId?: string }) {
   const t = useTheme()
-  return <div testId={testId} style={{ ...row, gap: 4, flexGrow: 1, flexShrink: 1 }}>
+  const urgent = reason.tone === 'danger'
+  return <div testId={testId} style={{ ...row, gap: 4, flexShrink: 1, minWidth: 0 }}>
     <Icon source={reasonGlyph(reason)} size={12} color={toneColor(t, reason.tone)} style={{ flexShrink: 0 }} />
-    <Label color={t.textSecondary} size={12} lineHeight={16} truncate>{reason.label}</Label>
+    <Label color={urgent ? t.red : t.textSecondary} size={12} lineHeight={16} weight={urgent ? 500 : undefined} truncate>{reason.label}</Label>
   </div>
 }
 
-/** `+12 −3`, never clipped: it keeps its width while the reason and the badge give way. */
+/** A row's repository: its hue dot and name, quiet, for lists that mix repositories. */
+export function RepoTag({ name, projectId, repo, testId }: { name: string; projectId: string; repo?: string; testId?: string }) {
+  const t = useTheme()
+  const hue = useRepoHue(projectId, repo)
+  return <div testId={testId} style={{ ...row, gap: 5, flexShrink: 1, minWidth: 0, maxWidth: 120 }}>
+    <div style={{ width: 6, height: 6, borderRadius: 3, flexShrink: 0, backgroundColor: repoDot(t, hue) }} />
+    <Label color={t.textTertiary} size={12} lineHeight={16} truncate>{name}</Label>
+  </div>
+}
+
+/** `+12 −3` in the row's quiet colour, never clipped: it keeps its width while the reason and the repository give way. */
 export function DiffStat({ additions, deletions }: { additions?: number; deletions?: number }) {
   const t = useTheme()
   if (additions === undefined && deletions === undefined) return null
-  return <div style={{ ...row, gap: 4, flexShrink: 0 }}>
-    <Label color={t.green} size={12} lineHeight={16}>{`+${(additions ?? 0).toLocaleString('en-US')}`}</Label>
-    <Label color={t.red} size={12} lineHeight={16}>{`−${(deletions ?? 0).toLocaleString('en-US')}`}</Label>
-  </div>
+  return <Label color={t.textTertiary} size={12} lineHeight={16} style={{ flexShrink: 0 }}>{`+${(additions ?? 0).toLocaleString('en-US')} −${(deletions ?? 0).toLocaleString('en-US')}`}</Label>
 }
