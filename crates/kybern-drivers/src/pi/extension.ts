@@ -1,7 +1,13 @@
 // Bundled Kybern extension for Pi RPC sessions.
 //
 // Keep this file dependency-free: the driver stages it in a private temporary
-// directory, so package-relative imports would not resolve reliably.
+// directory, so package-relative imports would not resolve reliably. Node
+// built-ins are fine.
+
+import { readFileSync, realpathSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 
 const PROTOCOL_VERSION = 1;
 const COMMAND_SENTINEL = "kybern-extension";
@@ -313,6 +319,88 @@ async function executeAppTool(name, toolCallId, args, signal, ctx) {
   }
 }
 
+// Kybern puts every selected skill in front of the message ("/skill:a /skill:b text").
+// Pi expands only the first one, so the others would reach the model as bare text.
+const SKILL_TOKEN = /^\/skill:(\S+)(?:[ \t]+|$)/;
+
+function stripFrontmatter(content) {
+  const text = content.replace(/\r\n?/g, "\n");
+  if (!text.startsWith("---")) return text;
+  const end = text.indexOf("\n---", 3);
+  return end === -1 ? text : text.slice(end + 4);
+}
+
+// Returns the message Pi should expand, or undefined when nothing needs to change.
+// The first skill stays a leading command for Pi's own loader; the others become the
+// same <skill> blocks Pi writes, after the message.
+async function inlineExtraSkills(text, listCommands, notify) {
+  const names = [];
+  let rest = text;
+  for (let match = SKILL_TOKEN.exec(rest); match; match = SKILL_TOKEN.exec(rest)) {
+    names.push(match[1]);
+    rest = rest.slice(match[0].length);
+  }
+  if (names.length < 2) return undefined;
+  let commands = [];
+  try {
+    commands = listCommands() || [];
+  } catch {
+    return undefined;
+  }
+  const skills = new Map();
+  for (const command of commands) {
+    if (command?.source === "skill" && typeof command.name === "string" && typeof command.sourceInfo?.path === "string") {
+      skills.set(command.name.replace(/^skill:/, ""), command.sourceInfo.path);
+    }
+  }
+  const blocks = [];
+  const unresolved = [];
+  const seen = new Set([names[0]]);
+  for (const name of names.slice(1)) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const path = skills.get(name);
+    if (!path) {
+      unresolved.push(`/skill:${name}`);
+      continue;
+    }
+    try {
+      const body = stripFrontmatter(await readFile(path, "utf8")).trim();
+      blocks.push(`<skill name="${name}" location="${path}">\nReferences are relative to ${dirname(path)}.\n\n${body}\n</skill>`);
+    } catch {
+      unresolved.push(`/skill:${name}`);
+      // No path here: the notice reaches every client of the thread.
+      notify?.(`Pi could not read the skill ${name}. Check that the skill's file still exists.`);
+    }
+  }
+  if (blocks.length === 0 && unresolved.length === names.length - 1) return undefined;
+  const message = [...unresolved, rest].join(" ").trim();
+  return `/skill:${names[0]} ${[message, ...blocks].filter(Boolean).join("\n\n")}`;
+}
+
+// Whether the user already said no to this folder, or to a folder above it. Pi keeps
+// the answer in `trust.json` in its agent directory, nearest folder first, `false` for
+// "do not trust". A folder nobody has decided about is the one worth a notice.
+export function projectTrustDeclined(cwd) {
+  try {
+    const agentDir = process.env.PI_CODING_AGENT_DIR ? resolve(process.env.PI_CODING_AGENT_DIR.replace(/^~(?=$|[\\/])/, homedir())) : join(homedir(), ".pi", "agent");
+    const data = JSON.parse(readFileSync(join(agentDir, "trust.json"), "utf8").replace(/^\uFEFF/, ""));
+    if (typeof data !== "object" || data === null) return false;
+    const same = (a, b) => (process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b);
+    let directory = realpathSync(resolve(cwd));
+    for (;;) {
+      for (const [key, value] of Object.entries(data)) {
+        if ((value === true || value === false) && same(key, directory)) return value === false;
+      }
+      const parent = dirname(directory);
+      if (parent === directory) return false;
+      directory = parent;
+    }
+  } catch {
+    return false;
+  }
+}
+
 export default function kybernExtension(pi) {
   let mode = normalizeMode(process.env.KYBERN_PI_PERMISSION_MODE);
   let modeRevision = 0;
@@ -347,7 +435,24 @@ export default function kybernExtension(pi) {
   pi.on("session_start", async (_event, ctx) => restoreCoordinatorBootstrap(ctx));
   pi.on("session_tree", async (_event, ctx) => restoreCoordinatorBootstrap(ctx));
 
-  pi.on("before_agent_start", async (event) => {
+  // RPC mode has no trust prompt, so Pi skips an untrusted folder's settings, extensions,
+  // skills and prompts without a word. Say so once per session.
+  let projectTrustChecked = false;
+  pi.on("before_agent_start", async (event, ctx) => {
+    if (!projectTrustChecked) {
+      projectTrustChecked = true;
+      if (
+        typeof ctx?.isProjectTrusted === "function" &&
+        !ctx.isProjectTrusted() &&
+        !process.argv.some((arg) => arg === "--no-approve" || arg === "-na") &&
+        !(typeof ctx.cwd === "string" && projectTrustDeclined(ctx.cwd))
+      ) {
+        ctx.ui?.notify?.(
+          "Pi skipped this folder's settings, extensions, skills and prompts because the folder isn't trusted. Run pi in the folder once and trust it, then start a new thread.",
+          "warning",
+        );
+      }
+    }
     if (!coordinatorInstructions) return;
     // Pi rebuilds its base system prompt for each user turn. Keep our role
     // byte-identical on every turn; only the durable history marker is once.
@@ -362,6 +467,13 @@ export default function kybernExtension(pi) {
       },
       systemPrompt,
     };
+  });
+
+  pi.on("input", async (event, ctx) => {
+    if (typeof event?.text !== "string" || !event.text.startsWith("/skill:")) return;
+    const text = await inlineExtraSkills(event.text, () => pi.getCommands?.(), (message) => ctx?.ui?.notify?.(message, "error"));
+    if (text === undefined) return;
+    return { action: "transform", text, images: event.images };
   });
 
   pi.registerCommand(COMMAND_SENTINEL, {

@@ -457,12 +457,7 @@ impl ScanRun {
         let imported = state
             .store
             .threads_list(None, true)
-            .map(|threads| {
-                threads
-                    .into_iter()
-                    .filter_map(|thread| Some((thread.provider.kind, thread.provider.instance, thread.provider_session_id?)))
-                    .collect()
-            })
+            .map(|threads| crate::pi_sessions::session_owners(&state.store, &threads).into_keys().collect())
             .unwrap_or_default();
         let project_ids = state
             .store
@@ -801,12 +796,7 @@ impl JobRunner {
             .state
             .store
             .threads_list(None, true)
-            .map(|threads| {
-                threads
-                    .into_iter()
-                    .filter_map(|thread| Some((thread.provider.kind, thread.provider.instance, thread.provider_session_id?)))
-                    .collect()
-            })
+            .map(|threads| crate::pi_sessions::session_owners(&self.state.store, &threads).into_keys().collect())
             .unwrap_or_default();
         let targets: HashMap<(ProviderKind, String), Target> = targets(&self.state, None)
             .into_iter()

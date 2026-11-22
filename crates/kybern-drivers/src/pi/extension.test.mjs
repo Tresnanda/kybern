@@ -1,6 +1,10 @@
 // Dependency-free tests for the bundled extension and its fake Pi API.
 import assert from "node:assert/strict";
 import test from "node:test";
+import { realpathSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const extensionPath = process.env.KYBERN_PI_EXTENSION_TEST_PATH ?? process.argv[2] ?? new URL('./extension.ts', import.meta.url).pathname;
@@ -25,6 +29,7 @@ function fakePi(initialMode = "supervised", configuredTools, policy = {}) {
   const handlers = new Map();
   const pi = {
     getAllTools: () => policy.toolInfos ?? [],
+    getCommands: () => policy.commands ?? [],
     registerCommand(name, definition) {
       commands.set(name, definition);
     },
@@ -443,4 +448,95 @@ test("Coordinator permits only MCP tools owned by allowed servers", async () => 
     assert.equal((await call(event(name), context())).block, true, name);
   const regular = fakePi("full_access", [], { allowedMcpServers: ["memory"], toolInfos });
   assert.equal(await regular.handlers.get("tool_call")(event("mcp__other_lookup"), context()), undefined);
+});
+
+async function skillCommands(skills) {
+  const directory = await mkdtemp(join(tmpdir(), "kybern-skills-"));
+  const commands = [];
+  for (const [name, body] of Object.entries(skills)) {
+    const path = join(directory, `${name}.md`);
+    await writeFile(path, `---\nname: ${name}\ndescription: ${name} skill\n---\n${body}\n`);
+    commands.push({ name: `skill:${name}`, source: "skill", sourceInfo: { path } });
+  }
+  return { commands, directory };
+}
+
+test("every selected skill reaches the model, not only the leading one", async () => {
+  const { commands, directory } = await skillCommands({ alpha: "Alpha rules.", beta: "Beta rules.", gamma: "Gamma rules." });
+  const input = fakePi("full_access", [], { commands }).handlers.get("input");
+
+  const transformed = await input({ text: "/skill:alpha /skill:beta /skill:gamma fix the parser", images: [] }, context());
+  assert.equal(transformed.action, "transform");
+  const [lead, ...rest] = transformed.text.split("\n\n<skill ");
+  assert.equal(lead, "/skill:alpha fix the parser");
+  assert.equal(rest.length, 2);
+  assert.equal(rest[0], `name="beta" location="${join(directory, "beta.md")}">\nReferences are relative to ${directory}.\n\nBeta rules.\n</skill>`);
+  assert.match(rest[1], /^name="gamma" .*Gamma rules\.\n<\/skill>$/s);
+  assert.doesNotMatch(transformed.text, /description: /);
+
+  // One skill is Pi's own business, as is text that is not a skill command.
+  assert.equal(await input({ text: "/skill:alpha fix it" }, context()), undefined);
+  assert.equal(await input({ text: "please /skill:alpha /skill:beta" }, context()), undefined);
+  // A skill Pi does not know stays in the text instead of vanishing.
+  const unknown = await input({ text: "/skill:alpha /skill:nope do it" }, context());
+  assert.equal(unknown, undefined);
+  const mixed = await input({ text: "/skill:alpha /skill:nope /skill:beta do it" }, context());
+  assert.match(mixed.text, /^\/skill:alpha \/skill:nope do it\n\n<skill name="beta"/);
+});
+
+test("an unreadable skill is reported without its path", async () => {
+  const { commands, directory } = await skillCommands({ alpha: "Alpha rules.", beta: "Beta rules." });
+  await rm(join(directory, "beta.md"));
+  const notices = [];
+  const input = fakePi("full_access", [], { commands }).handlers.get("input");
+  const ctx = { ...context(), ui: { notify: (message, level) => notices.push({ message, level }) } };
+  await input({ text: "/skill:alpha /skill:beta go", images: [] }, ctx);
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].level, "error");
+  assert.match(notices[0].message, /could not read the skill beta/);
+  assert.doesNotMatch(notices[0].message, new RegExp(directory.replaceAll("\\", "\\\\")));
+  assert.doesNotMatch(notices[0].message, /\.md|\//);
+});
+
+test("an untrusted project is reported once; a trusted or declined one is not", async () => {
+  const root = await mkdtemp(join(tmpdir(), "kybern-trust-"));
+  const agentDir = join(root, "agent");
+  const declinedParent = join(root, "declined");
+  const declinedChild = join(declinedParent, "child");
+  const decided = join(root, "decided");
+  const undecided = join(root, "undecided");
+  for (const folder of [agentDir, declinedChild, decided, undecided]) await mkdir(folder, { recursive: true });
+  const real = (folder) => realpathSync(folder);
+  // A declined folder and a trusted one; a folder inside the declined one has no entry of its own.
+  await writeFile(
+    join(agentDir, "trust.json"),
+    JSON.stringify({ [real(declinedParent)]: false, [real(decided)]: true }),
+  );
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    const notices = [];
+    const ctx = (trusted, cwd) => ({ cwd, isProjectTrusted: () => trusted, ui: { notify: (message, level) => notices.push({ message, level }) } });
+    const run = async (trusted, cwd) => {
+      notices.length = 0;
+      await fakePi().handlers.get("before_agent_start")({ systemPrompt: "native" }, ctx(trusted, cwd));
+      return notices.length;
+    };
+    assert.equal(await run(true, undecided), 0, "trusted");
+    assert.equal(await run(false, declinedParent), 0, "declined folder");
+    assert.equal(await run(false, declinedChild), 0, "a folder inside a declined one");
+    assert.equal(await run(false, undecided), 1, "undecided folder");
+    assert.equal(notices[0].level, "warning");
+    assert.match(notices[0].message, /isn't trusted/);
+    assert.equal(await run(false, join(root, "does-not-exist")), 1, "an unknown folder is undecided");
+    // Once per session.
+    const hook = fakePi().handlers.get("before_agent_start");
+    notices.length = 0;
+    await hook({ systemPrompt: "native" }, ctx(false, undecided));
+    await hook({ systemPrompt: "native" }, ctx(false, undecided));
+    assert.equal(notices.length, 1);
+  } finally {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+  }
 });

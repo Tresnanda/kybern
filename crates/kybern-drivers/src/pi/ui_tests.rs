@@ -31,6 +31,9 @@ impl UiHarness {
             _compaction_overlay: None,
             pending_app_tools: Mutex::new(HashMap::new()),
             app_tool_names: extension::APP_TOOL_NAMES.iter().map(|name| (*name).to_string()).collect(),
+            compaction_ended: tokio::sync::Notify::new(),
+            prompt_hold: tokio::sync::watch::channel(HoldState::default()).0,
+            hold_owners: std::sync::atomic::AtomicU64::new(0),
         });
         let handle = Arc::new(Handle(session.clone(), crate::ndjson::SessionLifetime::new(child)));
         Self { session, handle, events: receiver }
@@ -155,4 +158,18 @@ async fn app_cards_survive_two_minutes_and_only_daemon_answers_or_stop_finish_th
         assert!(harness.wire().await["value"].is_string());
         assert!(harness.session.pending_app_tools.lock().await.is_empty());
     }
+}
+
+/// Pi sends `timeout: 0` for a dialog without a deadline, not for one that expired already.
+#[tokio::test]
+async fn a_dialog_timeout_of_zero_means_no_timeout() {
+    let mut harness = UiHarness::new(8);
+    harness.session.handle_ui_request(&json!({ "id":"no-deadline", "method":"confirm", "title":"Continue?", "timeout":0 })).await;
+    assert!(matches!(harness.next_event().await, DriverEvent::PermissionRequest { .. }));
+    tokio::time::sleep(Duration::from_millis(80)).await;
+
+    assert!(harness.session.pending_approvals.lock().await.contains_key("no-deadline"));
+    assert!(harness.events.try_recv().is_err(), "a zero timeout withdrew the dialog");
+    harness.handle.respond_permission("no-deadline", &ApprovalDecision::Submit { response: json!({ "confirmed":true }) }).await.unwrap();
+    assert_eq!(harness.wire().await["confirmed"], true);
 }

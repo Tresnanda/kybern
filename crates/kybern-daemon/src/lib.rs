@@ -37,6 +37,7 @@ mod native_tools_mcp;
 #[allow(dead_code)]
 mod network;
 mod orchestrator;
+mod pi_sessions;
 mod pick;
 mod power;
 mod previews;
