@@ -978,7 +978,8 @@ struct TurnState {
     announced_limits: std::collections::HashSet<String>,
 }
 
-/// How long Claude Code may take to answer `initialize` before its turn fails (T3 waits as long).
+/// How long Claude Code may go without answering `initialize` and without writing a line before its turn
+/// fails (T3 waits as long). Any output starts the wait over, so a slow start that is still working is kept.
 const STARTUP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
 /// A control request in flight and the channel its answer arrives on.
@@ -987,14 +988,25 @@ struct ControlAnswer {
     answer: oneshot::Receiver<std::result::Result<Value, String>>,
 }
 
-/// Fail the session's turn when Claude Code does not answer `initialize` within `deadline`.
-/// Any answer, an error included, and an exit both count as a start: the exit reports itself.
-async fn watch_startup(session: Arc<ClaudeSession>, initialized: ControlAnswer, deadline: std::time::Duration) {
-    if tokio::time::timeout(deadline, initialized.answer).await.is_ok() {
-        return;
+/// Fail the session's turn when Claude Code neither answers `initialize` nor writes anything (a frame on
+/// stdout, a line on stderr) for a whole `quiet` window. A start that keeps writing, such as many MCP servers
+/// connecting one by one, is waited for. Any answer, an error included, and an exit both count as a start:
+/// the exit reports itself.
+async fn watch_startup(session: Arc<ClaudeSession>, initialized: ControlAnswer, quiet: std::time::Duration) {
+    let ControlAnswer { id, mut answer } = initialized;
+    let mut seen = session.child.output_lines();
+    loop {
+        if tokio::time::timeout(quiet, &mut answer).await.is_ok() {
+            return;
+        }
+        let written = session.child.output_lines();
+        if written == seen {
+            break;
+        }
+        seen = written;
     }
-    session.pending_control.lock().await.remove(&initialized.id);
-    session.startup_stalled(deadline).await;
+    session.pending_control.lock().await.remove(&id);
+    session.startup_stalled(quiet).await;
 }
 
 /// Launch calls remembered for their role; older ones are forgotten first.
@@ -1418,7 +1430,7 @@ impl ClaudeSession {
         self.state.lock().await.startup_stalled = true;
         let minutes = waited.as_secs().div_ceil(60).max(1);
         let detail = format!(
-            "Claude Code didn't answer its startup request within {minutes} minute{}, so Kybern stopped it.",
+            "Claude Code didn't answer its startup request or write anything for {minutes} minute{}, so Kybern stopped it.",
             if minutes == 1 { "" } else { "s" }
         );
         tracing::warn!(waited_ms = waited.as_millis() as u64, "claude never answered initialize; stopping it");
@@ -2127,6 +2139,14 @@ fn exit_error(end: crate::ndjson::ProcessEnd, stderr_tail: &str) -> Option<Strin
     })
 }
 
+/// Whether the model Claude Code reports in effect is the one `requested`: the same name, or the full id an
+/// alias stands for (`sonnet` in `claude-sonnet-5-5`). `default` is whatever Claude Code picks.
+fn model_applied(requested: &str, applied: &str) -> bool {
+    let base = |model: &str| model.split('[').next().unwrap_or(model).trim().to_ascii_lowercase();
+    let (requested, applied) = (base(requested), base(applied));
+    requested == "default" || requested == applied || (!requested.contains('-') && applied.split('-').any(|part| part == requested))
+}
+
 /// The reason Claude reads when the user declines a tool call and writes why: their words, marked as
 /// theirs, so the model does not take them for a tool result or its own text. The daemon applies it to
 /// the user's own answer only; the reasons Kybern gives itself ("turn ended") go as they are.
@@ -2432,7 +2452,15 @@ impl AgentSession for SessionHandle {
     }
 
     async fn set_model(&self, model: &str) -> Result<()> {
-        self.0.send_control("set_model", json!({ "model": model })).await.map(|_| ())
+        let answer = self.0.send_control("set_model", json!({ "model": model })).await?;
+        // Claude Code answers with the model now in effect (2.1.327: `{model}`). One it accepted but did not
+        // switch to is an error, so the daemon restarts on the new model instead of running the old one.
+        match answer.get("model").and_then(Value::as_str) {
+            Some(applied) if !model_applied(model, applied) => {
+                Err(DriverError::Unsupported(format!("Claude Code kept model {applied} instead of {model}")))
+            }
+            _ => Ok(()),
+        }
     }
 
     async fn set_effort(&self, effort: &str) -> Result<()> {
@@ -2470,10 +2498,13 @@ impl AgentSession for SessionHandle {
         if input.get("_kybern_elicitation").is_some() {
             let response = match decision {
                 ApprovalDecision::Submit { response } => response.clone(),
-                // MCP keeps "decline" for an explicit no, which the form's Decline sends without a reason. A deny
-                // with a reason is Kybern's own (the turn ended, the daemon restarted, the session moved on):
-                // nobody answered the form, so it is cancelled and the server may ask another way.
-                ApprovalDecision::Deny { reason: None } => json!({ "action": "decline" }),
+                // MCP keeps "decline" for an explicit no: a person's Decline, which the daemon sends without a
+                // reason whatever they typed (MCP has nowhere to put it). A deny with a reason is Kybern's own (the
+                // turn ended, the daemon restarted, the session moved on): nobody answered the form, so it is
+                // cancelled and the server may ask another way. A blank reason is no reason.
+                ApprovalDecision::Deny { reason } if reason.as_deref().is_none_or(|reason| reason.trim().is_empty()) => {
+                    json!({ "action": "decline" })
+                }
                 ApprovalDecision::Deny { reason: Some(_) } => json!({ "action": "cancel" }),
                 _ => return Err(DriverError::Protocol("this form needs an answer".into())),
             };
@@ -2496,7 +2527,10 @@ impl AgentSession for SessionHandle {
             }
             ApprovalDecision::Deny { reason } => json!({
                 "behavior": "deny",
-                "message": reason.clone().unwrap_or_else(|| "The user declined this action.".into()),
+                "message": reason
+                    .as_deref()
+                    .filter(|reason| !reason.trim().is_empty())
+                    .unwrap_or("The user declined this action."),
                 "interrupt": false,
             }),
         };
@@ -3825,6 +3859,26 @@ mod harness_gap_tests {
         child.close().await;
     }
 
+    /// A slow start that keeps writing (MCP servers connecting, with `MCP_CONNECTION_NONBLOCKING=0`) is not a
+    /// stall: only a whole quiet window without an answer fails the turn.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_start_that_keeps_writing_is_waited_for() {
+        let mut slow = Command::new("sh");
+        slow.args(["-c", "i=0; while [ $i -lt 10 ]; do echo 'connecting MCP server' >&2; sleep 0.05; i=$((i+1)); done; cat > /dev/null"]);
+        let child = Arc::new(NdjsonChild::spawn(slow).unwrap());
+        let (session, mut rx) = session_over(child.clone());
+        let initialized = session.send_control_watched("initialize", json!({})).await.unwrap();
+        let reader = session.clone();
+        tokio::spawn(async move { reader.read_loop().await });
+        let started = std::time::Instant::now();
+        tokio::spawn(watch_startup(session.clone(), initialized, std::time::Duration::from_millis(200)));
+        let DriverEvent::TurnFailed { .. } = next_event(&mut rx).await else { panic!("a start that went quiet still fails") };
+        // Ten lines 50 ms apart keep it alive for about half a second; only the quiet window after them ends it.
+        assert!(started.elapsed() >= std::time::Duration::from_millis(500), "stopped while it was still writing: {:?}", started.elapsed());
+        assert!(child.output_lines() >= 10);
+    }
+
     /// A signal (the OOM killer, a crash) names itself and keeps what Claude Code said before it died.
     #[test]
     fn a_signal_exit_names_the_signal_and_keeps_the_stderr_tail() {
@@ -3977,7 +4031,12 @@ mod harness_gap_tests {
     async fn an_elicitation_nobody_answered_is_cancelled_not_declined() {
         let (session, child, mut rx) = echo_session();
         let handle = SessionHandle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
-        for (id, reason, expected) in [("declined", None, "decline"), ("unseen", Some("turn ended".to_string()), "cancel")] {
+        for (id, reason, expected) in [
+            ("declined", None, "decline"),
+            ("declined-blank", Some(String::new()), "decline"),
+            ("declined-space", Some("  \n".to_string()), "decline"),
+            ("unseen", Some("turn ended".to_string()), "cancel"),
+        ] {
             session
                 .handle_control_request(
                     &json!({"request_id":id,"request":{"subtype":"elicitation","message":"Name","requestedSchema":{"type":"object"}}}),
@@ -3990,6 +4049,26 @@ mod harness_gap_tests {
                 .unwrap();
             assert_eq!(frame["response"]["response"], json!({ "action": expected }), "{id}");
         }
+        drop(handle);
+        child.close().await;
+    }
+
+    /// A tool call declined with a blank reason reads as a decline without one, not an empty message.
+    #[tokio::test]
+    async fn a_blank_decline_reason_is_no_reason() {
+        let (session, child, mut rx) = echo_session();
+        let handle = SessionHandle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
+        session
+            .handle_control_request(
+                &json!({"request_id":"bash","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"}}}),
+            )
+            .await;
+        assert!(matches!(rx.recv().await, Some(DriverEvent::PermissionRequest { .. })));
+        handle.respond_permission("bash", &ApprovalDecision::Deny { reason: Some(" \n ".into()) }).await.unwrap();
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(5), async { child.lines.lock().await.recv().await.unwrap() })
+            .await
+            .unwrap();
+        assert_eq!(frame["response"]["response"]["message"], "The user declined this action.");
         drop(handle);
         child.close().await;
     }
@@ -4075,6 +4154,7 @@ mod live_target_tests {
     /// the effort `applied` holds, `apply_flag_settings` changes it unless it is `ignored`.
     async fn answer_like_claude(session: Arc<ClaudeSession>, child: Arc<NdjsonChild>, ignored: &'static str) {
         let mut applied = "high".to_string();
+        let mut model = "claude-opus-5-5".to_string();
         loop {
             let frame = { child.lines.lock().await.recv().await };
             let Some(frame) = frame else { return };
@@ -4087,8 +4167,15 @@ mod live_target_tests {
                     }
                     json!({})
                 }
-                Some("get_settings") => json!({ "effective": {}, "applied": { "model": "claude-opus-5-5", "effort": applied } }),
-                Some("set_model") => json!({ "model": "claude-sonnet-5-5" }),
+                Some("get_settings") => json!({ "effective": {}, "applied": { "model": model, "effort": applied } }),
+                Some("set_model") => {
+                    match request["model"].as_str().unwrap_or_default() {
+                        "sonnet" => model = "claude-sonnet-5-5".into(),
+                        requested if requested != ignored => model = requested.to_string(),
+                        _ => {}
+                    }
+                    json!({ "model": model })
+                }
                 _ => continue,
             };
             session
@@ -4116,8 +4203,21 @@ mod live_target_tests {
         tokio::spawn(answer_like_claude(session.clone(), child.clone(), "ultra"));
         let handle = SessionHandle(session, crate::ndjson::SessionLifetime::new(child.clone()));
         handle.set_effort("low").await.expect("Claude Code applied it");
-        handle.set_model("sonnet").await.unwrap();
+        handle.set_model("sonnet").await.expect("the alias names the model in effect");
+        handle.set_model("claude-haiku-5-5").await.expect("a full id");
         let refused = handle.set_effort("ultra").await.expect_err("Claude Code kept low");
         assert!(matches!(refused, DriverError::Unsupported(_)), "{refused}");
+        let ignored = handle.set_model("ultra").await.expect_err("Claude Code kept claude-haiku-5-5");
+        assert!(matches!(ignored, DriverError::Unsupported(_)), "{ignored}");
+    }
+
+    #[test]
+    fn a_model_is_applied_by_its_name_or_the_id_its_alias_stands_for() {
+        assert!(model_applied("sonnet", "claude-sonnet-5-5"));
+        assert!(model_applied("opus[1m]", "claude-opus-5-5[1m]"));
+        assert!(model_applied("claude-opus-5-5", "claude-opus-5-5"));
+        assert!(model_applied("default", "claude-opus-5-5"));
+        assert!(!model_applied("opus", "claude-sonnet-5-5"));
+        assert!(!model_applied("claude-opus-5", "claude-opus-5-5"));
     }
 }

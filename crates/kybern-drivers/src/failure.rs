@@ -45,6 +45,10 @@ pub fn label(kind: ProviderKind) -> &'static str {
 
 /// The problem a failed turn of `kind` with this `text` is, or `None` when Kybern can't tell.
 pub fn classify(kind: ProviderKind, text: &str) -> Option<Problem> {
+    // A signal stopped the process: that is the cause, whatever its last stderr lines say.
+    if let Some(signal) = stopped_by_signal(kind, text) {
+        return Some(signal_problem(kind, signal, text));
+    }
     let lower = text.to_ascii_lowercase();
     if signed_out(kind, text, &lower) {
         return Some(signed_out_problem(kind, text));
@@ -215,6 +219,27 @@ pub fn stalled_start_problem(kind: ProviderKind, detail: &str) -> Problem {
         .with_action(ProblemAction::retry("Try again"))
 }
 
+/// The signal named by a driver's exit text ("Claude Code was stopped by SIGKILL", see `claude::exit_error`).
+fn stopped_by_signal(kind: ProviderKind, text: &str) -> Option<&str> {
+    let rest = text.trim_start().strip_prefix(label(kind))?.strip_prefix(" was stopped by ")?;
+    let signal = rest.split(|c: char| c.is_whitespace()).next().filter(|signal| !signal.is_empty())?;
+    (signal.starts_with("SIG") || signal == "signal").then_some(signal)
+}
+
+/// Something outside Kybern stopped the harness. A `SIGKILL` nobody asked for is most often the system
+/// running out of memory; the conversation is saved either way, so sending again resumes it.
+fn signal_problem(kind: ProviderKind, signal: &str, detail: &str) -> Problem {
+    let hint = if signal == "SIGKILL" {
+        "The system stopped it, often because the computer ran low on memory. Close other apps if you can, then send your message again."
+    } else {
+        "It stopped unexpectedly. Your conversation is saved; send your message again."
+    };
+    Problem::new(ProblemKind::Internal, detail)
+        .with_subject(tool_name(kind))
+        .with_copy(format!("{} stopped unexpectedly", label(kind)), hint)
+        .with_action(ProblemAction::retry("Try again"))
+}
+
 fn network_problem(kind: ProviderKind, detail: &str) -> Problem {
     Problem::new(ProblemKind::Offline, detail)
         .with_subject("network")
@@ -225,6 +250,25 @@ fn network_problem(kind: ProviderKind, detail: &str) -> Problem {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A signal exit is named for what stopped it, ahead of anything its stderr tail happens to say; the
+    /// whole text stays behind Show details.
+    #[test]
+    fn a_signal_exit_is_an_internal_problem_with_its_stderr_as_detail() {
+        let text = "Claude Code was stopped by SIGKILL\nrequest timed out after 401 retries";
+        let problem = classify(ProviderKind::ClaudeCode, text).expect("a signal exit has a problem");
+        assert_eq!((problem.kind, problem.subject.as_deref()), (ProblemKind::Internal, Some("claude")));
+        assert_eq!(problem.detail.as_deref(), Some(text));
+        assert_eq!(problem.title.as_deref(), Some("Claude Code stopped unexpectedly"));
+        assert!(problem.hint.as_deref().is_some_and(|hint| hint.contains("low on memory")), "{:?}", problem.hint);
+        assert_eq!(problem.action.map(|action| action.id).as_deref(), Some("retry"));
+        let segv = classify(ProviderKind::ClaudeCode, "Claude Code was stopped by SIGSEGV").unwrap();
+        assert!(!segv.hint.as_deref().unwrap_or_default().contains("memory"));
+        assert!(classify(ProviderKind::ClaudeCode, "Claude Code was stopped by signal 64").is_some());
+        // Only the driver's own exit text, not a sentence that mentions a signal.
+        assert_eq!(classify(ProviderKind::ClaudeCode, "the test was stopped by SIGKILL"), None);
+        assert_eq!(classify(ProviderKind::Codex, "Claude Code was stopped by SIGKILL"), None);
+    }
 
     fn kind_of(provider: ProviderKind, text: &str) -> Option<(ProblemKind, Option<String>)> {
         classify(provider, text).map(|problem| (problem.kind, problem.subject))

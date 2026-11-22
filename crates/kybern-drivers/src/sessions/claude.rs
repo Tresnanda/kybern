@@ -8,14 +8,20 @@ pub(super) fn summary(path: &Path, records: &[Value]) -> Option<SavedSession> {
     let first = records.iter().find(|v| v["cwd"].is_string() && v["sessionId"].is_string() && v["isSidechain"] != true)?;
     // A saved title can be the markup of the command that opened the session; that is no title.
     let saved = |key: &str| records.iter().rev().find_map(|v| v[key].as_str()).map(str::trim).filter(|title| plain_title(title));
+    // A prompt names the session; a bare command such as `/review` only when nothing else does. Read up to the
+    // first prompt, and only when there is no saved title.
     let typed = || {
-        let prompts = records.iter().filter(|v| v["type"] == "user" && v["isMeta"] != true).map(|v| content_text(&v["message"]["content"]));
-        let shown = prompts.map(|text| typed_text(&text)).collect::<Vec<_>>();
-        // A prompt names the session; a bare command such as `/review` only when nothing else does.
-        shown
-            .iter()
-            .find_map(|typed| typed.as_ref().map(|typed| typed.title.clone()).filter(|title| !title.is_empty()))
-            .or_else(|| shown.iter().find_map(|typed| typed.as_ref().map(|typed| typed.text.clone()).filter(|text| !text.is_empty())))
+        let mut command = None;
+        for record in records.iter().filter(|v| v["type"] == "user" && v["isMeta"] != true) {
+            let Some(typed) = typed_text(&content_text(&record["message"]["content"])) else { continue };
+            if !typed.title.is_empty() {
+                return Some(typed.title);
+            }
+            if command.is_none() && !typed.text.is_empty() {
+                command = Some(typed.text);
+            }
+        }
+        command
     };
     let name =
         saved("customTitle").or_else(|| saved("aiTitle")).map(str::to_string).or_else(typed).unwrap_or_else(|| "Untitled session".into());
@@ -212,32 +218,43 @@ fn typed_message(message: UserMessage) -> UserMessage {
     UserMessage { parts }
 }
 
-/// The most bytes of conversation records an import holds at once. The file itself may be larger: the
-/// records an import never reads (API request copies, attachments, structured duplicates of tool results)
-/// are kept only as the links that order the conversation.
+/// The most bytes of records an import holds at once: conversation records whole, every other record by
+/// the size of the link kept for it. The file itself may be larger: the records an import never reads (API
+/// request copies, attachments, structured duplicates of tool results) are kept only as the links that
+/// order the conversation.
 const MAX_RETAINED_BYTES: u64 = 128 * 1024 * 1024;
+/// The largest transcript file an import reads at all, however little of it is conversation.
+const MAX_FILE_BYTES: u64 = 1024 * 1024 * 1024;
 /// The longest single record an import reads.
 const MAX_RECORD_BYTES: usize = 64 * 1024 * 1024;
 /// The words that classify a transcript as too large (`classify_read_error`).
-pub(super) const TOO_LARGE_TEXT: &str = "128 MB of messages";
+pub(super) const TOO_LARGE_TEXT: &str = "too large to import";
 
 /// Read a Claude Code transcript line by line, keeping what `summary` and `parse` read.
 fn read_records(path: &Path) -> Result<Vec<Value>> {
-    read_records_within(path, MAX_RETAINED_BYTES)
+    read_records_within(path, MAX_RETAINED_BYTES, MAX_FILE_BYTES)
 }
 
-fn read_records_within(path: &Path, budget: u64) -> Result<Vec<Value>> {
+fn read_records_within(path: &Path, budget: u64, file_limit: u64) -> Result<Vec<Value>> {
     use std::io::BufRead;
     let file = std::fs::File::open(path)?;
+    if file.metadata()?.len() > file_limit {
+        return Err(file_too_large(file_limit));
+    }
     let mut reader = BufReader::with_capacity(1024 * 1024, file);
     let mut records = Vec::new();
-    let mut retained = 0u64;
+    let (mut retained, mut total) = (0u64, 0u64);
     let mut line = Vec::new();
     loop {
         line.clear();
         let read = (&mut reader).take(MAX_RECORD_BYTES as u64 + 1).read_until(b'\n', &mut line)?;
         if read == 0 {
             break;
+        }
+        // A file still growing past the limit while it is read.
+        total += read as u64;
+        if total > file_limit {
+            return Err(file_too_large(file_limit));
         }
         let complete = line.last() == Some(&b'\n');
         if !complete && line.len() > MAX_RECORD_BYTES {
@@ -266,7 +283,14 @@ fn read_records_within(path: &Path, budget: u64) -> Result<Vec<Value>> {
                 }
                 records.push(record);
             }
-            Kept::Link(record) => records.push(record),
+            Kept::Link(record) => {
+                // Links are small, but a file of nothing else must not grow memory without bound.
+                retained += serde_json::to_vec(&record).map_or(0, |bytes| bytes.len() as u64);
+                if retained > budget {
+                    return Err(too_large());
+                }
+                records.push(record);
+            }
         }
     }
     Ok(records)
@@ -274,7 +298,14 @@ fn read_records_within(path: &Path, budget: u64) -> Result<Vec<Value>> {
 
 fn too_large() -> DriverError {
     DriverError::Unsupported(format!(
-        "This conversation is too long to import (more than {TOO_LARGE_TEXT}). Fork a shorter conversation in Claude Code and import that session."
+        "This conversation is {TOO_LARGE_TEXT} (more than 128 MB of messages). Fork a shorter conversation in Claude Code and import that session."
+    ))
+}
+
+fn file_too_large(limit: u64) -> DriverError {
+    DriverError::Unsupported(format!(
+        "This conversation is {TOO_LARGE_TEXT} (its file is over {} MB). Fork a shorter conversation in Claude Code and import that session.",
+        limit / (1024 * 1024)
     ))
 }
 
@@ -425,7 +456,7 @@ mod markup_tests {
         file.flush().unwrap();
         assert!(file.as_file().metadata().unwrap().len() > 10 * BUDGET);
 
-        let records = read_records_within(file.path(), BUDGET).unwrap();
+        let records = read_records_within(file.path(), BUDGET, MAX_FILE_BYTES).unwrap();
         assert!(
             records
                 .iter()
@@ -445,12 +476,52 @@ mod markup_tests {
             writeln!(file, "{}", user(&format!("u{n}"), None, json!(text))).unwrap();
         }
         file.flush().unwrap();
-        let error = read_records_within(file.path(), 256 * 1024).unwrap_err();
+        let error = read_records_within(file.path(), 256 * 1024, MAX_FILE_BYTES).unwrap_err();
         assert_eq!(classify_read_error(&error), ReadFailure::TooLarge, "{error}");
 
         let mut file = tempfile::NamedTempFile::new().unwrap();
         write!(file, "{}\n{{\"type\":\"user\",\"mess", user("u1", None, json!("hi"))).unwrap();
         file.flush().unwrap();
         assert_eq!(classify_read_error(&read_records(file.path()).unwrap_err()), ReadFailure::InUse);
+    }
+
+    /// Link records are cheap, not free: a file of nothing but them still stops at the budget, and a file
+    /// past the size limit is refused before a byte of it is read.
+    #[test]
+    fn a_file_of_tiny_link_records_or_a_huge_file_is_refused() {
+        use std::io::Write;
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(file, "{}", user("u1", None, json!("First prompt"))).unwrap();
+        for n in 0..5_000 {
+            writeln!(file, "{}", json!({"type":"progress","uuid":format!("p{n}"),"parentUuid":"u1","data":{}})).unwrap();
+        }
+        file.flush().unwrap();
+        let error = read_records_within(file.path(), 64 * 1024, MAX_FILE_BYTES).unwrap_err();
+        assert_eq!(classify_read_error(&error), ReadFailure::TooLarge, "{error}");
+
+        // A sparse file: its size is past the limit, its blocks are not on disk.
+        let huge = tempfile::NamedTempFile::new().unwrap();
+        huge.as_file().set_len(MAX_FILE_BYTES + 1).unwrap();
+        let error = read_records(huge.path()).unwrap_err();
+        assert_eq!(classify_read_error(&error), ReadFailure::TooLarge, "{error}");
+        assert!(error.to_string().contains("over 1024 MB"), "{error}");
+    }
+
+    /// Listing reads a transcript's start and end only, so a session larger than the 64 MB other harnesses
+    /// import (here 100 MB) is listed with its title, the same session `read_records` imports.
+    #[test]
+    fn a_session_past_64_mb_is_listed() {
+        use std::io::{Seek, SeekFrom, Write};
+        let mut file = tempfile::Builder::new().suffix(".jsonl").tempfile().unwrap();
+        writeln!(file, "{}", user("u1", None, json!("Plan the parser rewrite"))).unwrap();
+        // The middle is a hole; only the start and the end hold records.
+        file.as_file_mut().seek(SeekFrom::Start(100 * 1024 * 1024)).unwrap();
+        writeln!(file).unwrap();
+        writeln!(file, "{}", assistant("a1", "u1", "Here is the plan")).unwrap();
+        file.flush().unwrap();
+        assert!(file.as_file().metadata().unwrap().len() > 64 * 1024 * 1024);
+        let records = super::super::metadata_lines(file.path()).unwrap();
+        let listed = summary(file.path(), &records).expect("the session is listed");
+        assert_eq!(listed.title, "Plan the parser rewrite");
     }
 }

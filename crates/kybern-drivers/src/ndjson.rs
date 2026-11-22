@@ -19,6 +19,8 @@ pub struct NdjsonChild {
     pub stderr: Mutex<mpsc::Receiver<String>>,
     /// Kybern asked the process to stop (`kill`), so a signal exit is ours and no fault.
     stop_requested: std::sync::atomic::AtomicBool,
+    /// Lines the process wrote on stdout or stderr, JSON or not: a sign of life while it starts.
+    output_lines: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// How a provider process ended.
@@ -77,10 +79,13 @@ impl NdjsonChild {
         let stdout = child.stdout.take().ok_or_else(|| DriverError::Protocol("no stdout".into()))?;
         let stderr = child.stderr.take().ok_or_else(|| DriverError::Protocol("no stderr".into()))?;
 
+        let output_lines = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let (line_tx, line_rx) = mpsc::channel::<Value>(1024);
+        let stdout_lines = output_lines.clone();
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = reader.next_line().await {
+                stdout_lines.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let line = line.trim();
                 if line.is_empty() {
                     continue;
@@ -97,9 +102,11 @@ impl NdjsonChild {
         });
 
         let (err_tx, err_rx) = mpsc::channel::<String>(256);
+        let stderr_lines = output_lines.clone();
         tokio::spawn(async move {
             let mut reader = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = reader.next_line().await {
+                stderr_lines.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 tracing::debug!(target: "provider.stderr", "{line}");
                 let _ = err_tx.try_send(line);
             }
@@ -112,7 +119,13 @@ impl NdjsonChild {
             lines: Mutex::new(line_rx),
             stderr: Mutex::new(err_rx),
             stop_requested: std::sync::atomic::AtomicBool::new(false),
+            output_lines,
         })
+    }
+
+    /// How many lines the process has written on stdout and stderr together. It only grows.
+    pub fn output_lines(&self) -> u64 {
+        self.output_lines.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub async fn write(&self, value: &Value) -> Result<()> {
