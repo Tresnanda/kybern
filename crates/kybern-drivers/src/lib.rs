@@ -6,6 +6,7 @@
 //! and turns [`DriverEvent`]s into persisted thread events.
 
 pub mod account_auth;
+mod acp;
 pub mod antigravity;
 pub mod binary;
 pub mod coordinator_mcp;
@@ -109,6 +110,17 @@ impl DriverError {
         Self::Problem { detail: problem.detail.clone().unwrap_or_default(), problem: Box::new(problem) }
     }
 }
+
+impl From<kybern_protocol::rpc::Problem> for DriverError {
+    fn from(problem: kybern_protocol::rpc::Problem) -> Self {
+        Self::problem(problem)
+    }
+}
+
+/// [`AgentSession::steer`]'s answer for a harness that takes no input during a turn.
+pub(crate) const NO_STEERING: &str = "This harness does not support input during a turn. Queue your message or try again when it finishes.";
+/// [`AgentSession::compact`]'s answer for a harness without manual compaction.
+pub(crate) const NO_COMPACTION: &str = "This harness does not expose manual compaction. Automatic compaction remains available.";
 
 pub type Result<T> = std::result::Result<T, DriverError>;
 
@@ -542,13 +554,11 @@ pub trait AgentSession: Send + Sync {
     async fn send_message(&self, message_id: &str, message: &UserMessage) -> Result<()>;
     /// Deliver explicit user input to the current turn without interrupting it.
     async fn steer(&self, _message_id: &str, _message: &UserMessage) -> Result<()> {
-        Err(DriverError::Unsupported(
-            "This harness does not support input during a turn. Queue your message or try again when it finishes.".into(),
-        ))
+        Err(DriverError::Unsupported(NO_STEERING.into()))
     }
     /// Initiate native compaction; report completion through the usual turn events.
     async fn compact(&self) -> Result<()> {
-        Err(DriverError::Unsupported("This harness does not expose manual compaction. Automatic compaction remains available.".into()))
+        Err(DriverError::Unsupported(NO_COMPACTION.into()))
     }
     async fn interrupt(&self) -> Result<()>;
     async fn set_permission_mode(&self, mode: PermissionMode) -> Result<()>;
