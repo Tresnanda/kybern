@@ -18,28 +18,84 @@ pub(super) struct Discovery {
     pub models: Vec<ProviderModel>,
 }
 
+/// How long a finished probe gets to exit on its own once its input is closed.
+const STOP_GRACE: Duration = Duration::from_secs(2);
+
 /// Ask Pi for the effective model catalog in the supplied project and environment.
 ///
-/// `--no-session` keeps this probe out of the user's session history. The process
+/// `--no-session` keeps this probe out of the user's session history. `--offline` skips
+/// Pi's startup catalog refresh: that refresh renews an expired OAuth login, and a probe
+/// that is stopped as soon as it has its answers can lose the renewed token. The process
 /// lives in its own process group so cancellation and timeouts also stop descendants
 /// launched by extensions.
+///
+/// Pi reads its input only after extensions' `session_start`, so a startup dialog (an MCP
+/// adapter asking to approve a project server) can never be answered. The probe then
+/// runs again with `--no-approve`, which leaves the folder's own resources unloaded.
 pub(super) async fn discover(bin: &Path, context: &ProbeContext) -> Result<Discovery> {
     discover_with_timeout(bin, context, DISCOVERY_TIMEOUT).await
 }
 
 async fn discover_with_timeout(bin: &Path, context: &ProbeContext, timeout: Duration) -> Result<Discovery> {
-    tokio::time::timeout(timeout, discover_inner(bin, context))
-        .await
-        .map_err(|_| DriverError::Protocol(format!("Pi model discovery timed out after {} milliseconds", timeout.as_millis())))?
+    // Without a project the probe would run extensions in whatever folder the daemon
+    // started in. Give it an empty one of its own.
+    let private = match &context.cwd {
+        Some(_) => None,
+        None => Some(PrivateDir::create()?),
+    };
+    let cwd = context.cwd.as_deref().or(private.as_ref().map(|dir| dir.0.as_path()));
+    match discover_once(bin, context, cwd, &[], timeout).await {
+        Err(Failure { error, startup_blocked: true }) => {
+            tracing::debug!(%error, "Pi model discovery was blocked at startup; retrying without project resources");
+            discover_once(bin, context, cwd, &["--no-approve"], timeout).await.map_err(|failure| failure.error)
+        }
+        result => result.map_err(|failure| failure.error),
+    }
 }
 
-async fn discover_inner(bin: &Path, context: &ProbeContext) -> Result<Discovery> {
+/// An empty folder only this probe knows. `create_dir` fails on an existing path,
+/// so a planted symlink or folder cannot be adopted.
+struct PrivateDir(std::path::PathBuf);
+
+impl PrivateDir {
+    fn create() -> std::io::Result<Self> {
+        let path = std::env::temp_dir().join(format!("kybern-pi-probe-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir(&path)?;
+        Ok(Self(path))
+    }
+}
+
+impl Drop for PrivateDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+struct Failure {
+    error: DriverError,
+    /// Pi stopped before it could answer, or asked something nobody can answer yet.
+    startup_blocked: bool,
+}
+
+impl From<DriverError> for Failure {
+    fn from(error: DriverError) -> Self {
+        Self { error, startup_blocked: false }
+    }
+}
+
+async fn discover_once(
+    bin: &Path,
+    context: &ProbeContext,
+    cwd: Option<&Path>,
+    extra_args: &[&str],
+    timeout: Duration,
+) -> std::result::Result<Discovery, Failure> {
     let mut command = crate::binary::command(bin).no_window();
     // Preserve Pi's saved/default project-trust policy. In RPC mode an
     // undecided project is safely probed without loading its local resources.
-    command.args(["--mode", "rpc", "--no-session"]);
+    command.args(["--mode", "rpc", "--no-session", "--offline"]).args(extra_args);
     command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
-    if let Some(cwd) = &context.cwd {
+    if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
     for (key, value) in &context.env {
@@ -48,21 +104,54 @@ async fn discover_inner(bin: &Path, context: &ProbeContext) -> Result<Discovery>
     #[cfg(unix)]
     command.process_group(0);
 
-    let mut child = command.spawn()?;
+    let mut child = command.spawn().map_err(DriverError::from)?;
     let tree = crate::process_tree::ProcessTree::new(child.id().expect("spawned Pi discovery process"));
     let mut stdin = child.stdin.take().ok_or_else(|| DriverError::Protocol("Pi RPC discovery did not provide stdin".into()))?;
     let stdout = child.stdout.take().ok_or_else(|| DriverError::Protocol("Pi RPC discovery did not provide stdout".into()))?;
     let mut lines = BufReader::new(stdout).lines();
 
-    write_command(&mut stdin, &json!({ "type": "get_state" })).await?;
-    let state = read_response(&mut lines, &mut stdin, "get_state").await?;
-    write_command(&mut stdin, &json!({ "type": "get_available_models" })).await?;
-    let available = read_response(&mut lines, &mut stdin, "get_available_models").await?;
+    let exchange = async {
+        // A write fails when Pi already exited at startup.
+        let blocked = |error| Failure { error, startup_blocked: true };
+        write_command(&mut stdin, &json!({ "type": "get_state" })).await.map_err(blocked)?;
+        let state = read_response(&mut lines, &mut stdin, "get_state").await?;
+        write_command(&mut stdin, &json!({ "type": "get_available_models" })).await.map_err(blocked)?;
+        let available = read_response(&mut lines, &mut stdin, "get_available_models").await?;
+        parse_discovery(&state, &available).map_err(Failure::from)
+    };
+    match tokio::time::timeout(timeout, exchange).await {
+        Ok(Ok(discovery)) => {
+            stop_gracefully(child, stdin, tree).await;
+            Ok(discovery)
+        }
+        failure => {
+            // No answer to protect: stop now, descendants included.
+            drop(stdin);
+            let _ = child.kill().await;
+            drop(tree);
+            match failure {
+                Ok(Err(failure)) => Err(failure),
+                Ok(Ok(_)) => unreachable!("handled above"),
+                Err(_) => Err(DriverError::Protocol(format!("Pi model discovery timed out after {} milliseconds", timeout.as_millis())).into()),
+            }
+        }
+    }
+}
 
-    let discovery = parse_discovery(&state, &available)?;
-    let _ = child.kill().await;
-    drop(tree);
-    Ok(discovery)
+/// End of input first, which is how Pi stops on its own; then SIGTERM; a kill only when
+/// both were ignored. Pi may still be writing a refreshed login when the answers arrive.
+async fn stop_gracefully(mut child: tokio::process::Child, stdin: ChildStdin, tree: crate::process_tree::ProcessTree) {
+    drop(stdin);
+    if tokio::time::timeout(STOP_GRACE, child.wait()).await.is_ok() {
+        // Extensions' own children may outlive Pi; the tree's drop signals and reaps them.
+        drop(tree);
+        return;
+    }
+    tree.terminate();
+    if tokio::time::timeout(crate::process_tree::TERMINATE_GRACE, child.wait()).await.is_err() {
+        tree.kill_now();
+        let _ = child.kill().await;
+    }
 }
 
 async fn write_command(stdin: &mut ChildStdin, command: &Value) -> Result<()> {
@@ -77,18 +166,18 @@ async fn read_response(
     lines: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
     stdin: &mut ChildStdin,
     expected_command: &str,
-) -> Result<Value> {
+) -> std::result::Result<Value, Failure> {
     loop {
-        let line = lines
-            .next_line()
-            .await?
-            .ok_or_else(|| DriverError::Protocol(format!("Pi RPC exited before responding to {expected_command}")))?;
+        let line = lines.next_line().await.map_err(DriverError::from)?.ok_or_else(|| Failure {
+            error: DriverError::Protocol(format!("Pi RPC exited before responding to {expected_command}")),
+            startup_blocked: true,
+        })?;
         let frame: Value = serde_json::from_str(&line).map_err(|error| {
             DriverError::Protocol(format!("Pi RPC returned malformed JSON while waiting for {expected_command}: {error}"))
         })?;
 
         if frame.get("type").and_then(Value::as_str) == Some("extension_ui_request") {
-            handle_extension_request(stdin, &frame).await?;
+            handle_extension_request(stdin, &frame).await.map_err(|error| Failure { error, startup_blocked: true })?;
             continue;
         }
         if frame.get("type").and_then(Value::as_str) != Some("response")
@@ -101,9 +190,12 @@ async fn read_response(
                 .get("error")
                 .and_then(|error| error.as_str().or_else(|| error.get("message").and_then(Value::as_str)))
                 .unwrap_or("unknown error");
-            return Err(DriverError::Protocol(format!("Pi RPC {expected_command} failed: {detail}")));
+            return Err(DriverError::Protocol(format!("Pi RPC {expected_command} failed: {detail}")).into());
         }
-        return frame.get("data").cloned().ok_or_else(|| DriverError::Protocol(format!("Pi RPC {expected_command} response omitted data")));
+        return frame
+            .get("data")
+            .cloned()
+            .ok_or_else(|| DriverError::Protocol(format!("Pi RPC {expected_command} response omitted data")).into());
     }
 }
 
@@ -174,6 +266,18 @@ fn parse_model(model: &Value, default_model: Option<&str>, configured_effort: Op
         provider,
         efforts,
         default_effort,
+    })
+}
+
+/// Split `selector` into the provider and model id Pi reported for it. Both can
+/// contain `/` (a provider such as `hub=https://host/v1`, a model such as
+/// `openrouter/auto`), so the first slash alone does not tell them apart.
+/// `available` is the answer to `get_available_models`.
+pub(super) fn split_reported_selector(available: &Value, selector: &str) -> Option<(String, String)> {
+    available.get("models")?.as_array()?.iter().find_map(|model| {
+        let provider = model.get("provider").and_then(Value::as_str)?.trim();
+        let id = model.get("id").and_then(Value::as_str)?.trim();
+        (!provider.is_empty() && !id.is_empty() && format!("{provider}/{id}") == selector).then(|| (provider.to_string(), id.to_string()))
     })
 }
 
@@ -342,7 +446,7 @@ mod tests {
     async fn rpc_probe_is_ephemeral_and_uses_project_context() {
         let (directory, binary) = executable_script(
             r###"#!/bin/sh
-[ "$1" = "--mode" ] && [ "$2" = "rpc" ] && [ "$3" = "--no-session" ] && [ "$#" = 3 ] || exit 9
+[ "$1" = "--mode" ] && [ "$2" = "rpc" ] && [ "$3" = "--no-session" ] && [ "$4" = "--offline" ] && [ "$#" = 4 ] || exit 9
 IFS= read -r state_request
 [ "$state_request" = '{"type":"get_state"}' ] || exit 6
 printf '%s\n' '{"type":"response","command":"get_state","success":true,"data":{"model":{"provider":"custom","id":"from-context"},"thinkingLevel":"medium"}}'
@@ -377,6 +481,87 @@ case "$answer" in *'"type":"extension_ui_response"'*'"id":"startup-1"'*'"cancell
 
         let error = discover_fixture(&binary, &ProbeContext::default()).await.unwrap_err();
         assert!(error.to_string().contains("Trust extension?"));
+    }
+
+    /// Pi's startup catalog refresh renews an expired OAuth login; without `--offline`
+    /// a probe stopped as soon as it has its answers can lose the renewed token.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn probe_stops_by_closing_input_so_pi_can_finish_saving() {
+        let (directory, binary) = executable_script(
+            r###"#!/bin/sh
+IFS= read -r state_request
+printf '%s\n' '{"type":"response","command":"get_state","success":true,"data":{}}'
+IFS= read -r models_request
+printf '%s\n' '{"type":"response","command":"get_available_models","success":true,"data":{"models":[]}}'
+# Like Pi: finish writing the renewed login once input ends, then exit.
+while IFS= read -r line; do :; done
+sleep 0.4
+touch saved
+"###,
+        );
+        let context = ProbeContext { cwd: Some(directory.path().to_path_buf()), ..ProbeContext::default() };
+
+        discover_fixture(&binary, &context).await.unwrap();
+        assert!(directory.path().join("saved").exists(), "the probe was stopped before Pi finished saving");
+    }
+
+    /// Pi reads input only after session_start, so a startup dialog cannot be answered:
+    /// the probe has to ask again without the folder's own resources.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn blocked_startup_is_retried_without_project_resources() {
+        let (directory, binary) = executable_script(
+            r###"#!/bin/sh
+case " $* " in
+  *" --no-approve "*) ;;
+  *) printf '%s\n' '{"type":"extension_ui_request","id":"startup-1","method":"confirm","title":"Approve project server?"}'; IFS= read -r answer; exit 0 ;;
+esac
+IFS= read -r state_request
+printf '%s\n' '{"type":"response","command":"get_state","success":true,"data":{"model":{"provider":"p","id":"m"}}}'
+IFS= read -r models_request
+printf '%s\n' '{"type":"response","command":"get_available_models","success":true,"data":{"models":[{"provider":"p","id":"m","name":"M"}]}}'
+"###,
+        );
+        let context = ProbeContext { cwd: Some(directory.path().to_path_buf()), ..ProbeContext::default() };
+
+        let discovery = discover_fixture(&binary, &context).await.unwrap();
+        assert_eq!(discovery.models.len(), 1);
+        assert_eq!(discovery.models[0].id, "p/m");
+    }
+
+    /// Without a project the probe must not run extensions in the daemon's own folder.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn probe_without_a_project_runs_in_its_own_empty_folder() {
+        let (_directory, binary) = executable_script(
+            r###"#!/bin/sh
+IFS= read -r state_request
+printf '%s\n' '{"type":"response","command":"get_state","success":true,"data":{}}'
+IFS= read -r models_request
+printf '{"type":"response","command":"get_available_models","success":true,"data":{"models":[{"provider":"p","id":"m","name":"%s"}]}}\n' "$(pwd)"
+"###,
+        );
+
+        let discovery = discover_fixture(&binary, &ProbeContext::default()).await.unwrap();
+        let folder = std::path::PathBuf::from(&discovery.models[0].display_name);
+        assert_ne!(folder, std::env::current_dir().unwrap().canonicalize().unwrap());
+        assert!(folder.file_name().unwrap().to_string_lossy().starts_with("kybern-pi-probe-"), "{folder:?}");
+        assert!(!folder.exists(), "the private folder is removed after the probe");
+    }
+
+    #[test]
+    fn selectors_split_where_pi_reports_the_provider_to_end() {
+        let available = json!({ "models": [
+            { "provider": "openrouter", "id": "openrouter/auto" },
+            { "provider": "hub=https://hub.example:8318/v1", "id": "claude-haiku-4-5" },
+            { "provider": "anthropic", "id": "claude" },
+        ] });
+        let split = |selector| split_reported_selector(&available, selector);
+        assert_eq!(split("openrouter/openrouter/auto"), Some(("openrouter".into(), "openrouter/auto".into())));
+        assert_eq!(split("hub=https://hub.example:8318/v1/claude-haiku-4-5"), Some(("hub=https://hub.example:8318/v1".into(), "claude-haiku-4-5".into())));
+        assert_eq!(split("anthropic/claude"), Some(("anthropic".into(), "claude".into())));
+        assert_eq!(split("unknown/model"), None);
     }
 
     #[cfg(unix)]

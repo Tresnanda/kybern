@@ -1,6 +1,9 @@
 // Dependency-free tests for the bundled extension and its fake Pi API.
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const extensionPath = process.env.KYBERN_PI_EXTENSION_TEST_PATH ?? process.argv[2] ?? new URL('./extension.ts', import.meta.url).pathname;
@@ -25,6 +28,7 @@ function fakePi(initialMode = "supervised", configuredTools, policy = {}) {
   const handlers = new Map();
   const pi = {
     getAllTools: () => policy.toolInfos ?? [],
+    getCommands: () => policy.commands ?? [],
     registerCommand(name, definition) {
       commands.set(name, definition);
     },
@@ -443,4 +447,52 @@ test("Coordinator permits only MCP tools owned by allowed servers", async () => 
     assert.equal((await call(event(name), context())).block, true, name);
   const regular = fakePi("full_access", [], { allowedMcpServers: ["memory"], toolInfos });
   assert.equal(await regular.handlers.get("tool_call")(event("mcp__other_lookup"), context()), undefined);
+});
+
+async function skillCommands(skills) {
+  const directory = await mkdtemp(join(tmpdir(), "kybern-skills-"));
+  const commands = [];
+  for (const [name, body] of Object.entries(skills)) {
+    const path = join(directory, `${name}.md`);
+    await writeFile(path, `---\nname: ${name}\ndescription: ${name} skill\n---\n${body}\n`);
+    commands.push({ name: `skill:${name}`, source: "skill", sourceInfo: { path } });
+  }
+  return { commands, directory };
+}
+
+test("every selected skill reaches the model, not only the leading one", async () => {
+  const { commands, directory } = await skillCommands({ alpha: "Alpha rules.", beta: "Beta rules.", gamma: "Gamma rules." });
+  const input = fakePi("full_access", [], { commands }).handlers.get("input");
+
+  const transformed = await input({ text: "/skill:alpha /skill:beta /skill:gamma fix the parser", images: [] }, context());
+  assert.equal(transformed.action, "transform");
+  const [lead, ...rest] = transformed.text.split("\n\n<skill ");
+  assert.equal(lead, "/skill:alpha fix the parser");
+  assert.equal(rest.length, 2);
+  assert.equal(rest[0], `name="beta" location="${join(directory, "beta.md")}">\nReferences are relative to ${directory}.\n\nBeta rules.\n</skill>`);
+  assert.match(rest[1], /^name="gamma" .*Gamma rules\.\n<\/skill>$/s);
+  assert.doesNotMatch(transformed.text, /description: /);
+
+  // One skill is Pi's own business, as is text that is not a skill command.
+  assert.equal(await input({ text: "/skill:alpha fix it" }, context()), undefined);
+  assert.equal(await input({ text: "please /skill:alpha /skill:beta" }, context()), undefined);
+  // A skill Pi does not know stays in the text instead of vanishing.
+  const unknown = await input({ text: "/skill:alpha /skill:nope do it" }, context());
+  assert.equal(unknown, undefined);
+  const mixed = await input({ text: "/skill:alpha /skill:nope /skill:beta do it" }, context());
+  assert.match(mixed.text, /^\/skill:alpha \/skill:nope do it\n\n<skill name="beta"/);
+});
+
+test("an untrusted project is reported once, a trusted or declined one is not", async () => {
+  const notices = [];
+  const ctx = (trusted) => ({ isProjectTrusted: () => trusted, ui: { notify: (message, level) => notices.push({ message, level }) } });
+  const hook = fakePi().handlers.get("before_agent_start");
+  await hook({ systemPrompt: "native" }, ctx(true));
+  assert.deepEqual(notices, []);
+  const untrusted = fakePi().handlers.get("before_agent_start");
+  await untrusted({ systemPrompt: "native" }, ctx(false));
+  await untrusted({ systemPrompt: "native" }, ctx(false));
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].level, "warning");
+  assert.match(notices[0].message, /isn't trusted/);
 });
