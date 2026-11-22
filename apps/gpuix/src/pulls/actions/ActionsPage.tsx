@@ -29,6 +29,7 @@ import { Label, useTheme } from '../../ui.tsx'
 import { column, row } from '../../usage/controls.tsx'
 import { prCall } from '../client.ts'
 import { hasPullRequests, isGroup, listableMembers } from '../list/model.ts'
+import { repoDot, useRepoHue } from '../list/parts.tsx'
 import { load, save } from '../persist.ts'
 import { PrLoading, Problem } from '../PrStates.tsx'
 import { FOLDER, HEADER_COMPACT_ACTIONS, PULLS_LIST_MIN, PullsHeader } from '../PullsTabs.tsx'
@@ -246,13 +247,21 @@ function ActionsTab() {
   </div>
 }
 
-/** The header's repository menu; `testId` names it for the page that uses it (Actions, Issues). */
-export function RepoPicker({ choices, current, onPick, compact = false, testId = 'actions-repo' }: { choices: Choice[]; current: Choice; onPick: (c: ActionsRepo) => void; compact?: boolean; testId?: string }) {
+/**
+ * The header's repository menu; `testId` names it for the page that uses it (Actions, Issues). `filter` is the same menu
+ * as the first chip of a filter row, with the repository's dot and name: where a narrow header would leave only the
+ * folder glyph, the list still says whose it is.
+ */
+export function RepoPicker({ choices, current, onPick, compact = false, filter = false, testId = 'actions-repo' }: { choices: Choice[]; current: Choice; onPick: (c: ActionsRepo) => void; compact?: boolean; filter?: boolean; testId?: string }) {
   const t = useTheme()
+  const hue = useRepoHue(current.projectId, current.repo)
   const groups = [...new Set(choices.filter(c => c.repo).map(c => c.projectId))]
-  return <Menu testId={testId} align="end" width={264} {...(compact ? { rootStyle: { flexShrink: 0 } } : {})} trigger={open => compact
+  const name = current.repo ? current.name.split(' / ').pop()! : current.name
+  return <Menu testId={testId} align={filter ? 'start' : 'end'} width={264} {...(compact || filter ? { rootStyle: { flexShrink: filter ? 1 : 0, minWidth: 0 } } : {})} trigger={open => filter
+    ? <PickerChip testId={`${testId}-chip`} size="sm" square dot={repoDot(t, hue)} open={open} truncate maxWidth={160} label={`Repository: ${current.name}`}>{name}</PickerChip>
+    : compact
     ? <IconButton icon={FOLDER} label={`Repository: ${current.name}`} active={open} />
-    : <PickerChip size="sm" open={open} truncate maxWidth={150} label={`Repository: ${current.name}`}>{current.repo ? current.name.split(' / ').pop()! : current.name}</PickerChip>}>
+    : <PickerChip size="sm" open={open} truncate maxWidth={150} label={`Repository: ${current.name}`}>{name}</PickerChip>}>
     {choices.filter(c => !c.repo).map(c => <MenuItem key={repoKey(c)} id={repoKey(c)} testId={`${testId}-${c.projectId}`} label={c.name} iconNode={<Lead on={repoKey(c) === repoKey(current)} color={t.link} />} onSelect={() => onPick(c)} />)}
     {groups.map(id => <div key={id} style={column}>
       <MenuSeparator />

@@ -1,6 +1,7 @@
 // One issue in the Issues list, in two steady lines like `PrListRow`: the title (one line; the full title is in the hover card
 // and the detail) with its number, then the labels as dots with their names, and on the right the pull requests that close
-// it and the author. The list shows one repository, named in its picker, so the row doesn't repeat it.
+// it and the author. The list shows one repository, which its picker names (in the header, or leading the filter row when the
+// list is narrow), so the row doesn't repeat it.
 import { useGpuix, type PublicInstance } from '@gpuix/react'
 import { memo, useEffect, useRef } from 'react'
 import { relativeTime } from '@/lib/format'

@@ -156,10 +156,12 @@ export function IssuesPage() {
   const labelWord = labels.length === 0 ? 'Labels' : labels.length === 1 ? labels[0]! : `${labels.length} labels`
   const assigneeWord = !assignee ? 'Assignee' : assignee === '@me' ? 'Assigned to me' : assignee
   const showList = wide || selected === null
+  // A header too narrow for the repository's name hands it to the filter row, where it leads as a named chip.
+  const repoInFilters = listWidth < HEADER_COMPACT_ISSUES
   return <div {...PR_SCROLL_LAYOUT} testId="page-issues" onMouseMove={measure} style={{ display: 'flex', flexGrow: 1, minHeight: 0, minWidth: 0 }}>
     {showList && <div style={{ ...column, width: wide ? list.width : '100%', flexShrink: 0, position: 'relative', borderRightWidth: wide ? 1 : 0, borderColor: t.border }}>
       <PullsHeader>
-        <RepoPicker testId="issues-repo" choices={choices} current={choice} onPick={pick} compact={listWidth < HEADER_COMPACT_ISSUES} />
+        {!repoInFilters && <RepoPicker testId="issues-repo" choices={choices} current={choice} onPick={pick} />}
         <IconButton testId="issues-refresh" icon={N.refresh} label="Refresh" disabled={pending} onClick={() => refresh(n => n + 1)}><SwapOnChange kind="icon" active={pending ? 'busy' : 'idle'} style={{ width: 16, height: 16 }}>{pending ? <SpinIcon testId="issues-refresh-spinner" source={N.refresh} size={16} color={t.iconSecondary} /> : <Icon source={N.refresh} size={16} color={t.iconSecondary} />}</SwapOnChange></IconButton>
       </PullsHeader>
       <div style={{ ...column, gap: 8, paddingLeft: 12, paddingRight: 12, paddingTop: 10, paddingBottom: 10 }}>
@@ -168,6 +170,7 @@ export function IssuesPage() {
           <div style={{ flexGrow: 1, minWidth: 0 }}><SearchField ref={searchField} size="sm" label="Search issues" testId="issues-search" value={query} placeholder="Search" onChange={setQuery} width="100%" onKeyDown={e => { if (e.key === 'down' && issues[0]) setFocused(issues[0].number) }} /></div>
         </div>
         <div testId="issues-filters" style={{ ...row, gap: 6 }}>
+          {repoInFilters && <RepoPicker testId="issues-repo" choices={choices} current={choice} onPick={pick} filter />}
           <Menu testId="issues-labels" align="start" width={248} trigger={open => <PickerChip testId="issues-labels-chip" size="sm" square icon={TAG} open={open} truncate maxWidth={150} selected={labels.length > 0} label={`Labels: ${labelWord}`}>{labelWord}</PickerChip>}>
             {labels.length > 0 && <MenuItem id="clear" testId="issues-labels-clear" label="Clear labels" onSelect={() => setLabels([])} />}
             {labels.length > 0 && <MenuSeparator />}

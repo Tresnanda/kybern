@@ -10,13 +10,14 @@ import { RADIUS } from '../../kit/controls.ts'
 import { HoverCard } from '../../kit/HoverCard.tsx'
 import { ink, Label, useTheme } from '../../ui.tsx'
 import { column, row } from '../../usage/controls.tsx'
-import { DiffStat, Reason, RepoTag, showsReason } from './parts.tsx'
+import { DiffStat, Reason, RepoBadge, showsReason } from './parts.tsx'
 import { memberName, type Row } from './model.ts'
 
 /**
  * One pull request in two steady lines: the title (one line, the full title in the hover card and the detail) with its
- * number, then why it is where it is, leading, and the quiet metadata trailing: the repository when the list mixes
- * repositories, and the diff size. Every row is the same height, so the reasons line up in a column a scan can follow.
+ * number, then why it is where it is, leading, and trailing the quiet diff size and, when the list mixes repositories,
+ * the repository as its badge at the row's edge. Every row is the same height, so the reasons line up in one column a
+ * scan can follow and the repositories in another.
  */
 export const PrListRow = memo(function PrListRow({ item: { pr, project }, showRepo = true, selected, focused, onOpen, onFocus, onKey, onOpenInTab }: { onOpenInTab?: () => void; item: Row; showRepo?: boolean; selected: boolean; focused: boolean; onOpen: () => void; onFocus: () => void; onKey: (key: string) => void }) {
   const t = useTheme(); const { renderer } = useGpuix(); const ref = useRef<PublicInstance | null>(null)
@@ -40,11 +41,11 @@ export const PrListRow = memo(function PrListRow({ item: { pr, project }, showRe
             <Label color={t.textTertiary} size={12} lineHeight={18} style={{ opacity: showActions ? 0 : 1 }}>{`#${pr.number}`}</Label>
           </div>
         </div>
-        <div style={{ ...row, gap: 10, height: 16 }}>
+        <div style={{ ...row, gap: 8, height: 18 }}>
           {showsReason(reason) && <Reason testId="pr-badge-reason" reason={reason} />}
           <div style={{ flexGrow: 1 }} />
-          {showRepo && <RepoTag testId="pr-badge-repo" name={badge} projectId={project.id} {...(pr.repo ? { repo: pr.repo } : {})} />}
           <DiffStat additions={pr.additions} deletions={pr.deletions} />
+          {showRepo && <RepoBadge testId="pr-badge-repo" name={badge} projectId={project.id} {...(pr.repo ? { repo: pr.repo } : {})} maxWidth={112} />}
         </div>
       </div>
     }>

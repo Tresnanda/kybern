@@ -1,4 +1,4 @@
-// Small pieces of the pull request list: the repository badge and tag, the readiness reason and the diff stat.
+// Small pieces of the pull request list: the repository badge, the readiness reason and the diff stat.
 import {
   Alert02Icon, CancelCircleIcon, CheckmarkCircle02Icon, Clock01Icon, FlashIcon, GitMergeIcon, GitPullRequestClosedIcon,
   GitPullRequestDraftIcon, GitPullRequestIcon, Loading03Icon, MessageEdit01Icon,
@@ -86,27 +86,18 @@ export const showsReason = (reason: RowReason) => reason.label !== 'Open' && rea
 /**
  * A 12 px tone glyph and a short reason; the label truncates before the glyph does. A reason that needs action (failing
  * checks, conflicts, changes requested) is set in its tone at medium weight, so it is the first thing a scan finds.
+ * In a row too narrow for everything it gives way well before the repository badge does (the higher shrink factor).
  */
 export function Reason({ reason, testId }: { reason: RowReason; testId?: string }) {
   const t = useTheme()
   const urgent = reason.tone === 'danger'
-  return <div testId={testId} style={{ ...row, gap: 4, flexShrink: 1, minWidth: 0 }}>
+  return <div testId={testId} style={{ ...row, gap: 4, flexShrink: 8, minWidth: 0 }}>
     <Icon source={reasonGlyph(reason)} size={12} color={toneColor(t, reason.tone)} style={{ flexShrink: 0 }} />
     <Label color={urgent ? t.red : t.textSecondary} size={12} lineHeight={16} weight={urgent ? 500 : undefined} truncate>{reason.label}</Label>
   </div>
 }
 
-/** A row's repository: its hue dot and name, quiet, for lists that mix repositories. */
-export function RepoTag({ name, projectId, repo, testId }: { name: string; projectId: string; repo?: string; testId?: string }) {
-  const t = useTheme()
-  const hue = useRepoHue(projectId, repo)
-  return <div testId={testId} style={{ ...row, gap: 5, flexShrink: 1, minWidth: 0, maxWidth: 120 }}>
-    <div style={{ width: 6, height: 6, borderRadius: 3, flexShrink: 0, backgroundColor: repoDot(t, hue) }} />
-    <Label color={t.textTertiary} size={12} lineHeight={16} truncate>{name}</Label>
-  </div>
-}
-
-/** `+12 −3` in the row's quiet colour, never clipped: it keeps its width while the reason and the repository give way. */
+/** `+12 −3` in the row's quiet colour, never clipped: it keeps its width while the reason, then the repository badge, give way. */
 export function DiffStat({ additions, deletions }: { additions?: number; deletions?: number }) {
   const t = useTheme()
   if (additions === undefined && deletions === undefined) return null

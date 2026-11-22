@@ -159,7 +159,7 @@ function PullRequestsList() {
           <div style={{ flexGrow: 1, minWidth: 0 }}><SearchField ref={search} size="sm" label="Search pull requests" testId="pr-search" value={query} placeholder="Search" onChange={setQuery} width="100%" onKeyDown={e => { if (e.key === 'down' && flat[0]) { setFocus(keyFor(flat[0])); } }} /></div>
         </div>
       </div>
-      <virtual-list {...PR_SCROLL_LAYOUT} testId="pr-list" estimatedItemHeight={52} style={{ flexGrow: 1, minHeight: 0 }}>
+      <virtual-list {...PR_SCROLL_LAYOUT} testId="pr-list" estimatedItemHeight={54} style={{ flexGrow: 1, minHeight: 0 }}>
         {failure ? <div key="gh-error" style={{ padding: 20 }}><Problem error={failure.error} projectId={failure.projectId} refresh={() => refresh(n => n + 1)} /></div> : !data ? <div key="loading" style={{ padding: 24 }}><PrLoading label="Loading pull requests…" kind="list" rows={5} /></div> : <>
           {data.errors.length > 0 && <div key="errors" style={{ padding: 12 }}><PartialProblem failures={data.errors} anyLoaded={data.rows.length > 0} refresh={() => refresh(n => n + 1)} /></div>}
           {flat.length === 0 && <div key="empty" style={{ ...column, gap: 10, padding: 24, paddingTop: 64 }}><Label color={t.text} size={16} weight={500}>{!targets.length ? 'No GitHub projects' : query.trim() ? `No results for “${query.trim()}”` : `No ${stateWord}pull requests`}</Label><Label color={t.textSecondary} size={13}>{!targets.length ? 'Add a project with a GitHub remote to review its pull requests here.' : query.trim() ? '' : `Pull requests from ${scope.project ? targets[0]?.name : 'your GitHub projects'} appear here.`}</Label>{query.trim() && <Button size="sm" style={{ alignSelf: 'flex-start' }} onClick={() => setQuery('')}>Clear search</Button>}</div>}
