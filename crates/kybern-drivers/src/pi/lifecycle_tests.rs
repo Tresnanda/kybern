@@ -822,7 +822,7 @@ async fn a_steer_and_stop_are_not_blocked_by_a_prompt_waiting_for_compaction() {
 
 #[tokio::test]
 async fn nothing_waits_behind_a_prompt_that_holds_the_gate_for_compaction() {
-    let mut harness = Harness::new(Flavor::Pi);
+    let harness = Harness::new(Flavor::Pi);
     let handle = harness.handle.clone();
     let sending = tokio::spawn(async move { handle.send_message("m1", &text_message("hello")).await });
     let first = harness.wire("prompt").await;

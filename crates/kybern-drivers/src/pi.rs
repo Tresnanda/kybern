@@ -130,7 +130,15 @@ impl PiDriver {
                 if ok {
                     status.models = match self.flavor {
                         Flavor::Pi => match models::discover(&bin, context).await {
-                            Ok(discovery) => discovery.models,
+                            Ok(discovery) => {
+                                if let Some(dialog) = &discovery.skipped_project_resources {
+                                    // Models that only this folder defines are missing from the list; say why.
+                                    status.unavailable_reason = Some(format!(
+                                        "Models from this project were left out: Pi asked \"{dialog}\" while starting, and only a thread can answer. Start a thread to approve and use them."
+                                    ));
+                                }
+                                discovery.models
+                            }
                             Err(error) => {
                                 // The executable still works: an interactive session can answer
                                 // startup dialogs and use Pi's own configured model.

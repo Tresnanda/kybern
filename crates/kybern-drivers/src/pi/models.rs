@@ -16,6 +16,9 @@ const THINKING_LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Discovery {
     pub models: Vec<ProviderModel>,
+    /// Set when the answer came from a probe that left the folder's own resources unloaded:
+    /// what the startup dialog that blocked the full probe asked.
+    pub skipped_project_resources: Option<String>,
 }
 
 /// How long a finished probe gets to exit on its own once its input is closed.
@@ -30,8 +33,10 @@ const STOP_GRACE: Duration = Duration::from_secs(2);
 /// launched by extensions.
 ///
 /// Pi reads its input only after extensions' `session_start`, so a startup dialog (an MCP
-/// adapter asking to approve a project server) can never be answered. The probe then
-/// runs again with `--no-approve`, which leaves the folder's own resources unloaded.
+/// adapter asking to approve a project server) can never be answered. Only then does the
+/// probe run again with `--no-approve`, which leaves the folder's own resources unloaded,
+/// and the answer says so (`skipped_project_resources`). A probe that fails any other way
+/// is not retried: its error is the answer.
 pub(super) async fn discover(bin: &Path, context: &ProbeContext) -> Result<Discovery> {
     discover_with_timeout(bin, context, DISCOVERY_TIMEOUT).await
 }
@@ -45,9 +50,11 @@ async fn discover_with_timeout(bin: &Path, context: &ProbeContext, timeout: Dura
     };
     let cwd = context.cwd.as_deref().or(private.as_ref().map(|dir| dir.0.as_path()));
     match discover_once(bin, context, cwd, &[], timeout).await {
-        Err(Failure { error, startup_blocked: true }) => {
+        Err(Failure { error, blocked_by: Some(dialog) }) => {
             tracing::debug!(%error, "Pi model discovery was blocked at startup; retrying without project resources");
-            discover_once(bin, context, cwd, &["--no-approve"], timeout).await.map_err(|failure| failure.error)
+            let mut discovery = discover_once(bin, context, cwd, &["--no-approve"], timeout).await.map_err(|failure| failure.error)?;
+            discovery.skipped_project_resources = Some(dialog);
+            Ok(discovery)
         }
         result => result.map_err(|failure| failure.error),
     }
@@ -73,13 +80,13 @@ impl Drop for PrivateDir {
 
 struct Failure {
     error: DriverError,
-    /// Pi stopped before it could answer, or asked something nobody can answer yet.
-    startup_blocked: bool,
+    /// What a startup dialog asked, when one nobody can answer yet blocked the probe.
+    blocked_by: Option<String>,
 }
 
 impl From<DriverError> for Failure {
     fn from(error: DriverError) -> Self {
-        Self { error, startup_blocked: false }
+        Self { error, blocked_by: None }
     }
 }
 
@@ -111,11 +118,9 @@ async fn discover_once(
     let mut lines = BufReader::new(stdout).lines();
 
     let exchange = async {
-        // A write fails when Pi already exited at startup.
-        let blocked = |error| Failure { error, startup_blocked: true };
-        write_command(&mut stdin, &json!({ "type": "get_state" })).await.map_err(blocked)?;
+        write_command(&mut stdin, &json!({ "type": "get_state" })).await?;
         let state = read_response(&mut lines, &mut stdin, "get_state").await?;
-        write_command(&mut stdin, &json!({ "type": "get_available_models" })).await.map_err(blocked)?;
+        write_command(&mut stdin, &json!({ "type": "get_available_models" })).await?;
         let available = read_response(&mut lines, &mut stdin, "get_available_models").await?;
         parse_discovery(&state, &available).map_err(Failure::from)
     };
@@ -170,16 +175,17 @@ async fn read_response(
     expected_command: &str,
 ) -> std::result::Result<Value, Failure> {
     loop {
-        let line = lines.next_line().await.map_err(DriverError::from)?.ok_or_else(|| Failure {
-            error: DriverError::Protocol(format!("Pi RPC exited before responding to {expected_command}")),
-            startup_blocked: true,
-        })?;
+        let line = lines
+            .next_line()
+            .await
+            .map_err(DriverError::from)?
+            .ok_or_else(|| DriverError::Protocol(format!("Pi RPC exited before responding to {expected_command}")))?;
         let frame: Value = serde_json::from_str(&line).map_err(|error| {
             DriverError::Protocol(format!("Pi RPC returned malformed JSON while waiting for {expected_command}: {error}"))
         })?;
 
         if frame.get("type").and_then(Value::as_str) == Some("extension_ui_request") {
-            handle_extension_request(stdin, &frame).await.map_err(|error| Failure { error, startup_blocked: true })?;
+            handle_extension_request(stdin, &frame).await?;
             continue;
         }
         if frame.get("type").and_then(Value::as_str) != Some("response")
@@ -201,7 +207,9 @@ async fn read_response(
     }
 }
 
-async fn handle_extension_request(stdin: &mut ChildStdin, frame: &Value) -> Result<()> {
+/// Cancels a dialog an extension opened at startup. It always ends the probe: nobody can
+/// answer it, and the failure names what it asked.
+async fn handle_extension_request(stdin: &mut ChildStdin, frame: &Value) -> std::result::Result<(), Failure> {
     let Some(method) = frame.get("method").and_then(Value::as_str) else {
         return Ok(());
     };
@@ -214,7 +222,16 @@ async fn handle_extension_request(stdin: &mut ChildStdin, frame: &Value) -> Resu
         .ok_or_else(|| DriverError::Protocol(format!("Pi extension {method} request omitted its id")))?;
     write_command(stdin, &json!({ "type": "extension_ui_response", "id": id, "cancelled": true })).await?;
     let title = frame.get("title").and_then(Value::as_str).unwrap_or(method);
-    Err(DriverError::Protocol(format!("Pi model discovery was cancelled because extension startup requested {method}: {title}")))
+    Err(Failure {
+        error: DriverError::Protocol(format!("Pi model discovery was cancelled because extension startup requested {method}: {title}")),
+        blocked_by: Some(dialog_summary(title)),
+    })
+}
+
+/// A startup dialog's title as one short line, for a message to the user.
+fn dialog_summary(title: &str) -> String {
+    let line: String = title.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.chars().count() > 80 { format!("{}…", line.chars().take(80).collect::<String>().trim_end()) } else { line }
 }
 
 fn parse_discovery(state: &Value, available: &Value) -> Result<Discovery> {
@@ -248,7 +265,7 @@ fn parse_discovery(state: &Value, available: &Value) -> Result<Discovery> {
     }
     models.sort_by(|a, b| a.provider.cmp(&b.provider).then_with(|| a.display_name.cmp(&b.display_name)).then_with(|| a.id.cmp(&b.id)));
 
-    Ok(Discovery { models })
+    Ok(Discovery { models, skipped_project_resources: None })
 }
 
 fn parse_model(model: &Value, default_model: Option<&str>, configured_effort: Option<&str>) -> Option<ProviderModel> {
@@ -530,6 +547,54 @@ printf '%s\n' '{"type":"response","command":"get_available_models","success":tru
         let discovery = discover_fixture(&binary, &context).await.unwrap();
         assert_eq!(discovery.models.len(), 1);
         assert_eq!(discovery.models[0].id, "p/m");
+        // The models of the project's own resources are missing, and the answer says why.
+        assert_eq!(discovery.skipped_project_resources.as_deref(), Some("Approve project server?"));
+    }
+
+    /// The provider status carries that to the user instead of silently listing fewer models.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_provider_status_says_project_models_were_skipped() {
+        use crate::AgentDriver;
+        let (directory, binary) = executable_script(
+            r###"#!/bin/sh
+case " $* " in
+  *" --version "*) echo 1.6.0; exit 0 ;;
+  *" --no-approve "*) ;;
+  *) printf '%s\n' '{"type":"extension_ui_request","id":"startup-1","method":"confirm","title":"Approve project server?"}'; IFS= read -r answer; exit 0 ;;
+esac
+IFS= read -r state_request
+printf '%s\n' '{"type":"response","command":"get_state","success":true,"data":{"model":{"provider":"p","id":"m"}}}'
+IFS= read -r models_request
+printf '%s\n' '{"type":"response","command":"get_available_models","success":true,"data":{"models":[{"provider":"p","id":"m","name":"M"}]}}'
+"###,
+        );
+        let context = ProbeContext { binary: Some(binary), cwd: Some(directory.path().to_path_buf()), ..ProbeContext::default() };
+        let status = super::super::PiDriver::pi().probe_with_context(&context).await;
+        assert!(status.available);
+        assert_eq!(status.models.len(), 1);
+        let reason = status.unavailable_reason.expect("the skipped project models are reported");
+        assert!(reason.contains("Models from this project were left out") && reason.contains("Approve project server?"), "{reason}");
+        assert!(reason.contains("Start a thread"), "{reason}");
+    }
+
+    /// Only a startup dialog earns the retry without project resources. A Pi that simply
+    /// fails to start would only hide the folder's models behind a second failure.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_early_exit_is_not_retried_without_project_resources() {
+        let (directory, binary) = executable_script(
+            r###"#!/bin/sh
+echo run >> "$(dirname "$0")/runs"
+exit 3
+"###,
+        );
+        let context = ProbeContext { cwd: Some(directory.path().to_path_buf()), ..ProbeContext::default() };
+
+        let error = discover_fixture(&binary, &context).await.unwrap_err();
+        assert!(error.to_string().contains("exited") || error.to_string().contains("pipe"), "{error}");
+        let runs = std::fs::read_to_string(directory.path().join("runs")).unwrap();
+        assert_eq!(runs.lines().count(), 1, "the probe ran again after a plain exit");
     }
 
     /// Without a project the probe must not run extensions in the daemon's own folder.
