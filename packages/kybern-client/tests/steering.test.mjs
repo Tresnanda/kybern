@@ -2,19 +2,19 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { canSteer, STEERABLE } from "../src/steering.ts";
 
-test("claude-code, codex, pi and omp take a steer", () => {
-  assert.deepEqual([...STEERABLE], ["claude-code", "codex", "pi", "omp"]);
+test("claude-code, codex, cursor, pi and omp take a steer", () => {
+  assert.deepEqual([...STEERABLE], ["claude-code", "codex", "cursor", "pi", "omp"]);
   for (const kind of STEERABLE) assert.equal(canSteer(kind), true, kind);
 });
 
-test("opencode and cursor only queue", () => {
+test("opencode only queues", () => {
   assert.equal(canSteer("opencode"), false);
-  assert.equal(canSteer("cursor"), false);
 });
 
 test("a provider object works like its kind", () => {
   assert.equal(canSteer({ kind: "claude-code", instance: "default" }), true);
-  assert.equal(canSteer({ kind: "cursor" }), false);
+  assert.equal(canSteer({ kind: "cursor", instance: "default" }), true);
+  assert.equal(canSteer({ kind: "opencode" }), false);
 });
 
 test("a missing provider does not steer", () => {

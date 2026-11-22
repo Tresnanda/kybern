@@ -88,7 +88,7 @@ fn describe_choice(kind: Option<ProviderKind>, model: Option<&str>) -> String {
 
 /// Harnesses whose sessions accept a message inside a running turn.
 pub(crate) fn harness_supports_steer(kind: ProviderKind) -> bool {
-    matches!(kind, ProviderKind::ClaudeCode | ProviderKind::Codex | ProviderKind::Pi | ProviderKind::Omp)
+    matches!(kind, ProviderKind::ClaudeCode | ProviderKind::Codex | ProviderKind::Cursor | ProviderKind::Pi | ProviderKind::Omp)
 }
 
 /// Daemon-side state of the delegation engine.

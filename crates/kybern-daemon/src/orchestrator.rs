@@ -2440,20 +2440,47 @@ impl Orchestrator {
         self.steer_from(params, SteerSource::Client).await
     }
 
+    /// When a running session declines a live steer (`DriverError::SteerFallback`),
+    /// deliver the message as an ordinary follow-up: start the next turn if the
+    /// previous one already finished, or queue it for `drain_queues` while busy.
+    async fn fallback_steer_to_followup(&self, message: methods::QueuedMessage) -> Result<methods::ThreadsSendResult> {
+        match self.send_with_id(message.thread_id, message.id, message.message.clone(), false, true).await {
+            Ok((turn_id, message_id, Admission::Queued)) => Ok(methods::ThreadsSendResult { turn_id, message_id, queued: true }),
+            Ok((turn_id, message_id, _)) => Ok(methods::ThreadsSendResult { turn_id, message_id, queued: false }),
+            Err(error) if error.downcast_ref::<ThreadBusy>().is_some() => {
+                self.enqueue(message.clone())?;
+                Ok(methods::ThreadsSendResult { turn_id: Uuid::nil(), message_id: message.id, queued: true })
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     pub(super) async fn steer_from(&self, mut params: methods::QueuedMessage, source: SteerSource) -> Result<methods::ThreadsSendResult> {
         self.ensure_not_subagent(params.thread_id)?;
         anyhow::ensure!(!self.is_rotating(params.thread_id), rotation::ROTATING_STEER_ERROR);
         self.resolve_attachments(&mut params.message);
         let receipt = || -> Result<Option<methods::ThreadsSendResult>> {
-            let Some((thread, turn_id, message)) =
+            if let Some((thread, turn_id, message)) =
                 self.inner.store.steering_receipt(params.id)?.or(self.inner.store.turn_started_receipt(params.id)?)
-            else {
-                return Ok(None);
-            };
-            if thread != params.thread_id || serde_json::to_value(message)? != serde_json::to_value(self.stored_shape(&params.message)?)? {
-                return Err(anyhow!("Message id already belongs to another request."));
+            {
+                if thread != params.thread_id
+                    || serde_json::to_value(message)? != serde_json::to_value(self.stored_shape(&params.message)?)?
+                {
+                    return Err(anyhow!("Message id already belongs to another request."));
+                }
+                return Ok(Some(methods::ThreadsSendResult { turn_id, message_id: params.id, queued: false }));
             }
-            Ok(Some(methods::ThreadsSendResult { turn_id, message_id: params.id, queued: false }))
+            if let Some(waiting) = self.inner.store.queue_receipt(params.id)? {
+                if waiting.thread_id != params.thread_id
+                    || serde_json::to_value(&waiting.message)? != serde_json::to_value(self.stored_shape(&params.message)?)?
+                {
+                    return Err(anyhow!("Message id already belongs to another request."));
+                }
+                if self.inner.store.queue_is_pending(params.id)? {
+                    return Ok(Some(methods::ThreadsSendResult { turn_id: Uuid::nil(), message_id: params.id, queued: true }));
+                }
+            }
+            Ok(None)
         };
         if let Some(result) = receipt()? {
             return Ok(result);
@@ -2551,9 +2578,22 @@ impl Orchestrator {
             .ok_or_else(|| anyhow!("This turn has ended. Send your message to start the next turn."))?;
         anyhow::ensure!(!self.is_rotating(params.thread_id), rotation::ROTATING_STEER_ERROR);
         live.touch();
-        live.session.steer(&params.id.to_string(), &self.provider_message_for(&thread, &params.message, &live)).await?;
-        self.emit(params.thread_id, Some(active.id), EventPayload::MessageSteered { message_id: params.id, message: params.message })?;
-        Ok(methods::ThreadsSendResult { turn_id: active.id, message_id: params.id, queued: false })
+        let active_id = active.id;
+        match live.session.steer(&params.id.to_string(), &self.provider_message_for(&thread, &params.message, &live)).await {
+            Ok(()) => {
+                self.emit(
+                    params.thread_id,
+                    Some(active_id),
+                    EventPayload::MessageSteered { message_id: params.id, message: params.message },
+                )?;
+                Ok(methods::ThreadsSendResult { turn_id: active_id, message_id: params.id, queued: false })
+            }
+            Err(kybern_drivers::DriverError::SteerFallback) if source == SteerSource::Client => {
+                drop(turn);
+                self.fallback_steer_to_followup(params).await
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
     /// One daemon-owned worker consumes accepted follow-ups, independently of clients.
@@ -3116,8 +3156,22 @@ impl Orchestrator {
                 .ok_or_else(|| anyhow!("The turn just ended. Submit your answer again to continue the conversation."))?;
             anyhow::ensure!(!self.is_rotating(params.thread_id), rotation::ROTATING_STEER_ERROR);
             live.touch();
-            live.session.steer(&message_id.to_string(), &self.provider_message_for(&thread, &message, &live)).await?;
-            Some(active.id)
+            let active_id = active.id;
+            match live.session.steer(&message_id.to_string(), &self.provider_message_for(&thread, &message, &live)).await {
+                Ok(()) => Some(active_id),
+                Err(kybern_drivers::DriverError::SteerFallback) => {
+                    drop(turn);
+                    let fallback = self
+                        .fallback_steer_to_followup(methods::QueuedMessage {
+                            id: message_id,
+                            thread_id: params.thread_id,
+                            message: message.clone(),
+                        })
+                        .await?;
+                    (!fallback.queued).then_some(fallback.turn_id)
+                }
+                Err(error) => return Err(error.into()),
+            }
         } else {
             // Queued during a context refresh: the answer has no turn until it starts one.
             match self.send_with_id(params.thread_id, message_id, message.clone(), false, false).await? {
@@ -5194,7 +5248,7 @@ impl Orchestrator {
                 t.status = ThreadStatus::Idle;
                 let t = self.update_thread(t)?;
                 self.save_account_binding(&t)?;
-                if matches!(stop_reason, StopReason::Completed | StopReason::MaxTurns)
+                if live.session.instructions_delivered().unwrap_or(true)
                     && live.instructions_unconfirmed.swap(false, Ordering::SeqCst)
                     && let Some(session_id) = &t.provider_session_id
                 {
@@ -5287,7 +5341,13 @@ impl Orchestrator {
                 // A failed turn may have hit a plan limit.
                 self.inner.usage.turn_finished(t.provider.kind);
                 t.status = ThreadStatus::Failed;
-                self.update_thread(t)?;
+                let t = self.update_thread(t)?;
+                if live.session.instructions_delivered() == Some(true)
+                    && live.instructions_unconfirmed.swap(false, Ordering::SeqCst)
+                    && let Some(session_id) = &t.provider_session_id
+                {
+                    self.inner.store.meta_set(&instructions_key(session_id), "1")?;
+                }
                 self.delegation_turn_finished(thread_id, turn_id, delegation::TurnOutcome::Failed(error));
             }
             DriverEvent::SessionMetadata { title, effort } => {
@@ -5770,6 +5830,7 @@ mod tests {
         /// `close()` fails, as one whose process could not be ended would.
         broken_close: bool,
         reject_permission: bool,
+        steer_fallback: bool,
         stopped_tasks: Arc<Mutex<Vec<String>>>,
         /// What the session was told to do with each permission request.
         permission_responses: Arc<Mutex<Vec<ApprovalDecision>>>,
@@ -5796,6 +5857,9 @@ mod tests {
         }
 
         async fn steer(&self, _message_id: &str, message: &UserMessage) -> kybern_drivers::Result<()> {
+            if self.steer_fallback {
+                return Err(kybern_drivers::DriverError::SteerFallback);
+            }
             self.messages.lock().await.push(message.clone());
             Ok(())
         }
@@ -8179,6 +8243,165 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn steer_fallback_queues_followup_and_delivers_on_next_turn() {
+        assert!(super::delegation::harness_supports_steer(ProviderKind::Cursor));
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let live = Arc::new(LiveSession {
+            session_instance_id: Uuid::now_v7(),
+            session: Box::new(TestSession { messages: messages.clone(), steer_fallback: true, ..Default::default() }),
+            computer_tools: false,
+            last_activity: std::sync::Mutex::new(SessionActivityTime::now()),
+            released: AtomicBool::new(false),
+            retained: AtomicBool::new(false),
+            stop_cleanup: AtomicBool::new(false),
+            turn: Mutex::new(None),
+            continuation: Mutex::new(None),
+            turn_ready: tokio::sync::Notify::new(),
+            last_turn_id: Mutex::new(None),
+            tasks: Mutex::new(HashMap::new()),
+            task_aliases: Mutex::new(HashMap::new()),
+            deferred_checkpoints: Mutex::new(HashSet::new()),
+            pending: Mutex::new(HashMap::new()),
+            daemon_approvals: Mutex::new(HashMap::new()),
+            app_tool_requests: Mutex::new(HashSet::new()),
+            app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
+            brief_revision: Mutex::new(None),
+            lead_settings: Mutex::new(None),
+            context_usage: std::sync::Mutex::new(None),
+            instructions_unconfirmed: AtomicBool::new(false),
+        });
+        fixture.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
+
+        fixture.orchestrator.send(thread.id, UserMessage::text("initial request")).await.unwrap();
+        live.turn_ready.notified().await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while messages.lock().await.is_empty() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let prompt = methods::QueuedMessage { id: Uuid::now_v7(), thread_id: thread.id, message: UserMessage::text("Follow up please") };
+        let first = fixture.orchestrator.steer(prompt.clone()).await.unwrap();
+        assert!(first.queued, "declined steer must fall back to a queued follow-up");
+        assert_eq!(first.message_id, prompt.id);
+
+        // Retrying the same steer id while queued stays idempotent; a different body is rejected.
+        let retry = fixture.orchestrator.steer(prompt.clone()).await.unwrap();
+        assert!(retry.queued);
+        assert_eq!(retry.message_id, prompt.id);
+        assert!(
+            fixture.orchestrator.steer(methods::QueuedMessage { message: UserMessage::text("other"), ..prompt.clone() }).await.is_err()
+        );
+
+        // Kybern-originated steers still surface Err so messaging/delegation use their own queue fallback.
+        assert!(
+            fixture
+                .orchestrator
+                .steer_from(
+                    methods::QueuedMessage { id: Uuid::now_v7(), thread_id: thread.id, message: UserMessage::text("internal") },
+                    super::SteerSource::Kybern,
+                )
+                .await
+                .is_err()
+        );
+
+        let queue = fixture.store.queue_list(Some(thread.id)).unwrap();
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].id, prompt.id);
+
+        // Once the active turn completes, draining queues delivers the follow-up on the next turn.
+        fixture.orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Completed)).await.unwrap();
+        fixture.orchestrator.drain_queues().await.unwrap();
+        live.turn_ready.notified().await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while messages.lock().await.len() < 2 {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(messages.lock().await[1].plain_text(), "Follow up please");
+        assert!(fixture.store.queue_list(Some(thread.id)).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn answer_questions_falls_back_to_followup_when_steer_is_declined() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let live = Arc::new(LiveSession {
+            session_instance_id: Uuid::now_v7(),
+            session: Box::new(TestSession { messages: messages.clone(), steer_fallback: true, ..Default::default() }),
+            computer_tools: false,
+            last_activity: std::sync::Mutex::new(SessionActivityTime::now()),
+            released: AtomicBool::new(false),
+            retained: AtomicBool::new(false),
+            stop_cleanup: AtomicBool::new(false),
+            turn: Mutex::new(None),
+            continuation: Mutex::new(None),
+            turn_ready: tokio::sync::Notify::new(),
+            last_turn_id: Mutex::new(None),
+            tasks: Mutex::new(HashMap::new()),
+            task_aliases: Mutex::new(HashMap::new()),
+            deferred_checkpoints: Mutex::new(HashSet::new()),
+            pending: Mutex::new(HashMap::new()),
+            daemon_approvals: Mutex::new(HashMap::new()),
+            app_tool_requests: Mutex::new(HashSet::new()),
+            app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
+            brief_revision: Mutex::new(None),
+            lead_settings: Mutex::new(None),
+            context_usage: std::sync::Mutex::new(None),
+            instructions_unconfirmed: AtomicBool::new(false),
+        });
+        fixture.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
+
+        fixture.orchestrator.send(thread.id, UserMessage::text("initial request")).await.unwrap();
+        live.turn_ready.notified().await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while messages.lock().await.is_empty() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let request = AsyncQuestionRequest {
+            id: "q-fallback".into(),
+            questions: vec![AsyncQuestion { title: "Continue?".into(), options: vec!["Yes".into(), "No".into()] }],
+        };
+        fixture.orchestrator.handle_driver_event(thread.id, &live, DriverEvent::AsyncQuestions(request)).await.unwrap();
+        fixture
+            .orchestrator
+            .answer_questions(methods::ThreadsAnswerParams {
+                thread_id: thread.id,
+                request_id: "q-fallback".into(),
+                answers: vec!["Yes".into()],
+            })
+            .await
+            .unwrap();
+
+        let events = fixture.store.events_for_thread(thread.id).unwrap();
+        assert!(kybern_store::project_pending_questions(&events).is_empty());
+        assert_eq!(fixture.store.queue_list(Some(thread.id)).unwrap().len(), 1);
+
+        fixture.orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Completed)).await.unwrap();
+        fixture.orchestrator.drain_queues().await.unwrap();
+        live.turn_ready.notified().await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while messages.lock().await.len() < 2 {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(messages.lock().await[1].plain_text().contains("Answer: Yes"));
     }
 
     #[tokio::test]
