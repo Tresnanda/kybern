@@ -45,8 +45,15 @@ async fn grok_ready() -> bool {
         eprintln!("skipping Grok Build: {:?}", status.unavailable_reason);
         return false;
     }
-    // `grok models` only answers when signed in.
-    if status.models.is_empty() && std::env::var_os("XAI_API_KEY").is_none() {
+    // `grok models` lists nothing when signed out, or (1.0.92) lists them after "You are not authenticated."
+    let signed_out_text = status.binary_path.as_ref().is_some_and(|binary| {
+        std::process::Command::new(binary)
+            .arg("models")
+            .env("GROK_DISABLE_AUTOUPDATER", "1")
+            .output()
+            .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).to_ascii_lowercase().contains("not authenticated"))
+    });
+    if (status.models.is_empty() || signed_out_text) && std::env::var_os("XAI_API_KEY").is_none() {
         assert!(!strict, "Grok Build is signed out");
         eprintln!("skipping Grok Build: signed out (grok models returned no models)");
         return false;
@@ -773,8 +780,8 @@ async fn grok_build_streams_runs_a_tool_and_lists_models() {
     }
     let driver = DriverRegistry::with_defaults().get(ProviderKind::GrokBuild).expect("driver registered");
     let status = driver.probe(None).await;
-    // Only Auto and Full access work: Grok sends no permission requests Kybern could answer.
-    assert_eq!(status.supported_permission_modes, vec![PermissionMode::Auto, PermissionMode::FullAccess]);
+    // Kybern answers Grok's permission requests, so every mode works.
+    assert_eq!(status.supported_permission_modes, PermissionMode::ALL.to_vec());
     assert!(!status.supports_model_switch, "the model is chosen at session start");
     if std::env::var_os("XAI_API_KEY").is_none() {
         assert!(!status.models.is_empty(), "`grok models` listed no models: {status:?}");

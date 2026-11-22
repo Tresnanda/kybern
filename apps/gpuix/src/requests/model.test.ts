@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { ApprovalRequest } from '../../../../packages/kybern-client/src/types.ts'
-import { approvalCard, commandOf, diffLines, editDiff, forwardsDeclineReason, grantLines, listParts, rowForDigit, sessionLabel, shellQuote, stepHighlight, type CardModel, type Part } from './model.ts'
+import { agentName, approvalCard, commandOf, diffLines, editDiff, forwardsDeclineReason, grantLines, listParts, rowForDigit, sessionLabel, shellQuote, stepHighlight, type CardModel, type Part } from './model.ts'
 
 const base = { id: 'a1', thread_id: 't', turn_id: 'u', tool_call_id: 'c', created_at: '2026-10-23T00:00:00Z', summary: '' }
 const request = (tool_name: string, input: unknown, suggestions: unknown[] = [], summary = ''): ApprovalRequest => ({ ...base, tool_name, input: input as never, suggestions: suggestions as never, summary })
@@ -183,4 +183,10 @@ describe('diffs', () => {
   test('grant lines read Codex network and write roots', () => {
     expect(grantLines({ network: { host: 'registry.npmjs.org' }, grant_root: '~/.cache/bun' })).toEqual([{ name: 'Network access', target: 'registry.npmjs.org', glyph: 'network' }, { name: 'Write outside the workspace', target: '~/.cache/bun', glyph: 'folder' }])
   })
+})
+
+test('cards name Grok Build as Grok, like the other harnesses', () => {
+  expect(agentName('grok-build')).toBe('Grok')
+  expect(agentName('claude-code')).toBe('Claude')
+  expect(agentName(undefined)).toBe('the agent')
 })

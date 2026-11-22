@@ -66,19 +66,7 @@ pub fn classify(kind: ProviderKind, text: &str) -> Option<Problem> {
 pub fn classify_error(kind: ProviderKind, error: &DriverError) -> Option<Problem> {
     let detail = error.to_string();
     match error {
-        DriverError::VersionTooOld { .. } => Some(
-            Problem::new(ProblemKind::UpdateNeeded, detail)
-                .with_subject(tool_name(kind))
-                .with_copy(
-                    format!("Update {}", label(kind)),
-                    format!("The installed {} is older than Kybern needs. Update it, then try again.", label(kind)),
-                )
-                .with_action(
-                    ProblemAction::new("update_agent", format!("Update {}", label(kind)))
-                        .with_params(json!({ "provider": tool_name(kind) })),
-                )
-                .with_secondary(ProblemAction::retry("Check again")),
-        ),
+        DriverError::VersionTooOld { .. } => Some(update_needed_problem(kind, &detail)),
         DriverError::BinaryNotFound(name) if !name.contains(' ') => Some(
             Problem::new(ProblemKind::ToolMissing, detail)
                 .with_subject(tool_name(kind))
@@ -93,8 +81,23 @@ pub fn classify_error(kind: ProviderKind, error: &DriverError) -> Option<Problem
         ),
         DriverError::ProcessExited(text) | DriverError::Protocol(text) => classify(kind, text),
         DriverError::Other(error) => classify(kind, &format!("{error:#}")),
+        DriverError::Problem { problem, .. } => Some((**problem).clone()),
         _ => None,
     }
+}
+
+/// The installed harness is too old for what Kybern asks of it: update it.
+pub fn update_needed_problem(kind: ProviderKind, detail: &str) -> Problem {
+    Problem::new(ProblemKind::UpdateNeeded, detail)
+        .with_subject(tool_name(kind))
+        .with_copy(
+            format!("Update {}", label(kind)),
+            format!("The installed {} is older than Kybern needs. Update it, then try again.", label(kind)),
+        )
+        .with_action(
+            ProblemAction::new("update_agent", format!("Update {}", label(kind))).with_params(json!({ "provider": tool_name(kind) })),
+        )
+        .with_secondary(ProblemAction::retry("Check again"))
 }
 
 fn signed_out(kind: ProviderKind, text: &str, lower: &str) -> bool {
@@ -203,7 +206,7 @@ fn signed_out_problem(kind: ProviderKind, detail: &str) -> Problem {
 }
 
 /// A usage limit is the account being refused for now, not a fault: `permission`, subject `rate_limit`.
-fn rate_limited_problem(kind: ProviderKind, detail: &str) -> Problem {
+pub(crate) fn rate_limited_problem(kind: ProviderKind, detail: &str) -> Problem {
     Problem::new(ProblemKind::Permission, detail).with_subject("rate_limit").with_copy(
         format!("{} reached its usage limit", label(kind)),
         "Wait for the limit to reset, or switch to another account or model, then send your message again.",

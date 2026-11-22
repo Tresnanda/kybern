@@ -27,18 +27,48 @@ fn installed_location(kind: ProviderKind) -> Option<PathBuf> {
     let local_app_data = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
     let candidates = match kind {
         ProviderKind::Antigravity => antigravity_candidates(home.as_deref(), local_app_data.as_deref()),
-        ProviderKind::GrokBuild => grok_candidates(home.as_deref()),
+        ProviderKind::GrokBuild => grok_candidates(home.as_deref(), std::env::var("GROK_HOME").ok().as_deref()),
         _ => return None,
     };
     candidates.into_iter().find(|path| path.is_file())
 }
 
-/// Where Grok Build's installer is expected to put `grok` (`~/.grok/bin`, or the shared `~/.local/bin`).
-/// Only used when `grok` is not on PATH.
-pub(crate) fn grok_candidates(home: Option<&Path>) -> Vec<PathBuf> {
+/// Grok Build's own folder: `$GROK_HOME` (a leading `~` is the home folder, and a relative path is
+/// taken from it), else `~/.grok`. Grok keeps its config, sessions, skills and installed versions there.
+pub fn grok_home(home: Option<&Path>, configured: Option<&str>) -> Option<PathBuf> {
+    match configured.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => {
+            let path = match (value, value.strip_prefix("~/").or_else(|| value.strip_prefix("~\\")), home) {
+                ("~", _, Some(home)) => home.to_path_buf(),
+                (_, Some(rest), Some(home)) => home.join(rest),
+                _ => PathBuf::from(value),
+            };
+            match home {
+                Some(home) if path.is_relative() => Some(home.join(path)),
+                _ => Some(path),
+            }
+        }
+        None => home.map(|home| home.join(".grok")),
+    }
+}
+
+/// `GROK_HOME` as `grok` should see it: a leading `~` expanded, since Grok does not expand it itself
+/// (T3 Code, a5f1c51e38). `None` when it is unset or needs no change.
+pub fn grok_home_override(home: Option<&Path>, configured: Option<&str>) -> Option<PathBuf> {
+    configured.map(str::trim).filter(|value| value.starts_with('~')).and_then(|value| grok_home(home, Some(value)))
+}
+
+/// Where Grok Build's installer is expected to put `grok` (`$GROK_HOME/bin`, `~/.grok/bin`, or the shared
+/// `~/.local/bin`). Only used when `grok` is not on PATH.
+pub(crate) fn grok_candidates(home: Option<&Path>, grok_home_var: Option<&str>) -> Vec<PathBuf> {
     let Some(home) = home else { return Vec::new() };
     let name = if cfg!(windows) { "grok.exe" } else { "grok" };
-    vec![home.join(".grok").join("bin").join(name), home.join(".local").join("bin").join(name)]
+    let mut candidates = Vec::new();
+    if let Some(grok) = grok_home(Some(home), grok_home_var).filter(|grok| *grok != home.join(".grok")) {
+        candidates.push(grok.join("bin").join(name));
+    }
+    candidates.extend([home.join(".grok").join("bin").join(name), home.join(".local").join("bin").join(name)]);
+    candidates
 }
 
 pub(crate) fn antigravity_candidates(home: Option<&Path>, local_app_data: Option<&Path>) -> Vec<PathBuf> {
@@ -161,19 +191,25 @@ fn quoted_segments(line: &str) -> Vec<(usize, &str)> {
 
 /// Run `<bin> --version` and return the first line, trimmed.
 pub async fn version_of(bin: &Path, args: &[&str]) -> Option<String> {
+    // A version check must not start Grok Build's updater; other harnesses ignore the variable.
+    let probe = || {
+        let mut probe = command(bin).no_window();
+        probe.args(args).env(crate::grok::DISABLE_AUTOUPDATER.0, crate::grok::DISABLE_AUTOUPDATER.1);
+        probe
+    };
     let run = async {
         // Linux refuses to run a file that a freshly forked child of another
         // thread still holds open for writing (ETXTBSY) until that child execs,
         // e.g. a harness just installed or updated. Retry briefly.
         for _ in 0..25 {
-            match crate::process_tree::output(command(bin).no_window().args(args)).await {
+            match crate::process_tree::output(&mut probe()).await {
                 Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
                     tokio::time::sleep(std::time::Duration::from_millis(20)).await
                 }
                 result => return result,
             }
         }
-        crate::process_tree::output(command(bin).no_window().args(args)).await
+        crate::process_tree::output(&mut probe()).await
     };
     let out = tokio::time::timeout(std::time::Duration::from_secs(10), run).await.ok()?.ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
@@ -207,12 +243,50 @@ mod tests {
         path
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_version_check_never_starts_grok_s_updater() {
+        let dir = tempfile::tempdir().unwrap();
+        let grok = dir.path().join("grok");
+        kybern_protocol::process::write_executable(&grok, "#!/bin/sh\necho \"grok 1.0.92 updater=${GROK_DISABLE_AUTOUPDATER:-on}\"\n")
+            .unwrap();
+        let mut version = None;
+        for _ in 0..50 {
+            version = version_of(&grok, &["--version"]).await;
+            if version.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(version.as_deref(), Some("grok 1.0.92 updater=1"));
+    }
+
     #[test]
     fn grok_is_looked_for_in_its_own_and_the_shared_bin_folder() {
         let home = Path::new("/home/me");
         let name = if cfg!(windows) { "grok.exe" } else { "grok" };
-        assert_eq!(grok_candidates(Some(home)), [home.join(".grok").join("bin").join(name), home.join(".local").join("bin").join(name)]);
-        assert!(grok_candidates(None).is_empty());
+        assert_eq!(
+            grok_candidates(Some(home), None),
+            [home.join(".grok").join("bin").join(name), home.join(".local").join("bin").join(name)]
+        );
+        assert!(grok_candidates(None, None).is_empty());
+        // A custom GROK_HOME is looked in first.
+        assert_eq!(grok_candidates(Some(home), Some("~/tools/grok"))[0], home.join("tools/grok/bin").join(name));
+    }
+
+    #[test]
+    fn grok_home_follows_grok_home_with_a_leading_tilde() {
+        let home = Path::new("/home/me");
+        assert_eq!(grok_home(Some(home), None), Some(home.join(".grok")));
+        assert_eq!(grok_home(Some(home), Some("  ")), Some(home.join(".grok")));
+        assert_eq!(grok_home(Some(home), Some("~")), Some(home.to_path_buf()));
+        assert_eq!(grok_home(Some(home), Some("~/xai/grok")), Some(home.join("xai/grok")));
+        assert_eq!(grok_home(Some(home), Some("/opt/grok")), Some(PathBuf::from("/opt/grok")));
+        assert_eq!(grok_home(Some(home), Some("xai")), Some(home.join("xai")));
+        assert_eq!(grok_home(None, None), None);
+        assert_eq!(grok_home_override(Some(home), Some("~/xai")), Some(home.join("xai")));
+        assert_eq!(grok_home_override(Some(home), Some("/opt/grok")), None);
+        assert_eq!(grok_home_override(Some(home), None), None);
     }
 
     #[test]
