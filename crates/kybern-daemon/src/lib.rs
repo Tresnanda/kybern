@@ -297,6 +297,7 @@ async fn serve() -> Result<()> {
     if !orphans.is_empty() {
         tokio::spawn(account_login::remove_orphans(state.clone(), orphans));
     }
+    cursor_setup::start(&state);
     let update_worker = tokio::spawn(harness_updates::run(state.clone()));
     let self_update_worker = tokio::spawn(self_update::run(state.clone()));
     // Updates of the desktop app this daemon belongs to (ADE-125): idle until this machine is asked to update.

@@ -81,6 +81,8 @@ export interface ComposerData {
   /** Per-account model catalog of the open thread's target (`providers.accounts.catalog`). */
   catalog: { key: string; status: ProviderStatus } | null
   catalogLoading: string | null
+  /** Bumped when every catalog must be read again (Cursor finished updating its SDK). */
+  catalogEpoch: number
   queued: Record<ThreadId, QueuedMessage[]>
   /** The branches of a project's checkout; `machineId` is unset for the machine the user is at. `fetching` while the remotes are fetched. */
   branches: { projectId: ProjectId; machineId?: MachineId | undefined; result: GitBranchesResult; fetching?: boolean } | null
@@ -98,6 +100,7 @@ const initialData: ComposerData = {
   target: null,
   catalog: null,
   catalogLoading: null,
+  catalogEpoch: 0,
   queued: {},
   branches: null,
   draft: { mode: null, provider: null, models: {}, projectId: undefined, worktree: null, baseBranch: null, group: null },
@@ -200,6 +203,14 @@ export function refreshComposerAccounts(accounts?: AccountSummary[]) {
   if (!client) return Promise.resolve()
   if (accounts) { patch({ accounts }); return Promise.resolve() }
   return readAccounts(client).then((r) => { if (localClient() === client) patch({ accounts: r.accounts }) }).catch(() => {})
+}
+
+/** Cursor's SDK update finished: read the provider list again and let the open composers fetch their catalogs anew. */
+export function reloadComposerCatalogs() {
+  if (!localClient()) return
+  for (const [id, entry] of catalogs) if (entry.key.includes(':cursor:')) catalogs.delete(id)
+  patch((d) => ({ catalog: d.catalog?.key.includes(':cursor:') ? null : d.catalog, catalogEpoch: d.catalogEpoch + 1 }))
+  void loadProviders(true).catch(() => {})
 }
 
 let providerLoad: Promise<ProviderStatus[]> | null = null

@@ -266,6 +266,8 @@ const MAX_PROVIDER_CATALOGS: usize = 32;
 pub struct ProviderCatalogCache {
     entries: Mutex<HashMap<String, CachedProviderCatalog>>,
     refresh: Mutex<()>,
+    /// Bumped by `invalidate`: a refresh that began before it describes the machine as it was.
+    generation: std::sync::atomic::AtomicU64,
     last_known: std::sync::Mutex<LastKnown>,
 }
 
@@ -369,6 +371,7 @@ impl ProviderCatalogCache {
     }
 
     pub async fn invalidate(&self) {
+        self.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.entries.lock().await.clear();
     }
     pub async fn get_if_fresh(&self, key: &str) -> Option<Vec<ProviderStatus>> {
@@ -397,8 +400,13 @@ impl ProviderCatalogCache {
             return providers;
         }
 
+        let generation = self.generation.load(std::sync::atomic::Ordering::SeqCst);
         let providers = refresh().await;
         let mut entries = self.entries.lock().await;
+        if generation != self.generation.load(std::sync::atomic::Ordering::SeqCst) {
+            // Something changed while this probed (a Cursor SDK update, a sign-in): answer it, but never keep it.
+            return providers;
+        }
         entries.retain(|_, entry| entry.refreshed_at.elapsed() < PROVIDER_CATALOG_TTL);
         if !entries.contains_key(&key)
             && entries.len() >= MAX_PROVIDER_CATALOGS
@@ -425,6 +433,29 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+
+    #[tokio::test]
+    async fn a_refresh_that_overlaps_an_invalidation_is_answered_but_not_kept() {
+        let cache = ProviderCatalogCache::default();
+        let calls = AtomicUsize::new(0);
+        let load = || async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            // The Cursor SDK update (or a sign-in) finishes while the providers are being read.
+            cache.invalidate().await;
+            Vec::new()
+        };
+        cache.get_or_refresh("project".into(), false, load).await;
+        cache.get_or_refresh("project".into(), false, load).await;
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "the stale answer was not cached");
+        // Without an overlapping invalidation, the answer is kept as before.
+        let quiet = || async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Vec::new()
+        };
+        cache.get_or_refresh("project".into(), false, quiet).await;
+        cache.get_or_refresh("project".into(), false, quiet).await;
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
 
     #[tokio::test]
     async fn provider_catalog_refreshes_are_coalesced() {

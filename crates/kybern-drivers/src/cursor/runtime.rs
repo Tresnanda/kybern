@@ -1,5 +1,7 @@
 use kybern_protocol::process::NoWindow;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -15,18 +17,18 @@ use super::Connection;
 use crate::DriverEvent;
 use crate::{DriverError, ProbeContext, Result};
 
-pub const SDK_VERSION: &str = "1.2.0";
+pub const SDK_VERSION: &str = "1.4.2";
 const NODE_MINIMUM: &str = "22.13";
 const SETUP_HINT: &str = "Install it in Settings → Agent providers, or run `kybern cursor install`.";
 const HOST: &str = include_str!("sdk/host.mjs");
 const PACKAGE: &str = include_str!("sdk/package.json");
 const LOCK: &str = include_str!("sdk/package-lock.json");
 
-fn env(context: &ProbeContext, name: &str) -> Option<String> {
+pub(super) fn env(context: &ProbeContext, name: &str) -> Option<String> {
     context.env.get(name).cloned().or_else(|| std::env::var(name).ok()).filter(|s| !s.is_empty())
 }
 
-fn installed_dir(context: &ProbeContext) -> Result<PathBuf> {
+pub(super) fn installed_dir(context: &ProbeContext) -> Result<PathBuf> {
     if let Some(path) = env(context, "KYBERN_CURSOR_SDK_DIR") {
         return Ok(path.into());
     }
@@ -86,11 +88,7 @@ pub(super) fn command(context: &ProbeContext, mode: &str) -> Result<Command> {
 }
 
 pub(super) async fn probe(context: &ProbeContext) -> Result<(PathBuf, Value)> {
-    if !installed(context)
-        && let Some(previous) = previous_version(context)
-    {
-        return Err(DriverError::Protocol(outdated(&previous)));
-    }
+    ensure_current(context)?;
     let binary = node(context)?;
     let mut cmd = command(context, "probe")?;
     let output = tokio::time::timeout(Duration::from_secs(25), crate::process_tree::output(&mut cmd)).await.map_err(|_| {
@@ -117,13 +115,41 @@ pub(super) fn diagnostic(bytes: &[u8]) -> String {
     }
 }
 
-/// Explicit setup only; provider discovery never downloads or installs code.
+fn install_lock(destination: &std::path::Path) -> Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: Mutex<BTreeMap<PathBuf, Arc<tokio::sync::Mutex<()>>>> = Mutex::new(BTreeMap::new());
+    LOCKS.lock().unwrap_or_else(|poison| poison.into_inner()).entry(destination.to_path_buf()).or_default().clone()
+}
+
+/// Staging folders left by an install that a crash or a daemon exit cut short.
+/// Only ones older than an hour go, so another process's running install stays.
+fn remove_abandoned_staging(cache: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(cache) else { return };
+    for entry in entries.flatten() {
+        let abandoned = entry.file_name().to_string_lossy().starts_with(".cursor-install-")
+            && entry
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|at| at.elapsed().ok())
+                .is_some_and(|age| age > Duration::from_secs(3600));
+        if abandoned {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+/// Explicit setup only (the Update button, `kybern cursor install`, or the
+/// automatic update of an SDK this machine already has); a fresh machine never
+/// downloads or installs code on its own.
 /// Install into a staging directory and rename after npm succeeds, so existing
 /// sessions never see a partly-installed SDK. Package versions/integrities are
 /// committed in the lockfile and lifecycle scripts are disabled.
 pub async fn install(context: &ProbeContext) -> Result<PathBuf> {
     let _ = node(context)?;
     let destination = installed_dir(context)?;
+    // One install per directory at a time: the Update button and the automatic
+    // update can both ask, and the second finds the first's result in place.
+    let _install = install_lock(&destination).lock_owned().await;
     let manifest = destination.join("node_modules/@cursor/sdk/package.json");
     if manifest.is_file() {
         let value: Value = serde_json::from_slice(&std::fs::read(manifest)?).map_err(|e| DriverError::Protocol(e.to_string()))?;
@@ -141,6 +167,7 @@ pub async fn install(context: &ProbeContext) -> Result<PathBuf> {
     }
     let parent = destination.parent().ok_or_else(|| DriverError::Protocol("Cursor SDK directory has no parent".into()))?;
     std::fs::create_dir_all(parent)?;
+    remove_abandoned_staging(parent);
     let staging = parent.join(format!(".cursor-install-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&staging)?;
     struct Staging(PathBuf);
@@ -152,7 +179,7 @@ pub async fn install(context: &ProbeContext) -> Result<PathBuf> {
     let _cleanup = Staging(staging.clone());
     std::fs::write(staging.join("package.json"), PACKAGE)?;
     std::fs::write(staging.join("package-lock.json"), LOCK)?;
-    let npm = npm().map_err(|_| {
+    let npm = npm_in(context).map_err(|_| {
         DriverError::BinaryNotFound("Cursor’s SDK installs with npm, which comes with Node.js. Install Node.js, then try again.".into())
     })?;
     let mut cmd = Command::new(npm).no_window();
@@ -163,17 +190,41 @@ pub async fn install(context: &ProbeContext) -> Result<PathBuf> {
     if !output.status.success() {
         return Err(DriverError::Protocol(diagnostic(&output.stderr)));
     }
-    std::fs::rename(&staging, &destination)?;
+    promote(&staging, &destination)?;
     Ok(destination)
 }
 
-fn npm() -> std::result::Result<PathBuf, which::Error> {
-    which::which(if cfg!(windows) { "npm.cmd" } else { "npm" })
+/// Whether `dir` holds the pinned SDK.
+fn holds_pinned(dir: &std::path::Path) -> bool {
+    std::fs::read(dir.join("node_modules/@cursor/sdk/package.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .is_some_and(|manifest| manifest["version"] == SDK_VERSION)
 }
 
-/// npm installs the SDK; it ships with Node.js but can be missing.
-pub fn npm_available() -> bool {
-    npm().is_ok()
+/// Moves the finished install into place. Another process (the CLI beside the
+/// daemon) can install the same version at the same moment, and the second
+/// rename then fails because the destination is not empty; that is a success.
+fn promote(staging: &std::path::Path, destination: &std::path::Path) -> Result<()> {
+    match std::fs::rename(staging, destination) {
+        Ok(()) => Ok(()),
+        Err(_) if holds_pinned(destination) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+pub(super) fn npm_in(context: &ProbeContext) -> std::result::Result<PathBuf, which::Error> {
+    which::which_in(
+        if cfg!(windows) { "npm.cmd" } else { "npm" },
+        env(context, "PATH"),
+        context.cwd.clone().unwrap_or_else(|| PathBuf::from(".")),
+    )
+}
+
+/// npm installs the SDK; it ships with Node.js but can be missing. Looked up
+/// on the same PATH the install runs with.
+pub fn npm_available(context: &ProbeContext) -> bool {
+    npm_in(context).is_ok()
 }
 
 /// The newest SDK an earlier Kybern release installed beside the pinned one
@@ -204,13 +255,28 @@ pub fn outdated(previous: &str) -> String {
     )
 }
 
+/// Why Cursor can't run yet while Kybern moves an earlier SDK to the pinned one.
+pub fn updating(previous: &str) -> String {
+    format!("Updating Cursor’s SDK from {previous} to {SDK_VERSION}. Cursor will be ready in a minute.")
+}
+
+/// Fails with what is wrong when only an earlier release's SDK is installed:
+/// that it is being updated now, or how to update it. Asking also starts the
+/// automatic update (see `auto_update`), so no probe or session start waits on it.
+pub(super) fn ensure_current(context: &ProbeContext) -> Result<()> {
+    if installed(context) {
+        return Ok(());
+    }
+    let Some(previous) = previous_version(context) else { return Ok(()) };
+    Err(DriverError::Protocol(match super::auto_update::request(context) {
+        Some(super::auto_update::Update::Running) => updating(&previous),
+        _ => outdated(&previous),
+    }))
+}
+
 /// Whether the pinned SDK is in place where new sessions load it.
 pub fn installed(context: &ProbeContext) -> bool {
-    let Ok(dir) = sdk_dir(context) else { return false };
-    std::fs::read(dir.join("node_modules/@cursor/sdk/package.json"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .is_some_and(|manifest| manifest["version"] == SDK_VERSION)
+    sdk_dir(context).is_ok_and(|dir| holds_pinned(&dir))
 }
 
 /// The Node.js that will run the SDK, e.g. `v24.1.0`, or why it cannot.
@@ -382,6 +448,16 @@ for line in sys.stdin:
         assert!(installed(&context));
     }
 
+    #[test]
+    fn sdk_version_pin_matches_embedded_host_and_npm_manifests() {
+        assert!(HOST.contains(&format!(r#"export const SDK_VERSION = "{SDK_VERSION}";"#)));
+        let manifest: Value = serde_json::from_str(PACKAGE).unwrap();
+        assert_eq!(manifest["dependencies"]["@cursor/sdk"].as_str(), Some(SDK_VERSION));
+        let lock: Value = serde_json::from_str(LOCK).unwrap();
+        assert_eq!(lock["packages"][""]["dependencies"]["@cursor/sdk"].as_str(), Some(SDK_VERSION));
+        assert_eq!(lock["packages"]["node_modules/@cursor/sdk"]["version"].as_str(), Some(SDK_VERSION));
+    }
+
     #[tokio::test]
     async fn an_earlier_releases_sdk_makes_setup_an_update() {
         let home = tempfile::tempdir().unwrap();
@@ -395,14 +471,14 @@ for line in sys.stdin:
             std::fs::write(package.join("package.json"), format!(r#"{{"version":"{version}"}}"#)).unwrap();
         };
         assert_eq!(previous_version(&context), None);
-        sdk("1.0.9");
         sdk("1.0.35");
+        sdk("1.2.0");
         // A staging folder from an interrupted install is not a release's SDK.
         std::fs::create_dir_all(home.path().join(".kybern/cache/cursor-sdk/.cursor-install-x/node_modules/@cursor/sdk")).unwrap();
-        assert_eq!(previous_version(&context).as_deref(), Some("1.0.35"));
+        assert_eq!(previous_version(&context).as_deref(), Some("1.2.0"));
         // Model discovery says what happened instead of "isn't installed", without starting Node.
         let error = reason_of(probe(&context).await.unwrap_err());
-        assert!(error.contains("SDK 1.0.35") && error.contains(SDK_VERSION) && error.contains("Update it"), "{error}");
+        assert!(error.contains("SDK 1.2.0") && error.contains(SDK_VERSION) && error.contains("Update it"), "{error}");
         // An explicit directory is the only SDK Kybern looks at.
         let explicit = ProbeContext {
             env: std::collections::BTreeMap::from([
@@ -412,6 +488,111 @@ for line in sys.stdin:
             ..Default::default()
         };
         assert_eq!(previous_version(&explicit), None);
+    }
+
+    #[tokio::test]
+    async fn upgrade_from_1_2_0_reports_update_and_installs_pinned_sdk_alongside_old_version() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let old_pkg = home.path().join(".kybern/cache/cursor-sdk/1.2.0/node_modules/@cursor/sdk");
+        std::fs::create_dir_all(&old_pkg).unwrap();
+        std::fs::write(old_pkg.join("package.json"), r#"{"version":"1.2.0"}"#).unwrap();
+
+        let fake_node = bin.join("node");
+        kybern_protocol::process::write_executable(&fake_node, "#!/usr/bin/env sh\necho v24.0.0\n").unwrap();
+        let fake_npm = bin.join("npm");
+        kybern_protocol::process::write_executable(
+            &fake_npm,
+            r#"#!/usr/bin/env python3
+import json, os, pathlib, sys
+assert sys.argv[1:] == ['ci', '--ignore-scripts', '--no-audit', '--no-fund'], sys.argv
+pkg = json.loads(pathlib.Path('package.json').read_text())
+lock = json.loads(pathlib.Path('package-lock.json').read_text())
+version = pkg['dependencies']['@cursor/sdk']
+assert lock['packages']['node_modules/@cursor/sdk']['version'] == version
+out = pathlib.Path('node_modules/@cursor/sdk')
+out.mkdir(parents=True, exist_ok=True)
+(out / 'package.json').write_text(json.dumps({'version': version}))
+"#,
+        )
+        .unwrap();
+
+        let context = ProbeContext {
+            env: std::collections::BTreeMap::from([
+                ("HOME".into(), home.path().display().to_string()),
+                ("PATH".into(), format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default())),
+            ]),
+            ..Default::default()
+        };
+        assert!(!installed(&context));
+        assert_eq!(previous_version(&context).as_deref(), Some("1.2.0"));
+        let err = reason_of(probe(&context).await.unwrap_err());
+        assert!(err.contains("SDK 1.2.0") && err.contains(SDK_VERSION) && err.contains("Update it"), "{err}");
+
+        let destination = install(&context).await.unwrap();
+        assert_eq!(destination, home.path().join(".kybern/cache/cursor-sdk").join(SDK_VERSION));
+        assert!(installed(&context));
+        // The earlier 1.2.0 directory stays untouched for any running host.
+        assert!(old_pkg.join("package.json").is_file());
+        // Re-running install is a fast idempotent no-op.
+        assert_eq!(install(&context).await.unwrap(), destination);
+    }
+
+    #[test]
+    fn new_sessions_are_told_to_update_or_wait_instead_of_that_the_sdk_is_missing() {
+        let home = tempfile::tempdir().unwrap();
+        let context = ProbeContext {
+            env: std::collections::BTreeMap::from([("HOME".into(), home.path().display().to_string())]),
+            ..Default::default()
+        };
+        // A fresh machine is left to the usual "isn't installed" path.
+        assert!(ensure_current(&context).is_ok());
+        let old = home.path().join(".kybern/cache/cursor-sdk/1.2.0/node_modules/@cursor/sdk");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("package.json"), r#"{"version":"1.2.0"}"#).unwrap();
+        assert_eq!(reason_of(ensure_current(&context).unwrap_err()), outdated("1.2.0"));
+        assert!(updating("1.2.0").contains("1.2.0") && updating("1.2.0").contains(SDK_VERSION));
+    }
+
+    #[test]
+    fn a_second_process_that_installed_the_same_sdk_first_is_not_an_error() {
+        let root = tempfile::tempdir().unwrap();
+        let staged = |name: &str| {
+            let dir = root.path().join(name);
+            std::fs::create_dir_all(dir.join("node_modules/@cursor/sdk")).unwrap();
+            dir
+        };
+        // The other process finished first: the destination holds the pinned SDK.
+        let destination = staged("destination");
+        std::fs::write(destination.join("node_modules/@cursor/sdk/package.json"), format!(r#"{{"version":"{SDK_VERSION}"}}"#)).unwrap();
+        let ours = staged("ours");
+        std::fs::write(ours.join("node_modules/@cursor/sdk/package.json"), format!(r#"{{"version":"{SDK_VERSION}"}}"#)).unwrap();
+        assert!(promote(&ours, &destination).is_ok());
+        assert!(holds_pinned(&destination));
+        // A destination that does not hold the pinned SDK stays an error.
+        let other = staged("other");
+        std::fs::write(other.join("node_modules/@cursor/sdk/package.json"), r#"{"version":"0.0.1"}"#).unwrap();
+        assert!(promote(&ours, &other).is_err());
+        // Nothing in the way: a plain move.
+        let free = root.path().join("free");
+        assert!(promote(&ours, &free).is_ok() && holds_pinned(&free));
+    }
+
+    #[test]
+    fn install_removes_only_abandoned_staging_folders() {
+        let cache = tempfile::tempdir().unwrap();
+        let stale = cache.path().join(".cursor-install-stale");
+        let running = cache.path().join(".cursor-install-running");
+        let release = cache.path().join("1.2.0");
+        for dir in [&stale, &running, &release] {
+            std::fs::create_dir(dir).unwrap();
+        }
+        let long_ago = std::time::SystemTime::now() - Duration::from_secs(2 * 3600);
+        std::fs::File::open(&stale).unwrap().set_modified(long_ago).unwrap();
+        std::fs::File::open(&release).unwrap().set_modified(long_ago).unwrap();
+        remove_abandoned_staging(cache.path());
+        assert!(!stale.exists() && running.exists() && release.exists());
     }
 
     fn reason_of(error: DriverError) -> String {

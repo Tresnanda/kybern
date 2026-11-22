@@ -34,6 +34,9 @@ import { followSpaces, loadSpaces } from '../spaces/store.ts'
 import { followWorkspaceProgress } from '../groups/store.ts'
 import { gpuixConfigDir } from '../platform/os.ts'
 import { machineHub } from '../machines/index.ts'
+import { followCursorUpdate } from './cursorUpdate.ts'
+import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
+import { reloadComposerCatalogs } from '../composer/store.ts'
 import { RemoteLive, activityMaps, withRemote } from './remoteLive.ts'
 import { remoteChildStore } from './remoteChildren.ts'
 import { RemoteDelegations, remoteDelegationStore } from './remoteDelegations.ts'
@@ -405,6 +408,14 @@ export function startLive() {
   stops.push(followWorkspaceProgress())
   stops.push(client.onNotification(USAGE_LIMITS_CHANGED_NOTIFICATION, (params) => applyLimits(params as UsageLimitsResult)))
   stops.push(onThreadActivity(activity => { if (getClient() === client) applyActivity(activity) }))
+  const cursorUpdate = followCursorUpdate({
+    status: () => client.call('cursor.status', {}),
+    reload: () => { if (getClient() === client) { void loadProviders(true).catch(() => {}); reloadComposerCatalogs() } },
+    isVisible: isWindowVisible,
+    onVisibility: onWindowVisibility,
+  })
+  stops.push(cursorUpdate.stop)
+  stops.push(subscribeNav(() => cursorUpdate.observe(getNav().providers)))
   const onOpen = () => {
     void loadProviders().catch(() => { if (getClient() === client) setNav({ providersLoaded: true }) })
     askLimits()

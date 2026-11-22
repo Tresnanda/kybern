@@ -9,7 +9,7 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { format } from "node:util";
 
-export const SDK_VERSION = "1.2.0";
+export const SDK_VERSION = "1.4.2";
 export const SETTING_SOURCES = ["project", "user", "team", "mdm", "plugins"];
 const runtimeSecrets = [process.env.CURSOR_API_KEY];
 const processStarted = performance.now();
@@ -36,8 +36,8 @@ export function ignorableSdkRejection(reason) {
   }
   if (
     reason.name === "AbortError" &&
-    typeof reason.stack === "string" &&
-    /^\s+at (?:\S+\.)?onStall\b/m.test(reason.stack)
+    (reason.cursorStallCut === true ||
+      (typeof reason.stack === "string" && /^\s+at (?:\S+\.)?(?:onStall|reportStall|onStallDetected)\b/m.test(reason.stack)))
   ) {
     return "Cursor SDK aborted a stalled request. Keeping the host running.";
   }
@@ -368,7 +368,7 @@ async function checkRunCheckpointed(platform, agentId, runId, beforeAgent) {
 }
 
 async function readRunCheckpointed(platform, turnAgent, agentId, runId, beforeAgent, settleMs = CHECKPOINT_SETTLE_MS) {
-  // In @cursor/sdk 1.2.0, the cancelled path in sendImpl does not await
+  // In @cursor/sdk 1.4.2, the cancelled path in sendImpl still does not await
   // agent.checkpointPersistChain before run.wait() settles.
   const chain = turnAgent?.checkpointPersistChain;
   if (chain && typeof chain.then === "function") {
@@ -692,6 +692,7 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
           if (turn.cancelled && isAbort(error)) {
             await emit({ type: "run_completed", result: {
               id: turn.run.id, status: "cancelled", checkpointed,
+              ...(turn.run.usage ? { usage: turn.run.usage } : {}),
               ...(contextUsage ? { contextUsage } : {}),
             } });
           } else {
@@ -729,7 +730,7 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
       .then(() => turn.run.steer(text))
       .then(
         (value) => (value === "complete_delivered" ? "complete_delivered" : "revert_to_followup"),
-        // @cursor/sdk 1.2.0 catches its own action-submit errors and never throws
+        // @cursor/sdk 1.4.2 catches its own action-submit errors and never throws
         // an "already delivered" error. If a rejection still surfaces (e.g. a
         // transport or wrapper failure), map it to `revert_to_followup` for
         // at-least-once delivery—acknowledging that if the server injected the

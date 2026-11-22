@@ -1,8 +1,13 @@
 //! Cursor SDK setup for clients: the install and browser sign-in behind
 //! `kybern cursor install` / `login`, run by the daemon so nobody needs a
 //! terminal. Both run in the background; clients poll `cursor.status`.
-//! The shared driver installer embeds @cursor/sdk 1.2.0 and its exact-pinned
+//! The shared driver installer embeds @cursor/sdk 1.4.2 and its exact-pinned
 //! zod peer dependency, keeping setup and agent hosts on the same lockfile.
+//!
+//! An SDK an earlier release installed is updated here on its own, once, in the
+//! background (`cursor::auto_update`): the user already set Cursor up, and a
+//! release must not leave it unavailable until they find the Update button.
+//! `cursor.status` reports that as `installing`, with a failure behind `error`.
 //!
 //! Sign-in is a device-style flow: the SDK polls Cursor until the browser
 //! finishes, so the page can be opened on whichever machine the client is on.
@@ -57,14 +62,27 @@ fn context(state: &AppState) -> ProbeContext {
     ProbeContext { binary: None, cwd: None, env: provider.env }
 }
 
+/// Lets this daemon update an earlier Cursor SDK by itself, and starts that
+/// now if it applies. Providers refresh as soon as an attempt ends.
+pub fn start(state: &AppState) {
+    let catalogs = state.provider_catalogs.clone();
+    cursor::enable_auto_update(move || {
+        let catalogs = catalogs.clone();
+        tokio::spawn(async move { catalogs.invalidate().await });
+    });
+    cursor::auto_update(&context(state));
+}
+
 pub async fn status(state: &AppState) -> CursorSetupStatus {
     let context = context(state);
     let installed = cursor::installed(&context);
+    // Asking is what starts an overdue automatic update; it never waits for it.
+    let updating = update_view(cursor::auto_update(&context));
     let (node_version, mut problem) = match cursor::node_version(&context).await {
         Ok(version) => (Some(version), None),
         Err(error) => (None, Some(cursor::reason(error))),
     };
-    if problem.is_none() && !installed && !cursor::npm_available() {
+    if problem.is_none() && !installed && !cursor::npm_available(&context) {
         problem = Some("Cursor’s SDK installs with npm, which comes with Node.js. Install Node.js, then try again.".into());
     }
     let (account, email) = if installed && node_version.is_some() {
@@ -84,10 +102,19 @@ pub async fn status(state: &AppState) -> CursorSetupStatus {
         problem,
         account,
         email,
-        installing: progress.installing,
+        installing: progress.installing || updating.0,
         signing_in: progress.sign_in.is_some(),
         login_url: progress.sign_in.as_ref().and_then(|sign_in| sign_in.url.clone()),
-        error: progress.error.clone(),
+        error: progress.error.clone().or(updating.1),
+    }
+}
+
+/// `installing` and the details of a failure, from the automatic update.
+fn update_view(update: Option<cursor::Update>) -> (bool, Option<String>) {
+    match update {
+        Some(cursor::Update::Running) => (true, None),
+        Some(cursor::Update::Failed(details)) => (false, Some(details)),
+        None => (false, None),
     }
 }
 
@@ -237,6 +264,13 @@ async fn run_sign_in(state: AppState, generation: u64, mut child: tokio::process
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn an_automatic_update_shows_as_installing_and_its_failure_as_details() {
+        assert_eq!(update_view(None), (false, None));
+        assert_eq!(update_view(Some(cursor::Update::Running)), (true, None));
+        assert_eq!(update_view(Some(cursor::Update::Failed("npm ERR!".into()))), (false, Some("npm ERR!".into())));
+    }
 
     #[test]
     fn reads_the_sdk_account_without_credentials() {

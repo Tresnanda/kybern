@@ -1,6 +1,6 @@
 # Cursor local SDK driver
 
-New Cursor sessions use official `@cursor/sdk` **1.2.0**, exact-pinned with an
+New Cursor sessions use official `@cursor/sdk` **1.4.2**, exact-pinned with an
 npm lockfile. Rust embeds `sdk/host.mjs` and owns one Node process per Cursor
 account/environment, shared by its agents and native-history readers.
 The SDK itself stays on disk so its lazy chunks, sandbox helper, ripgrep, and
@@ -10,7 +10,7 @@ path. Resolving the JavaScript package alone is insufficient.
 
 The implementation follows [T3's model selector](https://github.com/pingdotgg/t3code/blob/main/packages/provider-cursor/src/server/sdkModel.ts)
 and [SDK lifecycle runner](https://github.com/pingdotgg/t3code/blob/main/packages/provider-cursor/src/server/CursorAgentSdk.ts).
-Kybern uses 1.2.0 with zod 4.6.7, checked against the installed public types and
+Kybern uses 1.4.2 with zod 4.6.7, checked against the installed public types and
 [Cursor's official SDK documentation](https://cursor.com/docs/sdk/typescript).
 The official SDK Bridge was evaluated, but this small isolated host retains the
 SDK’s native browser authentication and model catalog APIs directly.
@@ -153,7 +153,7 @@ not reachable from the client on this network.
 
 `kybern cursor install` stages `npm ci --ignore-scripts --no-audit --no-fund`
 from the embedded manifest/lockfile, then atomically renames it into the versioned
-cache. No installs occur during discovery. `login`, `status`, and `logout` work
+cache. Discovery installs nothing for a first-time user. `login`, `status`, and `logout` work
 without a running daemon and use `FileCredentialStore` and `Cursor.auth`.
 
 The daemon offers the same setup to clients as `cursor.status` and
@@ -164,8 +164,24 @@ and the host prints `{"status":"login-url"}` instead, which the client opens.
 The SDK polls Cursor until the browser finishes, so this works for remote
 daemons. Both refresh the provider catalog when they finish.
 
+An SDK an earlier Kybern release installed updates itself (`auto_update.rs`).
+Each release pins one SDK version in its own cache folder, so without this the
+release after setup would leave Cursor unavailable until someone pressed Update.
+When the daemon has called `cursor::enable_auto_update` (`cursor_setup::start`),
+an earlier version is installed, the pinned one is not, and npm is found, the
+first probe, session start or `cursor.status` runs the same `install` in the
+background, once per SDK folder (installs are serialised, so the Update button
+shares it). Meanwhile Cursor is unavailable with "Updating Cursor’s SDK from X to
+Y…" and `cursor.status` reports `installing`; when it ends the provider catalog
+is invalidated, so Cursor is available without a restart. The earlier folder is
+never touched, so hosts already running on it continue. A failure falls back to
+the Update message, with the npm text in `cursor.status.error`, and is not retried
+for six hours or until the next daemon start. A machine with no SDK is never
+installed into, and `KYBERN_CURSOR_AUTO_UPDATE=0` turns it off. Only a real
+daemon enables it; library users and tests never install on their own.
+
 Node 22.13+ and npm are runtime prerequisites. The default SDK cache is
-`~/.kybern/cache/cursor-sdk/1.2.0`. Debug builds can reuse `sdk/node_modules`.
+`~/.kybern/cache/cursor-sdk/1.4.2`. Debug builds can reuse `sdk/node_modules`.
 `KYBERN_CURSOR_SDK_DIR`, `KYBERN_CURSOR_NODE`, `KYBERN_CURSOR_AUTH_FILE`, and
 `KYBERN_CURSOR_STATE_DIR` support isolated setup/testing; `CURSOR_API_KEY` takes
 precedence over the saved SDK login. The provider binary setting is reserved

@@ -122,6 +122,8 @@ impl Daemon {
             .arg("--data-dir")
             .arg(&dir)
             .args(["--port", "0", "--bind", "127.0.0.1"])
+            // These daemons run with the developer's real home folder: never let one install an SDK there.
+            .env("KYBERN_CURSOR_AUTO_UPDATE", "0")
             .env("KYBERN_TAILSCALE_FAKE", fixture)
             .env("RUST_LOG", "info,kybern=debug")
             // Plain text, so a needle naming a field (`transport="tcp"`) matches between the color codes.
