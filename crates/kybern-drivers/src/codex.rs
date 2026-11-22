@@ -219,16 +219,30 @@ async fn enabled_mcp_servers(
 /// middle of an SSH-agent request. Input closes now, so Codex itself exits;
 /// the group is stopped once only Codex is left in it, or after a minute.
 fn stop_after_startup_work(child: NdjsonChild) {
-    tokio::spawn(async move {
-        let _ = child.close_stdin().await;
-        if let Some(pid) = child.pid() {
-            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
-            while tokio::time::Instant::now() < deadline && process_group_busy(pid).await {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            }
+    tokio::spawn(stop_when_startup_work_ends(child, STARTUP_WORK_LIMIT, process_group_busy));
+}
+
+/// The longest a probe's startup work may run before its group is stopped.
+const STARTUP_WORK_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Close `child`'s input, wait while `busy` says its group has other members
+/// (up to `limit`), then stop the whole group. Returns the stopped child.
+async fn stop_when_startup_work_ends<Busy, Fut>(child: NdjsonChild, limit: std::time::Duration, busy: Busy) -> NdjsonChild
+where
+    Busy: Fn(u32) -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let _ = child.close_stdin().await;
+    if let Some(pid) = child.pid() {
+        let deadline = tokio::time::Instant::now() + limit;
+        while tokio::time::Instant::now() < deadline && busy(pid).await {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
-        stop_after_startup_work(child);
-    });
+    }
+    // Ends input, then signals the group (the job object on Windows), and
+    // forces it after the grace.
+    child.kill().await;
+    child
 }
 
 /// Whether the process group led by `pid` has members besides its leader.
@@ -580,6 +594,7 @@ impl AgentDriver for CodexDriver {
         let mut state = State::new(config.permission_mode);
         state.model = config.model.clone();
         state.effort = config.effort.clone();
+        state.workspace_roots = workspace_roots(&config.cwd);
         let session = CodexSession::new(child, tx, state, config.native_tool_bridge.clone());
         let reader = session.clone();
         lifetime.track(tokio::spawn(async move { reader.read_loop().await }));
@@ -673,6 +688,11 @@ impl AgentDriver for CodexDriver {
             session.child.close().await;
             return Err(error);
         }
+        // The workspace sandbox the user's config.toml gave this thread, to go
+        // back to after Full access.
+        if let Some(sandbox) = resp.get("sandbox").filter(|sandbox| sandbox["type"] == "workspaceWrite") {
+            session.state.lock().await.configured_sandbox = Some(sandbox.clone());
+        }
         session.bind_thread(thread_id, model).await;
         let usage_session = session.clone();
         lifetime.track(tokio::spawn(async move {
@@ -748,12 +768,16 @@ fn policy_for(mode: PermissionMode) -> Policy {
 /// The `turn/start` sandbox for a mode, sent only when the mode's sandbox
 /// changes. The thread starts with the plain `sandbox` mode, which keeps the
 /// user's `config.toml` (writable roots, network access); a turn that names a
-/// policy replaces it. A bare `workspaceWrite` still writes in the workspace,
-/// `/tmp` and `$TMPDIR`.
-fn sandbox_policy_for(mode: PermissionMode) -> Value {
-    match mode {
-        PermissionMode::FullAccess => json!({ "type": "dangerFullAccess" }),
-        _ => json!({ "type": "workspaceWrite" }),
+/// policy replaces it. Back from Full access, a workspace mode restores the
+/// policy Codex reported at start (`configured`). A thread that started in
+/// Full access never had one: it gets a bare `workspaceWrite`, which still
+/// writes in the workspace, `/tmp` and `$TMPDIR` but drops the config's extra
+/// writable roots and network setting.
+fn sandbox_policy_for(mode: PermissionMode, configured: Option<&Value>) -> Value {
+    match (mode, configured) {
+        (PermissionMode::FullAccess, _) => json!({ "type": "dangerFullAccess" }),
+        (_, Some(configured)) => configured.clone(),
+        (_, None) => json!({ "type": "workspaceWrite" }),
     }
 }
 
@@ -764,12 +788,87 @@ fn thread_config() -> Value {
 }
 
 /// A Codex approval that "Allow for this session" covers for the rest of the
-/// session in the same permission mode. Codex's own `acceptForSession` skips
-/// only the exact command it answered.
+/// session in the same permission mode. Kybern keeps it, not Codex: the user's
+/// answer goes to Codex as a one-time `accept`, so no Codex-side grant outlives
+/// a mode change. Network access, extra permissions, runs outside the sandbox
+/// and writes outside the workspace are never covered and always ask.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Allowance {
     Command,
     FileChange,
+}
+
+/// Whether a value says something: not null, an empty string, list or object.
+fn meaningful(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::String(text) => !text.trim().is_empty(),
+        Value::Array(items) => items.iter().any(meaningful),
+        Value::Object(map) => map.values().any(meaningful),
+        Value::Bool(_) | Value::Number(_) => true,
+    }
+}
+
+/// Whether a command approval asks for more than running one command inside
+/// the sandbox: network access, extra permissions, a run outside the sandbox,
+/// input to a running terminal or a checkpoint that needs a person.
+///
+/// Codex sends no "escalated" flag. A request to run outside the sandbox
+/// carries the model's justification or a prefix rule, and a retry without
+/// the sandbox carries Codex's own reason, so any reason counts as one. An
+/// escalation the model sends with neither looks like a plain command.
+fn command_asks_for_more(params: &Value) -> bool {
+    let kind = params.get("kind").and_then(Value::as_str).unwrap_or("command");
+    kind != "command"
+        || params.get("command").and_then(Value::as_str).is_none_or(|command| command.trim().is_empty())
+        || ["networkApprovalContext", "additionalPermissions", "proposedNetworkPolicyAmendments", "proposedExecpolicyAmendment", "reason"]
+            .iter()
+            .any(|key| params.get(*key).is_some_and(meaningful))
+}
+
+/// `path` with `.` and `..` resolved by its text alone, joined onto `base`
+/// when relative. `None` when `..` climbs above the root.
+fn lexical_path(base: &std::path::Path, path: &str) -> Option<PathBuf> {
+    use std::path::Component;
+    let joined = base.join(path);
+    let mut out = PathBuf::new();
+    for component in joined.components() {
+        match component {
+            Component::ParentDir => {
+                if !out.pop() {
+                    return None;
+                }
+            }
+            Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    Some(out)
+}
+
+/// Whether every file an edit changes (and every file it moves one to) is
+/// inside the workspace. `false` when the edit names no files: Kybern can't
+/// tell where it writes.
+fn edit_inside_workspace(changes: &Value, roots: &[PathBuf]) -> bool {
+    let Some(base) = roots.first() else { return false };
+    let inside = |path: &str| lexical_path(base, path).is_some_and(|path| roots.iter().any(|root| path.starts_with(root)));
+    let Some(changes) = changes.as_array().filter(|changes| !changes.is_empty()) else { return false };
+    changes.iter().all(|change| {
+        change.get("path").and_then(Value::as_str).is_some_and(inside)
+            && change.pointer("/kind/move_path").and_then(Value::as_str).is_none_or(inside)
+    })
+}
+
+/// The workspace a session's edits stay in: its folder as given and as the
+/// file system resolves it (a symlinked folder).
+fn workspace_roots(cwd: &std::path::Path) -> Vec<PathBuf> {
+    let mut roots = vec![cwd.to_path_buf()];
+    if let Ok(real) = std::fs::canonicalize(cwd)
+        && real != cwd
+    {
+        roots.push(real);
+    }
+    roots
 }
 
 /// The Codex thread an approval request belongs to (the root or a subagent).
@@ -830,6 +929,13 @@ struct State {
     effort: Option<String>,
     /// The sandbox mode the Codex thread runs with now (`Policy::sandbox`).
     sandbox: &'static str,
+    /// The workspace sandbox Codex reported when the thread started in a
+    /// workspace mode (the user's config.toml: writable roots, network), to
+    /// restore after Full access.
+    configured_sandbox: Option<Value>,
+    /// The session's workspace: edits inside it are what "Allow edits for
+    /// this session" covers.
+    workspace_roots: Vec<PathBuf>,
     /// Approvals "Allow for this session" covers, by Codex thread id. A
     /// permission mode change ends them.
     allowances: HashMap<String, HashSet<Allowance>>,
@@ -839,9 +945,16 @@ struct State {
     last_total_tokens: Option<Usage>,
     /// Codex said it will retry and nothing has happened since.
     retrying: Option<RetryStall>,
-    /// Turns Kybern already ended (a stalled retry); their late
-    /// `turn/completed` is not reported twice.
-    abandoned_turns: HashSet<String>,
+    /// The newest turns that ended (completed, or failed by Kybern after a
+    /// stalled retry), oldest first and at most [`ENDED_TURNS_KEPT`]. Their
+    /// late notifications are dropped: never a second completion, and never
+    /// items, usage or retries in a newer turn.
+    ended_turns: std::collections::VecDeque<String>,
+    /// Kybern failed a stalled turn before Codex named it: the next unknown
+    /// turn id that starts or completes is that turn.
+    abandoned_unnamed_turn: bool,
+    /// A `turn/start` is waiting for its answer.
+    starting_turn: bool,
     /// Agent message item ids seen this turn (for completion bookkeeping).
     message_ids: HashMap<String, ()>,
     /// fileChange item id -> changes[], so the approval card can show the diff.
@@ -863,10 +976,14 @@ impl State {
             model: None,
             effort: None,
             sandbox: policy_for(mode).sandbox,
+            configured_sandbox: None,
+            workspace_roots: Vec::new(),
             allowances: HashMap::new(),
             last_total_tokens: None,
             retrying: None,
-            abandoned_turns: HashSet::new(),
+            ended_turns: std::collections::VecDeque::new(),
+            abandoned_unnamed_turn: false,
+            starting_turn: false,
             message_ids: HashMap::new(),
             file_changes: HashMap::new(),
             subagents: HashMap::new(),
@@ -874,7 +991,42 @@ impl State {
             stopping_processes: HashSet::new(),
         }
     }
+
+    fn turn_ended(&self, turn_id: &str) -> bool {
+        self.ended_turns.iter().any(|ended| ended == turn_id)
+    }
+
+    /// Remember that `turn_id` ended, forgetting the oldest beyond the bound.
+    fn end_turn(&mut self, turn_id: &str) {
+        if self.turn_ended(turn_id) {
+            return;
+        }
+        if self.ended_turns.len() == ENDED_TURNS_KEPT {
+            self.ended_turns.pop_front();
+        }
+        self.ended_turns.push_back(turn_id.to_string());
+    }
+
+    /// Whether a turn id Codex just named belongs to a turn that already
+    /// ended. A stalled turn Kybern failed before Codex named it is the first
+    /// id seen while no turn is current or starting: that id is recorded as
+    /// ended. Once a new turn is under way, its own id tells them apart.
+    fn turn_is_stale(&mut self, turn_id: &str) -> bool {
+        if self.turn_ended(turn_id) {
+            return true;
+        }
+        if self.abandoned_unnamed_turn && self.turn_id.is_none() && !self.starting_turn {
+            self.abandoned_unnamed_turn = false;
+            self.end_turn(turn_id);
+            return true;
+        }
+        false
+    }
 }
+
+/// How many ended turn ids a session remembers. Late notifications come
+/// right after a turn ends, never many turns later.
+const ENDED_TURNS_KEPT: usize = 32;
 
 struct CodexSession {
     notification_gate: Mutex<()>,
@@ -953,7 +1105,8 @@ enum ApprovalKind {
     Command(Option<(String, Allowance)>),
     FileChange(Option<String>),
     /// `item/permissions/requestApproval`, with the permissions it asked for:
-    /// an approval grants exactly those.
+    /// an approval grants exactly those, for the turn. It has no session
+    /// option (the GPUIX card offers none).
     Permissions(Value),
     UserInput,
     Elicitation,
@@ -1132,8 +1285,10 @@ impl CodexSession {
             }
             let Some(retry) = st.retrying.take() else { return false };
             let turn_id = retry.turn_id.or_else(|| st.turn_id.clone());
-            if let Some(turn_id) = &turn_id {
-                st.abandoned_turns.insert(turn_id.clone());
+            match &turn_id {
+                Some(turn_id) => st.end_turn(turn_id),
+                // Codex has not named the turn yet: the first id it names is this one.
+                None => st.abandoned_unnamed_turn = true,
             }
             st.turn_id = None;
             st.message_ids.clear();
@@ -1155,6 +1310,21 @@ impl CodexSession {
             }
         }
         true
+    }
+
+    /// A call that starts a turn (a message, a review, a compaction). While it
+    /// waits, a turn that starts is the new one, never a stalled turn Kybern
+    /// failed before Codex named it; once it answers, the "current turn" rule
+    /// tells that old turn apart.
+    async fn start_turn(&self, method: &str, params: Value) -> Result<Value> {
+        self.state.lock().await.starting_turn = true;
+        let result = self.call(method, params).await;
+        let mut st = self.state.lock().await;
+        st.starting_turn = false;
+        if result.is_ok() {
+            st.abandoned_unnamed_turn = false;
+        }
+        result
     }
 
     async fn respond(&self, id: &Value, result: std::result::Result<Value, String>) -> Result<()> {
@@ -1261,12 +1431,18 @@ impl CodexSession {
             }
             "item/commandExecution/requestApproval" => {
                 let command = params.get("command").and_then(|c| c.as_str()).unwrap_or("").to_string();
-                // A network approval names a host, not a command; Codex remembers that host itself.
+                // A network approval names a host, not a command: it is never covered.
                 let allowance = (!command.is_empty()).then(|| (codex_thread_of(params), Allowance::Command));
+                // Only Supervised asks about commands that stay in the sandbox.
+                // The other modes ask only to leave it (or for a command Codex
+                // flags as dangerous), so there the allowance never answers.
+                let supervised = self.state.lock().await.mode == PermissionMode::Supervised;
                 if let Some((thread, kind)) = &allowance
+                    && supervised
+                    && !command_asks_for_more(params)
                     && self.allowed(thread, *kind).await
                 {
-                    let _ = self.respond(&id, Ok(json!({ "decision": "acceptForSession" }))).await;
+                    let _ = self.respond(&id, Ok(json!({ "decision": "accept" }))).await;
                     return;
                 }
                 let key = format!("cmd:{}", serde_json::to_string(&id).unwrap_or_default());
@@ -1302,18 +1478,23 @@ impl CodexSession {
                     return;
                 }
                 let thread = codex_thread_of(params);
-                // Writing outside the workspace (`grantRoot`) always asks.
-                let grants_root = params.get("grantRoot").is_some_and(|root| !root.is_null());
-                if !grants_root && self.allowed(&thread, Allowance::FileChange).await {
+                let changes = match &item_id {
+                    Some(i) => self.state.lock().await.file_changes.get(i).cloned().unwrap_or(Value::Null),
+                    None => Value::Null,
+                };
+                // Writing outside the workspace always asks: a `grantRoot`, a
+                // reason (Codex's retry without the sandbox), or a file outside it.
+                let inside = {
+                    let st = self.state.lock().await;
+                    edit_inside_workspace(&changes, &st.workspace_roots)
+                };
+                let asks_for_more = params.get("grantRoot").is_some_and(meaningful) || params.get("reason").is_some_and(meaningful);
+                if inside && !asks_for_more && self.allowed(&thread, Allowance::FileChange).await {
                     let _ = self.respond(&id, Ok(json!({ "decision": "accept" }))).await;
                     return;
                 }
                 let key = format!("patch:{}", serde_json::to_string(&id).unwrap_or_default());
                 self.pending_approvals.lock().await.insert(key.clone(), (id, ApprovalKind::FileChange(Some(thread))));
-                let changes = match &item_id {
-                    Some(i) => self.state.lock().await.file_changes.get(i).cloned().unwrap_or(Value::Null),
-                    None => Value::Null,
-                };
                 let paths: Vec<String> = changes
                     .as_array()
                     .map(|a| a.iter().filter_map(|c| c.get("path").and_then(|p| p.as_str()).map(str::to_string)).collect())
@@ -1548,7 +1729,12 @@ impl CodexSession {
                 self.emit(if terminal { DriverEvent::RuntimeTaskCompleted(update) } else { DriverEvent::RuntimeTaskUpdated(update) }).await;
             }
             "thread/closed" => {
-                self.state.lock().await.subagents.remove(thread_id);
+                {
+                    // Its "Allow for this session" ends with it.
+                    let mut st = self.state.lock().await;
+                    st.subagents.remove(thread_id);
+                    st.allowances.remove(thread_id);
+                }
                 self.emit(DriverEvent::RuntimeTaskCompleted(DriverRuntimeTaskUpdate {
                     id: thread_id.to_string(),
                     status: Some(RuntimeTaskStatus::Completed),
@@ -1639,6 +1825,27 @@ impl CodexSession {
                 ChildNotificationRoute::Root => {}
             }
         }
+        // A turn that already ended (Kybern failed it after a stalled retry)
+        // can still send items, retries and usage. They belong to no turn
+        // Kybern shows: never to a newer one. Its usage moves the baseline.
+        // Another turn than the current one is an old one too; `turn/started`
+        // is how the current turn changes.
+        let named_turn = p.get("turnId").and_then(Value::as_str).or_else(|| p.pointer("/turn/id").and_then(Value::as_str));
+        let stale = match named_turn.filter(|_| method != "turn/completed") {
+            Some(turn) => {
+                let mut st = self.state.lock().await;
+                st.turn_is_stale(turn) || (method != "turn/started" && st.turn_id.as_deref().is_some_and(|current| current != turn))
+            }
+            None => false,
+        };
+        if let Some(turn) = named_turn.filter(|_| stale) {
+            if method == "thread/tokenUsage/updated" {
+                let mut st = self.state.lock().await;
+                st.last_total_tokens = Some(p.pointer("/tokenUsage/total").map(parse_usage).unwrap_or_default());
+            }
+            tracing::debug!(method, turn, "dropped a notification from a Codex turn that already ended");
+            return;
+        }
         // Progress on the root turn means a retry recovered.
         if method.starts_with("item/") || matches!(method, "turn/started" | "turn/plan/updated") {
             self.state.lock().await.retrying = None;
@@ -1709,24 +1916,27 @@ impl CodexSession {
                 let mut st = self.state.lock().await;
                 let delta = usage_delta(st.last_total_tokens.as_ref(), &total, &last);
                 st.last_total_tokens = Some(total);
-                // A late update for a turn that already ended moves the baseline only.
-                let late = p.get("turnId").and_then(Value::as_str).is_some_and(|turn| st.turn_id.as_deref() != Some(turn));
                 drop(st);
-                if !late {
-                    self.turn_usage.lock().await.get_or_insert_with(Usage::default).add(&delta);
-                }
+                // An update for a turn that ended, or for another turn than the
+                // current one, was dropped above and moved the baseline only. One
+                // that comes before `turn/start` answers is this turn's.
+                self.turn_usage.lock().await.get_or_insert_with(Usage::default).add(&delta);
             }
             "turn/completed" => {
                 let turn = &p["turn"];
                 {
                     let mut st = self.state.lock().await;
-                    st.retrying = None;
-                    if let Some(id) = turn.get("id").and_then(Value::as_str)
-                        && st.abandoned_turns.remove(id)
-                    {
-                        // Kybern already ended this turn (a stalled retry).
-                        return;
+                    if let Some(id) = turn.get("id").and_then(Value::as_str) {
+                        // Kybern already ended this turn (a stalled retry), or
+                        // it is not the turn running now: it must not end that one.
+                        let other = st.turn_id.as_deref().is_some_and(|current| current != id);
+                        if st.turn_is_stale(id) || other {
+                            tracing::debug!(turn = id, "dropped the completion of a Codex turn that already ended");
+                            return;
+                        }
+                        st.end_turn(id);
                     }
+                    st.retrying = None;
                 }
                 let status = turn.get("status").and_then(|s| s.as_str()).unwrap_or("completed");
                 let duration_ms = turn.get("durationMs").and_then(|d| d.as_u64()).unwrap_or(0);
@@ -2300,12 +2510,12 @@ impl AgentSession for Handle {
     async fn compact(&self) -> Result<()> {
         let thread_id = self.0.state.lock().await.thread_id.clone().ok_or_else(|| DriverError::Protocol("no Codex thread".into()))?;
         *self.0.turn_usage.lock().await = None;
-        self.0.call("thread/compact/start", json!({ "threadId": thread_id })).await.map(|_| ())
+        self.0.start_turn("thread/compact/start", json!({ "threadId": thread_id })).await.map(|_| ())
     }
 
     async fn send_message(&self, message_id: &str, message: &UserMessage) -> Result<()> {
         let s = &self.0;
-        let (thread_id, mode, model, effort, sandbox) = {
+        let (thread_id, mode, model, effort, sandbox, configured_sandbox) = {
             let st = s.state.lock().await;
             (
                 st.thread_id.clone().ok_or_else(|| DriverError::Protocol("no codex thread".into()))?,
@@ -2313,6 +2523,7 @@ impl AgentSession for Handle {
                 st.model.clone(),
                 st.effort.clone(),
                 st.sandbox,
+                st.configured_sandbox.clone(),
             )
         };
         let text = message
@@ -2336,7 +2547,7 @@ impl AgentSession for Handle {
             } else {
                 return Err(DriverError::Protocol("Use /review, /review base <branch>, or /review commit <sha>.".into()));
             };
-            s.call("review/start", json!({"threadId":thread_id, "target":target, "delivery":"inline"})).await?;
+            s.start_turn("review/start", json!({"threadId":thread_id, "target":target, "delivery":"inline"})).await?;
             return Ok(());
         }
         if matches!(command, "/goal" | "/rename") {
@@ -2381,7 +2592,7 @@ impl AgentSession for Handle {
         // it started with, built from the user's config.toml.
         let sandbox_changed = policy.sandbox != sandbox;
         if sandbox_changed {
-            params["sandboxPolicy"] = sandbox_policy_for(mode);
+            params["sandboxPolicy"] = sandbox_policy_for(mode, configured_sandbox.as_ref());
         }
         if let Some(m) = model {
             params["model"] = Value::String(m);
@@ -2392,12 +2603,15 @@ impl AgentSession for Handle {
         if command == "/init" {
             params["input"] = json!([{"type":"text", "text":"Inspect this repository and write or update AGENTS.md with concise, accurate instructions for coding agents: architecture, setup, build and test commands, conventions, and important pitfalls. Preserve existing project guidance. Verify commands against the repository.", "text_elements":[]}]);
         }
-        let resp = s.call("turn/start", params).await?;
+        let resp = s.start_turn("turn/start", params).await?;
         let mut st = s.state.lock().await;
         if sandbox_changed {
             st.sandbox = policy.sandbox;
         }
-        if let Some(id) = resp.pointer("/turn/id").and_then(|i| i.as_str()) {
+        // A turn that already completed (before this answer came) is not current.
+        if let Some(id) = resp.pointer("/turn/id").and_then(|i| i.as_str())
+            && !st.turn_ended(id)
+        {
             st.turn_id = Some(id.to_string());
         }
         Ok(())
@@ -2474,13 +2688,17 @@ impl AgentSession for Handle {
         }
         let always = matches!(decision, ApprovalDecision::AllowAlways);
         let response = match (&kind, decision) {
-            // Granted exactly as asked; "for this session" lets Codex keep the grant.
+            // Granted exactly as asked, for this turn only, whatever the answer:
+            // a session grant would let later network access and writes outside
+            // the workspace run unasked, and Codex keeps it past a mode change.
             (ApprovalKind::Permissions(asked), ApprovalDecision::AllowOnce | ApprovalDecision::AllowAlways) => {
-                json!({ "permissions": asked, "scope": if always { "session" } else { "turn" } })
+                json!({ "permissions": asked, "scope": "turn" })
             }
             (ApprovalKind::Permissions(_), _) => json!({ "permissions": {}, "scope": "turn" }),
-            (_, ApprovalDecision::AllowOnce) => json!({ "decision": "accept" }),
-            (_, ApprovalDecision::AllowAlways) => json!({ "decision": "acceptForSession" }),
+            // Codex's `acceptForSession` would keep this exact request (a host, a
+            // run outside the sandbox) past a mode change; Kybern's allowance
+            // remembers "for this session" instead.
+            (_, ApprovalDecision::AllowOnce | ApprovalDecision::AllowAlways) => json!({ "decision": "accept" }),
             (_, _) => json!({ "decision": "decline" }),
         };
         self.0.respond(&id, Ok(response)).await?;
@@ -3394,6 +3612,7 @@ mod gap_tests {
         let mut state = State::new(mode);
         state.thread_id = Some("root".into());
         state.turn_id = Some("turn-1".into());
+        state.workspace_roots = vec![PathBuf::from("/repo")];
         (CodexSession::new(child, events, state, None), rx)
     }
 
@@ -3517,7 +3736,8 @@ wait
             json!({ "threadId": "root", "turnId": "turn-1", "itemId": "item-1", "cwd": "/repo", "reason": "commit", "permissions": asked });
         for (id, decision, expected) in [
             (7, ApprovalDecision::AllowOnce, json!({ "permissions": asked, "scope": "turn" })),
-            (8, ApprovalDecision::AllowAlways, json!({ "permissions": asked, "scope": "session" })),
+            // Review finding 3: never a session grant, which Codex would keep past a mode change.
+            (8, ApprovalDecision::AllowAlways, json!({ "permissions": asked, "scope": "turn" })),
             (9, ApprovalDecision::Deny { reason: None }, json!({ "permissions": {}, "scope": "turn" })),
         ] {
             session.handle_server_request(json!(id), "item/permissions/requestApproval", &params).await;
@@ -3552,6 +3772,55 @@ wait
         handle.close().await.unwrap();
     }
 
+    /// Review finding 7: back from Full access, a workspace mode restores the
+    /// sandbox Codex reported at start (the user's writable roots and network).
+    #[tokio::test]
+    async fn leaving_full_access_restores_the_configured_sandbox() {
+        let root = tempfile::tempdir().unwrap();
+        let binary = root.path().join("codex-fixture");
+        let requests = root.path().join("requests");
+        let configured = json!({ "type": "workspaceWrite", "writableRoots": ["/home/me/.cache/bun"], "networkAccess": true,
+            "excludeTmpdirEnvVar": false, "excludeSlashTmp": false });
+        kybern_protocol::process::write_executable(
+            &binary,
+            format!(
+                r#"#!/bin/sh
+IFS= read -r line
+printf '{{"id":1,"result":{{}}}}\n'
+IFS= read -r line
+IFS= read -r line
+printf '{{"id":2,"result":{{"thread":{{"id":"root"}},"model":"fixture","sandbox":{configured}}}}}\n'
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$REQUESTS"
+  case "$line" in
+    *'"method":"turn/start"'*)
+      id=$(printf '%s' "$line" | sed 's/^{{"id":\([0-9]*\).*/\1/')
+      printf '{{"id":%s,"result":{{"turn":{{"id":"turn-%s"}}}}}}\n' "$id" "$id" ;;
+  esac
+done
+"#
+            ),
+        )
+        .unwrap();
+        let env = HashMap::from([("REQUESTS".into(), requests.to_string_lossy().into_owned())]);
+        let spawned = spawn_fixture(fixture_config(root.path(), binary, PermissionMode::Supervised, env)).await.unwrap();
+        let session = spawned.session;
+        let mut sent = Vec::new();
+        for mode in [PermissionMode::FullAccess, PermissionMode::AcceptEdits] {
+            session.set_permission_mode(mode).await.unwrap();
+            session.send_message("m", &UserMessage::text("hello")).await.unwrap();
+            let turns: Vec<Value> = std::fs::read_to_string(&requests)
+                .unwrap()
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter(|line| line["method"] == "turn/start")
+                .collect();
+            sent.push(turns.last().unwrap()["params"]["sandboxPolicy"].clone());
+        }
+        assert_eq!(sent, [json!({ "type": "dangerFullAccess" }), configured]);
+        session.close().await.unwrap();
+    }
+
     /// Item 5: "Allow for this session" covers later commands and edits on the
     /// same thread in the same mode, not only the exact command.
     #[tokio::test]
@@ -3562,11 +3831,12 @@ wait
         session.handle_server_request(json!(1), "item/commandExecution/requestApproval", &command("git commit")).await;
         let Some(DriverEvent::PermissionRequest { request_id, .. }) = rx.recv().await else { panic!("first command asks") };
         handle.respond_permission(&request_id, &ApprovalDecision::AllowAlways).await.unwrap();
-        assert_eq!(next_wire(&session).await["result"], json!({ "decision": "acceptForSession" }));
+        // Kybern remembers it; Codex gets a one-time answer it can't keep past a mode change.
+        assert_eq!(next_wire(&session).await["result"], json!({ "decision": "accept" }));
 
         session.handle_server_request(json!(2), "item/commandExecution/requestApproval", &command("cargo test")).await;
         let wire = next_wire(&session).await;
-        assert_eq!((wire["id"].clone(), wire["result"].clone()), (json!(2), json!({ "decision": "acceptForSession" })));
+        assert_eq!((wire["id"].clone(), wire["result"].clone()), (json!(2), json!({ "decision": "accept" })));
         assert!(drain(&mut rx).is_empty(), "an allowed command must not ask again");
 
         // A subagent's thread, a network grant and a write outside the workspace still ask.
@@ -3576,21 +3846,119 @@ wait
         session.handle_server_request(json!(4), "item/commandExecution/requestApproval", &network).await;
         assert_eq!(drain(&mut rx).iter().filter(|event| matches!(event, DriverEvent::PermissionRequest { .. })).count(), 2);
 
-        let edit = |grant_root: Value| json!({ "threadId": "root", "itemId": "e", "grantRoot": grant_root });
-        session.handle_server_request(json!(5), "item/fileChange/requestApproval", &edit(Value::Null)).await;
+        let edit = |item: &str, grant_root: Value| json!({ "threadId": "root", "itemId": item, "grantRoot": grant_root });
+        let changes =
+            |paths: &[&str]| Value::Array(paths.iter().map(|path| json!({ "path": path, "kind": { "type": "update" } })).collect());
+        {
+            let mut st = session.state.lock().await;
+            st.file_changes.insert("inside".into(), changes(&["/repo/src/a.rs", "b.rs"]));
+            st.file_changes.insert("outside".into(), changes(&["/repo/src/a.rs", "/etc/hosts"]));
+            st.file_changes.insert("escapes".into(), changes(&["/repo/../etc/hosts"]));
+            st.file_changes
+                .insert("moves-out".into(), json!([{ "path": "/repo/a.rs", "kind": { "type": "update", "move_path": "/tmp/a.rs" } }]));
+        }
+        session.handle_server_request(json!(5), "item/fileChange/requestApproval", &edit("inside", Value::Null)).await;
         let Some(DriverEvent::PermissionRequest { request_id, .. }) = rx.recv().await else { panic!("first edit asks") };
         handle.respond_permission(&request_id, &ApprovalDecision::AllowAlways).await.unwrap();
-        let _ = next_wire(&session).await;
-        session.handle_server_request(json!(6), "item/fileChange/requestApproval", &edit(Value::Null)).await;
         assert_eq!(next_wire(&session).await["result"], json!({ "decision": "accept" }));
-        session.handle_server_request(json!(7), "item/fileChange/requestApproval", &edit(json!("/etc"))).await;
+        session.handle_server_request(json!(6), "item/fileChange/requestApproval", &edit("inside", Value::Null)).await;
+        assert_eq!(next_wire(&session).await["result"], json!({ "decision": "accept" }));
+        for (id, item, root) in [
+            (7, "inside", json!("/etc")),
+            (8, "outside", Value::Null),
+            (9, "escapes", Value::Null),
+            (10, "moves-out", Value::Null),
+            (11, "unknown", Value::Null),
+        ] {
+            session.handle_server_request(json!(id), "item/fileChange/requestApproval", &edit(item, root)).await;
+            assert!(matches!(rx.recv().await, Some(DriverEvent::PermissionRequest { .. })), "edit {item} must ask");
+        }
+        // Codex's retry of an edit without the sandbox says why: it asks too.
+        let retry = json!({ "threadId": "root", "itemId": "inside", "reason": "command failed; retry without sandbox?" });
+        session.handle_server_request(json!(12), "item/fileChange/requestApproval", &retry).await;
         assert!(matches!(rx.recv().await, Some(DriverEvent::PermissionRequest { .. })));
 
         // Another mode ends the allowance.
         handle.set_permission_mode(PermissionMode::AcceptEdits).await.unwrap();
-        session.handle_server_request(json!(8), "item/commandExecution/requestApproval", &command("cargo build")).await;
+        session.handle_server_request(json!(13), "item/commandExecution/requestApproval", &command("cargo build")).await;
         assert!(matches!(rx.recv().await, Some(DriverEvent::PermissionRequest { .. })));
         handle.close().await.unwrap();
+    }
+
+    /// Review finding 2: after "Allow commands for this session", a command
+    /// that asks for more than a run inside the sandbox still asks.
+    #[tokio::test]
+    async fn the_session_allowance_never_covers_escalation_network_or_extra_permissions() {
+        let (session, mut rx) = echo_session(PermissionMode::Supervised);
+        let handle = handle(&session);
+        let base = json!({ "threadId": "root", "turnId": "turn-1", "itemId": "c", "command": "cargo test", "cwd": "/repo" });
+        let with = |key: &str, value: Value| {
+            let mut params = base.clone();
+            params[key] = value;
+            params
+        };
+        session.handle_server_request(json!(1), "item/commandExecution/requestApproval", &base).await;
+        let Some(DriverEvent::PermissionRequest { request_id, .. }) = rx.try_recv().ok() else { panic!("first command asks") };
+        handle.respond_permission(&request_id, &ApprovalDecision::AllowAlways).await.unwrap();
+        let _ = next_wire(&session).await;
+        // The allowance holds for a plain command, an explicit `kind` and empty extras.
+        let plain = [
+            base.clone(),
+            with("kind", json!("command")),
+            with("additionalPermissions", json!({ "network": null, "fileSystem": null })),
+            with("reason", json!("")),
+        ];
+        for (id, params) in (2..).zip(plain) {
+            session.handle_server_request(json!(id), "item/commandExecution/requestApproval", &params).await;
+            assert_eq!(next_wire(&session).await["result"], json!({ "decision": "accept" }), "{params}");
+        }
+        let asks = [
+            // The model asked to run outside the sandbox, with its justification or a prefix rule.
+            with("reason", json!("Needs to write ~/.cargo")),
+            with("proposedExecpolicyAmendment", json!(["cargo", "install"])),
+            // Codex's own retry without the sandbox.
+            with("reason", json!("command failed; retry without sandbox?")),
+            with("additionalPermissions", json!({ "network": { "enabled": true } })),
+            with("additionalPermissions", json!({ "fileSystem": { "write": ["/etc"] } })),
+            with("networkApprovalContext", json!({ "host": "crates.io", "protocol": "https" })),
+            with("proposedNetworkPolicyAmendments", json!([{ "host": "crates.io", "action": "allow" }])),
+            with("kind", json!("humanCommand")),
+            with("kind", json!("writeStdin")),
+        ];
+        for (id, params) in (10..).zip(asks) {
+            session.handle_server_request(json!(id), "item/commandExecution/requestApproval", &params).await;
+            assert!(matches!(rx.try_recv().ok(), Some(DriverEvent::PermissionRequest { .. })), "{params} must ask");
+        }
+        // Outside Supervised, Codex asks about a command only to leave the sandbox.
+        for mode in [PermissionMode::AcceptEdits, PermissionMode::Auto] {
+            handle.set_permission_mode(mode).await.unwrap();
+            session.handle_server_request(json!(30), "item/commandExecution/requestApproval", &base).await;
+            let Some(DriverEvent::PermissionRequest { request_id, .. }) = rx.try_recv().ok() else { panic!("{mode:?} asks") };
+            handle.respond_permission(&request_id, &ApprovalDecision::AllowAlways).await.unwrap();
+            assert_eq!(next_wire(&session).await["result"], json!({ "decision": "accept" }));
+            session.handle_server_request(json!(31), "item/commandExecution/requestApproval", &base).await;
+            assert!(matches!(rx.try_recv().ok(), Some(DriverEvent::PermissionRequest { .. })), "{mode:?} asks again");
+        }
+        assert!(drain(&mut rx).is_empty());
+        handle.close().await.unwrap();
+    }
+
+    /// Review finding 8: a subagent that closes takes its allowance with it.
+    #[tokio::test]
+    async fn a_closed_subagent_drops_its_allowance() {
+        let (session, _rx) = echo_session(PermissionMode::Supervised);
+        {
+            let mut st = session.state.lock().await;
+            st.subagents.insert("child".into(), None);
+            st.allowances.entry("child".into()).or_default().insert(Allowance::Command);
+            st.allowances.entry("root".into()).or_default().insert(Allowance::Command);
+        }
+        session.handle_notification("thread/closed", &json!({ "threadId": "child" })).await;
+        let st = session.state.lock().await;
+        assert!(!st.allowances.contains_key("child"));
+        assert!(st.allowances.contains_key("root"));
+        drop(st);
+        session.child.kill().await;
     }
 
     /// Item 6: after a resume or fork the first total covers every earlier
@@ -3628,6 +3996,44 @@ wait
                 "total": { "inputTokens": 510_000, "outputTokens": 1, "cachedInputTokens": 0 },
                 "last": { "inputTokens": 10_000, "outputTokens": 1, "cachedInputTokens": 0 } } })
         }
+    }
+
+    /// Review finding 4: usage Codex reports before `turn/start` answers (so
+    /// before Kybern knows the turn's id) belongs to that turn.
+    #[tokio::test]
+    async fn usage_before_turn_start_answers_counts_for_the_turn() {
+        let (session, mut rx) = echo_session(PermissionMode::Supervised);
+        let usage = |turn: &str, total: u64, last: u64| {
+            json!({ "threadId": "root", "turnId": turn, "tokenUsage": {
+                "total": { "inputTokens": total, "outputTokens": 0, "cachedInputTokens": 0 },
+                "last": { "inputTokens": last, "outputTokens": 0, "cachedInputTokens": 0 } } })
+        };
+        {
+            let mut st = session.state.lock().await;
+            st.turn_id = None;
+            st.last_total_tokens = Some(Usage { input_tokens: 1_000, ..Usage::default() });
+        }
+        let handle = handle(&session);
+        let sending = tokio::spawn(async move {
+            let result = handle.send_message("m", &UserMessage::text("hello")).await;
+            (handle, result)
+        });
+        let request = next_wire(&session).await;
+        assert_eq!(request["method"], "turn/start");
+        session.handle_notification("thread/tokenUsage/updated", &usage("turn-2", 1_500, 500)).await;
+        answer(&session, &request, json!({ "turn": { "id": "turn-2" } })).await;
+        let (handle, result) = sending.await.unwrap();
+        result.unwrap();
+        session.handle_notification("thread/tokenUsage/updated", &usage("turn-2", 1_700, 200)).await;
+        session
+            .handle_notification("turn/completed", &json!({ "threadId": "root", "turn": { "id": "turn-2", "status": "completed" } }))
+            .await;
+        let usage = drain(&mut rx).into_iter().find_map(|event| match event {
+            DriverEvent::TurnCompleted { usage, .. } => Some(usage),
+            _ => None,
+        });
+        assert_eq!(usage.expect("turn completed").input_tokens, 700);
+        handle.close().await.unwrap();
     }
 
     /// Item 7: a model-specific (Spark) snapshot never replaces the main allowance.
@@ -3770,16 +4176,69 @@ printf 'A short title\n' > "$last"
         session.child.kill().await;
     }
 
+    /// Review finding 5: a stalled turn Codex never named still ends once, and
+    /// what it sends after Kybern failed it never reaches a newer turn.
+    #[tokio::test]
+    async fn a_stalled_turn_ends_once_and_stays_out_of_the_next_turn() {
+        let (session, mut rx) = echo_session(PermissionMode::Supervised);
+        session.state.lock().await.turn_id = None;
+        // An older Codex names no turn in its retry notice, and `turn/start` has not answered.
+        let retry = json!({ "threadId": "root", "willRetry": true, "error": { "message": "Reconnecting... 1/5" } });
+        session.handle_notification("error", &retry).await;
+        drain(&mut rx);
+        assert!(session.fail_stalled_retry(Duration::ZERO).await);
+        assert!(matches!(rx.recv().await, Some(DriverEvent::TurnFailed { .. })));
+        // Codex names the turn later: its items and its completion end nothing twice.
+        let message =
+            |turn: &str| json!({ "threadId": "root", "turnId": turn, "item": { "type": "agentMessage", "id": "m", "text": "late" } });
+        session.handle_notification("item/completed", &message("turn-old")).await;
+        let completed = |turn: &str| json!({ "threadId": "root", "turn": { "id": turn, "status": "completed" } });
+        session.handle_notification("turn/completed", &completed("turn-old")).await;
+        assert!(drain(&mut rx).is_empty(), "the failed turn must not complete again");
+
+        // A newer turn is retrying; the old turn's late items neither end that
+        // retry nor show up in it, and its usage is not billed to it.
+        session.state.lock().await.turn_id = Some("turn-new".into());
+        let mut new_retry = retry.clone();
+        new_retry["turnId"] = json!("turn-new");
+        session.handle_notification("error", &new_retry).await;
+        drain(&mut rx);
+        session.handle_notification("item/completed", &message("turn-old")).await;
+        let usage = json!({ "threadId": "root", "turnId": "turn-old", "tokenUsage": {
+            "total": { "inputTokens": 9, "outputTokens": 0 }, "last": { "inputTokens": 9, "outputTokens": 0 } } });
+        session.handle_notification("thread/tokenUsage/updated", &usage).await;
+        let mut old_retry = retry.clone();
+        old_retry["turnId"] = json!("turn-old");
+        session.handle_notification("error", &old_retry).await;
+        assert!(drain(&mut rx).is_empty(), "nothing of the old turn reaches the new one");
+        assert_eq!(session.state.lock().await.retrying.as_ref().and_then(|retry| retry.turn_id.clone()).as_deref(), Some("turn-new"));
+        assert!(session.turn_usage.lock().await.is_none());
+        session.handle_notification("turn/completed", &completed("turn-new")).await;
+        assert!(matches!(rx.recv().await, Some(DriverEvent::TurnCompleted { .. })));
+
+        // The ended turns kept are bounded.
+        let mut st = session.state.lock().await;
+        for turn in 0..100 {
+            st.end_turn(&format!("t{turn}"));
+        }
+        assert_eq!(st.ended_turns.len(), ENDED_TURNS_KEPT);
+        assert!(st.turn_ended("t99") && !st.turn_ended("t0") && !st.turn_ended("turn-old"));
+        drop(st);
+        session.child.kill().await;
+    }
+
     /// Item 11: a failed turn is classified by `codexErrorInfo` before its text.
     #[tokio::test]
     async fn failed_turns_are_classified_by_codex_error_info() {
         let (session, mut rx) = echo_session(PermissionMode::Supervised);
-        let failed = |info: Value, message: &str| json!({ "threadId": "root", "turn": { "id": "turn-1", "status": "failed", "error": { "message": message, "codexErrorInfo": info } } });
+        let failed = |turn: &str, info: Value, message: &str| json!({ "threadId": "root", "turn": { "id": turn, "status": "failed", "error": { "message": message, "codexErrorInfo": info } } });
         // The text alone reads as a usage limit; Codex says the context is too long.
-        session.handle_notification("turn/completed", &failed(json!("contextWindowExceeded"), "Token limit reached for this model")).await;
+        session
+            .handle_notification("turn/completed", &failed("turn-1", json!("contextWindowExceeded"), "Token limit reached for this model"))
+            .await;
         let Some(DriverEvent::TurnFailed { problem, .. }) = rx.recv().await else { panic!("turn failed") };
         assert!(problem.is_none(), "{problem:?}");
-        session.handle_notification("turn/completed", &failed(json!("usageLimitExceeded"), "Request failed")).await;
+        session.handle_notification("turn/completed", &failed("turn-2", json!("usageLimitExceeded"), "Request failed")).await;
         let Some(DriverEvent::TurnFailed { problem: Some(problem), .. }) = rx.recv().await else { panic!("turn failed") };
         assert_eq!(problem.subject.as_deref(), Some("rate_limit"));
         session.child.kill().await;
@@ -3801,6 +4260,37 @@ printf 'A short title\n' > "$last"
         };
         assert!(error.contains("unknown variant `fast`"), "{error}");
         assert!(error.contains("code 1"), "{error}");
+    }
+
+    /// Review finding 1: a probe whose Codex ignores the end of its input (and
+    /// SIGTERM) is stopped when the wait for startup work runs out, and the
+    /// wait ends there. One with nothing else in its group stops at once.
+    #[tokio::test(start_paused = true)]
+    async fn a_probe_that_ignores_end_of_input_is_stopped_at_the_deadline() {
+        let stubborn = || {
+            let mut cmd = tokio::process::Command::new("sh");
+            cmd.args(["-c", "trap '' TERM; while :; do sleep 1; done"]);
+            NdjsonChild::spawn(cmd).unwrap()
+        };
+        for busy in [true, false] {
+            let checks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counted = checks.clone();
+            let started = tokio::time::Instant::now();
+            let stop = stop_when_startup_work_ends(stubborn(), STARTUP_WORK_LIMIT, move |_| {
+                counted.fetch_add(1, Ordering::SeqCst);
+                std::future::ready(busy)
+            });
+            // No timeout around it: paused time jumps to any pending timer
+            // while the process is being reaped.
+            let child = stop.await;
+            assert!(matches!(child.child.lock().await.try_wait(), Ok(Some(_))), "the probe's process was stopped");
+            if busy {
+                assert!(started.elapsed() >= STARTUP_WORK_LIMIT);
+                assert!(checks.load(Ordering::SeqCst) <= 121, "one check every 500 ms, until the deadline");
+            } else {
+                assert_eq!(checks.load(Ordering::SeqCst), 1, "nothing else in the group: no wait");
+            }
+        }
     }
 
     /// Item 11: stopping a probe waits for Codex's startup git/ssh to finish.
