@@ -17,9 +17,10 @@ import {
   handleUnhandledRejection,
   configureAgentTransport,
   STEER_TIMEOUT_MS,
+  STEER_SETTLE_TIMEOUT_MS,
 } from "./host.mjs";
 
-function fixture({ duringStart, failStart, warmGate, fetch, platform, checkpoint, runRecord, agentRecord, runSteer, steerTimeoutMs, checkpointSettleMs, checkpointPersistChain } = {}) {
+function fixture({ duringStart, failStart, warmGate, fetch, platform, checkpoint, runRecord, agentRecord, runSteer, steerTimeoutMs, steerSettleTimeoutMs, checkpointSettleMs, checkpointPersistChain } = {}) {
   const terminal = Promise.withResolvers();
   const started = Promise.withResolvers();
   const events = [];
@@ -82,16 +83,32 @@ function fixture({ duringStart, failStart, warmGate, fetch, platform, checkpoint
       }
     }
   };
-  const waitForEvent = (pred) => {
+  const waitForEvent = (pred, timeoutMs = 2000) => {
     const existing = events.find(pred);
     if (existing) return Promise.resolve(existing);
-    return new Promise((resolve) => waiters.push({ pred, resolve }));
+    return new Promise((resolve, reject) => {
+      const waiter = {
+        pred,
+        resolve: (event) => {
+          clearTimeout(timer);
+          resolve(event);
+        },
+      };
+      const timer = setTimeout(() => {
+        const index = waiters.indexOf(waiter);
+        if (index >= 0) waiters.splice(index, 1);
+        reject(new Error(`timed out waiting for event after ${timeoutMs} ms`));
+      }, timeoutMs);
+      timer.unref?.();
+      waiters.push(waiter);
+    });
   };
   const host = createHost(sdk, async (event) => { await Promise.resolve(); events.push(event); notify(event); }, {
     apiKey: "secret",
     fetch,
     ...(platform ? { platform } : {}),
     ...(steerTimeoutMs !== undefined ? { steerTimeoutMs } : {}),
+    ...(steerSettleTimeoutMs !== undefined ? { steerSettleTimeoutMs } : {}),
     ...(checkpointSettleMs !== undefined ? { checkpointSettleMs } : {}),
   });
   return { host, agent, events, calls, terminal, started, waitForEvent, delta: (update) => callback({ update }) };
@@ -776,6 +793,32 @@ test("steer forwards run.steer(text), reverts during prewarm/idle, and settles t
   const revOrder = slowReverted.events.map((e) => e.type);
   assert.ok(revOrder.indexOf("steer_settled") < revOrder.indexOf("run_completed"), `expected steer_settled before run_completed: ${revOrder}`);
   await slowReverted.host.close();
+
+  // A hung steer that never settles is reverted after steerSettleTimeoutMs so
+  // run_completed is never blocked forever, and a late real settlement is a no-op.
+  assert.ok(STEER_SETTLE_TIMEOUT_MS >= 15_000 && STEER_SETTLE_TIMEOUT_MS <= 30_000, "settle deadline should be ~20 s");
+  const neverSettles = Promise.withResolvers();
+  const hungSteer = fixture({
+    runSteer: () => neverSettles.promise,
+    steerTimeoutMs: 5,
+    steerSettleTimeoutMs: 15,
+  });
+  await open(hungSteer.host);
+  await hungSteer.host.request({ type: "send", message: { text: "hung rpc" } });
+  const pendingHung = await hungSteer.host.request({ type: "steer", steerId: "steer-hung-1", text: "still there?" });
+  assert.deepEqual(pendingHung, { outcome: "pending", steerId: "steer-hung-1" });
+  const hungSettled = hungSteer.waitForEvent((e) => e.type === "steer_settled");
+  const hungCompleted = hungSteer.waitForEvent((e) => e.type === "run_completed");
+  hungSteer.terminal.resolve({ id: "r1", status: "finished" });
+  assert.deepEqual(await hungSettled, { type: "steer_settled", steerId: "steer-hung-1", outcome: "revert_to_followup" });
+  await hungCompleted;
+  const hungOrder = hungSteer.events.map((e) => e.type);
+  assert.ok(hungOrder.indexOf("steer_settled") < hungOrder.indexOf("run_completed"), `expected steer_settled before run_completed: ${hungOrder}`);
+  // Resolving the hung SDK promise later must not emit a duplicate steer_settled.
+  neverSettles.resolve("complete_delivered");
+  await tick();
+  assert.equal(hungSteer.events.filter((e) => e.type === "steer_settled").length, 1);
+  await hungSteer.host.close();
 
   // A run without steer() falls back to revert_to_followup.
   const plain = fixture();

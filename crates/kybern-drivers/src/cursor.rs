@@ -386,6 +386,9 @@ impl AgentSession for Session {
             }
         }
     }
+    fn steer_may_pend(&self) -> bool {
+        true
+    }
     fn take_pending_steer(&self, message_id: &str) -> bool {
         self.pending_steers.lock().unwrap_or_else(|poison| poison.into_inner()).remove(message_id)
     }
@@ -844,6 +847,7 @@ for line in sys.stdin:
             compaction: Default::default(),
         };
         let mut spawned = CursorDriver.spawn(config).await.unwrap();
+        assert!(spawned.session.steer_may_pend());
         spawned.session.send_message("m1", &UserMessage::text("Work")).await.unwrap();
         spawned.session.steer("s1", &UserMessage::text("Focus on tests")).await.unwrap();
         assert!(!spawned.session.take_pending_steer("s1"));

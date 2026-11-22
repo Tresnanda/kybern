@@ -565,6 +565,13 @@ pub trait AgentSession: Send + Sync {
     fn instructions_delivered(&self) -> Option<bool> {
         None
     }
+    /// Whether `steer` may wait asynchronously on the provider or return a
+    /// pending steer that settles later via `DriverEvent::SteerSettled`.
+    /// Sessions returning `false` execute `steer` while the orchestrator holds
+    /// the turn lock so turn completion cannot race the write.
+    fn steer_may_pend(&self) -> bool {
+        false
+    }
     /// Returns whether a steering call with `message_id` that just returned `Ok(())`
     /// is still awaiting provider confirmation and will report its final outcome via
     /// `DriverEvent::SteerSettled`. Consumes the pending marker for `message_id`.

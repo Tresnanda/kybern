@@ -267,6 +267,11 @@ export const WORKSPACE_LINGER_MS = 10 * 60_000;
 // Bounded well under pool.rs's 60 s call deadline so a steer waiting on a long
 // tool run returns "pending" promptly and reports its final outcome via `steer_settled`.
 export const STEER_TIMEOUT_MS = 5_000;
+// Bounds how long `run_completed` / `run_failed` waits for unsettled steers after
+// `run.wait()` ends (the SDK's `steer` awaits `submitConversationAction` before its
+// own ack timer, so a stalled RPC could otherwise hang forever). Stragglers are
+// reverted to follow-ups once this budget expires.
+export const STEER_SETTLE_TIMEOUT_MS = 20_000;
 // Brief settle re-read on cancel because the SDK's cancelled branch resolves
 // run.wait() without awaiting agent.checkpointPersistChain.
 export const CHECKPOINT_SETTLE_MS = 50;
@@ -396,7 +401,7 @@ async function readRunCheckpointed(platform, turnAgent, agentId, runId, beforeAg
 }
 
 /** One agent per logical session. emit is ordered and applies stdout backpressure. */
-export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}, sessionId, ensureCatalog, fetch, platform: hostPlatform = process.platform, steerTimeoutMs = STEER_TIMEOUT_MS, checkpointSettleMs = CHECKPOINT_SETTLE_MS } = {}) {
+export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}, sessionId, ensureCatalog, fetch, platform: hostPlatform = process.platform, steerTimeoutMs = STEER_TIMEOUT_MS, steerSettleTimeoutMs = STEER_SETTLE_TIMEOUT_MS, checkpointSettleMs = CHECKPOINT_SETTLE_MS } = {}) {
   let agent;
   let activePlatform;
   let options;
@@ -636,8 +641,31 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
       turn.ready = true;
       if (turn.cancelled || closing) await cancelRun(turn);
       const settlePendingSteers = async () => {
-        while (turn.activeSteers.size > 0 || turn.pendingSteers.size > 0) {
-          await Promise.allSettled([...turn.activeSteers, ...turn.pendingSteers]);
+        if (turn.activeSteers.size === 0 && turn.pendingSteers.size === 0) return;
+        let deadlineTimer;
+        let timedOut = false;
+        const deadline = new Promise((resolve) => {
+          deadlineTimer = setTimeout(() => {
+            timedOut = true;
+            resolve();
+          }, steerSettleTimeoutMs);
+          deadlineTimer.unref?.();
+        });
+        try {
+          while (!timedOut && (turn.activeSteers.size > 0 || turn.pendingSteers.size > 0)) {
+            const batch = [
+              ...[...turn.activeSteers].map((entry) => entry.promise),
+              ...[...turn.pendingSteers].map((entry) => entry.promise),
+            ];
+            await Promise.race([Promise.allSettled(batch), deadline]);
+          }
+        } finally {
+          clearTimeout(deadlineTimer);
+        }
+        if (turn.activeSteers.size > 0 || turn.pendingSteers.size > 0) {
+          for (const entry of [...turn.activeSteers]) entry.forceRevert();
+          const forcedEmits = [...turn.pendingSteers].map((entry) => entry.forceRevert());
+          await Promise.allSettled(forcedEmits);
         }
       };
       turn.done = (async () => {
@@ -699,10 +727,16 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
     }
     const steerId = typeof request.steerId === "string" && request.steerId ? request.steerId : crypto.randomUUID();
     const PENDING = Symbol("pending");
+    const FORCED_REVERT = Symbol("forced_revert");
     const steerPromise = Promise.resolve()
       .then(() => turn.run.steer(text))
       .then(
         (value) => (value === "complete_delivered" ? "complete_delivered" : "revert_to_followup"),
+        // @cursor/sdk 1.2.0 catches its own action-submit errors and never throws
+        // an "already delivered" error. If a rejection still surfaces (e.g. a
+        // transport or wrapper failure), map it to `revert_to_followup` for
+        // at-least-once delivery—acknowledging that if the server injected the
+        // text right before failing, it could be delivered twice.
         () => "revert_to_followup",
       );
     let timer;
@@ -710,30 +744,58 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
       timer = setTimeout(() => resolve(PENDING), steerTimeoutMs);
       timer.unref?.();
     });
-    const racing = Promise.race([steerPromise, timeout]);
-    turn.activeSteers.add(racing);
+    let abandoned = false;
+    const forced = Promise.withResolvers();
+    const racing = Promise.race([steerPromise, timeout, forced.promise]);
+    const activeEntry = {
+      promise: racing,
+      forceRevert: () => {
+        abandoned = true;
+        forced.resolve(FORCED_REVERT);
+      },
+    };
+    turn.activeSteers.add(activeEntry);
     let outcome;
     try {
       outcome = await racing;
+      if (outcome === FORCED_REVERT || abandoned) {
+        return { outcome: "revert_to_followup", ...(turn.cancelled ? { interrupted: true } : {}) };
+      }
       if (outcome === PENDING) {
         // The server may still inject this steer at the next step boundary, or the SDK's
         // run `finally` will resolve it as `revert_to_followup` before `run.wait()` settles.
-        // Keep the promise and emit `steer_settled` when it finishes so the daemon records
-        // delivery or enqueues a follow-up exactly once.
-        let settled;
-        settled = steerPromise
-          .then((finalOutcome) => emit({ type: "steer_settled", steerId, outcome: finalOutcome }))
-          .catch(() => {})
+        // Keep the promise and emit `steer_settled` once when it finishes (or when
+        // `settlePendingSteers` times out) so the daemon records delivery or enqueues
+        // a follow-up at most once per steer id.
+        let emitPromise;
+        const emitSettled = (finalOutcome) => {
+          if (!emitPromise) {
+            emitPromise = Promise.resolve()
+              .then(() => emit({ type: "steer_settled", steerId, outcome: finalOutcome }))
+              .catch(() => {});
+          }
+          return emitPromise;
+        };
+        let entry;
+        const settled = steerPromise
+          .then((finalOutcome) => emitSettled(finalOutcome))
           .finally(() => {
-            turn.pendingSteers.delete(settled);
+            turn.pendingSteers.delete(entry);
           });
-        turn.pendingSteers.add(settled);
+        entry = {
+          promise: settled,
+          forceRevert: () => {
+            turn.pendingSteers.delete(entry);
+            return emitSettled("revert_to_followup");
+          },
+        };
+        turn.pendingSteers.add(entry);
         return { outcome: "pending", steerId };
       }
       return { outcome, ...(turn.cancelled ? { interrupted: true } : {}) };
     } finally {
       clearTimeout(timer);
-      turn.activeSteers.delete(racing);
+      turn.activeSteers.delete(activeEntry);
     }
   }
 
