@@ -18,6 +18,8 @@ export interface RowSpec {
   /** Stable key, also the test id suffix (`approval-row-once`). */
   id: 'once' | 'session' | 'always' | 'decline'
   label: Part[]
+  /** The row's secondary line, under the label (how long "for this session" lasts). */
+  description?: string
   action: RowAction
 }
 
@@ -130,10 +132,14 @@ function cursorAlways(approval: ApprovalRequest): Part[] | null {
 
 type Noun = 'command' | 'edit' | 'read' | 'other'
 
-/** Codex's "accept for session" remembers this exact command, and an edit's files (later edits to them go through). */
-function codexNoun(approval: ApprovalRequest, noun: Noun): string {
-  if (noun === 'command') return 'this exact command'
-  if (noun === 'edit') return array(record(approval.input).changes).length > 1 ? 'edits to these files' : 'edits to this file'
+/**
+ * Kybern's Codex driver, like T3 Code, answers every later command (or every later edit) on the same thread, in any mode, until the
+ * permission mode changes or the thread unloads. Network requests and permission requests are answered once, so their cards offer
+ * no session row.
+ */
+function codexNoun(noun: Noun): string {
+  if (noun === 'command') return 'commands'
+  if (noun === 'edit') return 'edits'
   return 'this exact request'
 }
 
@@ -142,8 +148,8 @@ const piNoun = (noun: Noun) => (noun === 'command' ? 'this exact command' : noun
 
 /**
  * The "allow for this session" option, worded for what the harness really allows, or null when it allows nothing beyond one run:
- * Claude applies the rules in `suggestions` (an empty list changes nothing), OpenCode its `always` patterns, Codex remembers this
- * command or the edited files, Pi (through Kybern's extension, which gives the call an id) this exact call, and Cursor offers its
+ * Claude applies the rules in `suggestions` (an empty list changes nothing), OpenCode its `always` patterns, Codex (through
+ * Kybern's driver) later commands or edits on the thread, Pi (through Kybern's extension, which gives the call an id) this exact call, and Cursor offers its
  * own "always" option. Pi's other permission prompts and a Cursor request without that option only approve once.
  */
 export function sessionLabel(approval: ApprovalRequest, provider: string | undefined, noun: Noun, subject = ''): Part[] | null {
@@ -154,7 +160,7 @@ export function sessionLabel(approval: ApprovalRequest, provider: string | undef
       return scope ? lead(scope) : null
     }
     case 'opencode': return lead(opencodeScope(approval))
-    case 'codex': return [text(`Allow ${codexNoun(approval, noun)} for this session`)]
+    case 'codex': return [text(`Allow ${codexNoun(noun)} for this session`)]
     case 'pi': case 'omp': return approval.tool_call_id ? [text(`Allow ${piNoun(noun)} for this session`)] : null
     case 'cursor': return cursorAlways(approval)
     default: return [text(`Allow ${subject || 'this'} for this session`)]
@@ -254,14 +260,17 @@ export function grantLines(input: JsonValue): GrantLine[] {
 }
 
 const deniedRow = (agent: string): RowSpec => ({ id: 'decline', label: [text(`Decline and tell ${agent} what to do instead`)], action: { kind: 'decline' } })
-const decide = (id: RowSpec['id'], label: Part[], decision: ApprovalDecision): RowSpec => ({ id, label, action: { kind: 'decide', decision } })
+const decide = (id: RowSpec['id'], label: Part[], decision: ApprovalDecision, description?: string): RowSpec => ({ id, label, ...(description ? { description } : {}), action: { kind: 'decide', decision } })
+
+/** How long a harness's "for this session" lasts, when the label alone would overstate it. */
+const sessionNote = (provider: string | undefined): string | undefined => (provider === 'codex' ? 'Until the permission mode changes' : undefined)
 
 /** The card for a tool approval or a consent request; null for forms and questions, which lay themselves out. */
 export function approvalCard(approval: ApprovalRequest, provider: string | undefined, cwd?: string): CardModel | null {
   const agent = agentName(provider)
   const chip = cwd ? { label: cwd } : undefined
   const session = (noun: Noun, subject?: string) => sessionLabel(approval, provider, noun, subject)
-  const withSession = (once: RowSpec, label: Part[] | null, ...rest: RowSpec[]): RowSpec[] => [once, ...(label ? [decide('session', label, { decision: 'allow_always' })] : []), ...rest]
+  const withSession = (once: RowSpec, label: Part[] | null, ...rest: RowSpec[]): RowSpec[] => [once, ...(label ? [decide('session', label, { decision: 'allow_always' }, sessionNote(provider))] : []), ...rest]
 
   const connector = connectorApproval(approval)
   if (connector) return connectorCard(approval, connector, agent)
@@ -310,19 +319,19 @@ export function approvalCard(approval: ApprovalRequest, provider: string | undef
   if (kind === 'edit' || kind === 'write') {
     const diff = editDiff(approval.input)
     const creating = kind === 'write'
-    // Codex's "accept for session" on an edit that asks for a write root also grants writes under that root.
+    // A Codex edit can also ask for a write root; "Allow edits for this session" answers its later edits there too.
     const root = provider === 'codex' ? string(record(approval.input).grant_root) : ''
     return {
       kind: 'edit', glyph: 'pencil', agent, chip, title: creating ? 'Create this file?' : 'Apply this edit?',
       meta: root ? `${agent} also asks to write in ${root} for the rest of the session.` : undefined,
       well: diff ? { kind: 'diff', diff } : detail ? { kind: 'file', path: detail } : null,
-      rows: withSession(decide('once', [text(creating ? 'Create file' : 'Apply edit')], { decision: 'allow_once' }), root ? [text('Allow writes in '), code(root), text(' for this session')] : session('edit'), deniedRow(agent)),
+      rows: withSession(decide('once', [text(creating ? 'Create file' : 'Apply edit')], { decision: 'allow_once' }), session('edit'), deniedRow(agent)),
     }
   }
   return {
     kind: 'grant', glyph: 'shield', agent, chip: { label: agent }, title: approval.summary && !lines.length ? `${approval.summary}?` : 'Grant these permissions?',
     well: lines.length ? { kind: 'grants', lines } : { kind: 'text', text: permissionBody(approval.input) },
-    rows: withSession(decide('once', [text('Grant once')], { decision: 'allow_once' }), provider === 'codex' ? [text('Grant for this session')] : session('other'), deniedRow(agent)),
+    rows: withSession(decide('once', [text('Grant once')], { decision: 'allow_once' }), provider === 'codex' ? null : session('other'), deniedRow(agent)),
   }
 }
 
