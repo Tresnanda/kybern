@@ -615,6 +615,22 @@ async fn a_count_that_does_not_match_the_log_still_quotes_what_pi_cleared() {
 }
 
 #[test]
+fn the_notice_quotes_the_newest_steers_and_prefers_an_exact_match() {
+    // Pi read "yes" already; "say yes" is what it cleared, and "yes" is only its suffix.
+    let steered = [SteerLog::new(&text_message("yes")), SteerLog::new(&text_message("say yes"))];
+    let DriverEvent::Notice { data, .. } = cleared_queue_notice(&json!({ "steering": ["say yes"] }), &steered).unwrap() else {
+        panic!("expected a notice")
+    };
+    assert_eq!(data.unwrap()["clearedQueue"], json!(["say yes"]));
+    // Cleared copies are matched newest first, each steer once.
+    let steered = [SteerLog::new(&text_message("a")), SteerLog::new(&text_message("yes")), SteerLog::new(&text_message("say yes"))];
+    let DriverEvent::Notice { data, .. } = cleared_queue_notice(&json!({ "steering": ["yes", "say yes"] }), &steered).unwrap() else {
+        panic!("expected a notice")
+    };
+    assert_eq!(data.unwrap()["clearedQueue"], json!(["yes", "say yes"]));
+}
+
+#[test]
 fn the_notice_is_capped_and_counts_what_it_cannot_quote() {
     let sent: Vec<String> = (0..8).map(|n| format!("steer {n} {}", "y".repeat(4000))).collect();
     let steered: Vec<SteerLog> =
@@ -852,6 +868,47 @@ async fn stop_alone_ends_the_wait_for_compaction_without_sending_the_prompt() {
     assert!(harness.session.state.lock().await.compacting, "the test must not have ended the compaction");
     assert!(matches!(harness.next_completion().await, DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, .. }));
     assert!(harness.session.child.lines.lock().await.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn stop_while_the_resent_prompt_waits_for_the_gate_sends_nothing() {
+    let mut harness = Harness::new(Flavor::Pi);
+    let handle = harness.handle.clone();
+    let sending = tokio::spawn(async move { handle.send_message("m1", &text_message("never resent")).await });
+    let first = harness.wire("prompt").await;
+    harness.session.handle_frame(json!({ "type": "compaction_start", "reason": "threshold" })).await;
+    harness.reject(&first, "Cannot submit a prompt while compaction is in progress.").await;
+    wait_for_hold(&harness.session, PromptHold::Waiting).await;
+
+    // Something holds the gate when compaction ends: the send is not withdrawn, then queues for it.
+    let gate = harness.session.command_gate.lock().await;
+    harness.session.handle_frame(json!({ "type": "compaction_end" })).await;
+    for _ in 0..50 {
+        tokio::task::yield_now().await;
+    }
+    // Stop needs no gate.
+    harness.handle.interrupt().await.unwrap();
+    for expected in ["clear_queue", "abort_retry", "abort"] {
+        harness.wire(expected).await;
+    }
+    drop(gate);
+    tokio::time::timeout(DEADLINE, sending).await.expect("send hung").unwrap().unwrap();
+    // The stopped turn settles; any request but its idle probes, such as the prompt, fails the test.
+    loop {
+        let request = tokio::time::timeout(DEADLINE, async { harness.session.child.lines.lock().await.recv().await })
+            .await
+            .expect("the stopped turn never settled")
+            .expect("RPC process closed");
+        match request["type"].as_str().unwrap() {
+            "get_state" => harness.reply(&request, json!({ "isStreaming": false, "isCompacting": false, "pendingMessageCount": 0 })).await,
+            "get_fork_messages" => {
+                harness.reply(&request, json!({ "messages": [] })).await;
+                break;
+            }
+            other => panic!("unexpected request after Stop: {request} ({other})"),
+        }
+    }
+    assert!(matches!(harness.next_completion().await, DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, .. }));
 }
 
 #[tokio::test]

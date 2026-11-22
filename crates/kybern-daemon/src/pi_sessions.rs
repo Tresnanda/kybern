@@ -88,7 +88,13 @@ pub(crate) type SessionKey = (ProviderKind, String, String);
 pub(crate) fn session_owners(store: &Store, threads: &[Thread]) -> HashMap<SessionKey, ThreadId> {
     let mut owners = HashMap::new();
     for thread in threads {
-        for id in session_ids(store, thread) {
+        // Stored switches belong to Pi: a thread that left Pi keeps none under its new provider.
+        let ids = if matches!(thread.provider.kind, ProviderKind::Pi | ProviderKind::Omp) {
+            session_ids(store, thread)
+        } else {
+            thread.provider_session_id.clone().into_iter().collect()
+        };
+        for id in ids {
             owners.entry((thread.provider.kind, thread.provider.instance.clone(), id)).or_insert(thread.id);
         }
     }
@@ -224,6 +230,26 @@ mod tests {
         let omp = thread(&store, ProviderKind::Omp);
         note_switch(&store, omp, None, Some(&switch("a", "b"))).unwrap();
         assert_eq!(earlier_sessions(&store, omp), ["a"], "omp is Pi's fork and switches the same way");
+    }
+
+    #[test]
+    fn session_owners_ignore_stored_switches_of_a_thread_that_left_pi() {
+        let store = Store::open_in_memory().unwrap();
+        let pi = thread(&store, ProviderKind::Pi);
+        let moved = thread(&store, ProviderKind::ClaudeCode);
+        for id in [pi, moved] {
+            store
+                .meta_set(
+                    &key(id),
+                    &serde_json::to_string(&Switches { earlier: vec!["old".into()], turn: None, checkpointed: None }).unwrap(),
+                )
+                .unwrap();
+        }
+        let threads = store.threads_list(None, true).unwrap();
+        let owners = session_owners(&store, &threads);
+        let held = |id: ThreadId| owners.iter().any(|((_, _, session), owner)| session == "old" && *owner == id);
+        assert!(held(pi), "a Pi thread still owns the sessions it left");
+        assert!(!held(moved), "a thread of another provider keeps no old Pi ids");
     }
 
     #[test]

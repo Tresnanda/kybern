@@ -1790,6 +1790,11 @@ impl SteerLog {
         }
     }
 
+    /// Whether `pi_text` is exactly this steer, with nothing expanded before it.
+    fn is_exact_copy_in(&self, pi_text: &str) -> bool {
+        pi_text.trim() == self.tail
+    }
+
     /// Whether `pi_text`, Pi's copy of a queued message, is this steer.
     fn is_copy_in(&self, pi_text: &str) -> bool {
         let pi_text = pi_text.trim();
@@ -1836,18 +1841,25 @@ fn cleared_queue_notice(cleared: &Value, steered: &[SteerLog]) -> Option<DriverE
     if count == 0 {
         return None;
     }
-    // Each steer is matched once, in the order they were sent.
-    let mut next = 0;
+    // Pi reads steers oldest first, so what is left in its queue is the newest. Match from the
+    // newest end, each steer once, and prefer a copy that is exactly the steer over one that
+    // only ends with it ("yes" is the end of "say yes").
+    let mut end = steered.len();
     let mut quoted: Vec<String> = Vec::with_capacity(count);
-    for pi_text in &queued {
-        match steered[next..].iter().position(|steer| steer.is_copy_in(pi_text)) {
-            Some(offset) => {
-                quoted.push(steered[next + offset].shown.clone());
-                next += offset + 1;
+    for pi_text in queued.iter().rev() {
+        let found = steered[..end]
+            .iter()
+            .rposition(|steer| steer.is_exact_copy_in(pi_text))
+            .or_else(|| steered[..end].iter().rposition(|steer| steer.is_copy_in(pi_text)));
+        match found {
+            Some(index) => {
+                quoted.push(steered[index].shown.clone());
+                end = index;
             }
             None => quoted.push(pi_text_for_display(pi_text)),
         }
     }
+    quoted.reverse();
     let shown = &quoted[quoted.len().saturating_sub(MAX_CLEARED_MESSAGES)..];
     let mut text = format!(
         "Pi had not read {count} queued {} when the turn was interrupted. Send again if you still want {}:",
@@ -2234,6 +2246,7 @@ impl AgentSession for Handle {
         }
         let mut turn: Option<u64> = None;
         let mut resent = false;
+        let mut rejection = None;
         let (_gate, generation, result) = loop {
             // Wait for compaction before taking the gate, then look again under it: a steer, a
             // model change and Stop's own commands all need the gate, and none may queue behind
@@ -2250,7 +2263,19 @@ impl AgentSession for Handle {
                 break gate;
             };
             let generation = match turn {
-                Some(generation) => generation,
+                Some(generation) => {
+                    // Stop's commands need no gate, so one can land while this send waited for it.
+                    // Look again now that the gate is ours, so a stopped prompt is never sent.
+                    let withdrawn = {
+                        let st = s.state.lock().await;
+                        st.closed || st.aborted || st.admission_revision != admitted_at
+                    };
+                    if withdrawn && let Some(rejected) = rejection.take() {
+                        hold.release();
+                        break (None, generation, rejected);
+                    }
+                    generation
+                }
                 None => {
                     let Some(generation) = s.begin_turn(false, admitted_at).await? else { return Ok(()) };
                     s.state.lock().await.native_command =
@@ -2274,6 +2299,7 @@ impl AgentSession for Handle {
                 };
                 if !withdrawn {
                     resent = true;
+                    rejection = Some(result);
                     continue;
                 }
                 hold.release();
