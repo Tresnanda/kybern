@@ -1,17 +1,25 @@
-//! Antigravity (`agy`), Google's coding-agent CLI.
+//! Antigravity (`agy`), Google's coding-agent CLI, on one of two transports.
 //!
-//! One `agy` process runs per turn, so a session handle is lazy: `spawn`
-//! checks the request and starts nothing, and each `send_message` starts
-//! `agy -p= --input-format stream-json`, writes the prompt as one NDJSON line
-//! on stdin, closes stdin, and maps the NDJSON that comes back. Turns after the
-//! first pass `--conversation <id>`.
+//! **ACP** (`acp.rs`), when the installed `agy` is 1.5.0 or later and `agy acp`
+//! initializes: one long-lived `agy acp` per session, a flavor of the shared ACP
+//! client. Kybern answers agy's permission requests, so every permission mode
+//! works, and steering, live model and effort switches and background replies
+//! do too.
 //!
-//! Antigravity only runs in Full access (`--dangerously-skip-permissions`):
-//! Kybern has no way to approve or limit its tools. Kybern's own tools reach it
-//! through one global MCP entry (`kybern mcp-bridge`, added with `agy mcp add`)
-//! that forwards to the session's gateway; the session's endpoint and
-//! credential travel in the environment of each `agy` process, never on its
-//! command line.
+//! **`-p`** (this file), the fallback, unchanged: one `agy` process per turn, so a
+//! session handle is lazy: `spawn` checks the request and starts nothing, and each
+//! `send_message` starts `agy -p= --input-format stream-json`, writes the prompt as
+//! one NDJSON line on stdin, closes stdin, and maps the NDJSON that comes back.
+//! Turns after the first pass `--conversation <id>`. It only runs in Full access
+//! (`--dangerously-skip-permissions`): Kybern has no way to approve or limit its
+//! tools there. `KYBERN_ANTIGRAVITY_PRINT_MODE=1` in the Antigravity environment
+//! (Settings → Agents) forces it. Title one-shots always use it.
+//!
+//! Both reach the same conversations. Kybern's own tools reach agy through one
+//! global MCP entry (`kybern mcp-bridge`, added with `agy mcp add`) that forwards
+//! to the session's gateway; the session's endpoint and credential travel in the
+//! environment of the `agy` process, never on its command line.
+mod acp;
 mod login;
 mod stream;
 pub(crate) mod tools;
@@ -32,6 +40,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use kybern_protocol::process::NoWindow;
+use kybern_protocol::rpc::{Problem, ProblemAction, ProblemKind};
 use kybern_protocol::*;
 use serde_json::{Value, json};
 use tokio::process::Command;
@@ -54,6 +63,13 @@ pub const FULL_ACCESS_ONLY: &str = "Antigravity only runs in Full access. Choose
 /// Kybern cannot narrow Antigravity's tools, so it cannot lead a project.
 pub const NO_LEAD: &str = "Antigravity can't lead a project: Kybern can't limit its tools. Choose Claude Code or Codex for the lead.";
 pub(crate) const SIGN_IN: &str = "Antigravity isn't signed in. Sign in from Settings → Agents → Antigravity, then send your message again.";
+/// The detail for a mode only the ACP transport can run, when the installed agy is too old for it.
+pub const NEEDS_ACP: &str =
+    "Antigravity needs agy 1.5 or later for this permission mode. Update it with `agy update`, or choose Full access.";
+/// The detail for a mode only the ACP transport can run, when `agy acp` didn't start.
+pub const ACP_DIDNT_START: &str = "agy acp didn't start or answer initialize; only Full access runs without it.";
+/// Set to `1` in the Antigravity environment to always use `-p` (one process per turn, Full access only).
+pub const PRINT_MODE_ENV: &str = "KYBERN_ANTIGRAVITY_PRINT_MODE";
 
 /// How long SIGINT gets before SIGTERM. SIGKILL follows after
 /// [`crate::process_tree::TERMINATE_GRACE`].
@@ -62,15 +78,94 @@ const MODELS_TTL: Duration = Duration::from_secs(10 * 60);
 const MODELS_TIMEOUT: Duration = Duration::from_secs(20);
 const ONE_SHOT_TIMEOUT: Duration = Duration::from_secs(90);
 
+/// How long a failed `agy acp` check holds before the next session or probe checks again.
+const ACP_RETRY: Duration = Duration::from_secs(5 * 60);
+
 /// Refuses every permission mode but Full access.
 pub fn require_full_access(mode: PermissionMode) -> std::result::Result<(), &'static str> {
     if mode == PermissionMode::FullAccess { Ok(()) } else { Err(FULL_ACCESS_ONLY) }
+}
+
+/// A mode other than Full access, refused where only `-p` runs (forced, or no Antigravity driver).
+pub fn full_access_only_problem() -> Problem {
+    Problem::new(ProblemKind::InvalidInput, FULL_ACCESS_ONLY)
+        .with_subject("antigravity")
+        .with_copy("Antigravity only runs in Full access", "Choose Full access, or pick another agent.")
+}
+
+/// A mode other than Full access on an `agy` older than 1.5: update it.
+pub fn needs_update_problem() -> Problem {
+    crate::failure::update_needed_problem(ProviderKind::Antigravity, NEEDS_ACP)
+        .with_copy("Update Antigravity to use this permission mode", "This mode needs agy 1.5 or later. Update it, or choose Full access.")
+}
+
+/// A mode other than Full access when `agy acp` didn't start: it may next time.
+pub fn acp_failed_problem() -> Problem {
+    Problem::new(ProblemKind::Internal, ACP_DIDNT_START)
+        .with_subject("antigravity")
+        .with_copy("Antigravity couldn't start in this permission mode", "Try again. If it keeps failing, choose Full access.")
+        .with_action(ProblemAction::retry("Try again"))
 }
 
 #[derive(Default)]
 pub struct AntigravityDriver {
     models: std::sync::Mutex<Option<CachedModels>>,
     catalog_file: Option<PathBuf>,
+    /// Whether the installed `agy` takes ACP, as last checked.
+    acp_check: std::sync::Mutex<Option<AcpCheck>>,
+    /// What the last probe or session start found: which permission modes work.
+    acp: std::sync::Mutex<Acp>,
+}
+
+/// Whether sessions run on `agy acp`, as the last probe or session start found.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Acp {
+    /// Not checked since the daemon started: the session's start decides.
+    #[default]
+    Unknown,
+    /// Every permission mode works.
+    Ready,
+    /// `PRINT_MODE_ENV` forces `-p`.
+    Forced,
+    /// `agy` is older than 1.5.0.
+    TooOld,
+    /// `agy acp` didn't start or initialize (or agy's version couldn't be read).
+    Failed,
+}
+
+impl Acp {
+    /// Why a mode other than Full access can't run, or `None` when it can (or the start decides).
+    fn refusal(self) -> Option<Problem> {
+        match self {
+            Acp::Unknown | Acp::Ready => None,
+            Acp::Forced => Some(full_access_only_problem()),
+            Acp::TooOld => Some(needs_update_problem()),
+            Acp::Failed => Some(acp_failed_problem()),
+        }
+    }
+}
+
+/// One check of whether a binary takes ACP, keyed on the version `agy` reports (a `.cmd` or npm
+/// launcher doesn't change on disk when agy updates). A success holds for that version; a failure
+/// holds for [`ACP_RETRY`], and nothing holds across a daemon restart.
+struct AcpCheck {
+    binary: PathBuf,
+    version: String,
+    usable: bool,
+    at: Instant,
+}
+
+impl AcpCheck {
+    /// The cached answer for `binary` at `version`, while it holds.
+    fn answer(&self, binary: &Path, version: &str, now: Instant) -> Option<bool> {
+        let holds = self.usable || now.saturating_duration_since(self.at) < ACP_RETRY;
+        (self.binary == binary && self.version == version && holds).then_some(self.usable)
+    }
+}
+
+/// `PRINT_MODE_ENV` is on.
+fn forced_print(value: Option<&String>) -> bool {
+    value.is_some_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
 }
 
 struct CachedModels {
@@ -82,7 +177,47 @@ struct CachedModels {
 impl AntigravityDriver {
     /// Keep the model list in `file` so a restarted daemon lists models at once.
     pub fn with_catalog_file(file: PathBuf) -> Self {
-        Self { models: std::sync::Mutex::new(None), catalog_file: Some(file) }
+        Self { catalog_file: Some(file), ..Self::default() }
+    }
+
+    /// Whether a session should run on ACP: not forced to `-p`, `agy` 1.5.0 or later, and `agy acp`
+    /// initializes. The last check is reused while it holds ([`AcpCheck::answer`]); with `recheck`, a
+    /// failure is checked again at once.
+    async fn acp_state(&self, binary: &Path, env: &BTreeMap<String, String>, recheck: bool) -> Acp {
+        if forced_print(env.get(PRINT_MODE_ENV)) {
+            return Acp::Forced;
+        }
+        let Some(version) = version_of(binary, &["--version"]).await else { return Acp::Failed };
+        if !at_least(&version, acp::MIN_ACP_VERSION) {
+            return Acp::TooOld;
+        }
+        let cached = self.lock_check().as_ref().and_then(|check| check.answer(binary, &version, Instant::now()));
+        let usable = match cached {
+            Some(usable) if usable || !recheck => usable,
+            _ => {
+                let usable = acp::initializes(binary, env).await;
+                *self.lock_check() = Some(AcpCheck { binary: binary.to_path_buf(), version, usable, at: Instant::now() });
+                usable
+            }
+        };
+        if usable { Acp::Ready } else { Acp::Failed }
+    }
+
+    fn lock_check(&self) -> std::sync::MutexGuard<'_, Option<AcpCheck>> {
+        self.acp_check.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn record(&self, state: Acp) {
+        *self.acp.lock().unwrap_or_else(|e| e.into_inner()) = state;
+    }
+
+    /// ACP failed to start for this binary: `-p` until the check is due again.
+    fn forget_acp(&self, binary: &Path) {
+        if let Some(check) = self.lock_check().as_mut().filter(|check| check.binary == binary) {
+            check.usable = false;
+            check.at = Instant::now();
+        }
+        self.record(Acp::Failed);
     }
 
     fn cached(&self, binary: &Path, max_age: Duration) -> Option<Vec<ProviderModel>> {
@@ -172,6 +307,11 @@ impl AntigravityDriver {
         }
         if status.available {
             status.models = self.models(&binary, context, fresh).await;
+            let acp = self.acp_state(&binary, &context.env, false).await;
+            self.record(acp);
+            if acp == Acp::Ready {
+                status.supported_permission_modes = PermissionMode::ALL.to_vec();
+            }
         }
         status
     }
@@ -317,6 +457,13 @@ impl AgentDriver for AntigravityDriver {
         false
     }
 
+    fn permission_mode_refusal(&self, mode: PermissionMode) -> Option<DriverError> {
+        if mode == PermissionMode::FullAccess {
+            return None;
+        }
+        self.acp.lock().unwrap_or_else(|e| e.into_inner()).refusal().map(DriverError::problem)
+    }
+
     async fn probe(&self, binary: Option<&PathBuf>) -> ProviderStatus {
         self.probe_context(&ProbeContext { binary: binary.cloned(), ..ProbeContext::default() }, false).await
     }
@@ -383,7 +530,6 @@ impl AgentDriver for AntigravityDriver {
     }
 
     async fn spawn(&self, config: SessionConfig) -> Result<SpawnedSession> {
-        require_full_access(config.permission_mode).map_err(|sentence| DriverError::Unsupported(sentence.into()))?;
         if config.fork || config.rewind.is_some() {
             return Err(DriverError::Unsupported(
                 "Antigravity can't fork or rewind a conversation. Rewind restores the workspace only.".into(),
@@ -396,6 +542,37 @@ impl AgentDriver for AntigravityDriver {
             }
         }
         let binary = resolve(ProviderKind::Antigravity, config.binary.as_ref())?;
+        let env: BTreeMap<String, String> = config.env.iter().map(|(key, value)| (key.clone(), value.clone())).collect();
+        let full_access = config.permission_mode == PermissionMode::FullAccess;
+        // A mode only ACP runs checks an earlier failure again: it can't run otherwise.
+        let state = self.acp_state(&binary, &env, !full_access).await;
+        self.record(state);
+        if state == Acp::Ready {
+            let flavor = acp::AgyAcp::new(env_home(&env), config.native_tool_bridge.as_ref())?;
+            let failed_to_start = flavor.failed_to_start.clone();
+            match crate::acp::spawn(flavor, config.clone()).await {
+                Ok(session) => return Ok(session),
+                Err(error) if failed_to_start.load(Ordering::SeqCst) => {
+                    self.forget_acp(&binary);
+                    if !full_access {
+                        return Err(error);
+                    }
+                    // `agy acp` didn't come up: `-p` takes Full access sessions over, as if ACP had never been there.
+                    tracing::warn!(target: "kybern::antigravity", %error, "agy acp didn't start; using -p");
+                }
+                Err(error) => return Err(error),
+            }
+        } else if !full_access && let Some(problem) = state.refusal() {
+            return Err(DriverError::problem(problem));
+        }
+        self.spawn_print(config, binary).await
+    }
+}
+
+impl AntigravityDriver {
+    /// A `-p` session: lazy, one `agy` process per turn.
+    async fn spawn_print(&self, config: SessionConfig, binary: PathBuf) -> Result<SpawnedSession> {
+        require_full_access(config.permission_mode).map_err(|sentence| DriverError::Unsupported(sentence.into()))?;
         // The guide (and any role text) rides in the first prompt, because `agy` has
         // no system channel Kybern can reach. The daemon renders it from the tools
         // this session really has, so it never advertises one the agent cannot call.

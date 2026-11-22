@@ -34,8 +34,8 @@ use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     AuthenticateRequest, CancelNotification, ClientCapabilities, ContentBlock, Implementation, InitializeRequest, InitializeResponse,
     LoadSessionRequest, McpServer, Meta, NewSessionRequest, PermissionOption, PromptRequest, RequestPermissionRequest,
-    RequestPermissionResponse, SessionId, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, SetSessionModeRequest,
-    ToolCall as AcpToolCall, ToolCallUpdateFields, ToolKind,
+    RequestPermissionResponse, SessionConfigOption, SessionConfigValueId, SessionId, SessionModeState, SessionNotification, SessionUpdate,
+    SetSessionConfigOptionRequest, SetSessionModeRequest, ToolCall as AcpToolCall, ToolCallStatus, ToolCallUpdateFields, ToolKind,
 };
 use agent_client_protocol::{
     Agent, ByteStreams, Client, ConnectionTo, Handled, Responder, UntypedMessage, on_receive_notification, on_receive_request,
@@ -48,17 +48,17 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::binary::resolve;
-use crate::{AgentSession, DriverError, DriverEvent, Result, SessionConfig, SpawnedSession};
+use crate::{AgentSession, DriverError, DriverEvent, NativeToolBridge, Result, SessionConfig, SpawnedSession};
 
 pub(crate) use content::{blocks_with_guide, command_update, mcp_servers, merge_text_blocks, option_list, prompt_blocks, tool_name};
 pub(crate) use permission::{Ask, auto_response, cancelled, permission_response, selected};
 pub(crate) use startup::{Startup, fail_startup, rejects_arguments, remember_stderr, stderr_text};
-pub(crate) use turn::{Completion, LOAD_REPLAY_IDLE, LOAD_TIMEOUT, SessionCommand, settle_prompt};
+pub(crate) use turn::{Completion, LOAD_REPLAY_IDLE, LOAD_TIMEOUT, SessionCommand};
 #[cfg(test)]
 pub(crate) use {
     content::prompt_with_guide,
     startup::STDERR_TAIL_BYTES,
-    turn::{CANCEL_GRACE, LoadOutcome, Settled, await_session_load},
+    turn::{CANCEL_GRACE, LoadOutcome, Settled, await_session_load, settle_prompt},
 };
 // Only the fake-agent session tests, which run on Unix, use these.
 #[cfg(all(test, unix))]
@@ -76,6 +76,14 @@ pub(crate) struct PermissionCard {
     pub(crate) tool_name: String,
     pub(crate) input: Value,
     pub(crate) summary: String,
+}
+
+/// The config option writes that select a model and effort, in order, and the model to report as in use.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ConfigSelection {
+    pub(crate) writes: Vec<(String, String)>,
+    /// The model reported in `SessionBound` (`None`: the agent's default).
+    pub(crate) model: Option<String>,
 }
 
 /// An extension request (`x.ai/…`, `cursor/…`) the flavor handles.
@@ -137,6 +145,22 @@ pub(crate) trait AcpFlavor: Send + Sync + Sized + 'static {
     /// In front of the text a dropped connection ends the session with.
     const ERROR_PREFIX: &'static str = "";
 
+    /// Rewrite each message the agent sends before the client reads it: an agent's own fields that ACP's
+    /// types would drop can move into `_meta` there. Only called when `REWRITES_INCOMING`.
+    const REWRITES_INCOMING: bool = false;
+    /// `session/set_config_option` for the model and effort waits for the next prompt (what is picked
+    /// during a turn applies to the next one, as a harness that starts a process per turn does).
+    const CONFIG_AT_NEXT_PROMPT: bool = false;
+    /// The agent goes on after its prompt answers: a command it backgrounded holds the turn open until
+    /// the agent's reply to it closes, and a reply it starts with no prompt open is a turn of its own
+    /// (`ResponseStarted`), ended the same way. Every reply of such an agent ends with `usage_update`.
+    const BACKGROUND_REPLIES: bool = false;
+    /// Fail a prompt whose agent says nothing, runs no tool and asks nothing for this long.
+    const INACTIVITY_LIMIT: Option<Duration> = None;
+    /// End the session as soon as the agent's process is gone (its stderr closed), so the daemon starts
+    /// a new one for the next message instead of sending it to a dead connection.
+    const ENDS_WITH_PROCESS: bool = false;
+
     /// The agent's process: binary, arguments for the permission mode, environment. The core adds the
     /// working folder, pipes, `kill_on_drop` and the process group.
     fn command(&self, bin: &Path, config: &SessionConfig) -> Command;
@@ -147,6 +171,59 @@ pub(crate) trait AcpFlavor: Send + Sync + Sized + 'static {
 
     /// `initialize`'s `_meta`.
     fn initialize_meta(&self) -> Option<Meta> {
+        None
+    }
+    /// `initialize`'s client name and version.
+    fn client_info(&self) -> Implementation {
+        Implementation::new("kybern", env!("CARGO_PKG_VERSION"))
+    }
+    /// See `REWRITES_INCOMING`. Returns a message to pass on just before this one (text the flavor held
+    /// back and releases ahead of it).
+    fn rewrite_incoming(&self, _message: &mut Value) -> Option<Value> {
+        None
+    }
+    /// Kybern's MCP servers for `session/new` and `session/load`.
+    fn mcp_servers(&self, bridge: Option<&NativeToolBridge>) -> Result<Vec<McpServer>> {
+        mcp_servers(Self::NAME, bridge)
+    }
+    /// `_meta` that puts Kybern's guide in the agent's system prompt, when this agent takes one. The guide
+    /// then never rides on a prompt.
+    fn system_prompt_meta(&self, _init: &InitializeResponse, _guide: &str) -> Option<Meta> {
+        None
+    }
+    /// [`AcpFlavor::session_mode`], knowing the modes the session advertised.
+    fn session_mode_in(&self, mode: PermissionMode, _modes: Option<&SessionModeState>) -> Option<&'static str> {
+        self.session_mode(mode)
+    }
+    /// The config writes for a model and effort, from the session's options; `None` sets option
+    /// `model` and `EFFORT_OPTION` as given.
+    fn config_selection(&self, _model: Option<&str>, _effort: Option<&str>, _options: &[SessionConfigOption]) -> Option<ConfigSelection> {
+        None
+    }
+    /// A tool that goes on after its prompt answers (see `BACKGROUND_REPLIES`).
+    fn tool_outlives_prompt(&self, _call: &AcpToolCall) -> bool {
+        false
+    }
+    /// The turn's end for a prompt whose agent went silent (see `INACTIVITY_LIMIT`).
+    fn silent_failure() -> DriverEvent {
+        DriverEvent::turn_failed(Self::KIND, format!("{} stopped responding. Send your message again.", Self::NAME))
+    }
+    /// Where the agent's own record of the session stands before a prompt, for [`AcpFlavor::prompt_outcome`].
+    fn prompt_mark(&self, _session_id: &str) -> Option<i64> {
+        None
+    }
+    /// The turn's end, given what the agent recorded for this prompt since `mark` (an agent that reports
+    /// a failure as text and `end_turn` records it there).
+    fn prompt_outcome(&self, _session_id: &str, _mark: Option<i64>, event: DriverEvent) -> DriverEvent {
+        event
+    }
+    /// Text the flavor held back from the prompt that just ended (see [`AcpFlavor::rewrite_incoming`]),
+    /// shown at the end of its turn. Read right after [`AcpFlavor::prompt_outcome`].
+    fn released_text(&self) -> Option<String> {
+        None
+    }
+    /// A permission request that is really the agent's question to the user.
+    fn permission_question(&self, _request: &RequestPermissionRequest) -> Option<Box<dyn ExtensionAsk>> {
         None
     }
     /// The auth method to `authenticate` with after `initialize`, when the agent offers it (its answer is not checked).
@@ -241,7 +318,7 @@ pub(crate) trait AcpFlavor: Send + Sync + Sized + 'static {
 pub(crate) async fn spawn<F: AcpFlavor>(flavor: F, config: SessionConfig) -> Result<SpawnedSession> {
     let bin = resolve(F::KIND, config.binary.as_ref())?;
     // Checked before the agent starts, so a refused bridge costs no process.
-    let mcp_servers = mcp_servers(F::NAME, config.native_tool_bridge.as_ref())?;
+    let mcp_servers = flavor.mcp_servers(config.native_tool_bridge.as_ref())?;
     let (events_tx, events_rx) = mpsc::channel(1024);
     let (cmd_tx, cmd_rx) = mpsc::channel::<SessionCommand>(64);
     let (bound_tx, bound_rx) = oneshot::channel::<Result<Bound>>();
@@ -257,17 +334,14 @@ pub(crate) async fn spawn<F: AcpFlavor>(flavor: F, config: SessionConfig) -> Res
     let flavor = Arc::new(flavor);
     let stderr_tail = Arc::new(std::sync::Mutex::new(String::new()));
     let (stderr_closed_tx, mut stderr_closed) = tokio::sync::watch::channel(false);
-    let shared = Arc::new(Shared {
-        events: events_tx.clone(),
-        pending: Mutex::new(HashMap::new()),
-        mode: std::sync::Mutex::new(config.permission_mode),
-        cwd: config.cwd.clone(),
-    });
+    let shared = Arc::new(Shared::new(events_tx.clone(), config.permission_mode, config.cwd.clone()));
+    *shared.lock_config() = Config { model: config.model.clone(), effort: config.effort.clone(), ..Config::default() };
     let (finished, closed) = tokio::sync::watch::channel(());
     let connection = Connection {
         flavor: flavor.clone(),
         bin,
         config,
+        guide: guide.clone(),
         mcp_servers,
         shared: shared.clone(),
         stderr_tail: stderr_tail.clone(),
@@ -288,6 +362,8 @@ pub(crate) async fn spawn<F: AcpFlavor>(flavor: F, config: SessionConfig) -> Res
             return Err(flavor.exited_during_startup(&stderr_tail));
         }
     };
+    // A guide the agent's system prompt carries never rides on a prompt.
+    let guide = if bound.guide_in_system_prompt { None } else { guide };
     let handle = Handle { flavor, commands: cmd_tx, guide: Mutex::new(guide), shared, steers: bound.steers, closed, worker };
     Ok(SpawnedSession { session: Box::new(handle), events: events_rx })
 }
@@ -296,6 +372,21 @@ pub(crate) async fn spawn<F: AcpFlavor>(flavor: F, config: SessionConfig) -> Res
 struct Bound {
     /// The agent carries a running turn on with the next prompt.
     steers: bool,
+    /// Kybern's guide went into the agent's system prompt.
+    guide_in_system_prompt: bool,
+}
+
+/// The session's config: what the agent offers, and the model and effort Kybern wants.
+#[derive(Debug, Default)]
+struct Config {
+    /// The modes `session/new` (or `session/load`) advertised.
+    modes: Option<SessionModeState>,
+    /// The agent's config options, as it last reported them.
+    options: Vec<SessionConfigOption>,
+    model: Option<String>,
+    effort: Option<String>,
+    /// The model and effort still to be applied before the next prompt (`CONFIG_AT_NEXT_PROMPT`).
+    stale: bool,
 }
 
 struct Shared {
@@ -305,11 +396,35 @@ struct Shared {
     /// The mode Kybern's own permission answers follow.
     mode: std::sync::Mutex<PermissionMode>,
     cwd: PathBuf,
+    config: std::sync::Mutex<Config>,
+    activity: std::sync::Mutex<turn::Activity>,
+    /// Rings when the agent starts a reply by itself.
+    woke: tokio::sync::Notify,
 }
 
 impl Shared {
+    fn new(events: mpsc::Sender<DriverEvent>, mode: PermissionMode, cwd: PathBuf) -> Self {
+        Self {
+            events,
+            pending: Mutex::new(HashMap::new()),
+            mode: std::sync::Mutex::new(mode),
+            cwd,
+            config: std::sync::Mutex::new(Config::default()),
+            activity: std::sync::Mutex::new(turn::Activity::new()),
+            woke: tokio::sync::Notify::new(),
+        }
+    }
+
     fn mode(&self) -> PermissionMode {
         *self.mode.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn lock_config(&self) -> std::sync::MutexGuard<'_, Config> {
+        self.config.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn lock_activity(&self) -> std::sync::MutexGuard<'_, turn::Activity> {
+        self.activity.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Raise a card and return where its answer arrives. A dropped sender (the turn ended) reads as no answer.
@@ -317,8 +432,17 @@ impl Shared {
         let request_id = uuid::Uuid::new_v4().simple().to_string();
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(request_id.clone(), (kind, tx));
+        self.lock_activity().cards += 1;
         let _ = self.events.send(event(request_id)).await;
         rx
+    }
+
+    /// A card was answered (or its turn ended).
+    fn card_closed(&self) {
+        let mut activity = self.lock_activity();
+        activity.cards = activity.cards.saturating_sub(1);
+        activity.last_progress = tokio::time::Instant::now();
+        activity.last_heard = activity.last_progress;
     }
 
     /// The turn ended: the agent no longer waits for any open card.
@@ -328,6 +452,22 @@ impl Shared {
             let _ = self.events.send(DriverEvent::PermissionWithdrawn { request_id }).await;
         }
     }
+
+    /// The agent sent output with no turn open: it started a reply by itself, which opens one
+    /// (`BACKGROUND_REPLIES`). Returns whether it did.
+    fn open_background_turn(&self) -> bool {
+        let mut activity = self.lock_activity();
+        if activity.turn_open {
+            return false;
+        }
+        activity.turn_open = true;
+        activity.background = true;
+        activity.reply_open = true;
+        activity.last_progress = tokio::time::Instant::now();
+        drop(activity);
+        self.woke.notify_one();
+        true
+    }
 }
 
 /// Everything the worker needs to run the connection.
@@ -335,6 +475,8 @@ struct Connection<F> {
     flavor: Arc<F>,
     bin: PathBuf,
     config: SessionConfig,
+    /// Kybern's guide, which the flavor may put in the system prompt.
+    guide: Option<String>,
     mcp_servers: Vec<McpServer>,
     shared: Arc<Shared>,
     stderr_tail: Arc<std::sync::Mutex<String>>,
@@ -405,9 +547,93 @@ fn send_prompt<'a, F: AcpFlavor>(
     (prompt_id, Box::pin(answer))
 }
 
+/// The agent's stdout with each message rewritten by the flavor (`REWRITES_INCOMING`). A line that is
+/// not JSON passes as it is.
+fn rewritten<F: AcpFlavor>(flavor: Arc<F>, stdout: tokio::process::ChildStdout) -> tokio::io::DuplexStream {
+    let (mut writer, reader) = tokio::io::duplex(64 * 1024);
+    tokio::spawn(async move {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        let mut stdout = tokio::io::BufReader::new(stdout);
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            match stdout.read_until(b'\n', &mut line).await {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            let text = String::from_utf8_lossy(&line);
+            let out = match serde_json::from_str::<Value>(text.trim_end()) {
+                Ok(mut message) => match flavor.rewrite_incoming(&mut message) {
+                    Some(before) => format!("{before}\n{message}"),
+                    None => message.to_string(),
+                },
+                Err(_) => text.trim_end_matches(['\n', '\r']).to_string(),
+            };
+            if writer.write_all(out.as_bytes()).await.is_err() || writer.write_all(b"\n").await.is_err() {
+                break;
+            }
+        }
+    });
+    reader
+}
+
+/// Set the model and effort through the session's config options: the model now in use, or (when it
+/// couldn't be set) the model to report and a notice. `starting` words the notice for a new session.
+async fn apply_config<F: AcpFlavor>(
+    cx: &ConnectionTo<Agent>,
+    session_id: &SessionId,
+    flavor: &F,
+    shared: &Shared,
+    model: Option<String>,
+    effort: Option<&str>,
+) -> std::result::Result<Option<String>, (Option<String>, String)> {
+    let set = async |id: &str, value: &str| {
+        let set = cx
+            .send_request(SetSessionConfigOptionRequest::new(
+                session_id.clone(),
+                id.to_owned(),
+                SessionConfigValueId::new(value.to_owned()),
+            ))
+            .block_task()
+            .await;
+        if let Ok(set) = &set {
+            shared.lock_config().options = set.config_options.clone();
+        }
+        set
+    };
+    let options = shared.lock_config().options.clone();
+    if let Some(selection) = flavor.config_selection(model.as_deref(), effort, &options) {
+        for (id, value) in &selection.writes {
+            if let Err(e) = set(id, value).await
+                && !F::KEEPS_UNSET_MODEL
+            {
+                let wanted = model.as_deref().unwrap_or(value);
+                return Err((None, format!("{} could not switch to {wanted}: {e}. It is using its default model.", F::NAME)));
+            }
+        }
+        return Ok(selection.model);
+    }
+    let mut model = model;
+    let mut notice = None;
+    if let Some(wanted) = model.clone()
+        && let Err(e) = set("model", &wanted).await
+        && !F::KEEPS_UNSET_MODEL
+    {
+        notice = Some(format!("{} could not switch to {wanted}: {e}. It is using its default model.", F::NAME));
+        model = None;
+    }
+    if let (Some(effort), Some(option)) = (effort, F::EFFORT_OPTION) {
+        let _ = set(option, effort).await;
+    }
+    match notice {
+        Some(notice) => Err((model, notice)),
+        None => Ok(model),
+    }
+}
+
 impl<F: AcpFlavor> Connection<F> {
     async fn run(self, mut commands: mpsc::Receiver<SessionCommand>, bound: oneshot::Sender<Result<Bound>>) -> Result<()> {
-        let Connection { flavor, bin, config, mcp_servers, shared, stderr_tail, stderr_closed: stderr_closed_tx } = self;
+        let Connection { flavor, bin, config, guide, mcp_servers, shared, stderr_tail, stderr_closed: stderr_closed_tx } = self;
         let mut bound = Some(bound);
         let timings = turn::Timings::for_session::<F>(&config);
 
@@ -446,7 +672,9 @@ impl<F: AcpFlavor> Connection<F> {
                 let _ = stderr_closed_tx.send(true);
             });
         }
-        let agent = ByteStreams::new(stdin.compat_write(), stdout.compat());
+        let incoming: std::pin::Pin<Box<dyn tokio::io::AsyncRead + Send>> =
+            if F::REWRITES_INCOMING { Box::pin(rewritten(flavor.clone(), stdout)) } else { Box::pin(stdout) };
+        let agent = ByteStreams::new(stdin.compat_write(), incoming.compat());
         let _child_guard = child; // killed on drop when the connection ends
 
         let cwd = config.cwd.clone();
@@ -459,9 +687,13 @@ impl<F: AcpFlavor> Connection<F> {
         let (completions_tx, mut completions) = mpsc::unbounded_channel::<F::Completion>();
 
         let on_update = {
-            let (flavor, events, messages, loading, last_replay) =
-                (flavor.clone(), shared.events.clone(), messages.clone(), loading.clone(), last_replay.clone());
+            let (flavor, shared, events, messages, loading, last_replay) =
+                (flavor.clone(), shared.clone(), shared.events.clone(), messages.clone(), loading.clone(), last_replay.clone());
             async move |n: SessionNotification, _cx| {
+                // The agent's config options are its state, whenever they change.
+                if let SessionUpdate::ConfigOptionUpdate(update) = &n.update {
+                    shared.lock_config().options = update.config_options.clone();
+                }
                 if loading.load(std::sync::atomic::Ordering::Relaxed) {
                     if let Ok(mut last) = last_replay.lock() {
                         *last = Some(tokio::time::Instant::now());
@@ -470,6 +702,37 @@ impl<F: AcpFlavor> Connection<F> {
                     if !matches!(n.update, SessionUpdate::AvailableCommandsUpdate(_) | SessionUpdate::UsageUpdate(_)) {
                         return Ok(());
                     }
+                }
+                let output = matches!(
+                    n.update,
+                    SessionUpdate::AgentMessageChunk(_)
+                        | SessionUpdate::AgentThoughtChunk(_)
+                        | SessionUpdate::ToolCall(_)
+                        | SessionUpdate::ToolCallUpdate(_)
+                );
+                {
+                    let mut activity = shared.lock_activity();
+                    activity.last_progress = tokio::time::Instant::now();
+                    activity.last_heard = activity.last_progress;
+                    match &n.update {
+                        SessionUpdate::ToolCall(call) if !matches!(call.status, ToolCallStatus::Completed | ToolCallStatus::Failed) => {
+                            activity.tools.insert(call.tool_call_id.to_string(), flavor.tool_outlives_prompt(call));
+                        }
+                        SessionUpdate::ToolCallUpdate(update)
+                            if matches!(update.fields.status, Some(ToolCallStatus::Completed | ToolCallStatus::Failed)) =>
+                        {
+                            activity.tools.remove(&update.tool_call_id.to_string());
+                        }
+                        SessionUpdate::UsageUpdate(_) => activity.reply_open = false,
+                        _ => {}
+                    }
+                    if output {
+                        activity.reply_open = true;
+                    }
+                }
+                // A reply the agent starts by itself, with no prompt open, is a turn of its own.
+                if F::BACKGROUND_REPLIES && output && shared.open_background_turn() {
+                    let _ = events.send(DriverEvent::ResponseStarted).await;
                 }
                 let event = match n.update {
                     SessionUpdate::AgentMessageChunk(c) => {
@@ -539,6 +802,20 @@ impl<F: AcpFlavor> Connection<F> {
         let on_permission = {
             let (flavor, shared) = (flavor.clone(), shared.clone());
             async move |req: RequestPermissionRequest, responder: Responder<RequestPermissionResponse>, cx: ConnectionTo<Agent>| {
+                if F::BACKGROUND_REPLIES && shared.open_background_turn() {
+                    let _ = shared.events.send(DriverEvent::ResponseStarted).await;
+                }
+                if let Some(ask) = flavor.permission_question(&req) {
+                    let rx = shared.ask(ask.kind(), |request_id| ask.card(request_id)).await;
+                    let shared = shared.clone();
+                    return cx.spawn(async move {
+                        let decision = rx.await.ok();
+                        shared.card_closed();
+                        let response = serde_json::from_value(ask.response(decision)).unwrap_or_else(|_| cancelled());
+                        let _ = responder.respond(response);
+                        Ok(())
+                    });
+                }
                 if let Some(response) = flavor.auto_permission(shared.mode(), &req, &shared.cwd) {
                     return responder.respond(response);
                 }
@@ -555,9 +832,10 @@ impl<F: AcpFlavor> Connection<F> {
                     .await;
                 // Wait off the dispatch loop: the agent's updates and the prompt's answer keep flowing meanwhile.
                 let options = req.options;
-                let (flavor, events) = (flavor.clone(), shared.events.clone());
+                let (flavor, events, shared) = (flavor.clone(), shared.events.clone(), shared.clone());
                 cx.spawn(async move {
                     let decision = rx.await.ok();
+                    shared.card_closed();
                     let (response, notice) = flavor.permission_answer(&options, decision.as_ref());
                     if let Some(text) = notice {
                         let _ = events.send(DriverEvent::Notice { level: NoticeLevel::Warning, text, data: None }).await;
@@ -578,8 +856,10 @@ impl<F: AcpFlavor> Connection<F> {
                     Extension::Answer(answer) => responder.respond(answer)?,
                     Extension::Ask(ask) => {
                         let rx = shared.ask(ask.kind(), |request_id| ask.card(request_id)).await;
+                        let shared = shared.clone();
                         cx.spawn(async move {
                             let decision = rx.await.ok();
+                            shared.card_closed();
                             let _ = responder.respond(ask.response(decision));
                             Ok(())
                         })?;
@@ -601,7 +881,7 @@ impl<F: AcpFlavor> Connection<F> {
                     .send_request(
                         InitializeRequest::new(ProtocolVersion::V1)
                             .client_capabilities(ClientCapabilities::new())
-                            .client_info(Implementation::new("kybern", env!("CARGO_PKG_VERSION")))
+                            .client_info(flavor.client_info())
                             .meta(flavor.initialize_meta()),
                     )
                     .block_task()
@@ -621,15 +901,31 @@ impl<F: AcpFlavor> Connection<F> {
                     let _ = cx.send_request(AuthenticateRequest::new(method)).block_task().await;
                 }
 
-                let session_meta = flavor.session_meta(&init, &config);
+                let mut session_meta = flavor.session_meta(&init, &config);
+                // A new conversation's guide goes in the system prompt when this agent takes one there; a
+                // resumed one that lacks it gets it on its next prompt, which reaches it for certain.
+                let guide_meta = guide
+                    .as_deref()
+                    .filter(|_| config.resume_session_id.is_none())
+                    .and_then(|guide| flavor.system_prompt_meta(&init, guide));
+                let guide_in_system_prompt = guide_meta.is_some();
+                if let Some(extra) = guide_meta {
+                    session_meta.get_or_insert_with(Meta::new).extend(extra);
+                }
                 let session_id = match &config.resume_session_id {
                     Some(id) => {
                         loading.store(true, std::sync::atomic::Ordering::Relaxed);
                         let request = LoadSessionRequest::new(id.clone(), cwd.clone()).mcp_servers(mcp_servers.clone()).meta(session_meta);
                         let load = cx.send_request(request).block_task();
                         match turn::await_session_load(load, &last_replay, timings.replay_idle, timings.load_timeout).await {
-                            turn::LoadOutcome::Answered(Ok(_)) => {
+                            turn::LoadOutcome::Answered(Ok(loaded)) => {
                                 loading.store(false, std::sync::atomic::Ordering::Relaxed);
+                                let mut state = shared.lock_config();
+                                state.modes = loaded.modes;
+                                if let Some(options) = loaded.config_options {
+                                    state.options = options;
+                                }
+                                drop(state);
                                 SessionId::from(id.clone())
                             }
                             // A quiet replay only ends the wait: the agent may still be replaying, so its updates
@@ -651,7 +947,15 @@ impl<F: AcpFlavor> Connection<F> {
                     None => {
                         let request = NewSessionRequest::new(cwd.clone()).mcp_servers(mcp_servers).meta(session_meta);
                         match cx.send_request(request).block_task().await {
-                            Ok(created) => created.session_id,
+                            Ok(created) => {
+                                let mut state = shared.lock_config();
+                                state.modes = created.modes;
+                                if let Some(options) = created.config_options {
+                                    state.options = options;
+                                }
+                                drop(state);
+                                created.session_id
+                            }
                             Err(e) => {
                                 let error = flavor.startup_error(Startup::NewSession, &format!("session/new: {e}"), "");
                                 return Err(fail_startup(&mut bound, error));
@@ -660,51 +964,147 @@ impl<F: AcpFlavor> Connection<F> {
                     }
                 };
 
-                if let Some(mode) = flavor.session_mode(config.permission_mode) {
+                let modes = shared.lock_config().modes.clone();
+                if let Some(mode) = flavor.session_mode_in(config.permission_mode, modes.as_ref()) {
                     let _ = cx.send_request(SetSessionModeRequest::new(session_id.clone(), mode)).block_task().await;
                 }
                 // A model that cannot be set must not pass as the one in use, unless the flavor says otherwise.
-                let mut model = config.model.clone();
-                let mut model_notice = None;
-                if let Some(wanted) = &model {
-                    let set = cx
-                        .send_request(SetSessionConfigOptionRequest::new(session_id.clone(), "model", wanted.as_str()))
-                        .block_task()
-                        .await;
-                    if let Err(e) = set
-                        && !F::KEEPS_UNSET_MODEL
-                    {
-                        model_notice = Some(format!("{} could not switch to {wanted}: {e}. It is using its default model.", F::NAME));
-                        model = None;
-                    }
-                }
-                if let (Some(effort), Some(option)) = (&config.effort, F::EFFORT_OPTION) {
-                    let _ =
-                        cx.send_request(SetSessionConfigOptionRequest::new(session_id.clone(), option, effort.as_str())).block_task().await;
-                }
+                let (model, model_notice) =
+                    match apply_config::<F>(&cx, &session_id, &*flavor, &shared, config.model.clone(), config.effort.as_deref()).await {
+                        Ok(model) => (model, None),
+                        Err((model, notice)) => (model, Some(notice)),
+                    };
 
                 if let Some(b) = bound.take() {
-                    let _ = b.send(Ok(Bound { steers: flavor.steers_with_prompt(&init) }));
+                    let _ = b.send(Ok(Bound { steers: flavor.steers_with_prompt(&init), guide_in_system_prompt }));
                 }
                 let _ = shared.events.send(DriverEvent::SessionBound { session_id: session_id.to_string(), model }).await;
                 if let Some(text) = model_notice {
                     let _ = shared.events.send(DriverEvent::Notice { level: NoticeLevel::Warning, text, data: None }).await;
                 }
 
-                while let Some(cmd) = commands.recv().await {
+                let watch = |held: Option<DriverEvent>| {
+                    (F::BACKGROUND_REPLIES || F::INACTIVITY_LIMIT.is_some()).then(|| turn::Watch {
+                        activity: &shared.activity,
+                        holds: F::BACKGROUND_REPLIES,
+                        inactivity: F::INACTIVITY_LIMIT,
+                        silent: F::silent_failure,
+                        held,
+                    })
+                };
+                // A turn ended: the next output opens a new message, and a new turn if no prompt is open.
+                let turn_ended = async |event: DriverEvent| {
+                    {
+                        let mut activity = shared.lock_activity();
+                        activity.turn_open = false;
+                        activity.background = false;
+                        // A tool whose completion never came (a stopped or failed turn, a missed update)
+                        // must not hold or keep busy the turns after this one.
+                        activity.tools.clear();
+                    }
+                    shared.withdraw_all().await;
+                    let _ = shared.events.send(event).await;
+                    messages.lock().await.open = false;
+                };
+                let mut next_command: Option<SessionCommand> = None;
+                let mut process_gone = stderr_closed.clone();
+                loop {
+                    let gone = F::ENDS_WITH_PROCESS && *process_gone.borrow();
+                    if gone {
+                        return Err(agent_client_protocol::Error::from(anyhow::anyhow!("{} exited", F::NAME)));
+                    }
+                    let cmd = match next_command.take() {
+                        Some(cmd) => cmd,
+                        None => tokio::select! {
+                            cmd = commands.recv() => match cmd {
+                                Some(cmd) => cmd,
+                                None => break,
+                            },
+                            // The agent's process is gone: nothing more will come on this connection.
+                            () = async { let _ = process_gone.wait_for(|closed| *closed).await; }, if F::ENDS_WITH_PROCESS => continue,
+                            // The agent started a reply by itself: settle it as a turn of its own.
+                            () = shared.woke.notified(), if F::BACKGROUND_REPLIES => {
+                                if !shared.lock_activity().background {
+                                    continue;
+                                }
+                                let started = std::time::Instant::now();
+                                let held = DriverEvent::TurnCompleted {
+                                    stop_reason: StopReason::Completed,
+                                    usage: Usage::default(),
+                                    cost_usd: None,
+                                    duration_ms: 0,
+                                    anchors: Default::default(),
+                                };
+                                let control = Control { cx: &cx, session_id: &session_id, flavor: &*flavor, started };
+                                let settled = turn::settle_watched(
+                                    std::future::pending(),
+                                    "",
+                                    started,
+                                    &mut completions,
+                                    &mut commands,
+                                    timings.cancel_grace,
+                                    control,
+                                    watch(Some(held)),
+                                )
+                                .await;
+                                turn_ended(settled.event).await;
+                                if settled.close {
+                                    break;
+                                }
+                                next_command = settled.next.map(|blocks| SessionCommand::Prompt { blocks });
+                                continue;
+                            }
+                        },
+                    };
                     match cmd {
                         SessionCommand::Prompt { blocks } => {
                             // Whatever a resume still replays after this is this prompt's output.
                             loading.store(false, std::sync::atomic::Ordering::Relaxed);
+                            // A model or effort picked since the last prompt applies to this one.
+                            if F::CONFIG_AT_NEXT_PROMPT && std::mem::take(&mut shared.lock_config().stale) {
+                                let (model, effort) = {
+                                    let state = shared.lock_config();
+                                    (state.model.clone(), state.effort.clone())
+                                };
+                                let (model, notice) =
+                                    match apply_config::<F>(&cx, &session_id, &*flavor, &shared, model, effort.as_deref()).await {
+                                        Ok(model) => (model, None),
+                                        Err((model, notice)) => (model, Some(notice)),
+                                    };
+                                let _ = shared.events.send(DriverEvent::SessionBound { session_id: session_id.to_string(), model }).await;
+                                if let Some(text) = notice {
+                                    let _ = shared.events.send(DriverEvent::Notice { level: NoticeLevel::Warning, text, data: None }).await;
+                                }
+                            }
+                            let mark = flavor.prompt_mark(&session_id.0);
                             let started = std::time::Instant::now();
                             messages.lock().await.open = false;
+                            {
+                                let mut activity = shared.lock_activity();
+                                activity.turn_open = true;
+                                activity.background = false;
+                                activity.reply_open = false;
+                                activity.last_progress = tokio::time::Instant::now();
+                            }
                             let (prompt_id, answer) = send_prompt(&cx, &session_id, &*flavor, blocks, started);
                             let control = Control { cx: &cx, session_id: &session_id, flavor: &*flavor, started };
-                            let settled =
-                                settle_prompt(answer, &prompt_id, started, &mut completions, &mut commands, timings.cancel_grace, control)
-                                    .await;
-                            shared.withdraw_all().await;
-                            let _ = shared.events.send(settled.event).await;
+                            let settled = turn::settle_watched(
+                                answer,
+                                &prompt_id,
+                                started,
+                                &mut completions,
+                                &mut commands,
+                                timings.cancel_grace,
+                                control,
+                                watch(None),
+                            )
+                            .await;
+                            let event = flavor.prompt_outcome(&session_id.0, mark, settled.event);
+                            if let Some(delta) = flavor.released_text() {
+                                let message_id = messages.lock().await.current();
+                                let _ = shared.events.send(DriverEvent::TextDelta { message_id, origin: EventOrigin::Root, delta }).await;
+                            }
+                            turn_ended(event).await;
                             if settled.close {
                                 break;
                             }
@@ -728,6 +1128,9 @@ impl<F: AcpFlavor> Connection<F> {
                                 .send_request(SetSessionConfigOptionRequest::new(session_id.clone(), id, value.as_str()))
                                 .block_task()
                                 .await;
+                            if let Ok(set) = &set {
+                                shared.lock_config().options = set.config_options.clone();
+                            }
                             let _ = reply.send(set.map(|_| ()).map_err(|e| DriverError::Protocol(e.to_string())));
                         }
                         SessionCommand::Close => break,
@@ -785,12 +1188,7 @@ impl<F: AcpFlavor> Handle<F> {
         let (commands, _) = mpsc::channel(1);
         let (events, _) = mpsc::channel(1);
         let (_finished, closed) = tokio::sync::watch::channel(());
-        let shared = Arc::new(Shared {
-            events,
-            pending: Mutex::new(HashMap::new()),
-            mode: std::sync::Mutex::new(PermissionMode::Auto),
-            cwd: PathBuf::new(),
-        });
+        let shared = Arc::new(Shared::new(events, PermissionMode::Auto, PathBuf::new()));
         let worker = crate::process_tree::SessionTask(tokio::spawn(async {}));
         Self { flavor: Arc::new(flavor), commands, guide: Mutex::new(None), shared, steers: false, closed, worker }
     }
@@ -834,7 +1232,8 @@ impl<F: AcpFlavor> AgentSession for Handle<F> {
     }
 
     async fn set_permission_mode(&self, mode: PermissionMode) -> Result<()> {
-        let id = self.flavor.session_mode(mode).ok_or_else(|| DriverError::Unsupported(F::NO_MODE_SWITCH.into()))?;
+        let modes = self.shared.lock_config().modes.clone();
+        let id = self.flavor.session_mode_in(mode, modes.as_ref()).ok_or_else(|| DriverError::Unsupported(F::NO_MODE_SWITCH.into()))?;
         self.request(|reply| SessionCommand::SetMode { mode, id, reply }).await
     }
 
@@ -842,10 +1241,22 @@ impl<F: AcpFlavor> AgentSession for Handle<F> {
         if let Some(why) = F::NO_MODEL_SWITCH {
             return Err(DriverError::Unsupported(why.into()));
         }
+        if F::CONFIG_AT_NEXT_PROMPT {
+            let mut state = self.shared.lock_config();
+            state.model = Some(model.to_owned());
+            state.stale = true;
+            return Ok(());
+        }
         self.request(|reply| SessionCommand::SetConfig { id: "model".into(), value: model.into(), reply }).await
     }
 
     async fn set_effort(&self, effort: &str) -> Result<()> {
+        if F::CONFIG_AT_NEXT_PROMPT {
+            let mut state = self.shared.lock_config();
+            state.effort = Some(effort.to_owned());
+            state.stale = true;
+            return Ok(());
+        }
         let id = F::EFFORT_OPTION.ok_or_else(|| DriverError::Unsupported(F::NO_EFFORT_SWITCH.into()))?;
         self.request(|reply| SessionCommand::SetConfig { id: id.into(), value: effort.into(), reply }).await
     }

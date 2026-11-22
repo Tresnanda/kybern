@@ -45,6 +45,119 @@ async fn antigravity_threads_are_created_and_changed_only_in_full_access() {
 }
 
 #[tokio::test]
+async fn a_thread_in_its_mode_finishes_its_turns_and_archives_whatever_agy_was_last_found_to_take() {
+    let answer = || {
+        vec![
+            DriverEvent::SessionBound { session_id: "conv-1".into(), model: None },
+            DriverEvent::MessageCompleted { message_id: "m1".into(), origin: EventOrigin::Root, text: "done".into(), thinking: None },
+            completed_response(StopReason::Completed),
+        ]
+    };
+    let driver = Arc::new(ScriptedAgyDriver::antigravity(vec![answer(), answer(), answer()]));
+    driver.modes(None);
+    let mut drivers = DriverRegistry::default();
+    drivers.register(driver.clone());
+    let fixture = Fixture::with_drivers(drivers);
+    std::fs::create_dir_all(&fixture.root).unwrap();
+    let thread = fixture.orchestrator.create_thread(antigravity_create(&fixture.project, Some(PermissionMode::Supervised))).await.unwrap();
+    let mut events = fixture.orchestrator.inner.events.subscribe();
+
+    // A daemon restart before any probe, a failed `agy acp` start or a probe that found an older agy:
+    // this machine's Antigravity refuses Supervised for now. The Supervised thread still runs its turn
+    // to the end, is renamed and is archived.
+    for refusal in [kybern_drivers::antigravity::acp_failed_problem(), kybern_drivers::antigravity::needs_update_problem()] {
+        driver.modes(Some(refusal));
+        fixture.orchestrator.send(thread.id, UserMessage::text("tidy up")).await.unwrap();
+        let settled = wait_for_thread_status(&mut events, thread.id, ThreadStatus::Idle).await;
+        assert_eq!(settled.permission_mode, PermissionMode::Supervised);
+    }
+    let mut renamed = set_mode(&thread, PermissionMode::Supervised);
+    renamed.title = Some("Tidy".into());
+    fixture.orchestrator.update_thread_fields(renamed).unwrap();
+    // Its next message is admitted to the queue as well.
+    let later = methods::QueuedMessage { id: Uuid::now_v7(), thread_id: thread.id, message: UserMessage::text("and the docs") };
+    fixture.orchestrator.enqueue(later).unwrap();
+
+    // A changed mode is still checked, and refused with the problem agy's state names.
+    let error = fixture.orchestrator.update_thread_fields(set_mode(&thread, PermissionMode::AcceptEdits)).unwrap_err();
+    let problem = crate::problem::problem_from(&error);
+    assert_eq!(problem.title.as_deref(), Some("Update Antigravity to use this permission mode"), "{error:#}");
+    assert_eq!(problem.action.as_ref().map(|action| action.id.as_str()), Some("update_agent"));
+    driver.modes(Some(kybern_drivers::antigravity::acp_failed_problem()));
+    let error = fixture.orchestrator.update_thread_fields(set_mode(&thread, PermissionMode::Auto)).unwrap_err();
+    let problem = crate::problem::problem_from(&error);
+    assert_eq!(problem.title.as_deref(), Some("Antigravity couldn't start in this permission mode"));
+    assert_eq!(problem.action.as_ref().map(|action| action.id.as_str()), Some("retry"));
+    assert!(problem.retryable);
+
+    fixture.orchestrator.archive_thread(thread.id).await.unwrap();
+    let stored = fixture.store.thread_get(thread.id).unwrap().unwrap();
+    assert_eq!((stored.status, stored.permission_mode, stored.title.as_str()), (ThreadStatus::Archived, PermissionMode::Supervised, "Tidy"));
+}
+
+#[test]
+fn a_refusal_for_another_machine_names_it_and_offers_only_what_runs_here() {
+    let driver = Arc::new(ScriptedAgyDriver::antigravity(vec![]));
+    driver.modes(Some(kybern_drivers::antigravity::needs_update_problem()));
+    let mut drivers = DriverRegistry::default();
+    drivers.register(driver.clone());
+    let here = |mode| super::antigravity_rules::require_full_access_here(&drivers, ProviderKind::Antigravity, mode, "SatyaMas");
+    here(PermissionMode::FullAccess).unwrap();
+    let error = here(PermissionMode::Supervised).unwrap_err();
+    assert_eq!(error.message, kybern_drivers::antigravity::NEEDS_ACP);
+    let problem: kybern_protocol::rpc::Problem = serde_json::from_value(error.data.unwrap()["problem"].clone()).unwrap();
+    assert_eq!(problem.title.as_deref(), Some("Update Antigravity to use this permission mode on SatyaMas"));
+    assert_eq!(problem.hint.as_deref(), Some("Update Antigravity on SatyaMas, or choose Full access."));
+    assert!(problem.action.is_none() && problem.secondary.is_none(), "an update button would update the asking machine");
+    driver.modes(Some(kybern_drivers::antigravity::acp_failed_problem()));
+    let error = here(PermissionMode::Auto).unwrap_err();
+    let problem: kybern_protocol::rpc::Problem = serde_json::from_value(error.data.unwrap()["problem"].clone()).unwrap();
+    assert_eq!(problem.title.as_deref(), Some("Antigravity couldn't start in this permission mode on SatyaMas"));
+    assert_eq!(problem.action.as_ref().map(|action| action.id.as_str()), Some("retry"));
+}
+
+/// An Antigravity whose `agy` runs on ACP: Kybern answers its permission requests, so it takes every mode.
+struct AcpAntigravity;
+
+#[async_trait::async_trait]
+impl kybern_drivers::AgentDriver for AcpAntigravity {
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::Antigravity
+    }
+    fn permission_mode_refusal(&self, _: PermissionMode) -> Option<kybern_drivers::DriverError> {
+        None
+    }
+    async fn probe(&self, _: Option<&std::path::PathBuf>) -> ProviderStatus {
+        unreachable!("not probed")
+    }
+    async fn spawn(&self, _: kybern_drivers::SessionConfig) -> kybern_drivers::Result<kybern_drivers::SpawnedSession> {
+        unreachable!("not spawned")
+    }
+}
+
+#[tokio::test]
+async fn antigravity_on_acp_takes_every_mode_wherever_one_is_set() {
+    let mut drivers = DriverRegistry::default();
+    drivers.register(Arc::new(AcpAntigravity));
+    let fixture = Fixture::with_drivers(drivers);
+    std::fs::create_dir_all(&fixture.root).unwrap();
+    let thread = fixture.orchestrator.create_thread(antigravity_create(&fixture.project, Some(PermissionMode::Supervised))).await.unwrap();
+    assert_eq!((thread.provider.kind, thread.permission_mode), (ProviderKind::Antigravity, PermissionMode::Supervised));
+    for mode in [PermissionMode::AcceptEdits, PermissionMode::Auto, PermissionMode::FullAccess, PermissionMode::Supervised] {
+        fixture.orchestrator.update_thread_fields(set_mode(&thread, mode)).unwrap();
+        assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().permission_mode, mode);
+    }
+    // Switching a Supervised thread to Antigravity is admitted as it is, never widened.
+    let mut other = fixture.thread(ThreadStatus::Idle);
+    assert_eq!(other.permission_mode, PermissionMode::Supervised);
+    let target = SessionTarget { provider: ProviderInstance::default_for(ProviderKind::Antigravity), model: None, effort: None };
+    fixture.orchestrator.admit_target(&mut other, target).unwrap();
+    assert_eq!((other.provider.kind, other.permission_mode), (ProviderKind::Antigravity, PermissionMode::Supervised));
+    // It still can't lead a project: Kybern can't make it read-only.
+    assert!(super::antigravity_rules::refuse_lead(ProviderKind::Antigravity).is_err());
+}
+
+#[tokio::test]
 async fn switching_a_thread_to_antigravity_never_grants_it_full_access() {
     let fixture = Fixture::new();
     let thread = fixture.thread(ThreadStatus::Idle);
@@ -58,8 +171,8 @@ async fn switching_a_thread_to_antigravity_never_grants_it_full_access() {
     // The queue and steer admission use the same check.
     let mut receiving = thread.clone();
     receiving.provider = target.provider.clone();
-    assert_eq!(super::accounts::validate_permission(&receiving, PermissionMode::Supervised).unwrap_err().to_string(), ONLY_FULL_ACCESS);
-    super::accounts::validate_permission(&receiving, PermissionMode::FullAccess).unwrap();
+    assert_eq!(super::accounts::validate_permission(&fixture.orchestrator.inner.drivers, &thread, &receiving, PermissionMode::Supervised).unwrap_err().to_string(), ONLY_FULL_ACCESS);
+    super::accounts::validate_permission(&fixture.orchestrator.inner.drivers, &thread, &receiving, PermissionMode::FullAccess).unwrap();
     // Full access first, then the switch is admitted.
     thread.permission_mode = PermissionMode::FullAccess;
     fixture.orchestrator.admit_target(&mut thread, target).unwrap();
@@ -71,7 +184,7 @@ fn delegation_to_antigravity_needs_a_full_access_parent_and_never_narrows() {
     use super::antigravity_rules::require_full_access;
     let child = |parent: PermissionMode, requested: Option<PermissionMode>| {
         let mode = super::delegation::resolve_child_permission(parent, ProviderKind::ClaudeCode, ProviderKind::Antigravity, requested)?;
-        require_full_access(ProviderKind::Antigravity, mode).map(|()| mode)
+        require_full_access(&DriverRegistry::default(), ProviderKind::Antigravity, mode).map(|()| mode)
     };
     assert_eq!(child(PermissionMode::FullAccess, None).unwrap(), PermissionMode::FullAccess);
     for parent in [PermissionMode::Supervised, PermissionMode::AcceptEdits, PermissionMode::Auto] {
@@ -201,6 +314,9 @@ struct ScriptedAgyDriver {
     spawn_barriers: Arc<std::sync::Mutex<HashMap<usize, Barrier>>>,
     /// Notified whenever `send_message` is invoked on any spawned session.
     send_notify: Arc<tokio::sync::Notify>,
+    /// What this machine's Antigravity says of a mode other than Full access, when set: `None` takes
+    /// it (ACP), `Some` refuses it with that problem. Unset, the trait's own answer (Full access only).
+    refusal: Arc<std::sync::Mutex<Option<Option<kybern_protocol::rpc::Problem>>>>,
 }
 
 impl ScriptedAgyDriver {
@@ -217,7 +333,13 @@ impl ScriptedAgyDriver {
             close_barriers: Arc::new(std::sync::Mutex::new(HashMap::new())),
             spawn_barriers: Arc::new(std::sync::Mutex::new(HashMap::new())),
             send_notify: Arc::new(tokio::sync::Notify::new()),
+            refusal: Arc::new(std::sync::Mutex::new(None)),
         }
+    }
+
+    /// From now on this machine's Antigravity takes every mode (`None`) or refuses them with `problem`.
+    fn modes(&self, problem: Option<kybern_protocol::rpc::Problem>) {
+        *self.refusal.lock().unwrap() = Some(problem);
     }
 
     fn pause_close(&self, spawn_index: usize) -> Barrier {
@@ -316,6 +438,16 @@ impl kybern_drivers::AgentDriver for ScriptedAgyDriver {
     }
     fn supports_fork(&self) -> bool {
         self.supports_fork
+    }
+    fn permission_mode_refusal(&self, mode: PermissionMode) -> Option<kybern_drivers::DriverError> {
+        match self.refusal.lock().unwrap().clone() {
+            Some(_) if mode == PermissionMode::FullAccess => None,
+            Some(refusal) => refusal.map(kybern_drivers::DriverError::problem),
+            None if self.kind == ProviderKind::Antigravity && mode != PermissionMode::FullAccess => {
+                Some(kybern_drivers::DriverError::problem(kybern_drivers::antigravity::full_access_only_problem()))
+            }
+            None => None,
+        }
     }
     async fn probe(&self, _: Option<&std::path::PathBuf>) -> ProviderStatus {
         ProviderStatus {

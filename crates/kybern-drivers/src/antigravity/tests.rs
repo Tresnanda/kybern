@@ -535,6 +535,18 @@ fn config(binary: &Path, cwd: &Path) -> SessionConfig {
     }
 }
 
+#[test]
+fn an_acp_check_holds_for_its_version_and_a_failure_only_for_a_while() {
+    let now = Instant::now();
+    let binary = Path::new("/opt/agy/agy.cmd");
+    let check = |usable| AcpCheck { binary: binary.into(), version: "1.5.14".into(), usable, at: now };
+    assert_eq!(check(false).answer(binary, "1.5.14", now + ACP_RETRY - Duration::from_secs(1)), Some(false));
+    assert_eq!(check(false).answer(binary, "1.5.14", now + ACP_RETRY), None, "a failure is checked again");
+    assert_eq!(check(true).answer(binary, "1.5.14", now + Duration::from_secs(86_400)), Some(true));
+    assert_eq!(check(true).answer(binary, "1.5.15", now), None, "a new version is checked again");
+    assert_eq!(check(true).answer(Path::new("/usr/bin/agy"), "1.5.14", now), None);
+}
+
 #[tokio::test]
 async fn spawn_refuses_what_agy_cannot_do() {
     let root = tempfile::tempdir().unwrap();
@@ -542,11 +554,20 @@ async fn spawn_refuses_what_agy_cannot_do() {
     std::fs::write(&binary, "").unwrap();
     let driver = AntigravityDriver::default();
     for mode in [PermissionMode::Supervised, PermissionMode::AcceptEdits, PermissionMode::Auto] {
+        // An agy that can't run ACP takes Full access alone, and says how to get the other modes.
         let mut refused = config(&binary, root.path());
         refused.permission_mode = mode;
         let Err(error) = driver.spawn(refused).await else { panic!("{mode:?} must be refused") };
+        let problem = crate::failure::classify_error(ProviderKind::Antigravity, &error).expect("a worded problem");
+        assert_eq!(problem.title.as_deref(), Some("Antigravity couldn't start in this permission mode"), "{error}");
+        // Forced to `-p`, it only runs in Full access.
+        let mut forced = config(&binary, root.path());
+        forced.permission_mode = mode;
+        forced.env.insert(PRINT_MODE_ENV.into(), "1".into());
+        let Err(error) = driver.spawn(forced).await else { panic!("{mode:?} must be refused") };
         assert!(error.to_string().contains("Antigravity only runs in Full access. Choose Full access, or pick another agent."), "{error}");
     }
+    assert!(driver.accepts_permission_mode(PermissionMode::FullAccess) && !driver.accepts_permission_mode(PermissionMode::Supervised));
     let mut forked = config(&binary, root.path());
     forked.fork = true;
     assert!(driver.spawn(forked).await.is_err());

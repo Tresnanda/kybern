@@ -418,7 +418,7 @@ impl Orchestrator {
         let mut receiving = thread.clone();
         receiving.provider = target.provider.clone();
         receiving.provider_session_id = self.compatible_native_session(thread, &receiving.provider)?;
-        validate_permission(&receiving, receiving.permission_mode)?;
+        validate_permission(&self.inner.drivers, thread, &receiving, receiving.permission_mode)?;
         self.save_account_binding(thread)?;
         let previous = thread.provider.clone();
         thread.provider = target.provider;
@@ -540,7 +540,7 @@ impl Orchestrator {
             let mut receiving = current.clone();
             receiving.provider = selected.clone();
             receiving.provider_session_id = self.compatible_native_session(&current, &selected)?;
-            validate_permission(&receiving, mode)?;
+            validate_permission(&self.inner.drivers, &current, &receiving, mode)?;
             if selected != current.provider || matches!(current.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
                 self.inner.store.meta_set_many(&[
                     (&format!("pending_permission:{}", thread.id), &serde_json::to_string(&mode)?),
@@ -599,7 +599,7 @@ impl Orchestrator {
             !matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval),
             "Permission change is waiting for the active turn. Stop and apply now, or wait for it to finish."
         );
-        validate_permission(&thread, mode)?;
+        validate_permission(&self.inner.drivers, &thread, &thread, mode)?;
         let live = self.inner.sessions.lock().await.get(&thread_id).cloned();
         if let Some(live) = live {
             let mut desired = thread.clone();
@@ -783,8 +783,17 @@ impl Orchestrator {
     }
 }
 
-pub(super) fn validate_permission(thread: &Thread, mode: PermissionMode) -> Result<()> {
-    super::antigravity_rules::require_full_access(thread.provider.kind, mode)?;
+/// Whether `thread` (`stored` with its harness or account switched) can run in `mode`. Antigravity's
+/// rule is checked only when the harness or mode changes from `stored`'s.
+pub(super) fn validate_permission(
+    drivers: &kybern_drivers::registry::DriverRegistry,
+    stored: &Thread,
+    thread: &Thread,
+    mode: PermissionMode,
+) -> Result<()> {
+    if super::antigravity_rules::changes_mode_or_provider(Some(stored), thread.provider.kind, mode) {
+        super::antigravity_rules::require_full_access(drivers, thread.provider.kind, mode)?;
+    }
     let legacy_cursor = thread.provider_session_id.as_deref().is_some_and(|id| !id.starts_with("cursor-sdk:"));
     if thread.provider.kind == ProviderKind::Cursor && !legacy_cursor {
         ensure!(

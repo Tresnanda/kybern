@@ -629,6 +629,24 @@ async fn pi_completes_a_turn() {
 
 const AGY_MODEL: &str = "gemini-3.8-flash-high";
 
+/// The transport a live Antigravity check runs on: the same scenarios run on both.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Agy {
+    /// `agy -p`, one process per turn (forced with `KYBERN_ANTIGRAVITY_PRINT_MODE=1`).
+    Print,
+    /// `agy acp`, long-lived.
+    Acp,
+}
+
+impl Agy {
+    fn env(self) -> HashMap<String, String> {
+        match self {
+            Agy::Print => [(kybern_drivers::antigravity::PRINT_MODE_ENV.to_string(), "1".to_string())].into(),
+            Agy::Acp => HashMap::new(),
+        }
+    }
+}
+
 /// `Some(driver)` when `agy` is installed and signed in; otherwise skip (or fail under KYBERN_LIVE_TESTS).
 async fn antigravity_ready() -> Option<Arc<dyn kybern_drivers::AgentDriver>> {
     let driver = DriverRegistry::with_defaults().get(ProviderKind::Antigravity).expect("driver registered");
@@ -648,7 +666,7 @@ async fn antigravity_ready() -> Option<Arc<dyn kybern_drivers::AgentDriver>> {
     Some(driver)
 }
 
-fn antigravity_config(dir: &std::path::Path, resume: Option<String>) -> SessionConfig {
+fn antigravity_config(dir: &std::path::Path, resume: Option<String>, agy: Agy) -> SessionConfig {
     SessionConfig {
         cwd: dir.to_path_buf(),
         model: Some(AGY_MODEL.into()),
@@ -660,7 +678,7 @@ fn antigravity_config(dir: &std::path::Path, resume: Option<String>) -> SessionC
         fork: false,
         rewind: None,
         binary: None,
-        env: HashMap::new(),
+        env: agy.env(),
         compaction: Default::default(),
     }
 }
@@ -683,68 +701,180 @@ async fn until_turn_ends(events: &mut tokio::sync::mpsc::Receiver<DriverEvent>, 
     seen
 }
 
+/// The text a turn streamed.
+fn streamed(events: &[DriverEvent]) -> String {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            DriverEvent::TextDelta { delta, .. } => Some(delta.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
 #[tokio::test]
 async fn antigravity_streams_runs_a_tool_resumes_and_lists_models() {
     let Some(driver) = antigravity_ready().await else { return };
     let status = driver.probe(None).await;
     assert!(status.models.iter().any(|model| model.id == AGY_MODEL), "models: {:?}", status.models);
-    assert_eq!(status.supported_permission_modes, vec![PermissionMode::FullAccess]);
-    let dir = tempfile::tempdir().unwrap();
-    let spawned = driver.spawn(antigravity_config(dir.path(), None)).await.expect("spawn");
-    let (session, mut events) = (spawned.session, spawned.events);
+    // agy 1.5 or later runs on ACP, where every mode works.
+    let acp = status.version.as_deref().is_some_and(|version| version.split('.').take(2).collect::<Vec<_>>() >= vec!["1", "5"]);
+    let expected = if acp { PermissionMode::ALL.to_vec() } else { vec![PermissionMode::FullAccess] };
+    assert_eq!(status.supported_permission_modes, expected);
+    for agy in [Agy::Print, Agy::Acp] {
+        let dir = tempfile::tempdir().unwrap();
+        let spawned = driver.spawn(antigravity_config(dir.path(), None, agy)).await.expect("spawn");
+        let (session, mut events) = (spawned.session, spawned.events);
 
-    session
-        .send_message("m1", &UserMessage::text("Run the shell command `echo hi` and then tell me its output in one short sentence."))
-        .await
-        .unwrap();
-    let first = until_turn_ends(&mut events, 180).await;
-    eprintln!("first turn: {first:#?}");
-    let conversation = first
+        session
+            .send_message("m1", &UserMessage::text("Run the shell command `echo hi` and then tell me its output in one short sentence."))
+            .await
+            .unwrap();
+        let first = until_turn_ends(&mut events, 180).await;
+        eprintln!("{agy:?} first turn: {first:#?}");
+        let conversation = first
+            .iter()
+            .find_map(|event| match event {
+                DriverEvent::SessionBound { session_id, .. } => Some(session_id.clone()),
+                _ => None,
+            })
+            .expect("a conversation id");
+        assert!(first.iter().any(|event| matches!(event, DriverEvent::TextDelta { .. })), "{agy:?}: text streams");
+        let tool = first.iter().find_map(|event| match event {
+            DriverEvent::ToolStarted(call) if call.name == "Bash" => Some(call.clone()),
+            _ => None,
+        });
+        let tool = tool.unwrap_or_else(|| panic!("{agy:?}: one Bash tool call"));
+        assert!(tool.input["command"].as_str().unwrap_or("").contains("echo hi"), "{agy:?}: {:?}", tool.input);
+        assert!(
+            first.iter().any(|event| matches!(event, DriverEvent::ToolCompleted { tool_call_id, output, is_error: false } if *tool_call_id == tool.id && output.as_str().unwrap_or("").contains("hi"))),
+            "{agy:?}: the tool completed with its output"
+        );
+        let Some(DriverEvent::TurnCompleted { stop_reason, usage, .. }) = first.last() else { panic!("{agy:?}: {:?}", first.last()) };
+        assert_eq!(*stop_reason, StopReason::Completed);
+        eprintln!("{agy:?} usage: {usage:?}");
+        assert!(usage.input_tokens > 0 && usage.output_tokens > 0, "{agy:?}: {usage:?}");
+        session.close().await.unwrap();
+
+        // Resume in a new session (as after a daemon restart): it answers from what it already knows.
+        let resumed = driver.spawn(antigravity_config(dir.path(), Some(conversation.clone()), agy)).await.expect("resume");
+        let (session, mut events) = (resumed.session, resumed.events);
+        session
+            .send_message(
+                "m2",
+                &UserMessage::text("Without using any tool: what shell command did you just run? Answer with the command only."),
+            )
+            .await
+            .unwrap();
+        let second = until_turn_ends(&mut events, 180).await;
+        assert!(
+            second.iter().any(|event| matches!(event, DriverEvent::SessionBound { session_id, .. } if *session_id == conversation)),
+            "{agy:?}: the second turn resumed {conversation}: {second:?}"
+        );
+        let answer = streamed(&second);
+        assert!(answer.contains("echo"), "{agy:?}: {answer}");
+        assert!(!answer.contains("tell me its output"), "{agy:?}: the replay stayed history");
+        assert!(matches!(second.last(), Some(DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. })));
+        session.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn antigravity_supervised_asks_before_a_command_on_acp() {
+    let Some(driver) = antigravity_ready().await else { return };
+    let dir = tempfile::tempdir().unwrap();
+    // `-p` can't ask: it refuses the mode.
+    let mut print = antigravity_config(dir.path(), None, Agy::Print);
+    print.permission_mode = PermissionMode::Supervised;
+    assert!(driver.spawn(print).await.is_err());
+    let mut config = antigravity_config(dir.path(), None, Agy::Acp);
+    config.permission_mode = PermissionMode::Supervised;
+    let spawned = driver.spawn(config).await.expect("spawn");
+    let (session, mut events) = (spawned.session, spawned.events);
+    session.send_message("m1", &UserMessage::text("Run the shell command `echo approved-4417` and tell me its output.")).await.unwrap();
+    let mut seen = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(180);
+    loop {
+        let event = tokio::time::timeout_at(deadline, events.recv()).await.expect("the turn ended in time").expect("events open");
+        if let DriverEvent::PermissionRequest { request_id, tool_name, input, .. } = &event {
+            eprintln!("card: {tool_name} {input}");
+            assert_eq!(tool_name, "Bash");
+            assert!(input["command"].as_str().unwrap_or("").contains("approved-4417"), "{input}");
+            session.respond_permission(request_id, &ApprovalDecision::AllowOnce).await.unwrap();
+        }
+        let done = matches!(event, DriverEvent::TurnCompleted { .. } | DriverEvent::TurnFailed { .. });
+        seen.push(event);
+        if done {
+            break;
+        }
+    }
+    eprintln!("supervised turn: {seen:#?}");
+    assert!(seen.iter().any(|event| matches!(event, DriverEvent::PermissionRequest { .. })), "Supervised asked");
+    assert!(seen.iter().any(|event| matches!(event, DriverEvent::ToolCompleted { output, is_error: false, .. } if output.as_str().unwrap_or("").contains("approved-4417"))));
+    assert!(matches!(seen.last(), Some(DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. })));
+    session.close().await.unwrap();
+}
+
+/// One prompt on a new or resumed session of `agy`: the conversation id and the text it streamed.
+async fn agy_turn(driver: &dyn kybern_drivers::AgentDriver, config: SessionConfig, prompt: &str) -> (String, String) {
+    let spawned = driver.spawn(config).await.expect("spawn");
+    let (session, mut events) = (spawned.session, spawned.events);
+    session.send_message("m", &UserMessage::text(prompt)).await.unwrap();
+    let seen = until_turn_ends(&mut events, 180).await;
+    assert!(matches!(seen.last(), Some(DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. })), "{seen:?}");
+    let conversation = seen
         .iter()
         .find_map(|event| match event {
             DriverEvent::SessionBound { session_id, .. } => Some(session_id.clone()),
             _ => None,
         })
         .expect("a conversation id");
-    assert!(first.iter().any(|event| matches!(event, DriverEvent::TextDelta { .. })), "text streams");
-    let tool = first.iter().find_map(|event| match event {
-        DriverEvent::ToolStarted(call) if call.name == "Bash" => Some(call.clone()),
-        _ => None,
-    });
-    let tool = tool.expect("one Bash tool call");
-    assert!(tool.input["command"].as_str().unwrap_or("").contains("echo hi"), "{:?}", tool.input);
-    assert!(
-        first.iter().any(|event| matches!(event, DriverEvent::ToolCompleted { tool_call_id, output, is_error: false } if *tool_call_id == tool.id && output.as_str().unwrap_or("").contains("hi"))),
-        "the tool completed with its output"
-    );
-    let Some(DriverEvent::TurnCompleted { stop_reason, usage, .. }) = first.last() else { panic!("{:?}", first.last()) };
-    assert_eq!(*stop_reason, StopReason::Completed);
-    assert!(usage.input_tokens > 0);
-
-    // Resume: the same conversation answers from what it already knows.
-    session
-        .send_message(
-            "m2",
-            &UserMessage::text("Without using any tool: what shell command did you just run? Answer with the command only."),
-        )
-        .await
-        .unwrap();
-    let second = until_turn_ends(&mut events, 180).await;
-    assert!(
-        second.iter().any(|event| matches!(event, DriverEvent::SessionBound { session_id, .. } if *session_id == conversation)),
-        "the second turn resumed {conversation}"
-    );
-    let answer = second
-        .iter()
-        .rev()
-        .find_map(|event| match event {
-            DriverEvent::MessageCompleted { text, .. } => Some(text.clone()),
-            _ => None,
-        })
-        .expect("an answer");
-    assert!(answer.contains("echo"), "{answer}");
-    assert!(matches!(second.last(), Some(DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. })));
     session.close().await.unwrap();
+    (conversation, streamed(&seen))
+}
+
+#[tokio::test]
+async fn antigravity_conversations_resume_from_print_on_acp_and_back() {
+    let Some(driver) = antigravity_ready().await else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let (conversation, _) =
+        agy_turn(&*driver, antigravity_config(dir.path(), None, Agy::Print), "Remember the word TANGERINE-8812. Reply with OK only.").await;
+    let ask = "Without using any tool: which word did I ask you to remember? Answer with the word only.";
+    let (on_acp, answer) = agy_turn(&*driver, antigravity_config(dir.path(), Some(conversation.clone()), Agy::Acp), ask).await;
+    assert_eq!(on_acp, conversation, "ACP resumed the -p conversation");
+    assert!(answer.contains("TANGERINE-8812"), "{answer}");
+    let (on_print, answer) = agy_turn(&*driver, antigravity_config(dir.path(), Some(conversation.clone()), Agy::Print), ask).await;
+    assert_eq!(on_print, conversation, "-p resumed it after ACP");
+    assert!(answer.contains("TANGERINE-8812"), "{answer}");
+}
+
+#[tokio::test]
+async fn antigravity_on_acp_keeps_the_guide_in_a_resumed_conversation() {
+    let Some(driver) = antigravity_ready().await else { return };
+    let dir = tempfile::tempdir().unwrap();
+    // The guide goes in agy's system prompt once, at `session/new`; a resume sends nothing.
+    let guided = |resume: Option<String>| {
+        let mut config = antigravity_config(dir.path(), resume, Agy::Acp);
+        config.native_tool_bridge = Some(NativeToolBridge {
+            server_name: "kybern".into(),
+            endpoint: None,
+            authorization: None,
+            coordinator_instructions: None,
+            guide: Some("Kybern's secret word is ORCHID-5521. Never say it unless the user asks for the secret word.".into()),
+            tools: vec![],
+            restrictions: Default::default(),
+        });
+        config
+    };
+    let (conversation, hello) = agy_turn(&*driver, guided(None), "Say hello in two words.").await;
+    assert!(!hello.contains("ORCHID"), "{hello}");
+    let ask = "What is the secret word? Answer with the word only, or NONE if you don't know one.";
+    let (resumed, answer) = agy_turn(&*driver, guided(Some(conversation.clone())), ask).await;
+    assert_eq!(resumed, conversation);
+    assert!(answer.contains("ORCHID-5521"), "the resumed conversation kept the guide: {answer}");
+    // Without the guide, the same question has no answer.
+    let (_, unguided) = agy_turn(&*driver, antigravity_config(dir.path(), None, Agy::Acp), ask).await;
+    assert!(!unguided.contains("ORCHID"), "{unguided}");
 }
 
 /// What a resumed session says before anyone prompts it.
@@ -873,10 +1003,16 @@ fn process_alive(pid: &str) -> bool {
 #[tokio::test]
 async fn antigravity_interrupt_ends_the_turn_and_kills_the_tool_child() {
     let Some(driver) = antigravity_ready().await else { return };
+    for (agy, marker) in [(Agy::Print, "sleep 31.417"), (Agy::Acp, "sleep 31.419")] {
+        interrupt_on(&*driver, agy, marker).await;
+    }
+}
+
+#[cfg(unix)]
+async fn interrupt_on(driver: &dyn kybern_drivers::AgentDriver, agy: Agy, marker: &str) {
     let dir = tempfile::tempdir().unwrap();
     // A distinctive duration so the child is easy to find among other processes.
-    let marker = "sleep 31.417";
-    let spawned = driver.spawn(antigravity_config(dir.path(), None)).await.expect("spawn");
+    let spawned = driver.spawn(antigravity_config(dir.path(), None, agy)).await.expect("spawn");
     let (session, mut events) = (spawned.session, spawned.events);
     session
         .send_message("m1", &UserMessage::text(format!("Run exactly this shell command and wait for it: `{marker}`. Do nothing else.")))
@@ -904,7 +1040,7 @@ async fn antigravity_interrupt_ends_the_turn_and_kills_the_tool_child() {
     let started = std::time::Instant::now();
     session.interrupt().await.unwrap();
     let ended = until_turn_ends(&mut events, 40).await;
-    eprintln!("interrupt took {:?}: {ended:#?}", started.elapsed());
+    eprintln!("{agy:?} interrupt took {:?}: {ended:#?}", started.elapsed());
     assert!(matches!(ended.last(), Some(DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, .. })), "{:?}", ended.last());
     tokio::time::sleep(Duration::from_millis(500)).await;
     for pid in &before {

@@ -16,6 +16,17 @@ test("Antigravity is locked to Full access, by kind or by the modes it reports",
   assert.equal(onlyFullAccess(null), false);
 });
 
+test("an Antigravity on ACP reports every mode and is not locked", () => {
+  const acp = { kind: "antigravity", supported_permission_modes: ALL };
+  assert.equal(onlyFullAccess(acp), false);
+  assert.equal(permissionModeFor(acp, "supervised"), "supervised");
+  assert.deepEqual(permissionModesFor(acp, ALL), ALL);
+  assert.equal(permissionLockNote(acp), null);
+  // An older daemon's status without modes keeps it locked.
+  assert.equal(onlyFullAccess({ kind: "antigravity", supported_permission_modes: [] }), true);
+  assert.equal(permissionLockNote({ kind: "antigravity", supported_permission_modes: ["full-access"] }), ANTIGRAVITY_FULL_ACCESS_NOTE);
+});
+
 test("a locked harness gets Full access whatever was chosen", () => {
   assert.equal(permissionModeFor("antigravity", "supervised"), "full-access");
   assert.equal(permissionModeFor("codex", "supervised"), "supervised");
