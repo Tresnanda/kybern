@@ -42,6 +42,8 @@ impl Harness {
             pending_app_tools: Mutex::new(HashMap::new()),
             app_tool_names: extension::DEFAULT_APP_TOOL_NAMES.iter().map(|name| (*name).to_string()).collect(),
             compaction_ended: tokio::sync::Notify::new(),
+            prompt_hold: tokio::sync::watch::channel(HoldState::default()).0,
+            hold_owners: std::sync::atomic::AtomicU64::new(0),
         });
         let handle = Arc::new(Handle(session.clone(), crate::ndjson::SessionLifetime::new(child)));
         (Self { session, handle, events: rx }, initialized_tx)
@@ -493,14 +495,29 @@ async fn omp_handoff_emits_one_compaction_notice_only_on_success() {
     }
 }
 
-/// Steers the turn with `message`, the way the orchestrator does, and lets Pi accept it.
-async fn steer_with(harness: &Harness, message: UserMessage) {
+/// Steers the turn with `message`, the way the orchestrator does, and lets Pi answer with `disposition`.
+async fn steer_answered(harness: &Harness, message: UserMessage, disposition: &str) {
     let handle = harness.handle.clone();
     let steering = tokio::spawn(async move { handle.steer("s", &message).await });
     let prompt = harness.wire("prompt").await;
     assert_eq!(prompt["streamingBehavior"], "steer");
-    harness.reply(&prompt, json!({ "disposition": "queued" })).await;
+    harness.reply(&prompt, json!({ "disposition": disposition })).await;
     tokio::time::timeout(DEADLINE, steering).await.expect("steer hung").unwrap().unwrap();
+}
+
+/// Steers the turn with `message` and lets Pi queue it.
+async fn steer_with(harness: &Harness, message: UserMessage) {
+    steer_answered(harness, message, "queued").await;
+}
+
+/// Stops the turn and answers `clear_queue` with `cleared`; the notice about it, if any.
+async fn stop_with_queue(harness: &mut Harness, cleared: Value) -> DriverEvent {
+    harness.handle.interrupt().await.unwrap();
+    let clear = harness.wire("clear_queue").await;
+    harness.wire("abort_retry").await;
+    harness.wire("abort").await;
+    harness.reply(&clear, cleared).await;
+    harness.next_event().await
 }
 
 #[tokio::test]
@@ -522,15 +539,15 @@ async fn the_notice_for_unread_steers_quotes_what_the_user_sent() {
     .await;
     steer_with(&harness, UserMessage { parts: vec![ContentPart::Image { media_type: "image/png".into(), data: "AAAA".into() }] }).await;
 
-    harness.handle.interrupt().await.unwrap();
-    let clear = harness.wire("clear_queue").await;
-    harness.wire("abort_retry").await;
-    harness.wire("abort").await;
     // Pi had read the first steer; its answer holds the expanded text of the other three.
-    let expanded = "<skill name=\"review\" location=\"/home/me/.pi/skills/review/SKILL.md\">\n".to_string() + &"x".repeat(5000);
-    harness.reply(&clear, json!({ "steering": ["use tabs\nnot spaces", expanded, ""], "followUp": [] })).await;
-
-    let DriverEvent::Notice { level, text, data } = harness.next_event().await else { panic!("expected a notice") };
+    let expanded = "<skill name=\"review\" location=\"/home/me/.pi/skills/review/SKILL.md\">\n".to_string()
+        + &"x".repeat(5000)
+        + "\n</skill>\n\nthe diff";
+    let DriverEvent::Notice { level, text, data } =
+        stop_with_queue(&mut harness, json!({ "steering": ["use tabs\nnot spaces", expanded, ""], "followUp": [] })).await
+    else {
+        panic!("expected a notice")
+    };
     assert_eq!(level, NoticeLevel::Warning);
     assert!(text.starts_with("Pi had not read 3 queued messages when the turn was interrupted."), "{text}");
     assert!(!text.contains("Stop cleared"), "an interrupt Kybern started is not the user's Stop: {text}");
@@ -543,21 +560,84 @@ async fn the_notice_for_unread_steers_quotes_what_the_user_sent() {
     assert_eq!(data.unwrap()["clearedQueue"], json!(["use tabs\nnot spaces", "the diff", "[image]"]));
 }
 
+#[tokio::test]
+async fn a_handled_command_is_not_counted_among_the_queued_steers() {
+    let mut harness = Harness::new(Flavor::Pi);
+    active_turn(&harness.session).await;
+    steer_with(&harness, text_message("use tabs")).await;
+    // An extension command consumed this one; Pi queued nothing, so it is not in `clear_queue`.
+    steer_answered(&harness, text_message("/my-command now"), "handled").await;
+    steer_answered(&harness, text_message("/other-command"), "started").await;
+    assert_eq!(harness.session.state.lock().await.steered.len(), 1, "only what Pi queued is remembered");
+    let DriverEvent::Notice { text, data, .. } = stop_with_queue(&mut harness, json!({ "steering": ["use tabs"], "followUp": [] })).await
+    else {
+        panic!("expected a notice")
+    };
+    assert!(text.starts_with("Pi had not read 1 queued message "), "{text}");
+    assert!(text.ends_with("> use tabs"), "{text}");
+    assert!(!text.contains("my-command"), "a command Pi handled was quoted as unread: {text}");
+    assert_eq!(data.unwrap()["clearedQueue"], json!(["use tabs"]));
+}
+
+#[tokio::test]
+async fn a_message_an_extension_queued_is_quoted_from_pi_without_its_skill_files() {
+    let mut harness = Harness::new(Flavor::Pi);
+    active_turn(&harness.session).await;
+    steer_with(&harness, text_message("use tabs")).await;
+    // Pi counts the extension's message too; it is in the middle of the queue, not at its end.
+    let by_extension = "<skill name=\"lint\" location=\"/x/SKILL.md\">\nsecret file body\n</skill>\n\nrun the linter";
+    let DriverEvent::Notice { text, data, .. } =
+        stop_with_queue(&mut harness, json!({ "steering": ["use tabs", by_extension], "followUp": [] })).await
+    else {
+        panic!("expected a notice")
+    };
+    assert!(text.starts_with("Pi had not read 2 queued messages "), "{text}");
+    assert!(text.contains("> use tabs") && text.contains("> run the linter"), "{text}");
+    assert!(!text.contains("secret file body") && !text.contains("<skill"), "{text}");
+    assert_eq!(data.unwrap()["clearedQueue"], json!(["use tabs", "run the linter"]));
+}
+
+#[tokio::test]
+async fn a_count_that_does_not_match_the_log_still_quotes_what_pi_cleared() {
+    let mut harness = Harness::new(Flavor::Pi);
+    active_turn(&harness.session).await;
+    steer_with(&harness, text_message("only this one")).await;
+    // Pi holds three: this driver sent one of them.
+    let DriverEvent::Notice { text, .. } =
+        stop_with_queue(&mut harness, json!({ "steering": ["from an extension", "only this one"], "followUp": ["after the run"] })).await
+    else {
+        panic!("expected a notice")
+    };
+    assert!(text.starts_with("Pi had not read 3 queued messages "), "{text}");
+    for quoted in ["> from an extension", "> only this one", "> after the run"] {
+        assert!(text.contains(quoted), "{quoted} missing: {text}");
+    }
+}
+
 #[test]
 fn the_notice_is_capped_and_counts_what_it_cannot_quote() {
-    let steered: Vec<String> = (0..8).map(|n| format!("steer {n} {}", "y".repeat(4000))).collect();
-    let cleared = json!({ "steering": (0..8).map(|n| format!("steer {n}")).collect::<Vec<_>>() });
+    let sent: Vec<String> = (0..8).map(|n| format!("steer {n} {}", "y".repeat(4000))).collect();
+    let steered: Vec<SteerLog> =
+        sent.iter().map(|text| SteerLog::new(&UserMessage { parts: vec![ContentPart::Text { text: text.clone() }] })).collect();
+    let cleared = json!({ "steering": sent });
     let DriverEvent::Notice { text, data, .. } = cleared_queue_notice(&cleared, &steered).unwrap() else { panic!("expected a notice") };
     assert!(text.contains("not read 8 queued messages"), "{text}");
     assert_eq!(text.matches("\n> ").count(), MAX_CLEARED_MESSAGES, "{text}");
     assert!(text.ends_with("…and 3 more"), "{text}");
+    assert!(text.len() < MAX_CLEARED_MESSAGES * (MAX_CLEARED_TEXT_CHARS + 20) + 200, "{}", text.len());
     assert_eq!(data.unwrap()["clearedQueue"].as_array().unwrap().len(), MAX_CLEARED_MESSAGES);
     assert!(cleared_queue_notice(&json!({ "steering": [], "followUp": [] }), &steered).is_none());
-    // Steers from before the driver started keeping its own copy are counted, not invented.
+    // Messages the driver has no record of (older steers, an extension's) are quoted from Pi's copy.
     let DriverEvent::Notice { text, .. } = cleared_queue_notice(&json!({ "steering": ["a", "b"] }), &[]).unwrap() else {
         panic!("expected a notice")
     };
-    assert!(text.contains("not read 2 queued messages") && text.ends_with("…and 2 more"), "{text}");
+    assert!(text.contains("not read 2 queued messages") && text.ends_with("> a\n> b"), "{text}");
+    // A word that merely ends the same way is not the user's steer.
+    let steered = [SteerLog::new(&text_message("a"))];
+    let DriverEvent::Notice { text, .. } = cleared_queue_notice(&json!({ "steering": ["banana"] }), &steered).unwrap() else {
+        panic!("expected a notice")
+    };
+    assert!(text.ends_with("> banana"), "{text}");
 }
 
 #[tokio::test]
@@ -565,40 +645,16 @@ async fn nothing_queued_or_an_old_pi_stays_quiet() {
     for answer in [Ok(json!({ "steering": [], "followUp": [] })), Err("Unknown command: clear_queue")] {
         let mut harness = Harness::new(Flavor::Pi);
         active_turn(&harness.session).await;
-        harness.handle.interrupt().await.unwrap();
+        let notice = harness.session.clear_native_queue().await.unwrap();
         let clear = harness.wire("clear_queue").await;
         match answer {
             Ok(data) => harness.reply(&clear, data).await,
             Err(error) => harness.reject(&clear, error).await,
         }
-        // The answer is collected from `pending` whether or not it says anything. Wait for
-        // that, then for the notice task to have finished with it.
-        wait_until(|| async { harness.session.pending.lock().await.is_empty() }).await;
-        harness.wire("abort_retry").await;
-        harness.wire("abort").await;
-        // Completing the turn queues its event behind any notice the answer produced.
-        harness.session.schedule_finish().await;
-        let idle = harness.wire("get_state").await;
-        harness.reply(&idle, json!({ "isStreaming": false, "isCompacting": false, "pendingMessageCount": 0 })).await;
-        let listing = harness.wire("get_fork_messages").await;
-        harness.reply(&listing, json!({ "messages": [] })).await;
-        assert!(matches!(harness.next_event().await, DriverEvent::TurnCompleted { .. }), "an answer with nothing to report said something");
+        // The notice task has seen the answer and finished with it.
+        tokio::time::timeout(DEADLINE, notice).await.expect("the notice task hung").unwrap();
+        assert!(harness.events.try_recv().is_err(), "an answer with nothing to report said something");
     }
-}
-
-/// Polls `condition` until it holds, giving up after [`DEADLINE`].
-async fn wait_until<F, Fut>(mut condition: F)
-where
-    F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = bool>,
-{
-    tokio::time::timeout(DEADLINE, async {
-        while !condition().await {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("condition never held");
 }
 
 #[test]
@@ -702,7 +758,11 @@ async fn tools_called_through_another_tool_nest_under_their_caller() {
 
 /// A send that is waiting for compaction has said so.
 async fn wait_for_hold(session: &PiSession, hold: PromptHold) {
-    wait_until(|| async { session.state.lock().await.prompt_hold == hold }).await;
+    let mut changes = session.prompt_hold.subscribe();
+    tokio::time::timeout(DEADLINE, changes.wait_for(|state| state.hold == hold))
+        .await
+        .expect("the hold never changed")
+        .expect("the session was dropped");
 }
 
 #[tokio::test]
@@ -732,7 +792,7 @@ async fn a_prompt_rejected_by_compaction_is_sent_again_when_it_ends() {
     // Compaction began just before Pi read the prompt.
     harness.session.handle_frame(json!({ "type": "compaction_start", "reason": "threshold" })).await;
     harness.reject(&first, "Cannot submit a prompt while compaction is in progress. Wait for it to finish.").await;
-    wait_for_hold(&harness.session, PromptHold::HoldingGate).await;
+    wait_for_hold(&harness.session, PromptHold::Waiting).await;
     assert!(harness.session.child.lines.lock().await.try_recv().is_err());
 
     harness.session.handle_frame(json!({ "type": "compaction_end" })).await;
@@ -818,7 +878,11 @@ async fn a_steer_and_stop_are_not_blocked_by_a_prompt_waiting_for_compaction() {
     let steer = tokio::time::timeout(DEADLINE, harness.handle.steer("s1", &text_message("also this")))
         .await
         .expect("steer queued behind the held prompt");
-    assert!(steer.is_err(), "a steer has no running turn to join");
+    assert_eq!(
+        steer.unwrap_err().to_string(),
+        "Pi is compacting its context before it starts this turn. Queue the message instead.",
+        "the steer is refused for the compaction, not for lacking a turn"
+    );
     // Commands that are not about the prompt are not held up either: Pi decides.
     let handle = harness.handle.clone();
     let model = tokio::spawn(async move { handle.set_model("google/gemini-3.5-flash").await });
@@ -839,25 +903,39 @@ async fn a_steer_and_stop_are_not_blocked_by_a_prompt_waiting_for_compaction() {
 }
 
 #[tokio::test]
-async fn nothing_waits_behind_a_prompt_that_holds_the_gate_for_compaction() {
+async fn nothing_waits_behind_a_prompt_rejected_for_compaction() {
     let mut harness = Harness::new(Flavor::Pi);
     let handle = harness.handle.clone();
     let sending = tokio::spawn(async move { handle.send_message("m1", &text_message("hello")).await });
     let first = harness.wire("prompt").await;
+    // A steer that passed the hold check while the prompt was in flight waits for the gate.
+    let handle = harness.handle.clone();
+    let late_steer = tokio::spawn(async move { handle.steer("s0", &text_message("late steer")).await });
     harness.session.handle_frame(json!({ "type": "compaction_start", "reason": "threshold" })).await;
     harness.reject(&first, "Cannot submit a prompt while compaction is in progress.").await;
-    wait_for_hold(&harness.session, PromptHold::HoldingGate).await;
+    wait_for_hold(&harness.session, PromptHold::Waiting).await;
 
-    let refused = |result: Result<()>| match result {
-        Err(error) => assert!(error.to_string().contains("compacting"), "{error}"),
-        other => panic!("expected an immediate refusal, got {other:?}"),
-    };
+    // Pi's rejection let go of the gate; it is not held for the minutes compaction can take.
+    drop(harness.session.command_gate.try_lock().expect("the gate is still held while the prompt waits"));
+    let refusal = "Pi is compacting its context before it starts this turn. Queue the message instead.";
+    let late = tokio::time::timeout(DEADLINE, late_steer).await.expect("a steer waited for the gate").unwrap();
+    assert_eq!(late.unwrap_err().to_string(), refusal);
     let handle = harness.handle.clone();
-    refused(tokio::time::timeout(DEADLINE, handle.steer("s1", &text_message("steer"))).await.expect("steer waited for the gate"));
-    refused(tokio::time::timeout(DEADLINE, handle.set_model("google/gemini-3.5-flash")).await.expect("set_model waited for the gate"));
-    refused(tokio::time::timeout(DEADLINE, handle.set_effort("high")).await.expect("set_effort waited for the gate"));
-    refused(tokio::time::timeout(DEADLINE, handle.set_permission_mode(PermissionMode::Auto)).await.expect("set_permission_mode waited"));
-    refused(tokio::time::timeout(DEADLINE, handle.compact()).await.expect("compact waited for the gate"));
+    let refused = tokio::time::timeout(DEADLINE, handle.steer("s1", &text_message("steer"))).await.expect("steer waited for the gate");
+    assert_eq!(refused.unwrap_err().to_string(), refusal);
+    // Other commands are Pi's to decide; they do not queue behind the waiting prompt.
+    let model = {
+        let handle = harness.handle.clone();
+        tokio::spawn(async move { handle.set_model("google/gemini-3.5-flash").await })
+    };
+    let available = harness.wire("get_available_models").await;
+    harness.reply(&available, json!({ "models": [] })).await;
+    let set = harness.wire("set_model").await;
+    harness.reply(&set, json!({})).await;
+    let state = harness.wire("get_state").await;
+    harness.reply(&state, json!({})).await;
+    tokio::time::timeout(DEADLINE, model).await.expect("set_model waited for the gate").unwrap().unwrap();
+    let handle = harness.handle.clone();
 
     // Stop reaches Pi and ends the wait, without compaction ending.
     tokio::time::timeout(DEADLINE, handle.interrupt()).await.expect("stop hung").unwrap();
@@ -884,6 +962,44 @@ async fn nothing_waits_behind_a_prompt_that_holds_the_gate_for_compaction() {
         }
     }
     assert!(matches!(harness.next_completion().await, DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, .. }));
+}
+
+#[tokio::test]
+async fn a_send_holds_steers_back_only_while_pi_is_compacting() {
+    let harness = Harness::new(Flavor::Pi);
+    let admitted_at = harness.session.admission_revision().await;
+    let hold = harness.session.claim_hold();
+    // Nothing compacts: there is nothing to wait for, so a steer is not refused for it.
+    assert!(!harness.session.hold_for_compaction(&hold, admitted_at).await);
+    assert!(!harness.session.prompt_held());
+
+    harness.session.handle_frame(json!({ "type": "compaction_start", "reason": "threshold" })).await;
+    assert!(harness.session.hold_for_compaction(&hold, admitted_at).await);
+    assert!(harness.session.prompt_held());
+
+    harness.session.handle_frame(json!({ "type": "compaction_end" })).await;
+    assert!(!harness.session.hold_for_compaction(&hold, admitted_at).await);
+    assert!(!harness.session.prompt_held(), "the hold outlived the compaction");
+}
+
+#[tokio::test]
+async fn a_send_that_ends_never_clears_the_hold_of_the_next_one() {
+    let harness = Harness::new(Flavor::Pi);
+    harness.session.handle_frame(json!({ "type": "compaction_start", "reason": "threshold" })).await;
+    let admitted_at = harness.session.admission_revision().await;
+    let first = harness.session.claim_hold();
+    let second = harness.session.claim_hold();
+    first.set(PromptHold::Waiting);
+    // The first send ended, and the next one is already waiting.
+    second.set(PromptHold::Waiting);
+    drop(first);
+    assert!(harness.session.prompt_held(), "an earlier send cleared the hold of a later one");
+    // A send that never held anything lets nothing go either.
+    harness.session.claim_hold().release();
+    assert!(harness.session.prompt_held());
+    assert!(harness.session.hold_for_compaction(&second, admitted_at).await);
+    drop(second);
+    assert!(!harness.session.prompt_held());
 }
 
 #[tokio::test]

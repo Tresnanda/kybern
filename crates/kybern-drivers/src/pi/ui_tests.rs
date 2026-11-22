@@ -32,6 +32,8 @@ impl UiHarness {
             pending_app_tools: Mutex::new(HashMap::new()),
             app_tool_names: extension::APP_TOOL_NAMES.iter().map(|name| (*name).to_string()).collect(),
             compaction_ended: tokio::sync::Notify::new(),
+            prompt_hold: tokio::sync::watch::channel(HoldState::default()).0,
+            hold_owners: std::sync::atomic::AtomicU64::new(0),
         });
         let handle = Arc::new(Handle(session.clone(), crate::ndjson::SessionLifetime::new(child)));
         Self { session, handle, events: receiver }

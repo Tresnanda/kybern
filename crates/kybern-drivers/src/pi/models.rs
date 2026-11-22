@@ -16,9 +16,18 @@ const THINKING_LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Discovery {
     pub models: Vec<ProviderModel>,
-    /// Set when the answer came from a probe that left the folder's own resources unloaded:
-    /// what the startup dialog that blocked the full probe asked.
-    pub skipped_project_resources: Option<String>,
+    /// Set when the answer came from a probe that left the folder's own resources unloaded,
+    /// and why the full probe could not be used.
+    pub skipped_project_resources: Option<Skipped>,
+}
+
+/// Why the folder's own resources are not in the answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Skipped {
+    /// A startup dialog nobody could answer blocked the full probe; what it asked.
+    Dialog(String),
+    /// Pi stopped before it could answer, and did answer without the folder's resources.
+    Exited,
 }
 
 /// How long a finished probe gets to exit on its own once its input is closed.
@@ -33,10 +42,11 @@ const STOP_GRACE: Duration = Duration::from_secs(2);
 /// launched by extensions.
 ///
 /// Pi reads its input only after extensions' `session_start`, so a startup dialog (an MCP
-/// adapter asking to approve a project server) can never be answered. Only then does the
-/// probe run again with `--no-approve`, which leaves the folder's own resources unloaded,
-/// and the answer says so (`skipped_project_resources`). A probe that fails any other way
-/// is not retried: its error is the answer.
+/// adapter asking to approve a project server) can never be answered, and an extension that
+/// dies there stops Pi before it reads anything. In those two cases the probe runs once more
+/// with `--no-approve`, which leaves the folder's own resources unloaded, and the answer
+/// says so (`skipped_project_resources`). A probe that fails any other way, and the retry
+/// itself, are not run again: their error is the answer.
 pub(super) async fn discover(bin: &Path, context: &ProbeContext) -> Result<Discovery> {
     discover_with_timeout(bin, context, DISCOVERY_TIMEOUT).await
 }
@@ -49,14 +59,26 @@ async fn discover_with_timeout(bin: &Path, context: &ProbeContext, timeout: Dura
         None => Some(PrivateDir::create()?),
     };
     let cwd = context.cwd.as_deref().or(private.as_ref().map(|dir| dir.0.as_path()));
-    match discover_once(bin, context, cwd, &[], timeout).await {
-        Err(Failure { error, blocked_by: Some(dialog) }) => {
-            tracing::debug!(%error, "Pi model discovery was blocked at startup; retrying without project resources");
-            let mut discovery = discover_once(bin, context, cwd, &["--no-approve"], timeout).await.map_err(|failure| failure.error)?;
-            discovery.skipped_project_resources = Some(dialog);
-            Ok(discovery)
-        }
-        result => result.map_err(|failure| failure.error),
+    let first = discover_once(bin, context, cwd, &[], timeout).await;
+    let skipped = match &first {
+        Err(Failure { blocked_by: Some(dialog), .. }) => Skipped::Dialog(dialog.clone()),
+        Err(Failure { error, .. }) if stopped_early(error) => Skipped::Exited,
+        _ => return first.map_err(|failure| failure.error),
+    };
+    if let Err(failure) = &first {
+        tracing::debug!(error = %failure.error, "Pi model discovery stopped at startup; retrying without project resources");
+    }
+    let mut discovery = discover_once(bin, context, cwd, &["--no-approve"], timeout).await.map_err(|failure| failure.error)?;
+    discovery.skipped_project_resources = Some(skipped);
+    Ok(discovery)
+}
+
+/// Pi exited, or closed its input, before it had answered.
+fn stopped_early(error: &DriverError) -> bool {
+    match error {
+        DriverError::ProcessExited(_) => true,
+        DriverError::Io(error) => matches!(error.kind(), std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::UnexpectedEof),
+        _ => false,
     }
 }
 
@@ -179,7 +201,7 @@ async fn read_response(
             .next_line()
             .await
             .map_err(DriverError::from)?
-            .ok_or_else(|| DriverError::Protocol(format!("Pi RPC exited before responding to {expected_command}")))?;
+            .ok_or_else(|| DriverError::ProcessExited(format!("Pi RPC exited before responding to {expected_command}")))?;
         let frame: Value = serde_json::from_str(&line).map_err(|error| {
             DriverError::Protocol(format!("Pi RPC returned malformed JSON while waiting for {expected_command}: {error}"))
         })?;
@@ -549,7 +571,7 @@ printf '%s\n' '{"type":"response","command":"get_available_models","success":tru
         assert_eq!(discovery.models.len(), 1);
         assert_eq!(discovery.models[0].id, "p/m");
         // The models of the project's own resources are missing, and the answer says why.
-        assert_eq!(discovery.skipped_project_resources.as_deref(), Some("Approve project server?"));
+        assert_eq!(discovery.skipped_project_resources, Some(Skipped::Dialog("Approve project server?".into())));
     }
 
     /// The provider status carries that to the user instead of silently listing fewer models.
@@ -579,11 +601,58 @@ printf '%s\n' '{"type":"response","command":"get_available_models","success":tru
         assert!(reason.contains("Start a thread"), "{reason}");
     }
 
-    /// Only a startup dialog earns the retry without project resources. A Pi that simply
-    /// fails to start would only hide the folder's models behind a second failure.
+    /// A failed listing leaves the executable usable; the status says so in plain words and keeps the raw error out.
     #[cfg(unix)]
     #[tokio::test]
-    async fn an_early_exit_is_not_retried_without_project_resources() {
+    async fn the_provider_status_for_a_failed_listing_is_plain() {
+        use crate::AgentDriver;
+        let (directory, binary) = executable_script(
+            r###"#!/bin/sh
+case " $* " in *" --version "*) echo 1.6.0; exit 0 ;; esac
+IFS= read -r state_request
+printf '%s\n' '{"type":"response","command":"get_state","success":false,"error":"boom at /home/me/.pi"}'
+"###,
+        );
+        let context = ProbeContext { binary: Some(binary), cwd: Some(directory.path().to_path_buf()), ..ProbeContext::default() };
+        let status = super::super::PiDriver::pi().probe_with_context(&context).await;
+        assert!(status.available && status.models.is_empty());
+        assert_eq!(
+            status.unavailable_reason.as_deref(),
+            Some("Pi's models could not be listed. Start a thread to use its configured model, or refresh models.")
+        );
+    }
+
+    /// Pi that dies at `session_start` never reads its input; the folder's models used to come
+    /// back from a retry without the project's resources. It is tried once, and says so.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_early_exit_is_retried_once_without_project_resources() {
+        let (directory, binary) = executable_script(
+            r###"#!/bin/sh
+echo "$*" >> "$(dirname "$0")/runs"
+case " $* " in *" --no-approve "*) ;; *) exit 3 ;; esac
+IFS= read -r state_request
+printf '%s
+' '{"type":"response","command":"get_state","success":true,"data":{"model":{"provider":"p","id":"m"}}}'
+IFS= read -r models_request
+printf '%s
+' '{"type":"response","command":"get_available_models","success":true,"data":{"models":[{"provider":"p","id":"m","name":"M"}]}}'
+"###,
+        );
+        let context = ProbeContext { cwd: Some(directory.path().to_path_buf()), ..ProbeContext::default() };
+
+        let discovery = discover_fixture(&binary, &context).await.unwrap();
+        assert_eq!(discovery.models.len(), 1);
+        assert_eq!(discovery.skipped_project_resources, Some(Skipped::Exited));
+        let runs = std::fs::read_to_string(directory.path().join("runs")).unwrap();
+        assert_eq!(runs.lines().count(), 2, "{runs}");
+        assert!(runs.lines().nth(1).unwrap().contains("--no-approve"), "{runs}");
+    }
+
+    /// A Pi that cannot start at all fails twice and no more; the retry's error is the answer.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_pi_that_always_exits_early_is_tried_twice_and_fails() {
         let (directory, binary) = executable_script(
             r###"#!/bin/sh
 echo run >> "$(dirname "$0")/runs"
@@ -595,7 +664,54 @@ exit 3
         let error = discover_fixture(&binary, &context).await.unwrap_err();
         assert!(error.to_string().contains("exited") || error.to_string().contains("pipe"), "{error}");
         let runs = std::fs::read_to_string(directory.path().join("runs")).unwrap();
-        assert_eq!(runs.lines().count(), 1, "the probe ran again after a plain exit");
+        assert_eq!(runs.lines().count(), 2, "retried once, not more, not never");
+    }
+
+    /// An answer that is not a startup stop (a refused command, malformed output) is not retried.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_failed_answer_is_not_retried() {
+        let (directory, binary) = executable_script(
+            r###"#!/bin/sh
+echo run >> "$(dirname "$0")/runs"
+IFS= read -r state_request
+printf '%s
+' '{"type":"response","command":"get_state","success":false,"error":"no"}'
+"###,
+        );
+        let context = ProbeContext { cwd: Some(directory.path().to_path_buf()), ..ProbeContext::default() };
+        let error = discover_fixture(&binary, &context).await.unwrap_err();
+        assert!(error.to_string().contains("get_state failed"), "{error}");
+        assert_eq!(std::fs::read_to_string(directory.path().join("runs")).unwrap().lines().count(), 1);
+    }
+
+    /// The status tells the user the early exit left project models out, and what to do.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_provider_status_says_an_early_exit_left_project_models_out() {
+        use crate::AgentDriver;
+        let (directory, binary) = executable_script(
+            r###"#!/bin/sh
+case " $* " in
+  *" --version "*) echo 1.6.0; exit 0 ;;
+  *" --no-approve "*) ;;
+  *) exit 3 ;;
+esac
+IFS= read -r state_request
+printf '%s
+' '{"type":"response","command":"get_state","success":true,"data":{"model":{"provider":"p","id":"m"}}}'
+IFS= read -r models_request
+printf '%s
+' '{"type":"response","command":"get_available_models","success":true,"data":{"models":[{"provider":"p","id":"m","name":"M"}]}}'
+"###,
+        );
+        let context = ProbeContext { binary: Some(binary), cwd: Some(directory.path().to_path_buf()), ..ProbeContext::default() };
+        let status = super::super::PiDriver::pi().probe_with_context(&context).await;
+        assert!(status.available);
+        assert_eq!(status.models.len(), 1);
+        let reason = status.unavailable_reason.expect("the early exit is reported");
+        assert!(reason.contains("Models from this project may be left out") && reason.contains("stopped while starting"), "{reason}");
+        assert!(reason.contains("Start a thread"), "{reason}");
     }
 
     /// Without a project the probe must not run extensions in the daemon's own folder.

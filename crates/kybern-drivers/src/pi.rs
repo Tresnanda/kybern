@@ -44,6 +44,8 @@ const COMPACTING_PROMPT_REJECTION: &str = "Cannot submit a prompt while compacti
 /// Largest text of a cleared message that a notice repeats, and how many messages it lists.
 const MAX_CLEARED_TEXT_CHARS: usize = 500;
 const MAX_CLEARED_MESSAGES: usize = 5;
+/// How much of the end of a steer is kept to recognise Pi's expanded copy of it.
+const MAX_STEER_TAIL_CHARS: usize = 512;
 /// The key of a notice's `data` that says Pi moved the thread to another session
 /// (`{ "from": <session id>, "to": <session id> }`); the daemon reads it.
 pub const SESSION_SWITCH_KEY: &str = "piSessionSwitch";
@@ -136,20 +138,25 @@ impl PiDriver {
                     status.models = match self.flavor {
                         Flavor::Pi => match models::discover(&bin, context).await {
                             Ok(discovery) => {
-                                if let Some(dialog) = &discovery.skipped_project_resources {
-                                    // Models that only this folder defines are missing from the list; say why.
-                                    status.unavailable_reason = Some(format!(
+                                // Models that only this folder defines are missing from the list; say why.
+                                status.unavailable_reason = discovery.skipped_project_resources.as_ref().map(|skipped| match skipped {
+                                    models::Skipped::Dialog(dialog) => format!(
                                         "Models from this project were left out: Pi asked \"{dialog}\" while starting, and only a thread can answer. Start a thread to approve and use them."
-                                    ));
-                                }
+                                    ),
+                                    models::Skipped::Exited => {
+                                        "Models from this project may be left out: Pi stopped while starting with them. Start a thread to see why.".into()
+                                    }
+                                });
                                 discovery.models
                             }
                             Err(error) => {
                                 // The executable still works: an interactive session can answer
                                 // startup dialogs and use Pi's own configured model.
-                                status.unavailable_reason = Some(format!(
-                                    "Model discovery failed: {error}. Start a thread to use Pi's configured model, or refresh models."
-                                ));
+                                tracing::warn!(%error, "Pi model discovery failed");
+                                status.unavailable_reason = Some(
+                                    "Pi's models could not be listed. Start a thread to use its configured model, or refresh models."
+                                        .into(),
+                                );
                                 Vec::new()
                             }
                         },
@@ -380,6 +387,8 @@ impl AgentDriver for PiDriver {
             pending_app_tools: Mutex::new(HashMap::new()),
             app_tool_names,
             compaction_ended: tokio::sync::Notify::new(),
+            prompt_hold: tokio::sync::watch::channel(HoldState::default()).0,
+            hold_owners: std::sync::atomic::AtomicU64::new(0),
         });
         let (ready_tx, ready_rx) = oneshot::channel();
         *session.ready.lock().await = Some(ready_tx);
@@ -407,30 +416,52 @@ fn approval_tier(mode: PermissionMode) -> &'static str {
     }
 }
 
-/// Whether a prompt is held back for compaction, and whether it holds the command gate.
-/// Anything that would queue behind the gate fails at once instead, so Stop, which the
-/// orchestrator only reaches after a steer returns, is never stuck behind a held prompt.
+/// Whether a prompt is held back for compaction. While it is, a steer is refused at once:
+/// the orchestrator holds the turn lock Stop needs across `steer`, so a steer must never wait
+/// for a prompt that is itself waiting. The gate is free during the wait, so other commands
+/// (and Stop) go ahead and Pi decides.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 enum PromptHold {
     #[default]
     None,
-    /// Waiting before the gate is taken: other commands go ahead, a steer is refused.
     Waiting,
-    /// Waiting with the gate held, after Pi rejected the prompt: every command is refused.
-    HoldingGate,
 }
 
-/// Clears the hold when the waiting send ends or is dropped.
-struct HoldGuard(Arc<PiSession>);
+/// The hold, and the send that owns it: only that send may clear it.
+#[derive(Clone, Copy, Default, Debug)]
+struct HoldState {
+    hold: PromptHold,
+    owner: u64,
+}
+
+/// One send's claim on the hold. Setting or clearing the hold is synchronous, so a send that
+/// ends or is dropped lets go at once, and never clears the hold of a send that came after it.
+struct HoldGuard {
+    session: Arc<PiSession>,
+    owner: u64,
+}
+
+impl HoldGuard {
+    fn set(&self, hold: PromptHold) {
+        let owner = self.owner;
+        self.session.prompt_hold.send_modify(|state| *state = HoldState { hold, owner });
+    }
+
+    fn release(&self) {
+        let owner = self.owner;
+        self.session.prompt_hold.send_if_modified(|state| {
+            let mine = state.owner == owner && state.hold != PromptHold::None;
+            if mine {
+                state.hold = PromptHold::None;
+            }
+            mine
+        });
+    }
+}
 
 impl Drop for HoldGuard {
     fn drop(&mut self) {
-        if let Ok(mut st) = self.0.state.try_lock() {
-            st.prompt_hold = PromptHold::None;
-        } else {
-            let session = self.0.clone();
-            tokio::spawn(async move { session.state.lock().await.prompt_hold = PromptHold::None });
-        }
+        self.release();
     }
 }
 
@@ -447,12 +478,9 @@ struct State {
     native_command: Option<String>,
     compaction_noticed: bool,
     manual_compacting: bool,
-    /// A prompt is waiting for compaction to end; see [`PromptHold`].
-    prompt_hold: PromptHold,
-    /// What each steer of the running turn said, as the user sent it (Pi expands skills and
-    /// templates in its own copy), oldest first. Pi reads its queue in order, so the steers
-    /// Stop clears are the newest ones.
-    steered: Vec<String>,
+    /// What each steer Pi queued during the running turn said, as the user sent it (Pi expands
+    /// skills and templates in its own copy), oldest first.
+    steered: Vec<SteerLog>,
     closed: bool,
     model: Value,
     default_effort: Option<String>,
@@ -507,6 +535,10 @@ struct PiSession {
     /// Woken by every `compaction_end` (and by the process exiting) so a prompt held back
     /// during compaction can go out.
     compaction_ended: tokio::sync::Notify,
+    /// A prompt is waiting for compaction to end; see [`PromptHold`].
+    prompt_hold: tokio::sync::watch::Sender<HoldState>,
+    /// Hands out the owner of each send's [`HoldGuard`].
+    hold_owners: std::sync::atomic::AtomicU64,
 }
 
 #[derive(Clone)]
@@ -1185,17 +1217,27 @@ impl PiSession {
         st.compacting && !st.closed && st.admission_revision == admitted_at && tokio::time::Instant::now() < deadline
     }
 
-    async fn set_prompt_hold(&self, hold: PromptHold) {
-        self.state.lock().await.prompt_hold = hold;
+    /// A claim on the hold for one send.
+    fn claim_hold(self: &Arc<Self>) -> HoldGuard {
+        let owner = self.hold_owners.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        HoldGuard { session: self.clone(), owner }
     }
 
-    /// The error for a command that would queue behind the command gate while a prompt
-    /// holds it, waiting for compaction (after Pi rejected that prompt), or `None`.
-    async fn refuse_while_prompt_held(&self) -> Option<DriverError> {
-        if self.state.lock().await.prompt_hold != PromptHold::HoldingGate {
-            return None;
+    fn prompt_held(&self) -> bool {
+        self.prompt_hold.borrow().hold != PromptHold::None
+    }
+
+    /// Refuse steers while a prompt admitted at `admitted_at` has to wait for compaction, and
+    /// say whether it does. With nothing compacting there is nothing to wait for and no hold.
+    async fn hold_for_compaction(&self, hold: &HoldGuard, admitted_at: u64) -> bool {
+        let st = self.state.lock().await;
+        let waits = st.compacting && !st.closed && st.admission_revision == admitted_at;
+        if waits {
+            hold.set(PromptHold::Waiting);
+        } else {
+            hold.release();
         }
-        Some(DriverError::Other(anyhow::anyhow!("Pi is compacting its context before it starts the turn. Try again when it finishes.")))
+        waits
     }
 
     async fn begin_turn(&self, manual_compacting: bool, admitted_at: u64) -> Result<Option<u64>> {
@@ -1516,7 +1558,8 @@ impl PiSession {
         // These messages must be sent independently: abort() may wait for work
         // whose completion requires cancelling retry backoff or a queued input.
         if self.flavor == Flavor::Pi {
-            self.clear_native_queue().await?;
+            // The notice about what it cleared follows on its own.
+            drop(self.clear_native_queue().await?);
             self.child.write(&json!({ "type": "abort_retry", "id": Uuid::new_v4().to_string() })).await?;
         }
         self.child.write(&json!({ "type": "abort", "id": Uuid::new_v4().to_string() })).await
@@ -1526,7 +1569,7 @@ impl PiSession {
     /// thrown away. Pi answered each of those steers with `disposition: "queued"`,
     /// and Kybern counted them delivered then. The answer to `clear_queue` lists
     /// them; Pi before 0.84.4 rejects the command, and then nothing is reported.
-    async fn clear_native_queue(self: &Arc<Self>) -> Result<()> {
+    async fn clear_native_queue(self: &Arc<Self>) -> Result<tokio::task::JoinHandle<()>> {
         let id = Uuid::new_v4().simple().to_string();
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(id.clone(), tx);
@@ -1535,7 +1578,7 @@ impl PiSession {
             return Err(error);
         }
         let session = self.clone();
-        tokio::spawn(async move {
+        Ok(tokio::spawn(async move {
             match tokio::time::timeout(std::time::Duration::from_secs(2), rx).await {
                 Ok(Ok(Ok(cleared))) => {
                     let steered = std::mem::take(&mut session.state.lock().await.steered);
@@ -1548,8 +1591,7 @@ impl PiSession {
                     session.pending.lock().await.remove(&id);
                 }
             }
-        });
-        Ok(())
+        }))
     }
 
     async fn handle_ui_request(self: &Arc<Self>, v: &Value) {
@@ -1723,31 +1765,90 @@ impl PiSession {
     }
 }
 
-/// What a steer said, for the notice about steers Pi never read: the user's words as
-/// Kybern passed them on, without the `/skill:` prefixes Pi expands into whole files.
-/// Image-only steers read as `[image]`, so every cleared message has a line.
-fn steer_display_text(message: &UserMessage) -> String {
-    let text = prompt_text(message);
-    let mut rest = text.as_str();
-    while let Some(after) = rest.strip_prefix("/skill:") {
-        rest = after.split_once(char::is_whitespace).map_or("", |(_, tail)| tail);
-    }
-    let rest = rest.trim();
-    let text = if rest.is_empty() { "[image]" } else { rest };
-    text.chars().take(MAX_CLEARED_TEXT_CHARS).collect()
+/// What the user sent in a steer Pi queued. Pi expands skills and templates in its own copy
+/// (`<skill …>…</skill>\n\n` plus the user's text), so the user's text is the end of Pi's.
+struct SteerLog {
+    /// The user's words as Kybern passed them on, without the `/skill:` prefixes Pi expands
+    /// into whole files, capped. Image-only steers read as `[image]`.
+    shown: String,
+    /// The end of those words, what Pi's copy ends with. Empty for an image-only steer.
+    tail: String,
 }
 
-/// The notice for the steers Pi had not read when the turn was interrupted. `cleared` is
-/// the answer to `clear_queue`, which only supplies how many; the words come from
-/// `steered`, what the user sent (Pi's copy has skills and templates expanded into it).
-/// Steers are read oldest first, so the unread ones are the newest.
-fn cleared_queue_notice(cleared: &Value, steered: &[String]) -> Option<DriverEvent> {
-    let count: usize = ["steering", "followUp"].iter().filter_map(|key| cleared.get(key).and_then(Value::as_array)).map(Vec::len).sum();
+impl SteerLog {
+    fn new(message: &UserMessage) -> Self {
+        let text = prompt_text(message);
+        let mut rest = text.as_str();
+        while let Some(after) = rest.strip_prefix("/skill:") {
+            rest = after.split_once(char::is_whitespace).map_or("", |(_, tail)| tail);
+        }
+        let rest = rest.trim();
+        let tail: Vec<char> = rest.chars().rev().take(MAX_STEER_TAIL_CHARS).collect();
+        Self {
+            shown: if rest.is_empty() { "[image]".into() } else { rest.chars().take(MAX_CLEARED_TEXT_CHARS).collect() },
+            tail: tail.into_iter().rev().collect(),
+        }
+    }
+
+    /// Whether `pi_text`, Pi's copy of a queued message, is this steer.
+    fn is_copy_in(&self, pi_text: &str) -> bool {
+        let pi_text = pi_text.trim();
+        if self.tail.is_empty() {
+            return pi_text.is_empty();
+        }
+        // The words follow the expanded part after a blank line, never continue a word of it.
+        pi_text.strip_suffix(self.tail.as_str()).is_some_and(|before| before.is_empty() || before.ends_with(char::is_whitespace))
+    }
+}
+
+/// Pi's copy of a message nobody here sent (an extension queued it), as the user would read
+/// it: without the skill files Pi expands into its copy, and capped.
+fn pi_text_for_display(pi_text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = pi_text;
+    while let Some(start) = rest.find("<skill ") {
+        out.push_str(&rest[..start]);
+        match rest[start..].find("</skill>") {
+            Some(end) => rest = &rest[start + end + "</skill>".len()..],
+            None => {
+                rest = "";
+                break;
+            }
+        }
+    }
+    out.push_str(rest);
+    let out = out.trim();
+    if out.is_empty() { "[image]".into() } else { out.chars().take(MAX_CLEARED_TEXT_CHARS).collect() }
+}
+
+/// The notice for the messages Pi had not read when the turn was interrupted. `cleared` is the
+/// answer to `clear_queue`: Pi's own copy of each, oldest first. A copy that ends with what a
+/// steer of this turn said is quoted in the user's words; one nobody here sent (an extension
+/// queued it, or Pi expanded a template) is quoted from Pi's copy.
+fn cleared_queue_notice(cleared: &Value, steered: &[SteerLog]) -> Option<DriverEvent> {
+    let queued: Vec<&str> = ["steering", "followUp"]
+        .iter()
+        .filter_map(|key| cleared.get(key).and_then(Value::as_array))
+        .flatten()
+        .map(|item| item.as_str().unwrap_or(""))
+        .collect();
+    let count = queued.len();
     if count == 0 {
         return None;
     }
-    let unread = &steered[steered.len().saturating_sub(count)..];
-    let shown = &unread[unread.len().saturating_sub(MAX_CLEARED_MESSAGES)..];
+    // Each steer is matched once, in the order they were sent.
+    let mut next = 0;
+    let mut quoted: Vec<String> = Vec::with_capacity(count);
+    for pi_text in &queued {
+        match steered[next..].iter().position(|steer| steer.is_copy_in(pi_text)) {
+            Some(offset) => {
+                quoted.push(steered[next + offset].shown.clone());
+                next += offset + 1;
+            }
+            None => quoted.push(pi_text_for_display(pi_text)),
+        }
+    }
+    let shown = &quoted[quoted.len().saturating_sub(MAX_CLEARED_MESSAGES)..];
     let mut text = format!(
         "Pi had not read {count} queued {} when the turn was interrupted. Send again if you still want {}:",
         plural(count, "message", "messages"),
@@ -2087,9 +2188,6 @@ impl AgentSession for Handle {
     async fn compact(&self) -> Result<()> {
         let admitted_at = self.0.admission_revision().await;
         self.0.wait_initialized().await?;
-        if let Some(error) = self.0.refuse_while_prompt_held().await {
-            return Err(error);
-        }
         let _gate = self.0.command_gate.lock().await;
         let Some(generation) = self.0.begin_turn(true, admitted_at).await? else { return Ok(()) };
         // Pi rejects this compaction if one is already running, so a stale flag has nothing to wait for.
@@ -2121,25 +2219,8 @@ impl AgentSession for Handle {
         let admitted_at = s.admission_revision().await;
         s.wait_initialized().await?;
         let deadline = tokio::time::Instant::now() + COMPACTION_WAIT;
-        let hold = HoldGuard(s.clone());
-        // Wait for compaction before taking the gate, then look again under it: a steer, a
-        // model change and Stop's own commands all need the gate, and none may queue behind
-        // a prompt that is only waiting.
-        let _gate = loop {
-            if s.flavor == Flavor::Pi {
-                s.set_prompt_hold(PromptHold::Waiting).await;
-                s.wait_for_compaction_end(admitted_at, deadline).await;
-            }
-            let gate = s.command_gate.lock().await;
-            if s.flavor == Flavor::Pi && s.compaction_blocks(admitted_at, deadline).await {
-                continue;
-            }
-            s.set_prompt_hold(PromptHold::None).await;
-            break gate;
-        };
-        let Some(generation) = s.begin_turn(false, admitted_at).await? else { return Ok(()) };
+        let hold = s.claim_hold();
         let text = prompt_text(message);
-        s.state.lock().await.native_command = text.strip_prefix('/').and_then(|text| text.split_whitespace().next()).map(str::to_owned);
         let handoff = s.flavor == Flavor::Omp && text.split_whitespace().next() == Some("/handoff");
         let mut params = if handoff {
             let instructions = text.trim_start_matches("/handoff").trim();
@@ -2151,22 +2232,55 @@ impl AgentSession for Handle {
         if !imgs.is_empty() {
             params["images"] = Value::Array(imgs);
         }
-        let mut result = s.call(if handoff { "handoff" } else { "prompt" }, params.clone()).await;
-        if s.flavor == Flavor::Pi && matches!(&result, Err(error) if error.to_string().contains(COMPACTING_PROMPT_REJECTION)) {
-            // Compaction began before Pi read the prompt. Send it again once it ends,
-            // unless Stop or a closed session came first. The gate stays held, so
-            // everything else is refused at once meanwhile.
-            s.set_prompt_hold(PromptHold::HoldingGate).await;
-            s.wait_for_compaction_end(admitted_at, deadline).await;
-            s.set_prompt_hold(PromptHold::None).await;
-            let withdrawn = {
-                let st = s.state.lock().await;
-                st.closed || st.aborted || st.admission_revision != admitted_at || st.generation != generation
+        let mut turn: Option<u64> = None;
+        let mut resent = false;
+        let (_gate, generation, result) = loop {
+            // Wait for compaction before taking the gate, then look again under it: a steer, a
+            // model change and Stop's own commands all need the gate, and none may queue behind
+            // a prompt that is only waiting.
+            let gate = loop {
+                if s.flavor == Flavor::Pi && s.hold_for_compaction(&hold, admitted_at).await {
+                    s.wait_for_compaction_end(admitted_at, deadline).await;
+                }
+                let gate = s.command_gate.lock().await;
+                if s.flavor == Flavor::Pi && s.compaction_blocks(admitted_at, deadline).await {
+                    continue;
+                }
+                hold.release();
+                break gate;
             };
-            if !withdrawn {
-                result = s.call("prompt", params).await;
+            let generation = match turn {
+                Some(generation) => generation,
+                None => {
+                    let Some(generation) = s.begin_turn(false, admitted_at).await? else { return Ok(()) };
+                    s.state.lock().await.native_command =
+                        text.strip_prefix('/').and_then(|text| text.split_whitespace().next()).map(str::to_owned);
+                    turn = Some(generation);
+                    generation
+                }
+            };
+            let result = s.call(if handoff { "handoff" } else { "prompt" }, params.clone()).await;
+            if s.flavor == Flavor::Pi && !resent && matches!(&result, Err(error) if error.to_string().contains(COMPACTING_PROMPT_REJECTION))
+            {
+                // Compaction began before Pi read the prompt. Send it again once it ends, unless
+                // Stop or a closed session came first. The gate is let go of for the wait, with
+                // the hold set before, so a steer is refused and Stop never waits behind this send.
+                hold.set(PromptHold::Waiting);
+                drop(gate);
+                s.wait_for_compaction_end(admitted_at, deadline).await;
+                let withdrawn = {
+                    let st = s.state.lock().await;
+                    st.closed || st.aborted || st.admission_revision != admitted_at || st.generation != generation
+                };
+                if !withdrawn {
+                    resent = true;
+                    continue;
+                }
+                hold.release();
+                break (None, generation, result);
             }
-        }
+            break (Some(gate), generation, result);
+        };
         drop(hold);
         let (no_run, interrupted, open) = {
             let mut st = s.state.lock().await;
@@ -2206,12 +2320,16 @@ impl AgentSession for Handle {
         self.0.wait_initialized().await?;
         // The orchestrator holds the turn lock that Stop needs while this runs, so a steer
         // must not wait behind a prompt that is itself waiting for compaction.
-        if self.0.state.lock().await.prompt_hold != PromptHold::None {
-            return Err(DriverError::Other(anyhow::anyhow!(
-                "Pi is compacting its context before it starts this turn. Queue the message instead."
-            )));
+        let held =
+            || DriverError::Other(anyhow::anyhow!("Pi is compacting its context before it starts this turn. Queue the message instead."));
+        if self.0.prompt_held() {
+            return Err(held());
         }
         let _gate = self.0.command_gate.lock().await;
+        // A prompt can take the hold while this steer waited for the gate it just let go of.
+        if self.0.prompt_held() {
+            return Err(held());
+        }
         {
             let st = self.0.state.lock().await;
             if !st.active || st.aborted || st.closed || st.manual_compacting || st.settling {
@@ -2225,12 +2343,15 @@ impl AgentSession for Handle {
         }
         // Pi atomically runs extension commands or steers the active run. Unlike
         // a bare `steer`, an input at the idle boundary cannot be orphaned.
-        self.0.call("prompt", params).await?;
-        let mut st = self.0.state.lock().await;
-        if st.steered.len() >= MAX_STEER_LOG {
-            st.steered.remove(0);
+        let response = self.0.call("prompt", params).await?;
+        // An extension command or input handler that consumed the message queued nothing.
+        if response.get("disposition").and_then(Value::as_str) == Some("queued") {
+            let mut st = self.0.state.lock().await;
+            if st.steered.len() >= MAX_STEER_LOG {
+                st.steered.remove(0);
+            }
+            st.steered.push(SteerLog::new(message));
         }
-        st.steered.push(steer_display_text(message));
         Ok(())
     }
 
@@ -2249,9 +2370,6 @@ impl AgentSession for Handle {
 
     async fn set_permission_mode(&self, mode: PermissionMode) -> Result<()> {
         self.0.wait_initialized().await?;
-        if let Some(error) = self.0.refuse_while_prompt_held().await {
-            return Err(error);
-        }
         let _gate = self.0.command_gate.lock().await;
         if self.0.state.lock().await.closed {
             return Err(DriverError::ProcessExited("Pi session is closed; send again to resume".into()));
@@ -2264,9 +2382,6 @@ impl AgentSession for Handle {
 
     async fn set_model(&self, model: &str) -> Result<()> {
         self.0.wait_initialized().await?;
-        if let Some(error) = self.0.refuse_while_prompt_held().await {
-            return Err(error);
-        }
         let _gate = self.0.command_gate.lock().await;
         // A provider id can contain `/` as well as a model id, so the first slash is only a
         // guess. Use the split Pi itself reports for this selector when it has one.
@@ -2283,9 +2398,6 @@ impl AgentSession for Handle {
 
     async fn set_effort(&self, effort: &str) -> Result<()> {
         self.0.wait_initialized().await?;
-        if let Some(error) = self.0.refuse_while_prompt_held().await {
-            return Err(error);
-        }
         let _gate = self.0.command_gate.lock().await;
         let level = if self.0.flavor == Flavor::Pi {
             let st = self.0.state.lock().await;
@@ -2462,6 +2574,8 @@ mod tests {
             pending_app_tools: Mutex::new(HashMap::new()),
             app_tool_names: HashSet::new(),
             compaction_ended: tokio::sync::Notify::new(),
+            prompt_hold: tokio::sync::watch::channel(HoldState::default()).0,
+            hold_owners: std::sync::atomic::AtomicU64::new(0),
         });
         let handle = Handle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
         let sending = tokio::spawn(async move {
@@ -2500,6 +2614,8 @@ mod tests {
             pending_app_tools: Mutex::new(HashMap::new()),
             app_tool_names: HashSet::new(),
             compaction_ended: tokio::sync::Notify::new(),
+            prompt_hold: tokio::sync::watch::channel(HoldState::default()).0,
+            hold_owners: std::sync::atomic::AtomicU64::new(0),
         });
         session.handle_frame(json!({"type":"available_commands_update","commands":[{"name":"usage","aliases":["limits"],"source":"builtin","input":{"hint":"account"},"subcommands":[{"name":"all"}]}]})).await;
         let Some(DriverEvent::CommandsUpdated(commands)) = rx.recv().await else { panic!("commands missing") };
@@ -2532,6 +2648,8 @@ mod tests {
                 pending_app_tools: Mutex::new(HashMap::new()),
                 app_tool_names: extension::DEFAULT_APP_TOOL_NAMES.iter().map(|name| (*name).to_string()).collect(),
                 compaction_ended: tokio::sync::Notify::new(),
+                prompt_hold: tokio::sync::watch::channel(HoldState::default()).0,
+                hold_owners: std::sync::atomic::AtomicU64::new(0),
             });
             let handle = Handle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
             let task = tokio::spawn(async move {
@@ -2599,6 +2717,8 @@ mod tests {
                 pending_app_tools: Mutex::new(HashMap::new()),
                 app_tool_names: extension::DEFAULT_APP_TOOL_NAMES.iter().map(|name| (*name).to_string()).collect(),
                 compaction_ended: tokio::sync::Notify::new(),
+                prompt_hold: tokio::sync::watch::channel(HoldState::default()).0,
+                hold_owners: std::sync::atomic::AtomicU64::new(0),
             });
             let handle = Handle(session.clone(), crate::ndjson::SessionLifetime::new(session.child.clone()));
             for (method, response) in [
@@ -2740,6 +2860,8 @@ mod tests {
             pending_app_tools: Mutex::new(HashMap::new()),
             app_tool_names: extension::DEFAULT_APP_TOOL_NAMES.iter().map(|name| (*name).to_string()).collect(),
             compaction_ended: tokio::sync::Notify::new(),
+            prompt_hold: tokio::sync::watch::channel(HoldState::default()).0,
+            hold_owners: std::sync::atomic::AtomicU64::new(0),
         })
     }
 
@@ -2950,6 +3072,8 @@ mod tests {
             pending_app_tools: Mutex::new(HashMap::new()),
             app_tool_names: extension::DEFAULT_APP_TOOL_NAMES.iter().map(|name| (*name).to_string()).collect(),
             compaction_ended: tokio::sync::Notify::new(),
+            prompt_hold: tokio::sync::watch::channel(HoldState::default()).0,
+            hold_owners: std::sync::atomic::AtomicU64::new(0),
         });
         let reader = session.clone();
         tokio::spawn(async move { reader.read_loop().await });
