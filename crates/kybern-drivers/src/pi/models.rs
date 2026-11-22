@@ -132,7 +132,9 @@ async fn discover_once(
             match failure {
                 Ok(Err(failure)) => Err(failure),
                 Ok(Ok(_)) => unreachable!("handled above"),
-                Err(_) => Err(DriverError::Protocol(format!("Pi model discovery timed out after {} milliseconds", timeout.as_millis())).into()),
+                Err(_) => {
+                    Err(DriverError::Protocol(format!("Pi model discovery timed out after {} milliseconds", timeout.as_millis())).into())
+                }
             }
         }
     }
@@ -559,7 +561,10 @@ printf '{"type":"response","command":"get_available_models","success":true,"data
         ] });
         let split = |selector| split_reported_selector(&available, selector);
         assert_eq!(split("openrouter/openrouter/auto"), Some(("openrouter".into(), "openrouter/auto".into())));
-        assert_eq!(split("hub=https://hub.example:8318/v1/claude-haiku-4-5"), Some(("hub=https://hub.example:8318/v1".into(), "claude-haiku-4-5".into())));
+        assert_eq!(
+            split("hub=https://hub.example:8318/v1/claude-haiku-4-5"),
+            Some(("hub=https://hub.example:8318/v1".into(), "claude-haiku-4-5".into()))
+        );
         assert_eq!(split("anthropic/claude"), Some(("anthropic".into(), "claude".into())));
         assert_eq!(split("unknown/model"), None);
     }

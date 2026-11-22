@@ -421,6 +421,8 @@ struct State {
     /// `None` until the first successful read; `Some(None)` is a session without
     /// user entries.
     user_entry_baseline: Option<Option<String>>,
+    /// Running usage last reported from a streaming update, so an unchanged one is not repeated.
+    live_used_tokens: u64,
     /// Sequence number for synthetic assistant message ids.
     message_seq: u64,
     current_message: Option<String>,
@@ -756,6 +758,7 @@ impl PiSession {
                 let msg = &v["message"];
                 if msg.get("role").and_then(|r| r.as_str()) == Some("assistant") {
                     let mut st = self.state.lock().await;
+                    st.live_used_tokens = 0;
                     st.message_seq += 1;
                     st.current_message = Some(format!("m{}", st.message_seq));
                     st.current_text.clear();
@@ -765,6 +768,9 @@ impl PiSession {
                 }
             }
             "message_update" => {
+                if self.flavor == Flavor::Pi {
+                    self.report_live_usage(&v["usage"]).await;
+                }
                 let ev = &v["assistantMessageEvent"];
                 let message_id = match self.state.lock().await.current_message.clone() {
                     Some(m) => m,
@@ -1274,6 +1280,27 @@ impl PiSession {
         }
     }
 
+    /// Pi 0.84.2 and newer attach the message's running usage to every streaming update,
+    /// so the context meter moves while the answer is written, not only when it ends.
+    async fn report_live_usage(&self, usage: &Value) {
+        let Some(used_tokens) = usage.get("totalTokens").and_then(Value::as_u64).filter(|tokens| *tokens > 0) else { return };
+        let window_tokens = {
+            let mut st = self.state.lock().await;
+            let Some(window) = st.context_window.filter(|window| *window > 0) else { return };
+            if st.live_used_tokens == used_tokens {
+                return;
+            }
+            st.live_used_tokens = used_tokens;
+            window
+        };
+        self.emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage {
+            context: Some(kybern_protocol::ContextUsage { used_tokens, window_tokens }),
+            limits: None,
+            prompt_cache: None,
+        }))
+        .await;
+    }
+
     /// Entry ids of the session's user messages, oldest first. `None` when Pi did not answer.
     async fn user_entry_ids(&self, timeout: std::time::Duration) -> Option<Vec<String>> {
         let command = if self.flavor == Flavor::Pi { "get_fork_messages" } else { "get_branch_messages" };
@@ -1622,7 +1649,11 @@ fn cleared_queue_notice(cleared: &Value) -> Option<DriverEvent> {
         return None;
     }
     let count = texts.len();
-    let mut text = format!("Stop cleared {count} queued {} Pi had not read yet. Send again if you still want {}:", plural(count, "message", "messages"), if count == 1 { "it" } else { "them" });
+    let mut text = format!(
+        "Stop cleared {count} queued {} Pi had not read yet. Send again if you still want {}:",
+        plural(count, "message", "messages"),
+        if count == 1 { "it" } else { "them" }
+    );
     for message in texts.iter().filter(|message| !message.is_empty()).take(MAX_CLEARED_MESSAGES) {
         text.push_str("\n> ");
         text.push_str(&message.chars().take(MAX_CLEARED_TEXT_CHARS).collect::<String>().replace('\n', "\n> "));
@@ -2093,7 +2124,8 @@ impl AgentSession for Handle {
         let _gate = self.0.command_gate.lock().await;
         // A provider id can contain `/` as well as a model id, so the first slash is only a
         // guess. Use the split Pi itself reports for this selector when it has one.
-        let reported = self.0.call("get_available_models", json!({})).await.ok().and_then(|data| models::split_reported_selector(&data, model));
+        let reported =
+            self.0.call("get_available_models", json!({})).await.ok().and_then(|data| models::split_reported_selector(&data, model));
         let Some((provider, model_id)) = reported.or_else(|| model.split_once('/').map(|(p, m)| (p.to_string(), m.to_string()))) else {
             return Err(DriverError::Unsupported(format!("models are named provider/model, got {model}")));
         };

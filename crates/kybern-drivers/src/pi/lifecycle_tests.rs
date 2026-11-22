@@ -567,7 +567,9 @@ async fn rewinding_a_turn_that_had_a_steer_drops_from_its_first_prompt() {
     let idle = harness.wire("get_state").await;
     harness.reply(&idle, json!({ "isStreaming": false, "isCompacting": false, "pendingMessageCount": 0 })).await;
     let listing = harness.wire("get_fork_messages").await;
-    harness.reply(&listing, json!({ "messages": [{ "entryId": "u1" }, { "entryId": "u2" }, { "entryId": "u3" }, { "entryId": "u4" }] })).await;
+    harness
+        .reply(&listing, json!({ "messages": [{ "entryId": "u1" }, { "entryId": "u2" }, { "entryId": "u3" }, { "entryId": "u4" }] }))
+        .await;
     let DriverEvent::TurnCompleted { anchors, .. } = harness.next_completion().await else { panic!("turn did not complete") };
     assert_eq!(anchors.turn_id.as_deref(), Some("u4"));
 }
@@ -605,13 +607,20 @@ async fn a_session_an_extension_switched_to_becomes_the_threads_session() {
 #[tokio::test]
 async fn tools_called_through_another_tool_nest_under_their_caller() {
     let mut harness = Harness::new(Flavor::Pi);
-    harness.session.handle_frame(json!({ "type": "tool_execution_start", "toolCallId": "outer", "toolName": "codemode", "args": {} })).await;
     harness
         .session
-        .handle_frame(json!({ "type": "tool_execution_start", "toolCallId": "inner", "toolName": "read", "args": {}, "parentToolCallId": "outer" }))
+        .handle_frame(json!({ "type": "tool_execution_start", "toolCallId": "outer", "toolName": "codemode", "args": {} }))
+        .await;
+    harness
+        .session
+        .handle_frame(
+            json!({ "type": "tool_execution_start", "toolCallId": "inner", "toolName": "read", "args": {}, "parentToolCallId": "outer" }),
+        )
         .await;
     assert!(matches!(harness.next_event().await, DriverEvent::ToolStarted(call) if call.id == "outer" && call.parent_id.is_none()));
-    assert!(matches!(harness.next_event().await, DriverEvent::ToolStarted(call) if call.id == "inner" && call.parent_id.as_deref() == Some("outer")));
+    assert!(
+        matches!(harness.next_event().await, DriverEvent::ToolStarted(call) if call.id == "inner" && call.parent_id.as_deref() == Some("outer"))
+    );
 }
 
 #[tokio::test]
@@ -685,4 +694,30 @@ async fn model_selectors_follow_the_split_pi_reports() {
     let state = harness.wire("get_state").await;
     harness.reply(&state, json!({})).await;
     tokio::time::timeout(DEADLINE, selecting).await.expect("set_model hung").unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn context_usage_moves_while_pi_streams_an_answer() {
+    let mut harness = Harness::new(Flavor::Pi);
+    harness.session.state.lock().await.context_window = Some(200_000);
+    harness.session.handle_frame(json!({ "type": "message_start", "message": { "role": "assistant" } })).await;
+    let update = |tokens: u64| {
+        json!({
+            "type": "message_update",
+            "usage": { "input": tokens - 5, "output": 5, "totalTokens": tokens },
+            "assistantMessageEvent": { "type": "text_delta", "delta": "x" }
+        })
+    };
+    for tokens in [1_000, 1_000, 1_200] {
+        harness.session.handle_frame(update(tokens)).await;
+    }
+    let mut used = Vec::new();
+    while let Ok(event) = harness.events.try_recv() {
+        if let DriverEvent::UsageUpdated(usage) = event {
+            let context = usage.context.unwrap();
+            assert_eq!(context.window_tokens, 200_000);
+            used.push(context.used_tokens);
+        }
+    }
+    assert_eq!(used, [1_000, 1_200], "an unchanged reading is not repeated");
 }
