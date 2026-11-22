@@ -28,6 +28,7 @@ mod antigravity_rules;
 mod askpass;
 mod change_report;
 mod child_questions;
+mod claude_sessions;
 mod delegation;
 mod federated_tools;
 pub(crate) mod fork_machine;
@@ -55,6 +56,7 @@ mod project_map;
 pub(crate) mod provision;
 pub(crate) mod remote_delegation;
 mod request_tools;
+mod resend;
 mod rotation;
 mod secret_request;
 mod spaces;
@@ -651,6 +653,8 @@ struct Inner {
     /// Compactions planned for idle threads ("Compact idle threads: Before the cache expires").
     idle_compactions: idle_compaction::IdleCompactions,
     older_sweeps: older::OlderSweeps,
+    /// Turns moving to a new session (a lost conversation, a rejected login), so Stop ends them (`resend.rs`).
+    resends: resend::Resends,
 }
 
 struct LiveSession {
@@ -1068,6 +1072,7 @@ impl Orchestrator {
                 rotation: Default::default(),
                 idle_compactions: Default::default(),
                 older_sweeps: Default::default(),
+                resends: Default::default(),
             }),
         }
     }
@@ -1207,6 +1212,8 @@ impl Orchestrator {
         now: Instant,
         wall_now: SystemTime,
     ) -> Result<Vec<SessionRelease>> {
+        // Never in the way of the idle sweep: it logs its own failures and closes in the background.
+        self.close_quiet_retained_sessions(now).await;
         let (idle_limit, cap, idle_reason) = if saving_power {
             (Some(BackgroundSettings::BATTERY_SESSION_IDLE), None, SessionReleaseReason::Power)
         } else {
@@ -1332,6 +1339,7 @@ impl Orchestrator {
     /// Provider-owned tasks and turns cannot survive a daemon restart. Close
     /// both projections explicitly so clients never show immortal work.
     pub async fn recover_after_restart(&self) -> Result<()> {
+        self.forget_retired_resend_markers();
         self.fail_all_subagent_messages("Not delivered — native session ended before delivery could be confirmed.")?;
         let threads = self.inner.store.threads_list(None, true)?;
         for t in &threads {
@@ -2590,10 +2598,36 @@ impl Orchestrator {
         message: UserMessage,
         startup_started: std::time::Instant,
     ) -> Result<()> {
+        self.start_turn_with(thread, turn_id, message_id, message, startup_started, None).await
+    }
+
+    /// [`Self::start_turn`], for a turn sent again on a new session when `resend` is set: the turn is only sent
+    /// if nothing (a Stop) ended it while the session started (`resend.rs`).
+    async fn start_turn_with(
+        &self,
+        thread: Thread,
+        turn_id: TurnId,
+        message_id: MessageId,
+        message: UserMessage,
+        startup_started: std::time::Instant,
+        resend: Option<Arc<resend::ResendEntry>>,
+    ) -> Result<()> {
+        let resend = resend.filter(|entry| entry.turn_id() == turn_id);
+        if resend.is_none() {
+            // A turn still waiting for its new session is not this thread's turn any more.
+            self.supersede_resend(thread.id, turn_id);
+        }
+        let resend_ended = || resend.as_ref().is_some_and(|entry| !entry.is_pending());
         self.prepare_for_computer(&thread, &message).await;
         let (live, session_reused) = match self.ensure_session(&thread).await {
             Ok(live) => live,
             Err(error) => {
+                // A resent turn that Stop already ended has nothing left to fail.
+                if let Some(entry) = &resend
+                    && !entry.claim(resend::ResendOutcome::Ended)
+                {
+                    return Ok(());
+                }
                 // The whole chain: "start claude: program not found", not just the outermost context.
                 let (text, problem) = (crate::problem::detail(&error), crate::problem::turn_problem(thread.provider.kind, &error));
                 self.emit(thread.id, Some(turn_id), EventPayload::TurnFailed { error: text.clone(), problem })?;
@@ -2605,6 +2639,10 @@ impl Orchestrator {
                 return Err(error);
             }
         };
+        // Stop came while the new session started: the turn already ended, nothing is sent.
+        if resend_ended() {
+            return Ok(());
+        }
         live.touch();
         if self.inner.store.thread_get(thread.id)?.is_some_and(|current| current.status == ThreadStatus::Archived) {
             live.mark_released();
@@ -2624,6 +2662,9 @@ impl Orchestrator {
         );
         {
             let mut turn = live.turn.lock().await;
+            if resend_ended() {
+                return Ok(());
+            }
             live.continuation.lock().await.take();
             *turn = Some(ActiveTurn {
                 response_id: Uuid::now_v7(),
@@ -2644,6 +2685,11 @@ impl Orchestrator {
         }
         live.turn_ready.notify_one();
         *live.last_turn_id.lock().await = Some(turn_id);
+        // Stop ended the resent turn while it took its place: there is nothing to snapshot or send.
+        if resend_ended() {
+            Self::leave_resent_turn(turn_id, &live).await;
+            return Ok(());
+        }
         let checkpoint_started = std::time::Instant::now();
         self.checkpoint(&thread, turn_id, "before").await;
         tracing::info!(
@@ -2659,6 +2705,9 @@ impl Orchestrator {
 
         let mut workspace_transition = None;
         let delivery = if is_compact_message(&message) {
+            if !self.commit_resent_turn(turn_id, &live, resend.as_ref()).await {
+                return Ok(());
+            }
             live.session.compact().await
         } else {
             match self.portable_message(&thread, &message).and_then(|portable| self.workspace_transition_message(&thread, &portable)) {
@@ -2722,6 +2771,9 @@ impl Orchestrator {
                     {
                         turn.rotation_seed = Some(seed.clone());
                     }
+                    if !self.commit_resent_turn(turn_id, &live, resend.as_ref()).await {
+                        return Ok(());
+                    }
                     let sent = live.session.send_message(&message_id.to_string(), &provider_message).await;
                     if sent.is_ok() {
                         if let Some((revision, _)) = brief_update {
@@ -2741,10 +2793,34 @@ impl Orchestrator {
                     }
                     sent
                 }
-                Err(error) => Err(kybern_drivers::DriverError::Other(error)),
+                Err(error) => {
+                    // A resent turn that Stop already ended has nothing left to fail.
+                    if let Some(entry) = &resend
+                        && !entry.claim(resend::ResendOutcome::Ended)
+                    {
+                        Self::leave_resent_turn(turn_id, &live).await;
+                        return Ok(());
+                    }
+                    Err(kybern_drivers::DriverError::Other(error))
+                }
             }
         };
+        if let Some(entry) = &resend
+            && self.resend_delivered(thread.id, entry, delivery.is_ok())
+        {
+            // Stop came while the message was on its way: there is a turn to interrupt now.
+            let (this, thread_id) = (self.clone(), thread.id);
+            tokio::spawn(async move {
+                if let Err(error) = this.interrupt_turn(thread_id, "Stop came while the resent message was delivered").await {
+                    tracing::debug!(%thread_id, %error, "the resent turn had nothing left to stop");
+                }
+            });
+        }
         if let Err(e) = delivery {
+            if live.stop_cleanup.load(Ordering::Relaxed) {
+                // Stop closed the process while the message was on its way and already ended the turn.
+                return Ok(());
+            }
             let (text, problem) = crate::problem::driver_failure(thread.provider.kind, &e);
             self.emit(thread.id, Some(turn_id), EventPayload::TurnFailed { error: text.clone(), problem })?;
             let thread_id = thread.id;
@@ -2773,6 +2849,25 @@ impl Orchestrator {
         Ok(())
     }
 
+    /// A resent turn is about to reach its new session: claim it (`resend.rs`). `false` when Stop ended it
+    /// meanwhile; the turn then gives up its place in the session and nothing is sent.
+    async fn commit_resent_turn(&self, turn_id: TurnId, live: &Arc<LiveSession>, resend: Option<&Arc<resend::ResendEntry>>) -> bool {
+        let Some(entry) = resend else { return true };
+        if self.resend_commit(entry) {
+            return true;
+        }
+        Self::leave_resent_turn(turn_id, live).await;
+        false
+    }
+
+    /// A resent turn that Stop ended gives up its place in the new session.
+    async fn leave_resent_turn(turn_id: TurnId, live: &Arc<LiveSession>) {
+        let mut turn = live.turn.lock().await;
+        if turn.as_ref().is_some_and(|turn| turn.id == turn_id) {
+            *turn = None;
+        }
+    }
+
     /// Stop a thread's turn and everything it delegated (user Stop, Lineage Stop).
     /// `cause` names who asked, for `daemon.log`.
     pub async fn stop_thread(&self, thread_id: ThreadId, cause: &str) -> Result<()> {
@@ -2797,8 +2892,17 @@ impl Orchestrator {
     }
 
     async fn interrupt_with_grace(&self, thread_id: ThreadId, grace: Duration) -> Result<()> {
+        // A turn moving to a new session (`resend.rs`) ends here, whether or not the new session is up yet.
+        if self.stop_resend(thread_id) {
+            return Ok(());
+        }
         let live = self.inner.sessions.lock().await.get(&thread_id).cloned().ok_or_else(|| anyhow!("thread has no live session"))?;
         let response_id = live.turn.lock().await.as_ref().map(|turn| turn.response_id);
+        // A failed turn registers its resend while it holds `live.turn`: one that did while Stop waited for
+        // the lock has no turn left here, and ends through the resend instead.
+        if response_id.is_none() && self.stop_resend(thread_id) {
+            return Ok(());
+        }
         live.touch();
         let this = self.clone();
         // The RPC connection may disappear while stopping. Cleanup still owns
@@ -2847,9 +2951,11 @@ impl Orchestrator {
         let result = async {
             // close() terminates the owned process tree if graceful EOF fails.
             // Keep the resume barrier until both process and turn are settled.
-            live.session.close().await?;
+            // The turn is settled even when closing or restoring tasks fails: nothing
+            // else will (the pump and a failed delivery leave it to this cleanup).
+            let closed = live.session.close().await;
             live.continuation.lock().await.take();
-            self.restore_active_runtime_tasks(thread_id, live).await?;
+            let restored = self.restore_active_runtime_tasks(thread_id, live).await;
             self.interrupt_runtime_tasks(thread_id, live, "Stopped because the provider did not finish interrupting").await;
             self.process_driver_event(
                 thread_id,
@@ -2875,7 +2981,8 @@ impl Orchestrator {
                     problem: None,
                 },
             )?;
-            Ok::<_, anyhow::Error>(())
+            closed?;
+            restored
         }
         .await;
         self.inner.releasing.lock().await.remove(&thread_id);
@@ -3070,13 +3177,39 @@ impl Orchestrator {
         let mut pending = live.pending.lock().await;
         let request_id = pending.get(&approval_id).cloned().ok_or_else(|| anyhow!("approval no longer pending"))?;
         live.touch();
-        live.session.respond_permission(&request_id, &decision).await?;
+        let provider_decision = self.provider_decision(&approval, &decision, answered_by.as_ref());
+        live.session.respond_permission(&request_id, provider_decision.as_ref().unwrap_or(&decision)).await?;
         pending.remove(&approval_id);
         drop(pending);
         self.inner.store.approval_resolve(approval_id, &decision)?;
         self.emit(approval.thread_id, Some(approval.turn_id), EventPayload::ApprovalResolved { approval_id, decision, answered_by })?;
         self.restore_running_after_approval(approval.thread_id, &live).await?;
         Ok(())
+    }
+
+    /// The provider's copy of a person's answer, when it differs from what Kybern records: Claude reads the
+    /// reason a user gives for declining as a reply of theirs. An agent answering for the user, and the reasons
+    /// Kybern gives itself, go unchanged; a declined form takes no reason.
+    fn provider_decision(
+        &self,
+        approval: &ApprovalRequest,
+        decision: &ApprovalDecision,
+        answered_by: Option<&RequestAnswerer>,
+    ) -> Option<ApprovalDecision> {
+        let ApprovalDecision::Deny { reason: Some(reason) } = decision else { return None };
+        let thread = self.inner.store.thread_get(approval.thread_id).ok().flatten()?;
+        if thread.provider.kind != ProviderKind::ClaudeCode {
+            return None;
+        }
+        // Declining a form is an explicit no whatever the reason says; MCP has no field for the reason, and
+        // Claude Code would read one as Kybern cancelling the form.
+        if approval.tool_name == "mcp_elicitation" {
+            return Some(ApprovalDecision::Deny { reason: None });
+        }
+        if answered_by.is_some() || reason.trim().is_empty() {
+            return None;
+        }
+        Some(ApprovalDecision::Deny { reason: Some(kybern_drivers::claude::user_decline_feedback(reason)) })
     }
 
     /// The harness's own response for normalized answers (`{"kybern_answers": [...]}`); any other decision unchanged.
@@ -3727,6 +3860,9 @@ impl Orchestrator {
             if identity.as_deref().is_none_or(|identity| identity == expected) {
                 return Ok((live, true));
             }
+            if self.switch_live_target(thread, &live, identity.as_deref()).await? {
+                return Ok((live, true));
+            }
             self.retire_or_close_session(thread.id, live, identity.unwrap_or_default()).await?;
         }
         let retained = self.inner.retained_sessions.lock().await.remove(&(thread.id, expected.clone()));
@@ -3739,6 +3875,7 @@ impl Orchestrator {
                     (&format!("live_identity:{}", thread.id), &expected),
                     (&format!("live_owner:{}", thread.id), &serde_json::to_string(&thread.provider)?),
                 ])?;
+                self.record_live_target(thread)?;
                 return Ok((live, true));
             }
             live.mark_released();
@@ -3957,6 +4094,7 @@ impl Orchestrator {
             (&format!("live_identity:{}", thread.id), &self.session_identity(thread)?),
             (&format!("live_owner:{}", thread.id), &serde_json::to_string(&thread.provider)?),
         ])?;
+        self.record_live_target(thread)?;
         *live.brief_revision.lock().await = brief_revision;
         *live.lead_settings.lock().await = lead_settings;
         self.inner.sessions.lock().await.insert(thread.id, live.clone());
@@ -4356,14 +4494,30 @@ impl Orchestrator {
             tracing::error!(%thread_id, %error, "failed to recover tasks from the exited provider");
         }
         self.interrupt_runtime_tasks(thread_id, &live, "Provider exited before this work finished").await;
-        let turn = live.turn.lock().await.take();
-        if let Some(mut turn) = turn.filter(|t| !t.completed) {
+        let (turn, resend) = {
+            let mut turn_guard = live.turn.lock().await;
+            let turn = turn_guard.take();
+            // Registered while `live.turn` is held, like a failed turn's (`process_driver_event`).
+            let resend = match (&turn, exit_error.as_deref()) {
+                (Some(turn), Some(error)) if !turn.completed && turn.internal.is_none() => {
+                    self.plan_missing_conversation(thread_id, &live, turn.id, error, true)
+                }
+                _ => None,
+            };
+            (turn, resend)
+        };
+        if let Some(plan) = resend {
+            self.run_resend(thread_id, &live, plan).await;
+        } else if let Some(mut turn) = turn.filter(|t| !t.completed) {
             // A handoff turn is invisible: its rotation goes on without a handoff.
             if let Some(internal) = turn.internal.as_mut() {
                 internal.finish(Err("The session exited before it wrote a handoff.".into()));
             } else {
                 self.fail_exited_turn(thread_id, &live, turn.id, exit_error.as_deref()).await;
             }
+        } else if let Some(error) = exit_error.as_deref() {
+            // No turn was waiting, but the next one would resume the same missing conversation.
+            self.forget_conversation_after_exit(thread_id, error);
         }
         if cleanup_barrier.is_some() {
             self.inner.releasing.lock().await.remove(&thread_id);
@@ -4656,6 +4810,7 @@ impl Orchestrator {
                 // Native canonical model reports belong to this live binding and must
                 // not look like a user-requested reconfiguration on the next send.
                 self.inner.store.meta_set(&format!("live_identity:{thread_id}"), &self.session_identity(&t)?)?;
+                self.record_live_target(&t)?;
                 if changed {
                     self.update_thread(t)?;
                 }
@@ -5060,9 +5215,20 @@ impl Orchestrator {
             DriverEvent::TurnFailed { error, problem } => {
                 let Some(turn) = turn_guard.as_mut() else { return Ok(()) };
                 // A login another machine lent was rejected (the broker rotated it): borrow again, resume and
-                // send the message once more instead of failing the turn.
-                if turn.internal.is_none() && !retiring && self.recover_rejected_login(thread_id, live, turn.id, &error).await {
+                // send the message once more instead of failing the turn. Or Claude Code no longer has the
+                // conversation this session resumed: continue on a fresh one. The resend is registered while
+                // `live.turn` is held, so a Stop waiting for it finds the resend, and carried out after it is
+                // released: it takes `sessions`, which `force_interrupt` takes first.
+                let resend = (turn.internal.is_none() && !retiring)
+                    .then(|| {
+                        self.plan_login_recovery(thread_id, live, turn.id, &error)
+                            .or_else(|| self.plan_missing_conversation(thread_id, live, turn.id, &error, false))
+                    })
+                    .flatten();
+                if let Some(plan) = resend {
                     *turn_guard = None;
+                    drop(turn_guard);
+                    self.run_resend(thread_id, live, plan).await;
                     return Ok(());
                 }
                 turn.completed = true;
@@ -5180,7 +5346,9 @@ impl Orchestrator {
                 self.emit(thread_id, turn_id, EventPayload::ProviderNotice { level, text, data, problem })?;
             }
             DriverEvent::Exited { code, error } => {
-                if let Some(error) = error.filter(|_| !live.is_released()) {
+                // A conversation Claude Code no longer has is taken over when the pump ends (a fresh session,
+                // or the turn's failure); its exit is no row of its own.
+                if let Some(error) = error.filter(|error| !live.is_released() && !self.is_missing_conversation(thread_id, error)) {
                     self.emit(
                         thread_id,
                         turn_id,
@@ -5598,10 +5766,16 @@ mod tests {
         app_tool_responses: CapturedAppToolResponses,
         hang_interrupt: bool,
         broken_interrupt: bool,
+        /// `close()` fails, as one whose process could not be ended would.
+        broken_close: bool,
         reject_permission: bool,
         stopped_tasks: Arc<Mutex<Vec<String>>>,
         /// What the session was told to do with each permission request.
         permission_responses: Arc<Mutex<Vec<ApprovalDecision>>>,
+        /// Live model and effort changes, in order (`model:sonnet`, `effort:low`).
+        target_changes: Arc<std::sync::Mutex<Vec<String>>>,
+        /// Refuse live model and effort changes, as an older Claude Code would.
+        reject_target: bool,
     }
 
     #[async_trait::async_trait]
@@ -5642,11 +5816,19 @@ mod tests {
             Ok(())
         }
 
-        async fn set_model(&self, _model: &str) -> kybern_drivers::Result<()> {
+        async fn set_model(&self, model: &str) -> kybern_drivers::Result<()> {
+            if self.reject_target {
+                return Err(kybern_drivers::DriverError::Protocol(format!("set_model: Model '{model}' not found")));
+            }
+            self.target_changes.lock().unwrap().push(format!("model:{model}"));
             Ok(())
         }
 
-        async fn set_effort(&self, _effort: &str) -> kybern_drivers::Result<()> {
+        async fn set_effort(&self, effort: &str) -> kybern_drivers::Result<()> {
+            if self.reject_target {
+                return Err(kybern_drivers::DriverError::Unsupported("fixture keeps its effort".into()));
+            }
+            self.target_changes.lock().unwrap().push(format!("effort:{effort}"));
             Ok(())
         }
 
@@ -5666,6 +5848,9 @@ mod tests {
 
         async fn close(&self) -> kybern_drivers::Result<()> {
             self.closes.fetch_add(1, Ordering::SeqCst);
+            if self.broken_close {
+                return Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe).into());
+            }
             Ok(())
         }
     }
@@ -7674,6 +7859,42 @@ mod tests {
         assert!(!fixture.has_session(&thread).await);
     }
 
+    /// A forced stop whose `close()` fails still settles the turn: nothing else will, since the pump and a
+    /// failed delivery both leave a forced stop's turn to it.
+    #[tokio::test]
+    async fn a_forced_stop_whose_close_fails_still_ends_the_turn() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let (mut live, closes) = fixture.park(&thread, Instant::now()).await;
+        fixture.orchestrator.inner.sessions.lock().await.remove(&thread.id);
+        Arc::get_mut(&mut live).unwrap().session =
+            Box::new(TestSession { closes: closes.clone(), hang_interrupt: true, broken_close: true, ..Default::default() });
+        fixture.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
+        fixture.orchestrator.send(thread.id, UserMessage::text("stuck provider")).await.unwrap();
+        live.turn_ready.notified().await;
+        let turn_id = live.turn.lock().await.as_ref().unwrap().id;
+
+        let stopped = fixture.orchestrator.interrupt_with_grace(thread.id, Duration::from_millis(50)).await;
+        assert!(stopped.is_err(), "the failed close is still reported");
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
+        assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::Idle);
+        assert!(live.turn.lock().await.is_none());
+        assert!(!fixture.has_session(&thread).await);
+        assert!(fixture.orchestrator.inner.releasing.lock().await.is_empty());
+        let terminal: Vec<_> = fixture
+            .store
+            .events_for_thread(thread.id)
+            .unwrap()
+            .into_iter()
+            .filter(|event| {
+                event.turn_id == Some(turn_id)
+                    && matches!(event.payload, EventPayload::TurnCompleted { .. } | EventPayload::TurnFailed { .. })
+            })
+            .collect();
+        assert_eq!(terminal.len(), 1, "exactly one end for the turn");
+        assert!(matches!(terminal[0].payload, EventPayload::TurnCompleted { stop_reason: StopReason::Interrupted, .. }));
+    }
+
     #[tokio::test]
     async fn interrupt_deadline_does_not_close_a_new_continuation() {
         let fixture = Fixture::new();
@@ -9329,4 +9550,5 @@ for line in sys.stdin:
     include!("orchestrator/project_map_tests.rs");
     include!("orchestrator/rotation_tests.rs");
     include!("orchestrator/media_tests.rs");
+    include!("orchestrator/claude_session_tests.rs");
 }

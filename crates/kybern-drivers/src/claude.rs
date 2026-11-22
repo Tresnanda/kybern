@@ -45,6 +45,8 @@ pub(crate) const ENTRYPOINT_ENV: &str = "CLAUDE_CODE_ENTRYPOINT";
 /// Claude Code's auto-compact window (100k..=1M tokens), ahead of its `autoCompactWindow` setting.
 pub(crate) const AUTO_COMPACT_WINDOW_ENV: &str = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
 pub(crate) const KYBERN_ENTRYPOINT: &str = "kybern";
+/// `0` makes Claude Code wait for its MCP servers before the first request.
+const MCP_NONBLOCKING_ENV: &str = "MCP_CONNECTION_NONBLOCKING";
 
 /// The label for a Claude process: a value set in the session's own environment wins; anything
 /// inherited from the daemon's environment is replaced, so Kybern never runs as `sdk-*` or as
@@ -310,6 +312,14 @@ impl AgentDriver for ClaudeDriver {
             cmd.env(k, v);
         }
         cmd.env(ENTRYPOINT_ENV, entrypoint(config.env.get(ENTRYPOINT_ENV)));
+        // A resumed session's first request otherwise goes out before its MCP servers connect, and Claude
+        // Code tells the agent they disconnected. A value the account or the daemon sets still wins.
+        if config.resume_session_id.is_some()
+            && !config.env.contains_key(MCP_NONBLOCKING_ENV)
+            && std::env::var_os(MCP_NONBLOCKING_ENV).is_none()
+        {
+            cmd.env(MCP_NONBLOCKING_ENV, "0");
+        }
         // A login another machine lent (design §9.4): the access token rides in this process' environment
         // only. A named account blanks `CLAUDE_CODE_OAUTH_TOKEN`, so this comes after the loop.
         let lent = crate::login_lend::source_of(&config.env);
@@ -369,10 +379,12 @@ impl AgentDriver for ClaudeDriver {
             }
         }
         // Initialize is optional; we send it for the command and model catalogs and to be a well-behaved client.
-        session.send_control_nowait("initialize", json!({ "supportedDialogKinds": ["resume_return"], "hooks": {"PreToolUse": [{"matcher": null, "hookCallbackIds": [CHILD_MESSAGE_HOOK]}]} })).await?;
+        // Its answer is also the sign that Claude Code started: one that never comes fails the turn.
+        let initialized = session.send_control_watched("initialize", json!({ "supportedDialogKinds": ["resume_return"], "hooks": {"PreToolUse": [{"matcher": null, "hookCallbackIds": [CHILD_MESSAGE_HOOK]}]} })).await?;
 
         let reader = session.clone();
         lifetime.track(tokio::spawn(async move { reader.read_loop().await }));
+        lifetime.track(tokio::spawn(watch_startup(session.clone(), initialized, STARTUP_DEADLINE)));
 
         Ok(SpawnedSession { session: Box::new(SessionHandle(session, lifetime)), events: rx })
     }
@@ -394,7 +406,8 @@ impl ClaudeDriver {
             supported_permission_modes: PermissionMode::ALL.to_vec(),
             supports_fork: true,
             supports_model_switch: true,
-            supports_effort_switch: false,
+            // Live through `apply_flag_settings`; the daemon restarts the session when Claude Code refuses.
+            supports_effort_switch: true,
             supported_efforts: vec!["low".into(), "medium".into(), "high".into(), "xhigh".into(), "max".into()],
             models: vec![
                 ProviderModel {
@@ -957,6 +970,51 @@ struct TurnState {
     queued_usage: Usage,
     queued_cost: f64,
     queued_duration_ms: u64,
+    /// Claude Code never answered `initialize` and Kybern stopped it; its exit is no fault of its own.
+    startup_stalled: bool,
+    /// The context window the last result reported, so a cleared conversation can report an empty meter.
+    context_window: Option<u64>,
+    /// Usage limits already announced as reached this turn (`type:resetsAt`).
+    announced_limits: std::collections::HashSet<String>,
+}
+
+/// How long Claude Code may go without answering `initialize` and without writing a line before its turn
+/// fails (T3 waits as long). Any output starts the wait over, so a slow start that is still working is kept.
+const STARTUP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// A control request in flight and the channel its answer arrives on.
+struct ControlAnswer {
+    id: String,
+    answer: oneshot::Receiver<std::result::Result<Value, String>>,
+}
+
+/// Fail the session's turn when Claude Code neither answers `initialize` nor writes anything (a frame on
+/// stdout, a line on stderr) for a whole `quiet` window. A start that keeps writing, such as many MCP servers
+/// connecting one by one, is waited for. Any answer, an error included, and an exit both count as a start:
+/// the exit reports itself.
+async fn watch_startup(session: Arc<ClaudeSession>, initialized: ControlAnswer, quiet: std::time::Duration) {
+    let ControlAnswer { id, mut answer } = initialized;
+    if answered_while_writing(&mut answer, quiet, || session.child.output_lines()).await {
+        return;
+    }
+    session.pending_control.lock().await.remove(&id);
+    session.startup_stalled(quiet).await;
+}
+
+/// Wait for `answer` as long as `written` (a count of lines that only grows) moved in each `quiet` window.
+/// Returns whether the answer came; `false` once a whole window passed with nothing written.
+async fn answered_while_writing<T>(answer: &mut oneshot::Receiver<T>, quiet: std::time::Duration, written: impl Fn() -> u64) -> bool {
+    let mut seen = written();
+    loop {
+        if tokio::time::timeout(quiet, &mut *answer).await.is_ok() {
+            return true;
+        }
+        let now = written();
+        if now == seen {
+            return false;
+        }
+        seen = now;
+    }
 }
 
 /// Launch calls remembered for their role; older ones are forgotten first.
@@ -1028,6 +1086,93 @@ fn hook_no_verdict_notice(frame: &Value, failure: Option<HookFailure>) -> Option
     }
     let text = frame.get("content").and_then(Value::as_str).unwrap_or("A hook gave no usable answer, so it didn't check this action.");
     Some((text.to_string(), json!({ "hook_no_verdict": warning })))
+}
+
+/// The notice for an `informational` frame, or `None` for one only Claude Code's transcript view shows:
+/// `info` lines, and the summary a Stop hook leaves after every turn without stopping it.
+fn informational_notice(frame: &Value) -> Option<(NoticeLevel, String)> {
+    let text = frame.get("content").and_then(Value::as_str).unwrap_or("").trim();
+    let level = frame.get("level").and_then(Value::as_str);
+    let stops = frame.get("prevent_continuation").and_then(Value::as_bool) == Some(true);
+    if text.is_empty() || level == Some("info") || (!stops && level == Some("notice") && text.starts_with("Stop says: ")) {
+        return None;
+    }
+    let level = if level == Some("warning") { NoticeLevel::Warning } else { NoticeLevel::Info };
+    Some((level, text.to_string()))
+}
+
+/// What a retried API request means, in the words a person reads: what failed, when the next try goes out
+/// and which try it is. Claude Code's own error text is in the notice's data.
+fn api_retry_text(frame: &Value) -> String {
+    let int = |key: &str| frame.get(key).and_then(Value::as_u64);
+    let cause = match frame.get("error_status").and_then(Value::as_u64) {
+        None if frame.get("no_response").is_some_and(Value::is_object) => "got no answer",
+        None => "couldn't connect",
+        Some(429) => "was rate limited",
+        Some(529) => "found the API overloaded",
+        Some(401 | 403) => "was refused",
+        Some(status) if status >= 500 => "hit a server error",
+        Some(_) => "failed",
+    };
+    let attempt = int("attempt").unwrap_or(1).max(1);
+    let wait = match int("retry_delay_ms").unwrap_or(0) {
+        0 => "now".to_string(),
+        ms if ms < 1_000 => "in under a second".to_string(),
+        ms if ms < 60_000 => format!("in {} s", ms.div_ceil(1_000)),
+        ms => format!("in {} min", ms.div_ceil(60_000)),
+    };
+    let of = int("max_retries").filter(|max| *max >= attempt).map(|max| format!(" of {max}")).unwrap_or_default();
+    format!("Claude Code's request {cause}. Retrying {wait} (attempt {attempt}{of}).")
+}
+
+/// The fields of an `api_retry` frame a client may use, without its ids.
+fn api_retry_data(frame: &Value) -> Value {
+    let mut data = serde_json::Map::new();
+    for key in ["attempt", "max_retries", "retry_delay_ms", "error_status", "error"] {
+        if let Some(value) = frame.get(key) {
+            data.insert(key.into(), value.clone());
+        }
+    }
+    json!({ "api_retry": data })
+}
+
+/// The usage row a `rate_limit_event` window feeds, with the names `/usage` gives the same window
+/// (see `classify_usage_limit`) so a live read and an in-turn report fold into one row. Windows Kybern
+/// can't name get no row rather than one titled with Claude Code's internal id.
+fn limit_row(kind: &str) -> Option<(&'static str, Option<u64>)> {
+    Some(match kind {
+        "five_hour" => ("Current session", Some(300)),
+        "seven_day" => ("This week", Some(10080)),
+        "seven_day_opus" => ("Opus this week", None),
+        "seven_day_sonnet" => ("Sonnet only this week", None),
+        _ => return None,
+    })
+}
+
+/// "Claude Code reached its 5-hour usage limit. It resets in 2 h 5 min." `now` and `resets_at` are Unix seconds.
+fn limit_reached_text(kind: Option<&str>, resets_at: Option<i64>, now: i64) -> String {
+    let window = match kind {
+        Some("five_hour") => "5-hour ",
+        Some("seven_day") => "weekly ",
+        Some("seven_day_opus") => "weekly Opus ",
+        Some("seven_day_sonnet") => "weekly Sonnet ",
+        Some("overage") => "extra ",
+        _ => "",
+    };
+    let reset = match resets_at.map(|at| at - now) {
+        Some(left) if left > 0 && left < 60 => " It resets in under a minute.".to_string(),
+        Some(left) if left > 0 && left < 3_600 => format!(" It resets in {} min.", (left + 59) / 60),
+        Some(left) if left > 0 && left < 48 * 3_600 => {
+            let minutes = (left + 59) / 60;
+            match minutes % 60 {
+                0 => format!(" It resets in {} h.", minutes / 60),
+                rest => format!(" It resets in {} h {rest} min.", minutes / 60),
+            }
+        }
+        Some(left) if left > 0 && left <= 30 * 86_400 => format!(" It resets in {} days.", (left + 86_399) / 86_400),
+        _ => String::new(),
+    };
+    format!("Claude Code reached its {window}usage limit.{reset}")
 }
 
 impl TurnState {
@@ -1275,11 +1420,34 @@ impl ClaudeSession {
         let _ = self.events.send(ev).await;
     }
 
-    async fn send_control_nowait(&self, subtype: &str, mut request: Value) -> Result<String> {
+    /// Send a control request without waiting; the receiver gets its answer, or an error when the process exits.
+    async fn send_control_watched(&self, subtype: &str, mut request: Value) -> Result<ControlAnswer> {
+        let (tx, rx) = oneshot::channel();
         let id = Uuid::new_v4().simple().to_string();
+        self.pending_control.lock().await.insert(id.clone(), tx);
         request["subtype"] = Value::String(subtype.into());
-        self.child.write(&json!({ "type": "control_request", "request_id": id, "request": request })).await?;
-        Ok(id)
+        if let Err(error) = self.child.write(&json!({ "type": "control_request", "request_id": id, "request": request })).await {
+            self.pending_control.lock().await.remove(&id);
+            return Err(error);
+        }
+        Ok(ControlAnswer { id, answer: rx })
+    }
+
+    /// Claude Code never answered `initialize`: fail the turn that waits on it and stop the process.
+    async fn startup_stalled(&self, waited: std::time::Duration) {
+        self.state.lock().await.startup_stalled = true;
+        let minutes = waited.as_secs().div_ceil(60).max(1);
+        let detail = format!(
+            "Claude Code didn't answer its startup request or write anything for {minutes} minute{}, so Kybern stopped it.",
+            if minutes == 1 { "" } else { "s" }
+        );
+        tracing::warn!(waited_ms = waited.as_millis() as u64, "claude never answered initialize; stopping it");
+        self.emit(DriverEvent::TurnFailed {
+            problem: Some(crate::failure::stalled_start_problem(ProviderKind::ClaudeCode, &detail)),
+            error: detail,
+        })
+        .await;
+        self.child.kill().await;
     }
 
     async fn send_control(&self, subtype: &str, request: Value) -> Result<Value> {
@@ -1309,7 +1477,7 @@ impl ClaudeSession {
             let Some(v) = line else { break };
             self.handle_frame(v).await;
         }
-        let code = self.child.wait().await;
+        let end = self.child.wait_end().await;
         let stderr_tail = {
             let mut rx = self.child.stderr.lock().await;
             let mut lines = Vec::new();
@@ -1321,11 +1489,10 @@ impl ClaudeSession {
         for (_, tx) in self.pending_control.lock().await.drain() {
             let _ = tx.send(Err("process exited".into()));
         }
-        let error = match code {
-            Some(0) | None => None,
-            Some(c) => Some(if stderr_tail.is_empty() { format!("exit code {c}") } else { stderr_tail }),
-        };
-        self.emit(DriverEvent::Exited { code, error }).await;
+        // A start that never answered already failed its turn; the kill that followed is Kybern's own.
+        let stalled = self.state.lock().await.startup_stalled;
+        let error = if stalled { None } else { exit_error(end, &stderr_tail) };
+        self.emit(DriverEvent::Exited { code: end.code(), error }).await;
     }
 
     async fn handle_frame(&self, v: Value) {
@@ -1364,42 +1531,64 @@ impl ClaudeSession {
             "assistant" => self.handle_assistant(&v).await,
             "user" => self.handle_user(&v).await,
             "result" => self.handle_result(&v).await,
-            "rate_limit_event" => {
-                let info = &v["rate_limit_info"];
-                if let (Some(kind), Some(utilization)) =
-                    (info.get("rateLimitType").and_then(Value::as_str), info.get("utilization").and_then(Value::as_f64))
-                {
-                    // Same names as `/usage` (see `classify_usage_limit`), so a
-                    // live read and an in-turn report fold into one row.
-                    let (name, window_minutes) = match kind {
-                        "five_hour" => ("Current session", Some(300)),
-                        "seven_day" => ("This week", Some(10080)),
-                        _ => (kind, None),
-                    };
+            // `/clear` (and plan-mode and onboarding resets) discards the conversation: the context is empty again.
+            "conversation_reset" => {
+                let window = {
+                    let mut st = self.state.lock().await;
+                    if let Some((_, used)) = st.last_context.as_mut() {
+                        *used = 0;
+                    }
+                    st.context_window
+                };
+                if let Some(window_tokens) = window {
                     self.emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage {
-                        context: None,
-                        limits: Some(vec![kybern_protocol::UsageLimit {
-                            name: name.into(),
-                            used_percent: utilization * 100.0,
-                            window_minutes,
-                            resets_at: info.get("resetsAt").and_then(Value::as_i64),
-                        }]),
+                        context: Some(kybern_protocol::ContextUsage { used_tokens: 0, window_tokens }),
+                        limits: None,
                         prompt_cache: None,
                     }))
                     .await;
                 }
-
-                if info.get("status").and_then(|s| s.as_str()).is_some_and(|s| !s.starts_with("allowed") && s != "ok") {
-                    self.emit(DriverEvent::Notice {
-                        level: NoticeLevel::Warning,
-                        text: format!("rate limit: {}", info.get("status").and_then(|s| s.as_str()).unwrap_or("")),
-                        data: Some(info.clone()),
-                    })
-                    .await;
-                }
             }
+            "rate_limit_event" => self.handle_rate_limit(&v["rate_limit_info"]).await,
             _ => tracing::trace!(frame = %ty, "ignored claude frame"),
         }
+    }
+
+    async fn handle_rate_limit(&self, info: &Value) {
+        let kind = info.get("rateLimitType").and_then(Value::as_str);
+        if let (Some((name, window_minutes)), Some(utilization)) =
+            (kind.and_then(limit_row), info.get("utilization").and_then(Value::as_f64))
+        {
+            self.emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage {
+                context: None,
+                limits: Some(vec![kybern_protocol::UsageLimit {
+                    name: name.into(),
+                    used_percent: utilization * 100.0,
+                    window_minutes,
+                    resets_at: info.get("resetsAt").and_then(Value::as_i64),
+                }]),
+                prompt_cache: None,
+            }))
+            .await;
+        }
+        // A rejected window stops the turn unless extra usage carries it on. Say so once per window and reset.
+        let overage = matches!(info.get("overageStatus").and_then(Value::as_str), Some("allowed" | "allowed_warning"))
+            || info.get("isUsingOverage").and_then(Value::as_bool) == Some(true)
+            || info.get("overageInUse").and_then(Value::as_bool) == Some(true);
+        if info.get("status").and_then(Value::as_str) != Some("rejected") || overage {
+            return;
+        }
+        let resets_at = info.get("resetsAt").and_then(Value::as_i64);
+        let key = format!("{}:{}", kind.unwrap_or("unknown"), resets_at.map_or_else(|| "unknown".into(), |at| at.to_string()));
+        if !self.state.lock().await.announced_limits.insert(key) {
+            return;
+        }
+        self.emit(DriverEvent::Notice {
+            level: NoticeLevel::Error,
+            text: limit_reached_text(kind, resets_at, chrono::Utc::now().timestamp()),
+            data: Some(info.clone()),
+        })
+        .await;
     }
 
     async fn handle_control_request(&self, v: &Value) {
@@ -1610,16 +1799,13 @@ impl ClaudeSession {
                 }
             }
             "informational" => {
-                let level = match v.get("level").and_then(|s| s.as_str()) {
-                    Some("warning") => NoticeLevel::Warning,
-                    _ => NoticeLevel::Info,
-                };
-                self.emit(DriverEvent::Notice {
-                    level,
-                    text: v.get("content").and_then(|s| s.as_str()).unwrap_or("").to_string(),
-                    data: None,
-                })
-                .await;
+                if let Some((level, text)) = informational_notice(v) {
+                    self.emit(DriverEvent::Notice { level, text, data: None }).await;
+                }
+            }
+            "api_retry" => {
+                self.emit(DriverEvent::Notice { level: NoticeLevel::Warning, text: api_retry_text(v), data: Some(api_retry_data(v)) })
+                    .await;
             }
             "task_started" => {
                 if let Some(mut task) = claude_task_started(v) {
@@ -1873,6 +2059,9 @@ impl ClaudeSession {
                 .and_then(Value::as_u64)?;
             Some(kybern_protocol::ContextUsage { used_tokens, window_tokens })
         });
+        if let Some(context) = &context {
+            self.state.lock().await.context_window = Some(context.window_tokens);
+        }
         if context.is_some() || prompt_cache.is_some() {
             self.emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage { context, limits: None, prompt_cache })).await;
         }
@@ -1885,6 +2074,7 @@ impl ClaudeSession {
             let mut st = self.state.lock().await;
             let delta = (total_cost - st.last_total_cost).max(0.0);
             st.last_total_cost = total_cost;
+            st.announced_limits.clear();
             st.text.clear();
             st.thinking.clear();
             st.current_message = None;
@@ -1937,6 +2127,39 @@ impl ClaudeSession {
         };
         self.emit(ev).await;
     }
+}
+
+/// Why a Claude process ended, for an exit that was not a clean one: the exit code or the signal
+/// that stopped it, with the end of its stderr. `None` for a clean exit and for a stop Kybern asked for.
+fn exit_error(end: crate::ndjson::ProcessEnd, stderr_tail: &str) -> Option<String> {
+    use crate::ndjson::ProcessEnd;
+    let cause = match end {
+        ProcessEnd::Code(0) | ProcessEnd::Unknown | ProcessEnd::Signal { requested: true, .. } => return None,
+        ProcessEnd::Code(code) => format!("exit code {code}"),
+        ProcessEnd::Signal { signal, .. } => format!("stopped by {}", crate::ndjson::signal_name(signal)),
+    };
+    Some(match (end, stderr_tail.trim()) {
+        (ProcessEnd::Code(_), "") => cause,
+        // The stderr of a clean exit code already says why; a signal leaves no word of its own.
+        (ProcessEnd::Code(_), tail) => tail.to_string(),
+        (_, "") => format!("Claude Code was {cause}"),
+        (_, tail) => format!("Claude Code was {cause}\n{tail}"),
+    })
+}
+
+/// Whether the model Claude Code reports in effect is the one `requested`: the same name, or the full id an
+/// alias stands for (`sonnet` in `claude-sonnet-5-5`). `default` is whatever Claude Code picks.
+fn model_applied(requested: &str, applied: &str) -> bool {
+    let base = |model: &str| model.split('[').next().unwrap_or(model).trim().to_ascii_lowercase();
+    let (requested, applied) = (base(requested), base(applied));
+    requested == "default" || requested == applied || (!requested.contains('-') && applied.split('-').any(|part| part == requested))
+}
+
+/// The reason Claude reads when the user declines a tool call and writes why: their words, marked as
+/// theirs, so the model does not take them for a tool result or its own text. The daemon applies it to
+/// the user's own answer only; the reasons Kybern gives itself ("turn ended") go as they are.
+pub fn user_decline_feedback(feedback: &str) -> String {
+    format!("The user declined this tool call and said:\n{}", feedback.trim())
 }
 
 /// The prompt-cache TTL an API usage block reports: the tier its request wrote.
@@ -2237,11 +2460,25 @@ impl AgentSession for SessionHandle {
     }
 
     async fn set_model(&self, model: &str) -> Result<()> {
-        self.0.send_control("set_model", json!({ "model": model })).await.map(|_| ())
+        let answer = self.0.send_control("set_model", json!({ "model": model })).await?;
+        // Claude Code answers with the model now in effect (2.1.327: `{model}`). One it accepted but did not
+        // switch to is an error, so the daemon restarts on the new model instead of running the old one.
+        match answer.get("model").and_then(Value::as_str) {
+            Some(applied) if !model_applied(model, applied) => {
+                Err(DriverError::Unsupported(format!("Claude Code kept model {applied} instead of {model}")))
+            }
+            _ => Ok(()),
+        }
     }
 
-    async fn set_effort(&self, _effort: &str) -> Result<()> {
-        Err(DriverError::Unsupported("Claude Code effort is fixed when the session starts; start a new thread to change it".into()))
+    async fn set_effort(&self, effort: &str) -> Result<()> {
+        self.0.send_control("apply_flag_settings", json!({ "settings": { "effortLevel": effort } })).await?;
+        // Claude Code answers success even for a level it ignores; what it applied says whether the change took.
+        let settings = self.0.send_control("get_settings", json!({})).await?;
+        match settings.pointer("/applied/effort").and_then(Value::as_str) {
+            Some(applied) if applied == effort => Ok(()),
+            applied => Err(DriverError::Unsupported(format!("Claude Code kept effort {} instead of {effort}", applied.unwrap_or("unset")))),
+        }
     }
 
     async fn respond_permission(&self, request_id: &str, decision: &ApprovalDecision) -> Result<()> {
@@ -2269,7 +2506,14 @@ impl AgentSession for SessionHandle {
         if input.get("_kybern_elicitation").is_some() {
             let response = match decision {
                 ApprovalDecision::Submit { response } => response.clone(),
-                ApprovalDecision::Deny { .. } => json!({ "action": "decline" }),
+                // MCP keeps "decline" for an explicit no: a person's Decline, which the daemon sends without a
+                // reason whatever they typed (MCP has nowhere to put it). A deny with a reason is Kybern's own (the
+                // turn ended, the daemon restarted, the session moved on): nobody answered the form, so it is
+                // cancelled and the server may ask another way. A blank reason is no reason.
+                ApprovalDecision::Deny { reason } if reason.as_deref().is_none_or(|reason| reason.trim().is_empty()) => {
+                    json!({ "action": "decline" })
+                }
+                ApprovalDecision::Deny { reason: Some(_) } => json!({ "action": "cancel" }),
                 _ => return Err(DriverError::Protocol("this form needs an answer".into())),
             };
             self.0.respond_control(request_id, Ok(response)).await?;
@@ -2291,7 +2535,10 @@ impl AgentSession for SessionHandle {
             }
             ApprovalDecision::Deny { reason } => json!({
                 "behavior": "deny",
-                "message": reason.clone().unwrap_or_else(|| "The user declined this action.".into()),
+                "message": reason
+                    .as_deref()
+                    .filter(|reason| !reason.trim().is_empty())
+                    .unwrap_or("The user declined this action."),
                 "interrupt": false,
             }),
         };
@@ -3538,5 +3785,458 @@ mod compaction_tests {
             spawned.session.close().await.unwrap();
             assert_eq!(seen[AUTO_COMPACT_WINDOW_ENV], expected, "threshold {threshold:?}, account {account:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod harness_gap_tests {
+    use super::*;
+
+    fn session_over(child: Arc<NdjsonChild>) -> (Arc<ClaudeSession>, mpsc::Receiver<DriverEvent>) {
+        let (events, rx) = mpsc::channel(64);
+        let session = Arc::new(ClaudeSession {
+            child,
+            events,
+            pending_control: Mutex::new(HashMap::new()),
+            pending_permissions: Mutex::new(HashMap::new()),
+            state: Mutex::new(TurnState::default()),
+            child_inbox: Mutex::new(ChildInbox::default()),
+            session_id: Mutex::new("test".into()),
+            catalog: None,
+            decline_resume_prompt: false,
+            _native_mcp_config: None,
+        });
+        (session, rx)
+    }
+
+    fn echo_session() -> (Arc<ClaudeSession>, Arc<NdjsonChild>, mpsc::Receiver<DriverEvent>) {
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
+        let (session, rx) = session_over(child.clone());
+        (session, child, rx)
+    }
+
+    fn notices(rx: &mut mpsc::Receiver<DriverEvent>) -> Vec<(NoticeLevel, String, Option<Value>)> {
+        let mut out = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let DriverEvent::Notice { level, text, data } = event {
+                out.push((level, text, data));
+            }
+        }
+        out
+    }
+
+    #[cfg(unix)]
+    async fn next_event(rx: &mut mpsc::Receiver<DriverEvent>) -> DriverEvent {
+        tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv()).await.expect("an event").expect("the stream is open")
+    }
+
+    /// A Claude Code that never answers `initialize` (an MCP server or gateway that hangs) fails its
+    /// turn with a problem, is stopped, and its exit reports no fault of its own.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_start_that_never_answers_fails_the_turn_and_stops_claude() {
+        let mut silent = Command::new("sh");
+        silent.args(["-c", "cat > /dev/null"]);
+        let child = Arc::new(NdjsonChild::spawn(silent).unwrap());
+        let (session, mut rx) = session_over(child.clone());
+        let initialized = session.send_control_watched("initialize", json!({})).await.unwrap();
+        let reader = session.clone();
+        tokio::spawn(async move { reader.read_loop().await });
+        tokio::spawn(watch_startup(session.clone(), initialized, std::time::Duration::from_millis(50)));
+        let DriverEvent::TurnFailed { error, problem } = next_event(&mut rx).await else { panic!("the turn must fail") };
+        assert!(error.contains("didn't answer its startup request"), "{error}");
+        let problem = problem.expect("a problem clients can word");
+        assert_eq!((problem.kind, problem.subject.as_deref()), (kybern_protocol::rpc::ProblemKind::Internal, Some("claude")));
+        assert_eq!(problem.action.map(|action| action.id).as_deref(), Some("retry"));
+        let DriverEvent::Exited { error, .. } = next_event(&mut rx).await else { panic!("Claude Code must be stopped") };
+        assert_eq!(error, None, "Kybern's own stop is not reported as a crash");
+        assert!(session.pending_control.lock().await.is_empty());
+    }
+
+    /// An answer, even an error, is a start: the watchdog leaves the session alone.
+    #[tokio::test]
+    async fn an_answered_start_is_left_alone() {
+        let (session, child, mut rx) = echo_session();
+        let initialized = session.send_control_watched("initialize", json!({})).await.unwrap();
+        let id = initialized.id.clone();
+        let watchdog = tokio::spawn(watch_startup(session.clone(), initialized, std::time::Duration::from_secs(5)));
+        // The echo returns the request; answer it as Claude Code would.
+        let _ = child.lines.lock().await.recv().await;
+        session.handle_frame(json!({"type":"control_response","response":{"subtype":"error","request_id":id,"error":"nope"}})).await;
+        tokio::time::timeout(std::time::Duration::from_secs(5), watchdog).await.unwrap().unwrap();
+        assert!(rx.try_recv().is_err(), "nothing failed");
+        child.close().await;
+    }
+
+    /// A slow start that keeps writing (MCP servers connecting, with `MCP_CONNECTION_NONBLOCKING=0`) is not a
+    /// stall: only a whole quiet window without an answer fails the turn. On paused time, so the gaps are exact.
+    #[tokio::test(start_paused = true)]
+    async fn a_start_that_keeps_writing_is_waited_for() {
+        let written = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let lines = || written.load(std::sync::atomic::Ordering::SeqCst);
+        let quiet = std::time::Duration::from_millis(200);
+        // Ten lines 50 ms apart (MCP servers connecting), then nothing.
+        let writer = written.clone();
+        tokio::spawn(async move {
+            for _ in 0..10 {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                writer.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+        let (_never, mut answer) = oneshot::channel::<()>();
+        let started = tokio::time::Instant::now();
+        assert!(!answered_while_writing(&mut answer, quiet, lines).await, "a start that went quiet still fails");
+        assert_eq!(lines(), 10, "stopped while it was still writing");
+        // The last line came at 500 ms: only a whole quiet window after it ends the wait.
+        assert!(started.elapsed() >= std::time::Duration::from_millis(500) + quiet, "{:?}", started.elapsed());
+
+        // An answer ends the wait at once, writing or not.
+        let (reply, mut answer) = oneshot::channel();
+        reply.send(()).unwrap();
+        let started = tokio::time::Instant::now();
+        assert!(answered_while_writing(&mut answer, quiet, lines).await);
+        assert_eq!(started.elapsed(), std::time::Duration::ZERO);
+    }
+
+    /// A signal (the OOM killer, a crash) names itself and keeps what Claude Code said before it died.
+    #[test]
+    fn a_signal_exit_names_the_signal_and_keeps_the_stderr_tail() {
+        use crate::ndjson::ProcessEnd;
+        assert_eq!(
+            exit_error(ProcessEnd::Signal { signal: 9, requested: false }, "heap limit reached").as_deref(),
+            Some("Claude Code was stopped by SIGKILL\nheap limit reached")
+        );
+        assert_eq!(
+            exit_error(ProcessEnd::Signal { signal: 11, requested: false }, "").as_deref(),
+            Some("Claude Code was stopped by SIGSEGV")
+        );
+        assert_eq!(exit_error(ProcessEnd::Signal { signal: 15, requested: true }, "bye"), None, "Kybern stopped it");
+        assert_eq!(exit_error(ProcessEnd::Code(1), "").as_deref(), Some("exit code 1"));
+        assert_eq!(exit_error(ProcessEnd::Code(1), "No conversation found").as_deref(), Some("No conversation found"));
+        assert_eq!(exit_error(ProcessEnd::Code(0), "noise"), None);
+    }
+
+    /// Claude Code 2.1.327's `system/api_retry`: every retry says what failed, when and which try it is.
+    #[tokio::test]
+    async fn api_retries_are_notices_with_the_attempt_and_delay() {
+        let (session, child, mut rx) = echo_session();
+        for frame in [
+            json!({"type":"system","subtype":"api_retry","attempt":3,"max_retries":10,"retry_delay_ms":12_400,"error_status":529,
+                   "error":"overloaded_error","uuid":"u","session_id":"s"}),
+            json!({"type":"system","subtype":"api_retry","attempt":1,"max_retries":10,"retry_delay_ms":500,"error_status":null,
+                   "error":"ECONNRESET","uuid":"u","session_id":"s"}),
+            json!({"type":"system","subtype":"api_retry","attempt":2,"max_retries":1,"retry_delay_ms":90_000,"error_status":null,
+                   "error":"timeout","no_response":{"waited_ms":60000,"retry_wait_ms":60000},"uuid":"u","session_id":"s"}),
+        ] {
+            session.handle_frame(frame).await;
+        }
+        let seen = notices(&mut rx);
+        let texts: Vec<_> = seen.iter().map(|(level, text, _)| (*level, text.as_str())).collect();
+        assert_eq!(
+            texts,
+            [
+                (NoticeLevel::Warning, "Claude Code's request found the API overloaded. Retrying in 13 s (attempt 3 of 10)."),
+                (NoticeLevel::Warning, "Claude Code's request couldn't connect. Retrying in under a second (attempt 1 of 10)."),
+                (NoticeLevel::Warning, "Claude Code's request got no answer. Retrying in 2 min (attempt 2)."),
+            ]
+        );
+        let data = seen[0].2.as_ref().unwrap();
+        assert_eq!(
+            data["api_retry"],
+            json!({"attempt":3,"max_retries":10,"retry_delay_ms":12_400,"error_status":529,"error":"overloaded_error"})
+        );
+        child.close().await;
+    }
+
+    /// Info lines and a Stop hook's passive summary stay in Claude Code's transcript view; warnings, notices
+    /// and a Stop hook that stops the turn reach Kybern's.
+    #[tokio::test]
+    async fn only_informational_frames_a_person_needs_become_notices() {
+        let (session, child, mut rx) = echo_session();
+        let frame = |level: &str, content: &str, stops: Option<bool>| {
+            let mut frame = json!({"type":"system","subtype":"informational","level":level,"content":content});
+            if let Some(stops) = stops {
+                frame["prevent_continuation"] = json!(stops);
+            }
+            frame
+        };
+        for frame in [
+            frame("info", "Loaded 3 skills", None),
+            frame("notice", "Stop says: 4 files changed, tests pass", None),
+            frame("notice", "Stop says: tests fail, fix them first", Some(true)),
+            frame("notice", "Using the project's settings", None),
+            frame("warning", "The MCP server linear is slow to start", None),
+            frame("suggestion", "Run /compact to save tokens", Some(false)),
+        ] {
+            session.handle_frame(frame).await;
+        }
+        let texts: Vec<_> = notices(&mut rx).into_iter().map(|(level, text, _)| (level, text)).collect();
+        assert_eq!(
+            texts,
+            [
+                (NoticeLevel::Info, "Stop says: tests fail, fix them first".to_string()),
+                (NoticeLevel::Info, "Using the project's settings".to_string()),
+                (NoticeLevel::Warning, "The MCP server linear is slow to start".to_string()),
+                (NoticeLevel::Info, "Run /compact to save tokens".to_string()),
+            ]
+        );
+        child.close().await;
+    }
+
+    /// Windows Kybern can name get the `/usage` row names; others get no row. A rejected window is said once,
+    /// in words that classify as a usage limit, and not at all while extra usage carries the turn.
+    #[tokio::test]
+    async fn rate_limit_events_have_readable_rows_and_one_limit_notice() {
+        let (session, child, mut rx) = echo_session();
+        let event = |kind: &str, status: &str, extra: Value| {
+            let mut info = json!({"status":status,"rateLimitType":kind,"utilization":0.42,"resetsAt":4_102_444_800_i64});
+            info.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            json!({"type":"rate_limit_event","rate_limit_info":info})
+        };
+        for frame in [
+            event("seven_day_opus", "allowed", json!({})),
+            event("seven_day_sonnet", "allowed_warning", json!({})),
+            event("seven_day_omelette", "allowed", json!({})),
+            event("seven_day_oauth_apps", "allowed", json!({})),
+        ] {
+            session.handle_frame(frame).await;
+        }
+        let mut rows = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let DriverEvent::UsageUpdated(usage) = event {
+                rows.extend(usage.limits.unwrap().into_iter().map(|limit| limit.name));
+            }
+        }
+        assert_eq!(rows, ["Opus this week", "Sonnet only this week"], "no row is named with Claude Code's internal id");
+
+        for frame in [
+            event("five_hour", "rejected", json!({"overageStatus":"allowed"})),
+            event("five_hour", "rejected", json!({})),
+            event("five_hour", "rejected", json!({})),
+        ] {
+            session.handle_frame(frame).await;
+        }
+        let limit: Vec<_> = notices(&mut rx).into_iter().map(|(level, text, _)| (level, text)).collect();
+        assert_eq!(limit.len(), 1, "once per window and reset: {limit:?}");
+        assert_eq!(limit[0].0, NoticeLevel::Error);
+        assert!(limit[0].1.starts_with("Claude Code reached its 5-hour usage limit."), "{}", limit[0].1);
+        let problem = crate::failure::classify(ProviderKind::ClaudeCode, &limit[0].1).expect("the daemon can name it");
+        assert_eq!(problem.subject.as_deref(), Some("rate_limit"));
+        assert!(!limit[0].1.contains("rejected"));
+        child.close().await;
+    }
+
+    #[test]
+    fn limit_notices_say_when_the_window_resets() {
+        let now = 1_000_000;
+        assert_eq!(
+            limit_reached_text(Some("five_hour"), Some(now + 2 * 3600 + 300), now),
+            "Claude Code reached its 5-hour usage limit. It resets in 2 h 5 min."
+        );
+        assert_eq!(
+            limit_reached_text(Some("seven_day"), Some(now + 3 * 86_400), now),
+            "Claude Code reached its weekly usage limit. It resets in 3 days."
+        );
+        assert_eq!(
+            limit_reached_text(Some("seven_day_opus"), Some(now + 600), now),
+            "Claude Code reached its weekly Opus usage limit. It resets in 10 min."
+        );
+        assert_eq!(limit_reached_text(None, None, now), "Claude Code reached its usage limit.");
+        assert_eq!(limit_reached_text(Some("five_hour"), Some(now - 5), now), "Claude Code reached its 5-hour usage limit.");
+    }
+
+    /// A form Kybern answered for nobody (the turn ended, the session moved on) is cancelled; the user's Decline declines.
+    #[tokio::test]
+    async fn an_elicitation_nobody_answered_is_cancelled_not_declined() {
+        let (session, child, mut rx) = echo_session();
+        let handle = SessionHandle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
+        for (id, reason, expected) in [
+            ("declined", None, "decline"),
+            ("declined-blank", Some(String::new()), "decline"),
+            ("declined-space", Some("  \n".to_string()), "decline"),
+            ("unseen", Some("turn ended".to_string()), "cancel"),
+        ] {
+            session
+                .handle_control_request(
+                    &json!({"request_id":id,"request":{"subtype":"elicitation","message":"Name","requestedSchema":{"type":"object"}}}),
+                )
+                .await;
+            assert!(matches!(rx.recv().await, Some(DriverEvent::PermissionRequest { .. })));
+            handle.respond_permission(id, &ApprovalDecision::Deny { reason }).await.unwrap();
+            let frame = tokio::time::timeout(std::time::Duration::from_secs(5), async { child.lines.lock().await.recv().await.unwrap() })
+                .await
+                .unwrap();
+            assert_eq!(frame["response"]["response"], json!({ "action": expected }), "{id}");
+        }
+        drop(handle);
+        child.close().await;
+    }
+
+    /// A tool call declined with a blank reason reads as a decline without one, not an empty message.
+    #[tokio::test]
+    async fn a_blank_decline_reason_is_no_reason() {
+        let (session, child, mut rx) = echo_session();
+        let handle = SessionHandle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
+        session
+            .handle_control_request(
+                &json!({"request_id":"bash","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"}}}),
+            )
+            .await;
+        assert!(matches!(rx.recv().await, Some(DriverEvent::PermissionRequest { .. })));
+        handle.respond_permission("bash", &ApprovalDecision::Deny { reason: Some(" \n ".into()) }).await.unwrap();
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(5), async { child.lines.lock().await.recv().await.unwrap() })
+            .await
+            .unwrap();
+        assert_eq!(frame["response"]["response"]["message"], "The user declined this action.");
+        drop(handle);
+        child.close().await;
+    }
+
+    #[test]
+    fn decline_feedback_is_marked_as_the_users_reply() {
+        assert_eq!(user_decline_feedback("  use rg instead \n"), "The user declined this tool call and said:\nuse rg instead");
+    }
+
+    /// `/clear` (Claude Code 2.1.327 `conversation_reset`) empties the conversation, so the meter reads zero
+    /// against the window the last result reported.
+    #[tokio::test]
+    async fn clearing_the_conversation_resets_the_context_meter() {
+        let (session, child, mut rx) = echo_session();
+        session
+            .handle_frame(json!({"type":"assistant","message":{"id":"m1","model":"claude-opus-5-5",
+                "usage":{"input_tokens":5,"cache_read_input_tokens":180_000},"content":[{"type":"text","text":"done"}]}}))
+            .await;
+        session
+            .handle_frame(json!({"type":"result","subtype":"success","total_cost_usd":0,"duration_ms":1,"usage":{},
+                "modelUsage":{"claude-opus-5-5":{"contextWindow":1_000_000}}}))
+            .await;
+        while rx.try_recv().is_ok() {}
+        session
+            .handle_frame(json!({"type":"conversation_reset","new_conversation_id":"n","uuid":"n","session_id":"s","trigger":"clear"}))
+            .await;
+        let Some(DriverEvent::UsageUpdated(usage)) = rx.recv().await else { panic!("the meter must be told") };
+        assert_eq!(usage.context.map(|context| (context.used_tokens, context.window_tokens)), Some((0, 1_000_000)));
+        // The next result before any new request reports the empty conversation too.
+        session
+            .handle_frame(json!({"type":"result","subtype":"success","total_cost_usd":0,"duration_ms":1,"usage":{},
+                "modelUsage":{"claude-opus-5-5":{"contextWindow":1_000_000}}}))
+            .await;
+        let Some(DriverEvent::UsageUpdated(usage)) = rx.recv().await else { panic!("usage") };
+        assert_eq!(usage.context.map(|context| context.used_tokens), Some(0));
+        child.close().await;
+    }
+
+    /// A resumed session waits for its MCP servers before its first request; a new one, and a value the
+    /// account sets, are left alone.
+    #[tokio::test]
+    async fn resumed_sessions_wait_for_mcp_servers() {
+        use crate::{AgentDriver, SessionConfig};
+        for (resume, account, expected) in [(Some("native"), None, "0"), (None, None, ""), (Some("native"), Some("1"), "1")] {
+            let root = tempfile::tempdir().unwrap();
+            let spawned = ClaudeDriver::default()
+                .spawn(SessionConfig {
+                    cwd: root.path().into(),
+                    model: None,
+                    effort: None,
+                    permission_mode: PermissionMode::FullAccess,
+                    native_tool_bridge: None,
+                    resume_session_id: resume.map(str::to_string),
+                    resume_lacks_instructions: false,
+                    fork: false,
+                    rewind: None,
+                    binary: Some(crate::test_process::binary().to_path_buf()),
+                    env: account.map(|value| (MCP_NONBLOCKING_ENV.to_string(), value.to_string())).into_iter().collect(),
+                    compaction: Default::default(),
+                })
+                .await
+                .unwrap();
+            let env_path = root.path().join("env.json");
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while !env_path.exists() {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let seen: Value = serde_json::from_slice(&std::fs::read(env_path).unwrap()).unwrap();
+            spawned.session.close().await.unwrap();
+            assert_eq!(seen[MCP_NONBLOCKING_ENV], expected, "resume {resume:?}, account {account:?}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod live_target_tests {
+    use super::*;
+
+    /// Answer each control request the session writes as Claude Code 2.1.327 does: `get_settings` reports
+    /// the effort `applied` holds, `apply_flag_settings` changes it unless it is `ignored`.
+    async fn answer_like_claude(session: Arc<ClaudeSession>, child: Arc<NdjsonChild>, ignored: &'static str) {
+        let mut applied = "high".to_string();
+        let mut model = "claude-opus-5-5".to_string();
+        loop {
+            let frame = { child.lines.lock().await.recv().await };
+            let Some(frame) = frame else { return };
+            let (id, request) = (frame["request_id"].as_str().unwrap_or_default().to_string(), &frame["request"]);
+            let response = match request["subtype"].as_str() {
+                Some("apply_flag_settings") => {
+                    let level = request.pointer("/settings/effortLevel").and_then(Value::as_str).unwrap_or_default();
+                    if level != ignored {
+                        applied = level.to_string();
+                    }
+                    json!({})
+                }
+                Some("get_settings") => json!({ "effective": {}, "applied": { "model": model, "effort": applied } }),
+                Some("set_model") => {
+                    match request["model"].as_str().unwrap_or_default() {
+                        "sonnet" => model = "claude-sonnet-5-5".into(),
+                        requested if requested != ignored => model = requested.to_string(),
+                        _ => {}
+                    }
+                    json!({ "model": model })
+                }
+                _ => continue,
+            };
+            session
+                .handle_frame(json!({"type":"control_response","response":{"subtype":"success","request_id":id,"response":response}}))
+                .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn effort_changes_live_and_a_level_claude_ignores_is_an_error() {
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
+        let (events, _rx) = mpsc::channel(8);
+        let session = Arc::new(ClaudeSession {
+            child: child.clone(),
+            events,
+            pending_control: Mutex::new(HashMap::new()),
+            pending_permissions: Mutex::new(HashMap::new()),
+            state: Mutex::new(TurnState::default()),
+            child_inbox: Mutex::new(ChildInbox::default()),
+            session_id: Mutex::new("test".into()),
+            catalog: None,
+            decline_resume_prompt: false,
+            _native_mcp_config: None,
+        });
+        tokio::spawn(answer_like_claude(session.clone(), child.clone(), "ultra"));
+        let handle = SessionHandle(session, crate::ndjson::SessionLifetime::new(child.clone()));
+        handle.set_effort("low").await.expect("Claude Code applied it");
+        handle.set_model("sonnet").await.expect("the alias names the model in effect");
+        handle.set_model("claude-haiku-5-5").await.expect("a full id");
+        let refused = handle.set_effort("ultra").await.expect_err("Claude Code kept low");
+        assert!(matches!(refused, DriverError::Unsupported(_)), "{refused}");
+        let ignored = handle.set_model("ultra").await.expect_err("Claude Code kept claude-haiku-5-5");
+        assert!(matches!(ignored, DriverError::Unsupported(_)), "{ignored}");
+    }
+
+    #[test]
+    fn a_model_is_applied_by_its_name_or_the_id_its_alias_stands_for() {
+        assert!(model_applied("sonnet", "claude-sonnet-5-5"));
+        assert!(model_applied("opus[1m]", "claude-opus-5-5[1m]"));
+        assert!(model_applied("claude-opus-5-5", "claude-opus-5-5"));
+        assert!(model_applied("default", "claude-opus-5-5"));
+        assert!(!model_applied("opus", "claude-sonnet-5-5"));
+        assert!(!model_applied("claude-opus-5", "claude-opus-5-5"));
     }
 }

@@ -198,10 +198,19 @@ impl Orchestrator {
     }
 
     pub(super) async fn retire_or_close_session(&self, thread_id: ThreadId, live: Arc<LiveSession>, identity: String) -> Result<()> {
-        let reusable = live.tasks.lock().await.values().any(|task| {
-            task.status.is_active() && task.backgrounded && matches!(task.kind, RuntimeTaskKind::Process | RuntimeTaskKind::Monitor)
-        });
+        if live.is_released() {
+            // Already closed (a live target change that could not be undone): nothing to keep.
+            let mut sessions = self.inner.sessions.lock().await;
+            if sessions.get(&thread_id).is_some_and(|current| Arc::ptr_eq(current, &live)) {
+                sessions.remove(&thread_id);
+            }
+            return Ok(());
+        }
+        // Background work of any kind (a dev server, a monitor, a subagent) keeps the outgoing process until it ends.
+        let reusable = live.tasks.lock().await.values().any(|task| task.status.is_active() && task.backgrounded);
         if reusable {
+            // Its quiet time (`close_quiet_retained_sessions`) counts from here.
+            live.touch();
             let owner =
                 self.inner.store.meta_get(&format!("live_owner:{thread_id}"))?.map(|s| serde_json::from_str(&s)).transpose()?.ok_or_else(
                     || anyhow!("The outgoing background session has no account identity. Stop its background work before switching."),
@@ -233,6 +242,7 @@ impl Orchestrator {
     }
 
     pub(super) async fn handle_retained_event(&self, thread_id: ThreadId, live: &Arc<LiveSession>, mut event: DriverEvent) -> Result<()> {
+        live.touch();
         if let DriverEvent::SubagentMessageDelivered { task_id, message_id } = &event {
             // Acknowledgements refer to the native id and original session, even
             // while that session is retained behind a different foreground owner.
@@ -276,7 +286,9 @@ impl Orchestrator {
                 self.apply_runtime_task_update(thread_id, live, update, RuntimeTaskUpdateKind::Resume).await?;
             }
             DriverEvent::RuntimeTaskCompleted(update) => {
-                self.apply_runtime_task_update(thread_id, live, update, RuntimeTaskUpdateKind::Complete).await?;
+                if let Some(task) = self.apply_runtime_task_update(thread_id, live, update, RuntimeTaskUpdateKind::Complete).await? {
+                    self.report_retained_agent(thread_id, &task);
+                }
             }
             DriverEvent::AppToolRequest { request_id, .. } => {
                 live.session.respond_app_tool(&request_id, Err("The foreground conversation switched accounts. This outgoing session may finish its existing background work, but cannot start another Kybern operation.".into())).await?;
@@ -312,10 +324,15 @@ impl Orchestrator {
     }
 
     pub(super) fn session_identity(&self, thread: &Thread) -> Result<String> {
+        self.session_identity_for(thread, thread.model.as_deref(), thread.effort.as_deref())
+    }
+
+    /// The identity `thread` would have with this model and effort.
+    pub(super) fn session_identity_for(&self, thread: &Thread, model: Option<&str>, effort: Option<&str>) -> Result<String> {
         let mut input = serde_json::to_vec(&(
             thread.provider.clone(),
-            thread.model.clone(),
-            thread.effort.clone(),
+            model.map(str::to_string),
+            effort.map(str::to_string),
             thread.permission_mode,
             self.environment_fingerprint(thread)?,
         ))?;
@@ -615,7 +632,18 @@ impl Orchestrator {
         if self.pending_permission_for(&thread, &thread.provider)? == Some(mode) {
             self.inner.store.meta_set(&format!("pending_permission:{}", thread_id), "")?;
         }
-        self.update_thread(thread)
+        let thread = self.update_thread(thread)?;
+        // Claude Code took the mode live (`set_permission_mode`, or a respawn already recorded its own
+        // identity): the next message keeps this process instead of restarting it for the old mode. The
+        // identity is the model and effort the process runs, which a send may have changed on the thread
+        // before the process switched to them.
+        if thread.provider.kind == ProviderKind::ClaudeCode
+            && self.inner.sessions.lock().await.contains_key(&thread_id)
+            && let Some(identity) = self.live_identity_for(&thread)?
+        {
+            self.inner.store.meta_set(&format!("live_identity:{thread_id}"), &identity)?;
+        }
+        Ok(thread)
     }
 
     /// Closes a live session and resumes its native session with `desired`'s

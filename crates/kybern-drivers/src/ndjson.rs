@@ -17,6 +17,54 @@ pub struct NdjsonChild {
     pub lines: Mutex<mpsc::Receiver<Value>>,
     /// Raw stderr lines, for diagnostics.
     pub stderr: Mutex<mpsc::Receiver<String>>,
+    /// Kybern asked the process to stop (`kill`), so a signal exit is ours and no fault.
+    stop_requested: std::sync::atomic::AtomicBool,
+    /// Lines the process wrote on stdout or stderr, JSON or not: a sign of life while it starts.
+    output_lines: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+/// How a provider process ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessEnd {
+    /// It exited with this code.
+    Code(i32),
+    /// A signal stopped it (Unix). `requested` is true when Kybern sent the stop.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    Signal { signal: i32, requested: bool },
+    /// The status could not be read.
+    Unknown,
+}
+
+impl ProcessEnd {
+    pub fn code(self) -> Option<i32> {
+        match self {
+            Self::Code(code) => Some(code),
+            _ => None,
+        }
+    }
+}
+
+/// The conventional name of a Unix signal (`SIGKILL`), or its number.
+pub fn signal_name(signal: i32) -> String {
+    let name = match signal {
+        1 => "SIGHUP",
+        2 => "SIGINT",
+        3 => "SIGQUIT",
+        4 => "SIGILL",
+        5 => "SIGTRAP",
+        6 => "SIGABRT",
+        7 => "SIGBUS",
+        8 => "SIGFPE",
+        9 => "SIGKILL",
+        11 => "SIGSEGV",
+        13 => "SIGPIPE",
+        14 => "SIGALRM",
+        15 => "SIGTERM",
+        24 => "SIGXCPU",
+        25 => "SIGXFSZ",
+        _ => return format!("signal {signal}"),
+    };
+    name.to_string()
 }
 
 impl NdjsonChild {
@@ -32,10 +80,13 @@ impl NdjsonChild {
         let stdout = child.stdout.take().ok_or_else(|| DriverError::Protocol("no stdout".into()))?;
         let stderr = child.stderr.take().ok_or_else(|| DriverError::Protocol("no stderr".into()))?;
 
+        let output_lines = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let (line_tx, line_rx) = mpsc::channel::<Value>(1024);
+        let stdout_lines = output_lines.clone();
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = reader.next_line().await {
+                stdout_lines.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let line = line.trim();
                 if line.is_empty() {
                     continue;
@@ -52,9 +103,11 @@ impl NdjsonChild {
         });
 
         let (err_tx, err_rx) = mpsc::channel::<String>(256);
+        let stderr_lines = output_lines.clone();
         tokio::spawn(async move {
             let mut reader = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = reader.next_line().await {
+                stderr_lines.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 tracing::debug!(target: "provider.stderr", "{line}");
                 let _ = err_tx.try_send(line);
             }
@@ -66,7 +119,14 @@ impl NdjsonChild {
             stdin: Mutex::new(Some(stdin)),
             lines: Mutex::new(line_rx),
             stderr: Mutex::new(err_rx),
+            stop_requested: std::sync::atomic::AtomicBool::new(false),
+            output_lines,
         })
+    }
+
+    /// How many lines the process has written on stdout and stderr together. It only grows.
+    pub fn output_lines(&self) -> u64 {
+        self.output_lines.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub async fn write(&self, value: &Value) -> Result<()> {
@@ -105,6 +165,7 @@ impl NdjsonChild {
     }
 
     async fn kill_within(&self, grace: std::time::Duration) {
+        self.stop_requested.store(true, std::sync::atomic::Ordering::SeqCst);
         let mut child = self.child.lock().await;
         let tree = self.tree.lock().unwrap().take();
         let Some(tree) = tree else {
@@ -134,6 +195,11 @@ impl NdjsonChild {
     }
 
     pub async fn wait(&self) -> Option<i32> {
+        self.wait_end().await.code()
+    }
+
+    /// Wait for the process to end and say how: an exit code, or the signal that stopped it.
+    pub async fn wait_end(&self) -> ProcessEnd {
         // Never hold the child mutex across wait: stdout can close while the
         // process remains alive, and close/kill must still be able to acquire it.
         loop {
@@ -141,9 +207,19 @@ impl NdjsonChild {
             match status {
                 Ok(Some(status)) => {
                     self.tree.lock().unwrap().take();
-                    return status.code();
+                    if let Some(code) = status.code() {
+                        return ProcessEnd::Code(code);
+                    }
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::process::ExitStatusExt;
+                        if let Some(signal) = status.signal() {
+                            return ProcessEnd::Signal { signal, requested: self.stop_requested.load(std::sync::atomic::Ordering::SeqCst) };
+                        }
+                    }
+                    return ProcessEnd::Unknown;
                 }
-                Err(_) => return None,
+                Err(_) => return ProcessEnd::Unknown,
                 Ok(None) => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
             }
         }
@@ -192,6 +268,25 @@ mod lifecycle_tests {
         let child = NdjsonChild::spawn(crate::test_process::echo()).unwrap();
         child.close_stdin().await.unwrap();
         assert_eq!(tokio::time::timeout(Duration::from_secs(2), child.wait()).await.unwrap(), Some(0));
+    }
+
+    /// A process something else killed names its signal; one Kybern stopped says so.
+    #[tokio::test]
+    async fn a_signal_exit_names_the_signal_and_who_sent_it() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "printf '{\"ready\":true}\\n'; kill -KILL $$"]);
+        let child = NdjsonChild::spawn(cmd).unwrap();
+        let end = tokio::time::timeout(Duration::from_secs(2), child.wait_end()).await.unwrap();
+        assert_eq!(end, ProcessEnd::Signal { signal: 9, requested: false });
+        assert_eq!(signal_name(9), "SIGKILL");
+        assert_eq!(signal_name(64), "signal 64");
+
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "printf '{\"ready\":true}\\n'; sleep 30 & wait"]);
+        let child = NdjsonChild::spawn(cmd).unwrap();
+        ready(&child).await;
+        child.kill().await;
+        assert!(matches!(child.wait_end().await, ProcessEnd::Signal { requested: true, .. }));
     }
 
     #[tokio::test]

@@ -7,7 +7,7 @@
 //!   URL and token of the broker's `omp auth-broker serve`.
 //! * [`Orchestrator::login_rotated`]: the broker pushed a new token, so a Claude process that is idle ends
 //!   (stdin closed, never killed) and the next message resumes it with the new token.
-//! * [`Orchestrator::recover_rejected_login`]: a turn failed because the lent token no longer works. End the
+//! * [`Orchestrator::plan_login_recovery`]: a turn failed because the lent token no longer works. End the
 //!   process the same way, borrow again, resume, and send the message once more: one resume per rotation.
 
 use super::*;
@@ -102,75 +102,29 @@ impl Orchestrator {
         }
     }
 
-    /// `start_turn` behind a boxed future. A session's event pump reaches `recover_rejected_login`, which
-    /// restarts the turn, which spawns a session with a pump: erasing the type here ends that cycle.
-    fn start_turn_erased(
+    /// A turn failed. If the lent login was rejected, plan to recover once: end the process gracefully, borrow
+    /// a fresh token, resume the provider conversation and send the same message again. Call while holding
+    /// `live.turn`, then [`Orchestrator::run_resend`] once it is released. `None`: the failure is the turn's.
+    pub(super) fn plan_login_recovery(
         &self,
-        thread: Thread,
+        thread_id: ThreadId,
+        live: &Arc<LiveSession>,
         turn_id: TurnId,
-        message_id: MessageId,
-        message: UserMessage,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
-        Box::pin(self.start_turn(thread, turn_id, message_id, message, std::time::Instant::now()))
-    }
-
-    /// A turn failed. If the lent login was rejected, recover once: end the process gracefully, borrow a
-    /// fresh token, resume the provider conversation and send the same message again. Returns whether the
-    /// failure was taken over (the turn then neither fails nor completes here).
-    pub(super) async fn recover_rejected_login(&self, thread_id: ThreadId, live: &Arc<LiveSession>, turn_id: TurnId, error: &str) -> bool {
-        let Some(broker) = self.login_broker().cloned() else { return false };
-        let Ok(Some(thread)) = self.inner.store.thread_get(thread_id) else { return false };
+        error: &str,
+    ) -> Option<resend::PlannedResend> {
+        let broker = self.login_broker().cloned()?;
+        let thread = self.inner.store.thread_get(thread_id).ok().flatten()?;
         let (kind, instance) = (thread.provider.kind, thread.provider.instance.clone());
-        let Some(account) = broker.binding(kind, &instance) else { return false };
+        let account = broker.binding(kind, &instance)?;
         if !login_lend::is_login_failure(kind, error) || live.is_released() || !broker.take_recovery(turn_id) {
-            return false;
+            return None;
         }
-        let Ok(Some((message_id, mut message))) = self.inner.store.turn_started_message(thread_id, turn_id) else { return false };
+        let (message_id, mut message) = self.inner.store.turn_started_message(thread_id, turn_id).ok().flatten()?;
         // The stored prompt holds large images as references (#298); the agent gets them inline again.
         self.resolve_attachments(&mut message);
-        {
-            let mut sessions = self.inner.sessions.lock().await;
-            if sessions.get(&thread_id).is_some_and(|current| Arc::ptr_eq(current, live)) {
-                sessions.remove(&thread_id);
-            }
-        }
-        live.mark_released();
-        self.revoke_native_session(live);
         tracing::info!(%thread_id, provider = kind.as_str(), "the lent login was rejected; borrowing again and resuming");
-        let (this, live) = (self.clone(), live.clone());
-        tokio::spawn(async move {
-            // Stdin is closed and the process left to finish: killing Claude mid-refresh loses its tokens.
-            if let Err(error) = live.session.close().await {
-                tracing::debug!(%error, %thread_id, "closing a session whose login was rejected failed");
-            }
-            let renewed = broker.renew(kind, &instance, &account).await;
-            let restarted = match renewed {
-                Ok(()) => match this.inner.store.thread_get(thread_id) {
-                    Ok(Some(thread)) => {
-                        this.start_turn_erased(thread, turn_id, message_id, message).await.map_err(|error| error.to_string())
-                    }
-                    _ => Err("The thread no longer exists.".to_string()),
-                },
-                Err(text) => Err(text),
-            };
-            if let Err(text) = restarted {
-                // start_turn reports its own failures; a failed borrow is reported here.
-                let already =
-                    this.inner.store.thread_get(thread_id).ok().flatten().is_some_and(|thread| thread.status == ThreadStatus::Failed);
-                if !already {
-                    let _ = this.emit(
-                        thread_id,
-                        Some(turn_id),
-                        EventPayload::TurnFailed { error: text.clone(), problem: kybern_drivers::failure::classify(kind, &text) },
-                    );
-                    if let Ok(Some(mut thread)) = this.inner.store.thread_get(thread_id) {
-                        thread.status = ThreadStatus::Failed;
-                        let _ = this.update_thread(thread);
-                    }
-                    this.delegation_turn_finished(thread_id, turn_id, delegation::TurnOutcome::Failed(text));
-                }
-            }
-        });
-        true
+        let guard = self.begin_resend(thread_id, turn_id, resend::ResendReason::RejectedLogin);
+        let renew: resend::LoginRenewal = Box::pin(async move { broker.renew(kind, &instance, &account).await });
+        Some(resend::PlannedResend { guard, message_id, message, login: Some((kind, renew)) })
     }
 }
