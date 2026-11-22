@@ -108,13 +108,34 @@ pub fn codex_stalled_retry(info: Option<&serde_json::Value>, text: &str) -> Prob
 /// The problem a harness that stopped by itself is. `cause` is what it said
 /// as it went (its stderr, an exit code): read for a known problem, else the
 /// harness stopped. Either way `cause` is only the problem's details.
-pub fn exited_problem(kind: ProviderKind, cause: Option<&str>) -> Problem {
+/// `lost_turn`: it stopped in the middle of the person's turn, which then
+/// failed; otherwise nothing was lost and the next message starts it again.
+pub fn exited_problem(kind: ProviderKind, cause: Option<&str>, lost_turn: bool) -> Problem {
     let cause = cause.map(str::trim).filter(|cause| !cause.is_empty());
     cause.and_then(|cause| classify(kind, cause)).unwrap_or_else(|| {
-        let mut problem = Problem::new(ProblemKind::Internal, cause.unwrap_or_default()).with_subject(tool_name(kind)).with_copy(
-            format!("{} stopped unexpectedly", label(kind)),
-            "Send your message again. If it keeps happening, copy the details and report them.",
-        );
+        let name = label(kind);
+        let (title, help) = match (kind, lost_turn) {
+            // Antigravity runs one process per message, so it always "stops":
+            // what matters is whether the answer was finished.
+            (ProviderKind::Antigravity, true) => (
+                "Antigravity stopped before it answered".to_string(),
+                "Send your message again. If it keeps happening, copy the details and report them.",
+            ),
+            (ProviderKind::Antigravity, false) => (
+                "Antigravity reported an error as it finished".to_string(),
+                "Its answer is complete. If it keeps happening, copy the details and report them.",
+            ),
+            (_, true) => (
+                format!("{name} stopped unexpectedly"),
+                "Send your message again. If it keeps happening, copy the details and report them.",
+            ),
+            (_, false) => (
+                format!("{name} stopped unexpectedly"),
+                "Nothing was lost: your next message starts it again. If it keeps happening, copy the details and report them.",
+            ),
+        };
+        let mut problem =
+            Problem::new(ProblemKind::Internal, cause.unwrap_or_default()).with_subject(tool_name(kind)).with_copy(title, help);
         if cause.is_none() {
             problem.detail = None;
         }
@@ -477,14 +498,31 @@ mod tests {
     #[test]
     fn an_exit_is_a_headline_with_the_stderr_as_details() {
         let stderr = "Error loading config.toml: unknown variant `fast` for key model_reasoning_effort";
-        let problem = exited_problem(ProviderKind::Codex, Some(stderr));
+        let problem = exited_problem(ProviderKind::Codex, Some(stderr), true);
         assert_eq!((problem.kind, problem.subject.as_deref()), (ProblemKind::Internal, Some("codex")));
         assert_eq!(problem.title.as_deref(), Some("Codex stopped unexpectedly"));
         assert!(!problem.title.unwrap().contains("config.toml"));
         assert_eq!(problem.detail.as_deref(), Some(stderr));
+        assert!(problem.hint.clone().unwrap().starts_with("Send your message again"));
         // What the stderr says comes first: a signed-out Codex says so.
-        assert_eq!(exited_problem(ProviderKind::Codex, Some("Error: not logged in")).kind, ProblemKind::SignedOut);
-        assert_eq!(exited_problem(ProviderKind::Codex, Some("  ")).detail, None);
+        assert_eq!(exited_problem(ProviderKind::Codex, Some("Error: not logged in"), true).kind, ProblemKind::SignedOut);
+        assert_eq!(exited_problem(ProviderKind::Codex, Some("  "), true).detail, None);
+    }
+
+    /// Between turns nothing was lost, so nobody is asked to send again; and
+    /// Antigravity, which exits after every message, is told apart by whether
+    /// it finished its answer.
+    #[test]
+    fn an_exit_is_worded_for_what_it_cost() {
+        let between = exited_problem(ProviderKind::Codex, Some("Exit code 1"), false);
+        assert_eq!(between.title.as_deref(), Some("Codex stopped unexpectedly"));
+        assert!(between.hint.unwrap().starts_with("Nothing was lost"));
+        let finished = exited_problem(ProviderKind::Antigravity, Some("Exit code 1"), false);
+        assert_eq!(finished.title.as_deref(), Some("Antigravity reported an error as it finished"));
+        assert!(finished.hint.unwrap().starts_with("Its answer is complete"));
+        let lost = exited_problem(ProviderKind::Antigravity, None, true);
+        assert_eq!(lost.title.as_deref(), Some("Antigravity stopped before it answered"));
+        assert!(!lost.title.unwrap().contains("unexpectedly"));
     }
 
     #[test]
