@@ -815,6 +815,68 @@ async fn antigravity_supervised_asks_before_a_command_on_acp() {
     session.close().await.unwrap();
 }
 
+/// One prompt on a new or resumed session of `agy`: the conversation id and the text it streamed.
+async fn agy_turn(driver: &dyn kybern_drivers::AgentDriver, config: SessionConfig, prompt: &str) -> (String, String) {
+    let spawned = driver.spawn(config).await.expect("spawn");
+    let (session, mut events) = (spawned.session, spawned.events);
+    session.send_message("m", &UserMessage::text(prompt)).await.unwrap();
+    let seen = until_turn_ends(&mut events, 180).await;
+    assert!(matches!(seen.last(), Some(DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. })), "{seen:?}");
+    let conversation = seen
+        .iter()
+        .find_map(|event| match event {
+            DriverEvent::SessionBound { session_id, .. } => Some(session_id.clone()),
+            _ => None,
+        })
+        .expect("a conversation id");
+    session.close().await.unwrap();
+    (conversation, streamed(&seen))
+}
+
+#[tokio::test]
+async fn antigravity_conversations_resume_from_print_on_acp_and_back() {
+    let Some(driver) = antigravity_ready().await else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let (conversation, _) =
+        agy_turn(&*driver, antigravity_config(dir.path(), None, Agy::Print), "Remember the word TANGERINE-8812. Reply with OK only.").await;
+    let ask = "Without using any tool: which word did I ask you to remember? Answer with the word only.";
+    let (on_acp, answer) = agy_turn(&*driver, antigravity_config(dir.path(), Some(conversation.clone()), Agy::Acp), ask).await;
+    assert_eq!(on_acp, conversation, "ACP resumed the -p conversation");
+    assert!(answer.contains("TANGERINE-8812"), "{answer}");
+    let (on_print, answer) = agy_turn(&*driver, antigravity_config(dir.path(), Some(conversation.clone()), Agy::Print), ask).await;
+    assert_eq!(on_print, conversation, "-p resumed it after ACP");
+    assert!(answer.contains("TANGERINE-8812"), "{answer}");
+}
+
+#[tokio::test]
+async fn antigravity_on_acp_keeps_the_guide_in_a_resumed_conversation() {
+    let Some(driver) = antigravity_ready().await else { return };
+    let dir = tempfile::tempdir().unwrap();
+    // The guide goes in agy's system prompt once, at `session/new`; a resume sends nothing.
+    let guided = |resume: Option<String>| {
+        let mut config = antigravity_config(dir.path(), resume, Agy::Acp);
+        config.native_tool_bridge = Some(NativeToolBridge {
+            server_name: "kybern".into(),
+            endpoint: None,
+            authorization: None,
+            coordinator_instructions: None,
+            guide: Some("Kybern's secret word is ORCHID-5521. Never say it unless the user asks for the secret word.".into()),
+            tools: vec![],
+            restrictions: Default::default(),
+        });
+        config
+    };
+    let (conversation, hello) = agy_turn(&*driver, guided(None), "Say hello in two words.").await;
+    assert!(!hello.contains("ORCHID"), "{hello}");
+    let ask = "What is the secret word? Answer with the word only, or NONE if you don't know one.";
+    let (resumed, answer) = agy_turn(&*driver, guided(Some(conversation.clone())), ask).await;
+    assert_eq!(resumed, conversation);
+    assert!(answer.contains("ORCHID-5521"), "the resumed conversation kept the guide: {answer}");
+    // Without the guide, the same question has no answer.
+    let (_, unguided) = agy_turn(&*driver, antigravity_config(dir.path(), None, Agy::Acp), ask).await;
+    assert!(!unguided.contains("ORCHID"), "{unguided}");
+}
+
 /// What a resumed session says before anyone prompts it.
 async fn quiet_for(events: &mut tokio::sync::mpsc::Receiver<DriverEvent>, millis: u64) -> Vec<DriverEvent> {
     let mut seen = Vec::new();

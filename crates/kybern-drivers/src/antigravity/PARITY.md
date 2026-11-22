@@ -106,7 +106,7 @@ and "daemon" is a scratch `kybernd` driven with the CLI.
 | 2 | Pass (unchanged) | Pass: `agys_tool_names_and_prompt_usage_survive_acps_types` (recorded agy 1.5.14 usage: `inputTokens` without cache reads, `outputTokens` with thinking), `supervised_asks_and_shows_the_call_as_print_names_it`; live usage within a few tokens of `-p` for the same turn |
 | 3 | Pass (unchanged) | Not applicable: ACP streams the whole text and has no separate final answer |
 | 4 | Pass (unchanged; live) | Pass: `stop_cancels_the_prompt_and_its_command`; live (child killed); daemon (0.15 s) |
-| 5 | Pass (unchanged; live resume in a new session) | Pass: `the_guide_goes_in_the_system_prompt_once_…` (`session/load`, replay hidden), `a_crash_mid_turn_fails_it_plainly_and_ends_the_session_for_a_respawn`; live; daemon release + resume. `agy acp` resumes `-p` conversations and back (probed) |
+| 5 | Pass (unchanged; live resume in a new session) | Pass: `the_guide_goes_in_the_system_prompt_once_…` (`session/load`, replay hidden), `a_crash_mid_turn_fails_it_plainly_and_ends_the_session_for_a_respawn`; live; daemon release + resume. `agy acp` resumes `-p` conversations and back: live `antigravity_conversations_resume_from_print_on_acp_and_back` |
 | 6 | Pass (unchanged: refused) | Steers: `a_steer_carries_the_turn_on_and_both_prompts_count` |
 | 7 | Pass (unchanged) | Pass: `a_tier_slug_runs_as_its_family_at_the_tier_the_effort_picks`, `the_model_and_effort_go_through_config_options_and_switches_wait_for_the_next_prompt` |
 | 8 | Pass (unchanged) | agy sends its own, longer list (`available_commands_update`) |
@@ -115,8 +115,8 @@ and "daemon" is a scratch `kybernd` driven with the CLI.
 | 12 | Pass (daemon, unchanged) | Same daemon code: the cleared session id makes the next spawn a `session/new` seeded with the handoff |
 | 13 | Pass (unchanged) | Same check, before either transport starts |
 | 14 | Pass (unchanged) | Same classifier (`stream::failed`) for prompt errors and error steps |
-| 15 | Pass (unchanged) | Pass: `agys_recorded_errors_fail_the_turn_as_print_words_them` (`choose_model` before the model answered, Try again after), `steps_after_the_mark_tell_an_error_and_whether_the_model_answered` |
-| 16 | Pass (unchanged) | Same classifier; an ACP `refusal` (agy's exhausted quota) is a usage-limit problem |
+| 15 | Pass (unchanged) | Pass: `agys_recorded_errors_fail_the_turn_as_print_words_them` (`choose_model` before the model answered, Try again after), `steps_after_the_mark_tell_an_error_and_whether_the_model_answered`. The error's chat text shows once, as the failure: `an_error_agy_reports_as_text_shows_once_and_a_warning_that_isnt_one_still_shows` (see "An error shown once" below) |
+| 16 | Pass (unchanged) | Pass (scripted): an ACP `refusal` (agy's exhausted quota) reads the reset time from the prompt's last error step, else from the words agy sent with it: `an_exhausted_quota_says_when_it_resets`. Not seen on a real exhausted quota: what agy 1.5.14 sends with a refusal is T3 Code's account, and with neither an error step nor words the hint says to wait for the reset |
 | 17 | Pass (unchanged) | Not applicable: no repeated `result.error` on ACP |
 | 18 | Pass (unchanged) | Core: a prompt that never reached agy re-offers the guide (`restore_guide`) |
 | 19 | Pass (unchanged) | Pass: `a_crash_mid_turn_fails_it_plainly_and_ends_the_session_for_a_respawn`; startup failures worded in `startup_problem` |
@@ -126,15 +126,36 @@ and "daemon" is a scratch `kybernd` driven with the CLI.
 | 23 | Pass (unchanged) | ACP's `rawInput` is complete in every recorded call, so the transcript fallback is not used there |
 | 24 | Pass (unchanged) | Pass: `tool_results_read_as_print_reads_them` |
 | 25 | Pass (unchanged) | Pass: `the_guide_goes_in_the_system_prompt_once_and_the_bridge_only_in_the_environment` (no `mcpServers`, credentials only in agy's environment) |
-| 26 | Pass (unchanged) | Pass: same test (system prompt when advertised, else first prompt once; a resume that lacks it gets it on the next prompt) |
+| 26 | Pass (unchanged) | Pass: same test (system prompt when advertised, else first prompt once; a resume that lacks it gets it on the next prompt). agy keeps the system-prompt append in a resumed conversation, so a resume sends nothing: live `antigravity_on_acp_keeps_the_guide_in_a_resumed_conversation` (a new process loads the conversation and answers from the guide; a session without it can't) |
 | 27 | Pass (daemon, unchanged) | Same daemon code |
 | 28 | Pass (unchanged) | Same refusal before either transport |
-| 29 | Pass (unchanged; `-p` and forced `-p` still Full access only) | Every mode: `supervised_asks_…`, `full_access_and_accept_edits_answer_without_a_card_where_they_should`, `auto_runs_agys_own_review_only_when_the_session_offers_it`, `agys_own_question_is_a_question_card`; daemon `antigravity_on_acp_takes_every_mode_wherever_one_is_set`; live and daemon Supervised approval |
+| 29 | Pass (unchanged; `-p` and forced `-p` still Full access only) | Every mode: `supervised_asks_…`, `full_access_and_accept_edits_answer_without_a_card_where_they_should`, `auto_runs_agys_own_review_only_when_the_session_offers_it`, `agys_own_question_is_a_question_card`; daemon `antigravity_on_acp_takes_every_mode_wherever_one_is_set`; live `antigravity_supervised_asks_before_a_command_on_acp`. The rule is checked only where a mode or harness is chosen or changed, so a thread already in its mode ends its turns, queues and archives whatever agy was last found to take: daemon `a_thread_in_its_mode_finishes_its_turns_and_archives_whatever_agy_was_last_found_to_take`. A refusal carries its problem (update agy, Try again, Full access only): `a_failed_acp_check_is_retried_for_a_mode_only_acp_runs_and_for_a_new_agy_version`. Another machine's mode is that machine's to check, and its refusal names it: daemon `the_machine_that_runs_antigravity_decides_its_mode_and_names_itself_when_it_refuses`, `a_refusal_for_another_machine_names_it_and_offers_only_what_runs_here`. Checked by hand on a scratch daemon (agy 1.5.14): a Supervised thread right after the daemon started ran a turn, asked before a command, and archived |
 | 30 | Pass (unchanged) | Same |
 | 31 | Pass (unchanged; live) | Not applicable: title one-shots always run on `-p` |
-| 32–34 | Pass (unchanged) | Same code; the probe also reports every mode when ACP is usable |
+| 32–34 | Pass (unchanged) | Same code; the probe also reports every mode when ACP is usable. The check that `agy acp` initializes holds for the version agy reports (a `.cmd` or npm launcher doesn't change when agy updates); a failure holds for five minutes and never across a restart, and a mode only ACP runs checks it again at once: `an_acp_check_holds_for_its_version_and_a_failure_only_for_a_while`, `a_failed_acp_check_is_retried_…` |
 | 35 | Pass (unchanged) | `agy acp` starts through the same `binary::command` (`.cmd` shims) |
 | 36 | Pass (unchanged) | Same `resolve` and `env_home` |
 | 37 | Pass (unchanged) | ACP conversations are agy's own, in the same store |
 | 38 | Pass (unchanged) | Image blocks (`agy acp` advertises `promptCapabilities.image`) |
 | 39 | Pass (unchanged) | The flavor owns the log file's scratch folder and removes it with the session |
+
+## ACP only: background work and failures
+
+| Behaviour | Covered by |
+|-----------|------------|
+| A backgrounded command holds its turn until agy's reply to it closes; a reply agy starts by itself is a turn of its own | `a_command_that_outlives_its_prompt_holds_the_turn_until_agys_reply_to_it`, `a_reply_agy_starts_by_itself_is_a_turn_of_its_own` (waits for the first turn's end, not a sleep), `acp::turn` tests |
+| A tool whose end never comes (a stopped or failed turn, a missed update) never holds or keeps busy a later turn: a turn's end clears its open tool calls, and a completed prompt is held for an outliving command only while agy is heard from within 30 minutes | `a_command_whose_end_never_came_does_not_hold_the_next_turn`, `a_command_whose_end_never_comes_holds_its_prompt_only_while_agy_is_heard_from` |
+| A prompt agy leaves silent fails after 15 minutes; a card waiting for the user, a running tool or a sleeping host is not silence | `a_silent_prompt_fails_but_waiting_on_a_tool_the_user_or_a_sleeping_host_does_not` |
+
+### An error shown once
+
+On ACP agy reports a failure as chat text (`\n⚠ …`) and `end_turn`, and records an error step
+(type 17) in the conversation's database. Kybern withholds a chunk whose conversation's newest
+step is an error step, and the turn fails with the step's text as its problem. Confirmed on agy
+1.5.14 in a scratch home: with its HTTPS proxy pointed at a closed port, five prompts out of five
+failed with "⚠ failed to construct executor: …", and the error step was already the newest row
+each time the chunk arrived. agy rejects an unknown model id at `session/set_config_option`
+("Unknown model ID"), and truncates an oversized prompt instead of failing, so a failure from the
+model API itself was not reproduced. For one whose step lands after its text, a chunk that starts
+with `⚠` and has no error step yet is held: it is dropped if the turn then fails, and shown with
+the next text or at the end of a successful turn.
