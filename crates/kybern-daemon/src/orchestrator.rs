@@ -2685,6 +2685,11 @@ impl Orchestrator {
         }
         live.turn_ready.notify_one();
         *live.last_turn_id.lock().await = Some(turn_id);
+        // Stop ended the resent turn while it took its place: there is nothing to snapshot or send.
+        if resend_ended() {
+            Self::leave_resent_turn(turn_id, &live).await;
+            return Ok(());
+        }
         let checkpoint_started = std::time::Instant::now();
         self.checkpoint(&thread, turn_id, "before").await;
         tracing::info!(
@@ -2788,7 +2793,16 @@ impl Orchestrator {
                     }
                     sent
                 }
-                Err(error) => Err(kybern_drivers::DriverError::Other(error)),
+                Err(error) => {
+                    // A resent turn that Stop already ended has nothing left to fail.
+                    if let Some(entry) = &resend
+                        && !entry.claim(resend::ResendOutcome::Ended)
+                    {
+                        Self::leave_resent_turn(turn_id, &live).await;
+                        return Ok(());
+                    }
+                    Err(kybern_drivers::DriverError::Other(error))
+                }
             }
         };
         if let Some(entry) = &resend
@@ -2842,11 +2856,16 @@ impl Orchestrator {
         if self.resend_commit(entry) {
             return true;
         }
+        Self::leave_resent_turn(turn_id, live).await;
+        false
+    }
+
+    /// A resent turn that Stop ended gives up its place in the new session.
+    async fn leave_resent_turn(turn_id: TurnId, live: &Arc<LiveSession>) {
         let mut turn = live.turn.lock().await;
         if turn.as_ref().is_some_and(|turn| turn.id == turn_id) {
             *turn = None;
         }
-        false
     }
 
     /// Stop a thread's turn and everything it delegated (user Stop, Lineage Stop).
@@ -2932,9 +2951,11 @@ impl Orchestrator {
         let result = async {
             // close() terminates the owned process tree if graceful EOF fails.
             // Keep the resume barrier until both process and turn are settled.
-            live.session.close().await?;
+            // The turn is settled even when closing or restoring tasks fails: nothing
+            // else will (the pump and a failed delivery leave it to this cleanup).
+            let closed = live.session.close().await;
             live.continuation.lock().await.take();
-            self.restore_active_runtime_tasks(thread_id, live).await?;
+            let restored = self.restore_active_runtime_tasks(thread_id, live).await;
             self.interrupt_runtime_tasks(thread_id, live, "Stopped because the provider did not finish interrupting").await;
             self.process_driver_event(
                 thread_id,
@@ -2960,7 +2981,8 @@ impl Orchestrator {
                     problem: None,
                 },
             )?;
-            Ok::<_, anyhow::Error>(())
+            closed?;
+            restored
         }
         .await;
         self.inner.releasing.lock().await.remove(&thread_id);
@@ -5744,6 +5766,8 @@ mod tests {
         app_tool_responses: CapturedAppToolResponses,
         hang_interrupt: bool,
         broken_interrupt: bool,
+        /// `close()` fails, as one whose process could not be ended would.
+        broken_close: bool,
         reject_permission: bool,
         stopped_tasks: Arc<Mutex<Vec<String>>>,
         /// What the session was told to do with each permission request.
@@ -5824,6 +5848,9 @@ mod tests {
 
         async fn close(&self) -> kybern_drivers::Result<()> {
             self.closes.fetch_add(1, Ordering::SeqCst);
+            if self.broken_close {
+                return Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe).into());
+            }
             Ok(())
         }
     }
@@ -7830,6 +7857,42 @@ mod tests {
         .unwrap();
         assert_eq!(closes.load(Ordering::SeqCst), 1);
         assert!(!fixture.has_session(&thread).await);
+    }
+
+    /// A forced stop whose `close()` fails still settles the turn: nothing else will, since the pump and a
+    /// failed delivery both leave a forced stop's turn to it.
+    #[tokio::test]
+    async fn a_forced_stop_whose_close_fails_still_ends_the_turn() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let (mut live, closes) = fixture.park(&thread, Instant::now()).await;
+        fixture.orchestrator.inner.sessions.lock().await.remove(&thread.id);
+        Arc::get_mut(&mut live).unwrap().session =
+            Box::new(TestSession { closes: closes.clone(), hang_interrupt: true, broken_close: true, ..Default::default() });
+        fixture.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
+        fixture.orchestrator.send(thread.id, UserMessage::text("stuck provider")).await.unwrap();
+        live.turn_ready.notified().await;
+        let turn_id = live.turn.lock().await.as_ref().unwrap().id;
+
+        let stopped = fixture.orchestrator.interrupt_with_grace(thread.id, Duration::from_millis(50)).await;
+        assert!(stopped.is_err(), "the failed close is still reported");
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
+        assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::Idle);
+        assert!(live.turn.lock().await.is_none());
+        assert!(!fixture.has_session(&thread).await);
+        assert!(fixture.orchestrator.inner.releasing.lock().await.is_empty());
+        let terminal: Vec<_> = fixture
+            .store
+            .events_for_thread(thread.id)
+            .unwrap()
+            .into_iter()
+            .filter(|event| {
+                event.turn_id == Some(turn_id)
+                    && matches!(event.payload, EventPayload::TurnCompleted { .. } | EventPayload::TurnFailed { .. })
+            })
+            .collect();
+        assert_eq!(terminal.len(), 1, "exactly one end for the turn");
+        assert!(matches!(terminal[0].payload, EventPayload::TurnCompleted { stop_reason: StopReason::Interrupted, .. }));
     }
 
     #[tokio::test]

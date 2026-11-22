@@ -778,6 +778,75 @@ async fn stop_while_the_resent_message_is_delivered_interrupts_it_on_arrival() {
     assert_eq!(interrupted_turns(&fixture, &thread).len(), 1);
     assert_eq!(launches.lock().unwrap()[1].closes.load(Ordering::SeqCst), 0, "not closed for failing to stop");
     assert!(!notices(&fixture, &thread).iter().any(|text| text.contains("did not finish stopping")));
+    // Stop's own interrupt came before the message and was lost; the one after delivery ended the turn.
+    assert_eq!(interrupts.load(Ordering::SeqCst), 2);
+}
+
+/// Stop while the resent turn, already holding its place in the new session, waits for its before snapshot;
+/// the message then can't be prepared (an unreadable handoff). The turn Stop ended does not fail on top.
+#[tokio::test]
+async fn a_resent_turn_stop_ended_does_not_fail_afterwards() {
+    let (fixture, launches) = scripted_claude(None, false);
+    let thread = fixture.thread(ThreadStatus::Idle);
+    let (running, turn_id, message_id, message) = running_turn(&fixture, &thread, "Next question");
+    let guard = fixture.orchestrator.begin_resend(thread.id, turn_id, super::resend::ResendReason::MissingConversation);
+    let (live, _) = fixture.orchestrator.ensure_session(&running).await.unwrap();
+    fixture.store.meta_set(&format!("handoff:{}", thread.id), "not a range").unwrap();
+    // A slow snapshot of a large tree holds the checkpoint lock.
+    let lock = fixture.orchestrator.checkpoint_lock(thread.id);
+    let slow = lock.clone().lock_owned().await;
+    let orchestrator = fixture.orchestrator.clone();
+    let start = tokio::spawn(async move {
+        let started = orchestrator.start_resent_turn(&guard, running, message_id, message).await;
+        (started, guard)
+    });
+    // The map, `lock` and `slow` hold three references; the turn's start waiting for the lock holds a fourth.
+    claude_waits_for("the resent turn never reached its snapshot", || Arc::strong_count(&lock) > 3).await;
+
+    fixture.orchestrator.stop_thread(thread.id, "test").await.expect("Stop ends the turn");
+    drop(slow);
+    let (started, guard) = start.await.unwrap();
+    started.expect("a turn Stop ended has nothing left to fail");
+    drop(guard);
+
+    assert_eq!(interrupted_turns(&fixture, &thread), [Some(turn_id)]);
+    assert_eq!(failures(&fixture, &thread), 0);
+    assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::Idle);
+    assert!(live.turn.lock().await.is_none(), "the ended turn gave up its place");
+    assert!(launches.lock().unwrap()[0].messages.try_lock().unwrap().is_empty(), "nothing is sent after Stop");
+    assert!(fixture.orchestrator.inner.resends.is_empty());
+}
+
+/// Stop just after the resent turn took its place in the new session: the turn takes no before snapshot.
+#[tokio::test]
+async fn a_resent_turn_stop_ended_takes_no_checkpoint() {
+    let (fixture, launches) = scripted_claude(None, false);
+    let git = |args: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(&fixture.root).args(args).status().unwrap().success());
+    git(&["init", "-q"]);
+    git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]);
+    let thread = fixture.thread(ThreadStatus::Idle);
+    let (running, turn_id, message_id, message) = running_turn(&fixture, &thread, "Next question");
+    let guard = fixture.orchestrator.begin_resend(thread.id, turn_id, super::resend::ResendReason::MissingConversation);
+    let (live, _) = fixture.orchestrator.ensure_session(&running).await.unwrap();
+    // The turn's start stops right after taking its place, before the snapshot.
+    let held = live.last_turn_id.lock().await;
+    let orchestrator = fixture.orchestrator.clone();
+    let start = tokio::spawn(async move {
+        let started = orchestrator.start_resent_turn(&guard, running, message_id, message).await;
+        (started, guard)
+    });
+    claude_waits_for("the resent turn never took its place", || live.turn.try_lock().is_ok_and(|turn| turn.is_some())).await;
+
+    fixture.orchestrator.stop_thread(thread.id, "test").await.expect("Stop ends the turn");
+    drop(held);
+    let (started, guard) = start.await.unwrap();
+    started.unwrap();
+    drop(guard);
+
+    assert!(fixture.store.checkpoint_get(turn_id).unwrap().is_none(), "no snapshot for a stopped turn");
+    assert_eq!(interrupted_turns(&fixture, &thread), [Some(turn_id)]);
+    assert!(live.turn.lock().await.is_none());
+    assert!(launches.lock().unwrap()[0].messages.try_lock().unwrap().is_empty());
 }
 
 /// A new turn after Stop ended a turn that waited for its new session: the old resend wakes later and leaves
