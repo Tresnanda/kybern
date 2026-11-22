@@ -130,10 +130,10 @@ function cursorAlways(approval: ApprovalRequest): Part[] | null {
 
 type Noun = 'command' | 'edit' | 'read' | 'other'
 
-/** Codex's "accept for session" remembers this exact command, and an edit's files (later edits to them go through). */
-function codexNoun(approval: ApprovalRequest, noun: Noun): string {
-  if (noun === 'command') return 'this exact command'
-  if (noun === 'edit') return array(record(approval.input).changes).length > 1 ? 'edits to these files' : 'edits to this file'
+/** Kybern's Codex driver answers later commands, and edits inside the workspace, on the same thread until the mode changes. */
+function codexNoun(noun: Noun): string {
+  if (noun === 'command') return 'commands'
+  if (noun === 'edit') return 'edits'
   return 'this exact request'
 }
 
@@ -142,8 +142,8 @@ const piNoun = (noun: Noun) => (noun === 'command' ? 'this exact command' : noun
 
 /**
  * The "allow for this session" option, worded for what the harness really allows, or null when it allows nothing beyond one run:
- * Claude applies the rules in `suggestions` (an empty list changes nothing), OpenCode its `always` patterns, Codex remembers this
- * command or the edited files, Pi (through Kybern's extension, which gives the call an id) this exact call, and Cursor offers its
+ * Claude applies the rules in `suggestions` (an empty list changes nothing), OpenCode its `always` patterns, Codex (through
+ * Kybern's driver) later commands or edits on the thread, Pi (through Kybern's extension, which gives the call an id) this exact call, and Cursor offers its
  * own "always" option. Pi's other permission prompts and a Cursor request without that option only approve once.
  */
 export function sessionLabel(approval: ApprovalRequest, provider: string | undefined, noun: Noun, subject = ''): Part[] | null {
@@ -154,7 +154,7 @@ export function sessionLabel(approval: ApprovalRequest, provider: string | undef
       return scope ? lead(scope) : null
     }
     case 'opencode': return lead(opencodeScope(approval))
-    case 'codex': return [text(`Allow ${codexNoun(approval, noun)} for this session`)]
+    case 'codex': return [text(`Allow ${codexNoun(noun)} for this session`)]
     case 'pi': case 'omp': return approval.tool_call_id ? [text(`Allow ${piNoun(noun)} for this session`)] : null
     case 'cursor': return cursorAlways(approval)
     default: return [text(`Allow ${subject || 'this'} for this session`)]

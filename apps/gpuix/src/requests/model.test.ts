@@ -51,10 +51,10 @@ describe('session option', () => {
     const r = request('Edit', { file_path: '/a' }, [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }])
     expect(plain(sessionLabel(r, 'claude-code', 'edit'))).toBe('Allow edits for this session')
   })
-  test('Codex remembers the exact command, and the files of an edit', () => {
-    expect(plain(sessionLabel(request('shell', { command: 'x' }), 'codex', 'command'))).toBe('Allow this exact command for this session')
-    expect(plain(sessionLabel(request('apply_patch', { changes: [{ path: '/a' }] }), 'codex', 'edit'))).toBe('Allow edits to this file for this session')
-    expect(plain(sessionLabel(request('apply_patch', { changes: [{ path: '/a' }, { path: '/b' }] }), 'codex', 'edit'))).toBe('Allow edits to these files for this session')
+  test('Codex allows later commands and edits on the thread', () => {
+    expect(plain(sessionLabel(request('shell', { command: 'x' }), 'codex', 'command'))).toBe('Allow commands for this session')
+    expect(plain(sessionLabel(request('apply_patch', { changes: [{ path: '/a' }] }), 'codex', 'edit'))).toBe('Allow edits for this session')
+    expect(plain(sessionLabel(request('apply_patch', { changes: [{ path: '/a' }, { path: '/b' }] }), 'codex', 'edit'))).toBe('Allow edits for this session')
   })
   test('Pi remembers the exact call through Kybern\'s extension; its other prompts only approve once', () => {
     expect(plain(sessionLabel(request('bash', { command: 'x' }), 'pi', 'command'))).toBe('Allow this exact command for this session')
