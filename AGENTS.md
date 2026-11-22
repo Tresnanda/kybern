@@ -96,8 +96,11 @@ plugin staging alone required a 41 GiB cleanup.
   scratch test data, and redundant exports after preserving deliverables and
   validation evidence. Track custom output paths, including `.cargo/target`.
   Cleanup of this task's unused generated artifacts is part of the task and
-  does not require a separate confirmation. Keep source changes and worktree
-  registrations intact; never delete a whole worktree merely to reclaim space.
+  does not require a separate confirmation. When a task's own worktree is
+  done (its work merged or dropped, nothing uncommitted), remove it with its
+  local branch (`git worktree remove`, `git branch -D`), including the
+  `~/.kybern/worktrees/<project>/<id>` worktrees its delegated agents made.
+  Leave worktrees other tasks or sessions own.
 - Before deleting build output, check running builds, daemons, and open files.
   Stop only scratch processes owned by this task. Never run `cargo clean`,
   sweep, or remove output used by an active desktop, daemon, build, or another

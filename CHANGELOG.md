@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.26.0
+
+<!-- kybern-release-title: Every harness, tightened -->
+<!-- kybern-release-summary: Antigravity runs on Google's ACP agent with every permission mode, Cursor threads can be steered and its SDK updates itself, and Claude Code, Codex, OpenCode, Pi, Grok Build and Antigravity each get fixes for approvals, Stop, resumes and usage. -->
+
+- Antigravity runs on `agy acp` when agy is 1.5 or newer: Supervised, Accept edits and Auto now work alongside Full access, you can steer a running turn, and model and thinking changes apply without a restart. Older agy keeps working as before.
+- Antigravity counts thinking tokens once, recovers by itself when a conversation loses its thinking signature, and **Edit from here** really rewinds the conversation. Its skill list matches the folders agy reads.
+- Cursor threads can be steered mid-turn; a message Cursor can't take now is sent as a follow-up, never twice. Cursor's SDK moves to 1.4.2 and updates itself in the background, a failed shell command shows as failed, live shell output appears, and the context meter works on new chats.
+- Claude Code: a conversation Claude Code deleted continues in a fresh session with the thread so far, changing model or effort no longer restarts Claude or stops background agents, and retries while the API is busy show as a notice.
+- Codex: Full access no longer turns down app and MCP prompts, your `config.toml` sandbox is respected, and **Allow commands/edits for this session** covers later requests until you change the permission mode. Token use after a resume or fork, and Spark limits, are counted correctly.
+- OpenCode: subagents follow the thread's permission mode, and a thread no longer stays "Working" after a missed end of turn.
+- Pi and omp keep their sign-in through model discovery, Stop tells you which messages Pi hadn't read yet, and every selected skill loads.
+- Grok Build: Supervised, Accept edits and Auto work, and prompts and Stop always end.
+- When an agent's process stops unexpectedly, you see one plain headline instead of the same error twice.
+
 ## 0.25.7
 
 <!-- kybern-release-title: Antigravity limits without surprise sign-in tabs -->
