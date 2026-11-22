@@ -51,7 +51,7 @@ export interface CardModel {
 }
 
 /** The harness's name in card copy ("Decline and tell Claude …"), not the product name. */
-export const AGENT_NAMES: Record<string, string> = { 'claude-code': 'Claude', codex: 'Codex', opencode: 'OpenCode', pi: 'Pi', omp: 'Pi', cursor: 'Cursor' }
+export const AGENT_NAMES: Record<string, string> = { 'claude-code': 'Claude', codex: 'Codex', opencode: 'OpenCode', pi: 'Pi', omp: 'Pi', cursor: 'Cursor', 'grok-build': 'Grok' }
 export const agentName = (provider: string | undefined): string => AGENT_NAMES[provider ?? ''] ?? 'the agent'
 
 const text = (value: string): Part => ({ text: value })
