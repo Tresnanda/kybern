@@ -15,7 +15,6 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use futures::StreamExt;
 use kybern_protocol::*;
 use reqwest::Method;
 use serde_json::{Value, json};
@@ -23,15 +22,27 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Child;
 use tokio::sync::{Mutex, mpsc};
 
-use super::{OPENCODE_READ_ONLY_TOOLS, mcp_config, net, split_model};
+use super::{
+    CHILD_RULES_TIMEOUT, FIRST_SUBSCRIBE_TIMEOUT, MAX_LISTED_CHILDREN, OPENCODE_READ_ONLY_TOOLS, RECONCILE_CALL_TIMEOUT, RULE_WRITE_TRIES,
+    SILENT_STREAM_TIMEOUT, SUBSCRIBE_TIMEOUT, StartFailure, StderrTail, is_database_locked, mcp_config, model_window, net, read_frames,
+    retry_locked_start, split_model, unruled_child_notice,
+};
 use crate::{
     AgentSession, DriverError, DriverEvent, DriverRuntimeTask, DriverRuntimeTaskUpdate, NativeToolBridge, Result, SessionConfig,
     SpawnedSession,
 };
 
+/// Sessions asked for per page when listing a thread's subagents, and the most pages read.
+const LIST_PAGE: usize = 100;
+const LIST_PAGES: usize = 8;
+
 /// Instruction entry that carries the Kybern guide and coordinator role.
 const INSTRUCTIONS_KEY: &str = "kybern";
 /// Skills load after the server starts; built-ins always exist once they have.
+/// Messages read per request while looking for a turn's prompt, and the most
+/// requests made: a long turn pushes its prompt out of the first page.
+const SETTLE_PAGE: usize = 50;
+const SETTLE_PAGES: usize = 32;
 const SKILL_DISCOVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// A private `opencode serve` with a random password. Dropping it stops the
@@ -51,6 +62,16 @@ impl Server {
         env: impl IntoIterator<Item = (&'a String, &'a String)>,
         extra: &[(&str, &str)],
     ) -> Result<Self> {
+        let env: Vec<(&String, &String)> = env.into_iter().collect();
+        retry_locked_start(|| Self::start_once(bin, cwd, &env, extra)).await
+    }
+
+    async fn start_once(
+        bin: &Path,
+        cwd: Option<&Path>,
+        env: &[(&String, &String)],
+        extra: &[(&str, &str)],
+    ) -> std::result::Result<Self, StartFailure> {
         let password = uuid::Uuid::new_v4().simple().to_string();
         let mut cmd = crate::binary::command(bin).no_window();
         if let Some(cwd) = cwd {
@@ -61,7 +82,7 @@ impl Server {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        cmd.envs(env);
+        cmd.envs(env.iter().copied());
         for (key, value) in extra {
             cmd.env(key, value);
         }
@@ -70,19 +91,14 @@ impl Server {
         #[cfg(unix)]
         cmd.process_group(0);
         tracing::info!(bin = %bin.display(), "spawning opencode serve (v2)");
-        let mut child = cmd.spawn()?;
+        let mut child = cmd.spawn().map_err(|error| StartFailure::plain(error.into()))?;
         let tree = crate::process_tree::ProcessTree::new(child.id().expect("spawned opencode"));
         let stdout = child.stdout.take().ok_or_else(|| DriverError::Protocol("no stdout".into()))?;
         let stderr = child.stderr.take().ok_or_else(|| DriverError::Protocol("no stderr".into()))?;
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                tracing::debug!(target: "provider.stderr", "{line}");
-            }
-        });
+        let stderr = StderrTail::capture(stderr);
         // "Server listening on http://127.0.0.1:PORT".
         let mut lines = BufReader::new(stdout).lines();
-        let base = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        let announced = tokio::time::timeout(std::time::Duration::from_secs(60), async {
             while let Ok(Some(line)) = lines.next_line().await {
                 tracing::debug!(target: "provider.stdout", "{line}");
                 if let Some(index) = line.find("http://") {
@@ -93,14 +109,21 @@ impl Server {
         })
         .await
         .ok()
-        .flatten()
-        .ok_or_else(|| DriverError::Protocol("opencode serve did not announce a listening address".into()))?;
+        .flatten();
+        let Some(base) = announced else {
+            let _ = child.kill().await;
+            let database_locked = is_database_locked(&stderr.finish().await);
+            return Err(StartFailure {
+                error: DriverError::Protocol("opencode serve did not announce a listening address".into()),
+                database_locked,
+            });
+        };
         tokio::spawn(async move {
             while let Ok(Some(line)) = lines.next_line().await {
                 tracing::debug!(target: "provider.stdout", "{line}");
             }
         });
-        let http = reqwest::Client::builder().build().map_err(|e| DriverError::Protocol(e.to_string()))?;
+        let http = reqwest::Client::builder().build().map_err(|e| StartFailure::plain(DriverError::Protocol(e.to_string())))?;
         let server = Self { child, tree, http, base, password };
         for _ in 0..50 {
             if server.request(Method::GET, "/api/info").send().await.is_ok_and(|r| r.status().is_success()) {
@@ -289,7 +312,10 @@ pub(super) async fn spawn(bin: &Path, config: SessionConfig) -> Result<SpawnedSe
     let permissions = |mode| ruleset(mode).into_iter().chain(restrictions.iter().cloned()).collect::<Vec<_>>();
 
     // Subscribe before the session exists so no event of the first turn is missed.
-    let stream = server.request(Method::GET, "/api/event").send().await.map_err(net)?;
+    let stream = tokio::time::timeout(FIRST_SUBSCRIBE_TIMEOUT, server.request(Method::GET, "/api/event").send())
+        .await
+        .map_err(|_| DriverError::Protocol("opencode /api/event did not answer".into()))?
+        .map_err(net)?;
     if !stream.status().is_success() {
         return Err(DriverError::Protocol(format!("opencode /api/event: {}", stream.status())));
     }
@@ -364,9 +390,17 @@ pub(super) async fn spawn(bin: &Path, config: SessionConfig) -> Result<SpawnedSe
             let mut state = State::new(session_id.clone(), restrictions);
             state.model = config.model.clone().filter(|model| split_model(model).is_some());
             state.effort = config.effort.clone();
+            state.mode = config.permission_mode;
             Mutex::new(state)
         },
     });
+    if config.resume_session_id.is_some() {
+        // The server keeps a resumed thread's subagents with the rules they were
+        // last given. Bring each up to date now, not when it next runs, where the
+        // write would race its first tool call.
+        let listed = session.list_children(&session_id).await?;
+        session.rewrite_child_rules(listed).await;
+    }
     session.emit(DriverEvent::SessionBound { session_id, model: config.model.clone() }).await;
     let reader = session.clone();
     let worker = crate::process_tree::SessionTask(tokio::spawn(async move {
@@ -403,6 +437,12 @@ struct FormField {
 #[derive(Default)]
 struct ChildRuntime {
     task_id: String,
+    /// The tool call that started (or last resumed) this child.
+    call_id: Option<String>,
+    /// Whether Kybern wrote the rules of this thread's current mode into the
+    /// child. A child made from the parent's rules is no exception: it may have
+    /// been made from the ones before the last mode change.
+    rules_current: bool,
     terminal: bool,
     stop_requested: bool,
     stats: RuntimeTaskStats,
@@ -411,6 +451,14 @@ struct ChildRuntime {
 struct State {
     session_id: String,
     restrictions: Vec<Value>,
+    mode: PermissionMode,
+    /// Variant ids each model lists (`provider/model`), once known.
+    model_variants: HashMap<String, HashSet<String>>,
+    /// Text blocks of this turn already delivered, so a reply read back after a
+    /// reconnect does not repeat them.
+    completed_blocks: HashSet<String>,
+    /// Assistant messages of this turn whose tokens and cost are counted.
+    counted_messages: HashSet<String>,
     commands: Vec<ProviderCommand>,
     context_windows: HashMap<String, u64>,
     /// Model of the latest step, for its context window.
@@ -430,6 +478,10 @@ struct State {
     /// Provider child session id -> runtime bookkeeping. Child output stays out
     /// of the parent transcript; only compact lifecycle/progress is projected.
     children: HashMap<String, ChildRuntime>,
+    /// One lock per subagent session, held from reading the mode to the end
+    /// of the write, so writes to one session land in the order they read the
+    /// mode and the last to land is the current one.
+    rule_locks: HashMap<String, Arc<Mutex<()>>>,
 }
 
 impl State {
@@ -437,6 +489,10 @@ impl State {
         Self {
             session_id,
             restrictions,
+            mode: PermissionMode::Supervised,
+            model_variants: HashMap::new(),
+            completed_blocks: HashSet::new(),
+            counted_messages: HashSet::new(),
             commands: Vec::new(),
             context_windows: HashMap::new(),
             step_model: None,
@@ -450,6 +506,7 @@ impl State {
             pending: HashMap::new(),
             calls: HashMap::new(),
             children: HashMap::new(),
+            rule_locks: HashMap::new(),
         }
     }
 }
@@ -673,48 +730,50 @@ impl OpencodeSession {
             self.emit(DriverEvent::CommandsUpdated(commands)).await;
         }
         if let Ok(value) = models {
-            let windows = value["data"]
-                .as_array()
-                .into_iter()
-                .flatten()
+            let models = value["data"].as_array().map(Vec::as_slice).unwrap_or_default();
+            let key = |model: &Value| Some(format!("{}/{}", model["providerID"].as_str()?, model["id"].as_str()?));
+            let windows = models.iter().filter_map(|model| Some((key(model)?, model_window(model.get("limit")?)?))).collect();
+            let variants: HashMap<String, HashSet<String>> = models
+                .iter()
                 .filter_map(|model| {
-                    let window = model.pointer("/limit/context").and_then(Value::as_u64).filter(|w| *w > 0)?;
-                    Some((format!("{}/{}", model["providerID"].as_str()?, model["id"].as_str()?), window))
+                    let ids = model["variants"].as_array()?.iter().filter_map(|variant| variant["id"].as_str().map(str::to_string));
+                    Some((key(model)?, ids.collect()))
                 })
                 .collect();
             super::remember_windows(&windows);
-            self.state.lock().await.context_windows = windows;
+            let mut state = self.state.lock().await;
+            state.context_windows = windows;
+            state.model_variants = variants;
         }
     }
 
-    async fn event_loop(self: Arc<Self>, mut first: Option<reqwest::Response>) {
+    async fn event_loop(self: Arc<Self>, first: Option<reqwest::Response>) {
+        self.event_loop_with(first, SILENT_STREAM_TIMEOUT).await
+    }
+
+    /// Read events until the server exits. A stream that closes, breaks or goes
+    /// silent is subscribed again, and the turn it may have lost the end of is
+    /// settled from the stored messages.
+    async fn event_loop_with(self: Arc<Self>, mut first: Option<reqwest::Response>, silence: std::time::Duration) {
         let mut backoff = 200u64;
+        let mut reconnect = false;
         loop {
             let response = match first.take() {
-                Some(response) => Ok(response),
-                None => self.server.request(Method::GET, "/api/event").send().await,
+                Some(response) => Some(response),
+                None => tokio::time::timeout(SUBSCRIBE_TIMEOUT, self.server.request(Method::GET, "/api/event").send())
+                    .await
+                    .ok()
+                    .and_then(|response| response.ok()),
             };
-            if let Ok(response) = response
-                && response.status().is_success()
-            {
+            if let Some(response) = response.filter(|response| response.status().is_success()) {
                 backoff = 200;
-                let mut stream = response.bytes_stream();
-                let mut buf = String::new();
-                while let Some(chunk) = stream.next().await {
-                    let Ok(chunk) = chunk else { break };
-                    buf.push_str(&String::from_utf8_lossy(&chunk));
-                    while let Some(pos) = buf.find("\n\n") {
-                        let frame = buf[..pos].to_string();
-                        buf.drain(..pos + 2);
-                        for line in frame.lines() {
-                            if let Some(data) = line.strip_prefix("data:")
-                                && let Ok(value) = serde_json::from_str::<Value>(data.trim())
-                            {
-                                self.handle_event(&value).await;
-                            }
-                        }
-                    }
+                if reconnect {
+                    self.resync_requests().await;
+                    self.settle_after_reconnect().await;
                 }
+                reconnect = true;
+                let this = &*self;
+                read_frames(response.bytes_stream(), silence, |event| async move { this.handle_event(&event).await }).await;
             }
             if let Ok(Some(status)) = self.child.lock().await.try_wait() {
                 let code = status.code();
@@ -727,6 +786,198 @@ impl OpencodeSession {
             }
             tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
             backoff = (backoff * 2).min(5000);
+        }
+    }
+
+    /// The requests for approval and answers that are still open. After a
+    /// reconnect, one asked while the stream was down was never seen, and one
+    /// answered elsewhere was never withdrawn.
+    async fn resync_requests(&self) {
+        let get = |path: &'static str| async move { self.server_call(Method::GET, path, None, RECONCILE_CALL_TIMEOUT).await.ok() };
+        let before: Vec<(String, bool)> =
+            self.state.lock().await.pending.iter().map(|(id, pending)| (id.clone(), matches!(pending, Pending::Form { .. }))).collect();
+        let (permissions, forms) = tokio::join!(get("/api/permission/request"), get("/api/form"));
+        for (form, list) in [(false, &permissions), (true, &forms)] {
+            let Some(items) = list.as_ref().and_then(|list| list["data"].as_array()) else { continue };
+            let open: HashSet<&str> = items.iter().filter_map(|item| item["id"].as_str()).collect();
+            for item in items {
+                // `handle_event` keeps requests of other sessions out and shows a known one once.
+                let event = if form {
+                    json!({"type": "form.created", "data": {"form": item}})
+                } else {
+                    json!({"type": "permission.asked", "data": item})
+                };
+                self.handle_event(&event).await;
+            }
+            for (id, was_form) in &before {
+                if *was_form == form && !open.contains(id.as_str()) && self.state.lock().await.pending.remove(id).is_some() {
+                    self.emit(DriverEvent::PermissionWithdrawn { request_id: id.clone() }).await;
+                }
+            }
+        }
+    }
+
+    /// The stored messages of the running turn, newest first, up to its prompt.
+    /// Pages of [`SETTLE_PAGE`] are read back with the server's cursor until
+    /// the prompt is in them: a long turn pushes its own prompt out of the first
+    /// page. `None` when the prompt is not stored yet; otherwise the messages
+    /// after it, and whether it was found (not found: the turn is longer than
+    /// the most that is read, and what was read is all of it).
+    async fn turn_messages(&self, session_id: &str, message_id: &str) -> Option<(Vec<Value>, bool)> {
+        let mut messages: Vec<Value> = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..SETTLE_PAGES {
+            let path = match &cursor {
+                None => format!("/api/session/{session_id}/message?order=desc&limit={SETTLE_PAGE}"),
+                // The cursor remembers the order, and the server refuses both.
+                Some(cursor) => format!("/api/session/{session_id}/message?limit={SETTLE_PAGE}&cursor={cursor}"),
+            };
+            let page = self.server_call(Method::GET, &path, None, RECONCILE_CALL_TIMEOUT).await.ok()?;
+            messages.extend(page["data"].as_array().cloned().unwrap_or_default());
+            if let Some(start) = messages.iter().position(|message| message["id"].as_str() == Some(message_id)) {
+                messages.truncate(start);
+                return Some((messages, true));
+            }
+            match page.pointer("/cursor/next").and_then(Value::as_str) {
+                Some(next) => cursor = Some(next.to_string()),
+                // The whole history was read and the prompt is not in it.
+                None => return None,
+            }
+        }
+        Some((messages, false))
+    }
+
+    /// The event stream was down, so the end of the running turn may have gone
+    /// by. Read what OpenCode stored: if the session stopped running, finish
+    /// the turn the way its idle message says, with the reply text and usage it
+    /// was missing.
+    async fn settle_after_reconnect(&self) {
+        let (session_id, message_id) = {
+            let state = self.state.lock().await;
+            match (state.active, &state.current_message_id) {
+                (true, Some(message)) => (state.session_id.clone(), message.clone()),
+                _ => return,
+            }
+        };
+        let Ok(active) = self.server_call(Method::GET, "/api/session/active", None, RECONCILE_CALL_TIMEOUT).await else { return };
+        if active["data"].get(&session_id).is_some() {
+            return;
+        }
+        // Newest first. The turn is what follows its prompt; a prompt that is not
+        // stored yet leaves nothing to settle.
+        let Some((turn, _)) = self.turn_messages(&session_id, &message_id).await else { return };
+        let idle = turn.iter().find(|message| message["type"] == "idle");
+        let replies: Vec<&Value> = turn.iter().rev().filter(|message| message["type"] == "assistant").collect();
+        if idle.is_none() && replies.is_empty() {
+            return;
+        }
+        // The turn may have ended, or another begun, while the messages were read.
+        if !self.is_current_turn(&message_id).await {
+            return;
+        }
+        for reply in replies {
+            for (ordinal, part) in reply["content"].as_array().into_iter().flatten().filter(|part| part["type"] == "text").enumerate() {
+                let block = block_id(&json!({ "assistantMessageID": reply["id"], "ordinal": ordinal }));
+                let text = part["text"].as_str().unwrap_or("");
+                if text.is_empty() || !self.state.lock().await.completed_blocks.insert(block.clone()) {
+                    continue;
+                }
+                self.emit(DriverEvent::MessageCompleted {
+                    message_id: block,
+                    origin: EventOrigin::Root,
+                    text: text.to_string(),
+                    thinking: None,
+                })
+                .await;
+            }
+            // A reply the stream never finished counting is counted from what is stored.
+            if let Some(id) = reply["id"].as_str() {
+                let mut state = self.state.lock().await;
+                if state.counted_messages.insert(id.to_string()) {
+                    let count = |path: &str| reply.pointer(path).and_then(Value::as_u64).unwrap_or(0);
+                    state.turn_usage.input_tokens += count("/tokens/input");
+                    state.turn_usage.output_tokens += count("/tokens/output") + count("/tokens/reasoning");
+                    state.turn_usage.cache_read_tokens += count("/tokens/cache/read");
+                    state.turn_usage.cache_write_tokens += count("/tokens/cache/write");
+                    state.turn_cost += reply["cost"].as_f64().unwrap_or(0.0);
+                }
+            }
+        }
+        let turn = Some(message_id.as_str());
+        match idle.and_then(|idle| idle["outcome"].as_str()) {
+            Some("succeeded") => self.finish_turn_of(turn, StopReason::Completed).await,
+            Some("failed") => {
+                let text = "OpenCode ended the turn with an error while Kybern was reconnecting. Send the message again.".to_string();
+                self.fail_turn_of(turn, text, None).await;
+            }
+            // Without an idle message the execution was lost: nothing is running it.
+            _ => self.finish_turn_of(turn, StopReason::Interrupted).await,
+        }
+    }
+
+    /// Whether `message_id` is the turn still running.
+    async fn is_current_turn(&self, message_id: &str) -> bool {
+        let state = self.state.lock().await;
+        state.active && state.current_message_id.as_deref() == Some(message_id)
+    }
+
+    /// One request with its own time limit.
+    async fn server_call(&self, method: Method, path: &str, body: Option<Value>, timeout: std::time::Duration) -> Result<Value> {
+        let mut request = self.server.request(method, path).timeout(timeout);
+        if let Some(body) = body {
+            request = request.json(&body);
+        }
+        let response = request.send().await.map_err(net)?;
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(DriverError::Protocol(format!("opencode {path}: {status} {}", text.chars().take(500).collect::<String>())));
+        }
+        Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
+    }
+
+    /// The turn ended with `stop_reason`.
+    async fn finish_turn(&self, stop_reason: StopReason) {
+        self.finish_turn_of(None, stop_reason).await
+    }
+
+    /// The turn ended. With `turn`, only if that is the turn still running.
+    async fn finish_turn_of(&self, turn: Option<&str>, stop_reason: StopReason) {
+        let (usage, cost, duration_ms, active, anchors) = {
+            let mut state = self.state.lock().await;
+            if turn.is_some_and(|turn| state.current_message_id.as_deref() != Some(turn)) {
+                return;
+            }
+            let active = std::mem::take(&mut state.active);
+            let duration = state.turn_started.take().map(|t| t.elapsed().as_millis() as u64).unwrap_or(0);
+            let anchors = crate::TurnAnchors { turn_id: state.current_message_id.take(), previous_end: None };
+            state.counted_messages.clear();
+            (std::mem::take(&mut state.turn_usage), state.turn_cost, duration, active, anchors)
+        };
+        if active {
+            self.emit(DriverEvent::TurnCompleted { stop_reason, usage, cost_usd: Some(cost), duration_ms, anchors }).await;
+        }
+    }
+
+    /// The turn failed with `text`; between turns it is only a notice.
+    async fn fail_turn(&self, text: String, error: Option<&Value>) {
+        self.fail_turn_of(None, text, error).await
+    }
+
+    /// The turn failed. With `turn`, only if that is the turn still running.
+    async fn fail_turn_of(&self, turn: Option<&str>, text: String, error: Option<&Value>) {
+        let active = {
+            let mut state = self.state.lock().await;
+            if turn.is_some_and(|turn| state.current_message_id.as_deref() != Some(turn)) {
+                return;
+            }
+            state.turn_started = None;
+            std::mem::take(&mut state.active)
+        };
+        if active {
+            self.emit(DriverEvent::turn_failed(ProviderKind::Opencode, text)).await;
+        } else {
+            self.emit(DriverEvent::Notice { level: NoticeLevel::Error, text, data: error.cloned() }).await;
         }
     }
 
@@ -796,11 +1047,17 @@ impl OpencodeSession {
             }
             "session.text.delta" => {
                 let delta = data["delta"].as_str().unwrap_or("").to_string();
+                // A block already delivered whole takes no more text: the deltas
+                // that were buffered while a turn was settled are old news.
+                if self.state.lock().await.completed_blocks.contains(&block_id(data)) {
+                    return;
+                }
                 self.emit(DriverEvent::TextDelta { message_id: block_id(data), origin: EventOrigin::Root, delta }).await;
             }
             "session.text.ended" => {
                 let text = data["text"].as_str().unwrap_or("").to_string();
                 if !text.is_empty() {
+                    self.state.lock().await.completed_blocks.insert(block_id(data));
                     self.emit(DriverEvent::MessageCompleted {
                         message_id: block_id(data),
                         origin: EventOrigin::Root,
@@ -858,6 +1115,9 @@ impl OpencodeSession {
                 let count = |path: &str| tokens.pointer(path).and_then(Value::as_u64).unwrap_or(0);
                 let window = {
                     let mut state = self.state.lock().await;
+                    if let Some(message) = data["assistantMessageID"].as_str() {
+                        state.counted_messages.insert(message.to_string());
+                    }
                     state.turn_usage.input_tokens += count("/input");
                     state.turn_usage.output_tokens += count("/output") + count("/reasoning");
                     state.turn_usage.cache_read_tokens += count("/cache/read");
@@ -886,34 +1146,13 @@ impl OpencodeSession {
                 let text = data.pointer("/error/message").and_then(Value::as_str).unwrap_or("compaction failed");
                 self.emit(DriverEvent::Notice { level: NoticeLevel::Error, text: text.to_string(), data: Some(data.clone()) }).await
             }
-            "session.execution.succeeded" | "session.execution.interrupted" => {
-                let (usage, cost, duration_ms, active, anchors) = {
-                    let mut state = self.state.lock().await;
-                    let active = std::mem::take(&mut state.active);
-                    let duration = state.turn_started.take().map(|t| t.elapsed().as_millis() as u64).unwrap_or(0);
-                    let anchors = crate::TurnAnchors { turn_id: state.current_message_id.take(), previous_end: None };
-                    (std::mem::take(&mut state.turn_usage), state.turn_cost, duration, active, anchors)
-                };
-                if active {
-                    let stop_reason = if ty == "session.execution.succeeded" { StopReason::Completed } else { StopReason::Interrupted };
-                    self.emit(DriverEvent::TurnCompleted { stop_reason, usage, cost_usd: Some(cost), duration_ms, anchors }).await;
-                }
-            }
+            "session.execution.succeeded" => self.finish_turn(StopReason::Completed).await,
+            "session.execution.interrupted" => self.finish_turn(StopReason::Interrupted).await,
             "session.execution.failed" => {
                 let error = &data["error"];
                 let kind = error["type"].as_str().unwrap_or("error");
                 let message = error["message"].as_str().unwrap_or("");
-                let active = {
-                    let mut state = self.state.lock().await;
-                    state.turn_started = None;
-                    std::mem::take(&mut state.active)
-                };
-                let text = format!("{kind}: {message}");
-                if active {
-                    self.emit(DriverEvent::turn_failed(ProviderKind::Opencode, text)).await;
-                } else {
-                    self.emit(DriverEvent::Notice { level: NoticeLevel::Error, text, data: Some(error.clone()) }).await;
-                }
+                self.fail_turn(format!("{kind}: {message}"), Some(error)).await;
             }
             _ => {}
         }
@@ -938,7 +1177,10 @@ impl OpencodeSession {
             "message": data.get("message"),
         });
         let suggestions = data["save"].as_array().cloned().unwrap_or_default();
-        self.state.lock().await.pending.insert(id.clone(), Pending::Permission { session });
+        // One request is shown once, however many times it is announced.
+        if self.state.lock().await.pending.insert(id.clone(), Pending::Permission { session }).is_some() {
+            return;
+        }
         self.emit(DriverEvent::PermissionRequest {
             request_id: id,
             tool_call_id: data.pointer("/source/id").and_then(Value::as_str).map(str::to_string),
@@ -961,7 +1203,9 @@ impl OpencodeSession {
             Some("question") | None => "Answer the agent's questions".to_string(),
             Some(_) => form["title"].as_str().unwrap_or("Answer the agent's questions").to_string(),
         };
-        self.state.lock().await.pending.insert(id.clone(), Pending::Form { session, fields });
+        if self.state.lock().await.pending.insert(id.clone(), Pending::Form { session, fields }).is_some() {
+            return;
+        }
         self.emit(DriverEvent::PermissionRequest {
             request_id: id,
             tool_call_id: form.pointer("/metadata/tool/id").and_then(Value::as_str).map(str::to_string),
@@ -973,9 +1217,155 @@ impl OpencodeSession {
         .await;
     }
 
+    /// A subagent session showed up (or showed up again). Its rules are written
+    /// before it is announced, whether the server just made it or not: a child
+    /// is made from the parent's rules as they were then, which may be the ones
+    /// before a mode change that is still being applied, and a resumed one holds
+    /// whatever it was last given. One that cannot be given them is stopped,
+    /// once it is announced.
     async fn observe_child(&self, child_id: String, task: DriverRuntimeTask) {
-        self.state.lock().await.children.entry(child_id).or_default().task_id = task.id.clone();
+        let stale = {
+            let mut state = self.state.lock().await;
+            let child = state.children.entry(child_id.clone()).or_default();
+            // A new tool call for a finished child resumes it: its earlier end
+            // must not swallow the new run's, and its rules may be old.
+            let resumed = child.terminal && matches!((&child.call_id, &task.tool_call_id), (Some(old), Some(new)) if old != new);
+            if resumed {
+                child.terminal = false;
+                child.stop_requested = false;
+                child.rules_current = false;
+            }
+            if task.tool_call_id.is_some() {
+                child.call_id = task.tool_call_id.clone();
+            }
+            child.task_id = task.id.clone();
+            !child.rules_current
+        };
+        let failed = if stale { self.write_child_rules(&child_id).await.err() } else { None };
         self.emit(DriverEvent::RuntimeTaskStarted(task)).await;
+        if let Some(error) = failed {
+            self.child_rules_failed(&child_id, &error).await;
+        }
+    }
+
+    /// This thread's rules for `mode`: the mode's, then the coordinator's scope.
+    fn mode_rules(&self, state: &State, mode: PermissionMode) -> Vec<Value> {
+        ruleset(mode).into_iter().chain(state.restrictions.iter().cloned()).collect()
+    }
+
+    /// The lock that orders writes to one subagent session.
+    async fn child_write_lock(&self, child_id: &str) -> Arc<Mutex<()>> {
+        self.state.lock().await.rule_locks.entry(child_id.to_string()).or_default().clone()
+    }
+
+    /// Replace a subagent's rules with this thread's current ones. The mode can
+    /// change while the write is on its way, so a write that lost that race is
+    /// done again; one that cannot settle on the current mode is an error, never
+    /// a success that leaves an older mode in place.
+    async fn write_child_rules(&self, child_id: &str) -> Result<()> {
+        let lock = self.child_write_lock(child_id).await;
+        let _writing = lock.lock().await;
+        for _ in 0..RULE_WRITE_TRIES {
+            let (mode, rules) = {
+                let state = self.state.lock().await;
+                (state.mode, self.mode_rules(&state, state.mode))
+            };
+            let body = Some(json!({ "permissions": rules }));
+            self.server_call(Method::PATCH, &format!("/api/session/{child_id}"), body, CHILD_RULES_TIMEOUT).await?;
+            let mut state = self.state.lock().await;
+            let current = state.mode == mode;
+            if let Some(child) = state.children.get_mut(child_id) {
+                child.rules_current = current;
+            }
+            if current {
+                return Ok(());
+            }
+        }
+        Err(DriverError::Protocol(format!("the approval mode kept changing while the rules of {child_id} were written")))
+    }
+
+    /// A subagent's rules could not be written, so it may hold the rules of an
+    /// older, looser mode. One that is running is stopped: letting it carry on
+    /// is the one outcome that contradicts the mode the thread shows. A finished
+    /// one stays marked, so its rules are written again before it resumes, and
+    /// it is stopped then if that fails too.
+    async fn child_rules_failed(&self, child_id: &str, error: &DriverError) {
+        tracing::warn!(%error, child_id, "could not write approval rules into an OpenCode subagent");
+        let (running, mode) = {
+            let mut state = self.state.lock().await;
+            let mode = state.mode;
+            let running = state.children.get_mut(child_id).is_some_and(|child| {
+                child.rules_current = false;
+                !child.terminal
+            });
+            (running, mode)
+        };
+        if running {
+            let stopped = self.stop_child(child_id).await.is_ok();
+            self.emit(unruled_child_notice(mode, stopped)).await;
+        }
+    }
+
+    /// Every subagent session below `root`, nested ones too, as OpenCode lists
+    /// them. After a daemon restart this is the only record of them.
+    async fn list_children(&self, root: &str) -> Result<Vec<String>> {
+        let mut found: Vec<String> = Vec::new();
+        let mut queue = vec![root.to_string()];
+        while let Some(parent) = queue.pop() {
+            let mut cursor: Option<String> = None;
+            // `cursor.next` is set even on a last page, so a page that is not full ends it.
+            for _ in 0..LIST_PAGES {
+                let mut path = format!("/api/session?parentID={parent}&limit={LIST_PAGE}");
+                if let Some(cursor) = &cursor {
+                    path.push_str(&format!("&cursor={cursor}"));
+                }
+                let page = self.server_call(Method::GET, &path, None, CHILD_RULES_TIMEOUT).await?;
+                let items = page["data"].as_array().map(Vec::as_slice).unwrap_or_default();
+                // Only sessions that name this parent: a build that ignored the
+                // filter would otherwise hand back every session in the shared
+                // database, other threads' and the user's own, and this thread's
+                // rules would be written into all of them.
+                let children = items.iter().filter(|info| info["parentID"].as_str() == Some(parent.as_str()));
+                for id in children.filter_map(|info| info["id"].as_str()) {
+                    if id != root && !found.iter().any(|known| known == id) && found.len() < MAX_LISTED_CHILDREN {
+                        found.push(id.to_string());
+                        queue.push(id.to_string());
+                    }
+                }
+                cursor = page.pointer("/cursor/next").and_then(Value::as_str).map(str::to_string);
+                if items.len() < LIST_PAGE || cursor.is_none() || found.len() >= MAX_LISTED_CHILDREN {
+                    break;
+                }
+            }
+        }
+        if found.len() >= MAX_LISTED_CHILDREN {
+            tracing::warn!(
+                root,
+                limit = MAX_LISTED_CHILDREN,
+                "an OpenCode thread lists more subagents than are rewritten at once; the rest are written when they resume"
+            );
+        }
+        Ok(found)
+    }
+
+    /// Write the thread's current rules into every subagent session, finished
+    /// ones too, at once: a finished one that is rewritten only when it resumes
+    /// is rewritten while it makes its first tool call. `listed` is what the
+    /// server knows of them, which after a restart is more than this driver
+    /// does. A running subagent that cannot be updated is stopped.
+    async fn rewrite_child_rules(&self, listed: Vec<String>) {
+        let known: Vec<String> = {
+            let mut state = self.state.lock().await;
+            for child in state.children.values_mut() {
+                child.rules_current = false;
+            }
+            state.children.keys().cloned().collect()
+        };
+        for id in known.iter().chain(listed.iter().filter(|id| !known.contains(id))) {
+            if let Err(error) = self.write_child_rules(id).await {
+                self.child_rules_failed(id, &error).await;
+            }
+        }
     }
 
     async fn update_child(
@@ -1154,6 +1544,8 @@ impl OpencodeSession {
         state.turn_usage = Usage::default();
         state.turn_cost = 0.0;
         state.current_message_id = None;
+        state.completed_blocks.clear();
+        state.counted_messages.clear();
     }
 }
 
@@ -1204,18 +1596,39 @@ impl AgentSession for Handle {
         s.call(Method::POST, &format!("/api/session/{session_id}/interrupt"), None).await.map(|_| ())
     }
 
+    /// The thread's rules are replaced, then its subagents'. The mode is recorded
+    /// only once the thread's own rules were written, so a failure there leaves
+    /// the mode and the thread as they were. So does a failure to list the
+    /// subagents, which is read first: one nobody can find would keep an older
+    /// mode. A subagent created while the write is on its way is written when it
+    /// is seen, and again here, since the mode is recorded before they are read.
     async fn set_permission_mode(&self, mode: PermissionMode) -> Result<()> {
         let s = &self.0;
         let (session_id, rules) = {
             let state = s.state.lock().await;
-            (state.session_id.clone(), ruleset(mode).into_iter().chain(state.restrictions.iter().cloned()).collect::<Vec<_>>())
+            (state.session_id.clone(), s.mode_rules(&state, mode))
         };
-        s.call(Method::PATCH, &format!("/api/session/{session_id}"), Some(json!({ "permissions": rules }))).await.map(|_| ())
+        let listed = s.list_children(&session_id).await?;
+        s.call(Method::PATCH, &format!("/api/session/{session_id}"), Some(json!({ "permissions": rules }))).await?;
+        s.state.lock().await.mode = mode;
+        // OpenCode copies a parent's rules into a subagent once, when it is made,
+        // so every subagent keeps the old mode unless it is rewritten, finished
+        // ones too. One that cannot be rewritten is stopped, and does not undo the
+        // change: the thread really is in the new mode.
+        s.rewrite_child_rules(listed).await;
+        Ok(())
     }
 
     async fn set_model(&self, model: &str) -> Result<()> {
         let s = &self.0;
-        let effort = s.state.lock().await.effort.clone();
+        // A variant the new model does not list makes OpenCode refuse the turn, so
+        // it is left off; the choice itself stays for a model that lists it.
+        let effort = {
+            let state = s.state.lock().await;
+            let bare = model.split('#').next().unwrap_or(model);
+            let listed = state.model_variants.get(bare);
+            state.effort.clone().filter(|effort| listed.is_none_or(|variants| variants.contains(effort.trim())))
+        };
         let reference = model_ref(model, effort.as_deref())
             .ok_or_else(|| DriverError::Unsupported(format!("OpenCode models are named provider/model, got {model}")))?;
         let session_id = s.state.lock().await.session_id.clone();

@@ -403,62 +403,7 @@ impl AgentDriver for OpencodeDriver {
             config.env.get("OPENCODE_CONFIG_CONTENT"),
             compaction_config(config.model.as_deref(), config.compaction.auto_compact_tokens),
         )?;
-        let mut cmd = crate::binary::command(&bin).no_window();
-        cmd.current_dir(&config.cwd)
-            .args(["serve", "--port", "0", "--hostname", "127.0.0.1"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        for (k, v) in &config.env {
-            cmd.env(k, v);
-        }
-        if let Some(native_config) = native_config {
-            cmd.env("OPENCODE_CONFIG_CONTENT", native_config);
-        }
-        tracing::info!(bin = %bin.display(), cwd = %config.cwd.display(), "spawning opencode serve");
-        #[cfg(unix)]
-        cmd.process_group(0);
-        let mut child = cmd.spawn()?;
-        let tree = crate::process_tree::ProcessTree::new(child.id().expect("spawned opencode"));
-        let stdout = child.stdout.take().ok_or_else(|| DriverError::Protocol("no stdout".into()))?;
-        let stderr = child.stderr.take().ok_or_else(|| DriverError::Protocol("no stderr".into()))?;
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(l)) = lines.next_line().await {
-                tracing::debug!(target: "provider.stderr", "{l}");
-            }
-        });
-
-        // Wait for "opencode server listening on http://127.0.0.1:PORT".
-        let base = {
-            let mut lines = BufReader::new(stdout).lines();
-            let found = tokio::time::timeout(std::time::Duration::from_secs(60), async {
-                while let Ok(Some(l)) = lines.next_line().await {
-                    tracing::debug!(target: "provider.stdout", "{l}");
-                    if let Some(idx) = l.find("http://") {
-                        let url = l[idx..].trim().trim_end_matches('/').to_string();
-                        return Some((url, lines));
-                    }
-                }
-                None
-            })
-            .await;
-            match found {
-                Ok(Some((url, mut lines))) => {
-                    tokio::spawn(async move {
-                        while let Ok(Some(l)) = lines.next_line().await {
-                            tracing::debug!(target: "provider.stdout", "{l}");
-                        }
-                    });
-                    url
-                }
-                _ => {
-                    let _ = child.kill().await;
-                    return Err(DriverError::Protocol("opencode serve did not announce a listening address".into()));
-                }
-            }
-        };
+        let (child, tree, base) = retry_locked_start(|| start_server(&bin, &config.cwd, &config.env, native_config.as_deref())).await?;
 
         let http = reqwest::Client::builder().build().map_err(|e| DriverError::Protocol(e.to_string()))?;
         let dir = config.cwd.to_string_lossy().to_string();
@@ -493,9 +438,22 @@ impl AgentDriver for OpencodeDriver {
                 active: false,
                 pending: HashMap::new(),
                 current_message_id: None,
+                context_overflow: None,
                 children: HashMap::new(),
+                rule_locks: HashMap::new(),
             }),
         });
+
+        // Subscribe before the session exists so no event of the first turn is
+        // missed: a quick turn can finish before a late subscription attaches.
+        let stream =
+            tokio::time::timeout(FIRST_SUBSCRIBE_TIMEOUT, session.http.get(format!("{base}/event")).query(&[("directory", &dir)]).send())
+                .await
+                .map_err(|_| DriverError::Protocol("opencode /event did not answer".into()))?
+                .map_err(net)?;
+        if !stream.status().is_success() {
+            return Err(DriverError::Protocol(format!("opencode /event: {}", stream.status())));
+        }
 
         // Create or adopt the session.
         let session_id = match (&config.resume_session_id, config.fork) {
@@ -546,14 +504,86 @@ impl AgentDriver for OpencodeDriver {
             }
         };
         session.state.lock().await.session_id = Some(session_id.clone());
+        if config.resume_session_id.is_some() {
+            // A resumed or forked session keeps the rules it was stored with.
+            // Write the ones for this thread's current mode: a session that kept
+            // an older, looser mode while the thread shows this one is worse than
+            // one that does not start. Its subagents are brought up to date too,
+            // since the server forgets nothing about them across a restart.
+            let rules = json!({ "permission": ruleset(config.permission_mode) });
+            session.send(reqwest::Method::PATCH, &format!("/session/{session_id}"), rules, Some(CHILD_RULES_TIMEOUT)).await?;
+            let listed = session.list_children(&session_id).await?;
+            session.rewrite_child_rules(listed).await;
+        }
         session.emit(DriverEvent::SessionBound { session_id, model: config.model.clone() }).await;
 
         let reader = session.clone();
         let worker = crate::process_tree::SessionTask(tokio::spawn(async move {
-            tokio::join!(reader.discover_metadata(), reader.clone().event_loop());
+            tokio::join!(reader.discover_metadata(), reader.clone().event_loop(Some(stream)));
         }));
 
         Ok(SpawnedSession { session: Box::new(Handle(session, std::sync::Mutex::new(Some(tree)), Some(worker))), events: rx })
+    }
+}
+
+/// One `opencode serve` start: the process, its process tree and its address.
+async fn start_server(
+    bin: &Path,
+    cwd: &Path,
+    env: &HashMap<String, String>,
+    native_config: Option<&str>,
+) -> std::result::Result<(Child, crate::process_tree::ProcessTree, String), StartFailure> {
+    let mut cmd = crate::binary::command(bin).no_window();
+    cmd.current_dir(cwd)
+        .args(["serve", "--port", "0", "--hostname", "127.0.0.1"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    if let Some(native_config) = native_config {
+        cmd.env("OPENCODE_CONFIG_CONTENT", native_config);
+    }
+    tracing::info!(bin = %bin.display(), cwd = %cwd.display(), "spawning opencode serve");
+    #[cfg(unix)]
+    cmd.process_group(0);
+    let mut child = cmd.spawn().map_err(|error| StartFailure::plain(error.into()))?;
+    let tree = crate::process_tree::ProcessTree::new(child.id().expect("spawned opencode"));
+    let stdout = child.stdout.take().ok_or_else(|| DriverError::Protocol("no stdout".into()))?;
+    let stderr = child.stderr.take().ok_or_else(|| DriverError::Protocol("no stderr".into()))?;
+    let stderr = StderrTail::capture(stderr);
+
+    // Wait for "opencode server listening on http://127.0.0.1:PORT".
+    let mut lines = BufReader::new(stdout).lines();
+    let found = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        while let Ok(Some(l)) = lines.next_line().await {
+            tracing::debug!(target: "provider.stdout", "{l}");
+            if let Some(idx) = l.find("http://") {
+                return Some(l[idx..].trim().trim_end_matches('/').to_string());
+            }
+        }
+        None
+    })
+    .await;
+    match found {
+        Ok(Some(url)) => {
+            tokio::spawn(async move {
+                while let Ok(Some(l)) = lines.next_line().await {
+                    tracing::debug!(target: "provider.stdout", "{l}");
+                }
+            });
+            Ok((child, tree, url))
+        }
+        _ => {
+            let _ = child.kill().await;
+            let database_locked = is_database_locked(&stderr.finish().await);
+            Err(StartFailure {
+                error: DriverError::Protocol("opencode serve did not announce a listening address".into()),
+                database_locked,
+            })
+        }
     }
 }
 
@@ -564,6 +594,246 @@ fn net(e: reqwest::Error) -> DriverError {
 fn split_model(s: &str) -> Option<(String, String)> {
     let (p, m) = s.split_once('/')?;
     Some((p.to_string(), m.to_string()))
+}
+
+/// How long an event stream may stay silent. OpenCode sends a heartbeat every
+/// 10-15 seconds, so more silence than this means the stream is stuck, not idle.
+pub(super) const SILENT_STREAM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
+/// How long a re-subscription to the event stream may take to answer.
+pub(super) const SUBSCRIBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// The first subscription also waits for a cold server to load its project.
+pub(super) const FIRST_SUBSCRIBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// One read or write while settling a turn after a reconnect.
+pub(super) const RECONCILE_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// Messages read per request while looking for a turn's prompt, and how many
+/// are read at most (the page doubles until it holds the prompt).
+const SETTLE_PAGE: usize = 100;
+const SETTLE_PAGE_CAP: usize = 1600;
+/// One rules update sent to a subagent session.
+pub(super) const CHILD_RULES_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Server-sent events cut out of a byte stream. A network chunk can end in the
+/// middle of a multibyte character, so bytes are kept until a whole event
+/// (ending in a blank line) has arrived and only that is decoded.
+#[derive(Default)]
+pub(super) struct SseFrames {
+    buf: Vec<u8>,
+}
+
+impl SseFrames {
+    /// Add a chunk and return the JSON `data:` payloads of every event it completed.
+    pub(super) fn push(&mut self, chunk: &[u8]) -> Vec<Value> {
+        self.buf.extend_from_slice(chunk);
+        let mut payloads = Vec::new();
+        while let Some(end) = self.buf.windows(2).position(|pair| pair == b"\n\n") {
+            let frame: Vec<u8> = self.buf.drain(..end + 2).collect();
+            for line in String::from_utf8_lossy(&frame[..end]).lines() {
+                if let Some(data) = line.strip_prefix("data:")
+                    && let Ok(value) = serde_json::from_str::<Value>(data.trim())
+                {
+                    payloads.push(value);
+                }
+            }
+        }
+        payloads
+    }
+}
+
+/// Why [`read_frames`] stopped.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum StreamEnd {
+    /// The server closed the stream or the connection broke.
+    Closed,
+    /// No bytes (not even a heartbeat) arrived for the silence limit.
+    Silent,
+}
+
+/// Feed every event of `stream` to `on_event` until it ends, breaks or stays
+/// silent for `silence`.
+pub(super) async fn read_frames<S, B, E, F, Fut>(mut stream: S, silence: std::time::Duration, mut on_event: F) -> StreamEnd
+where
+    S: futures::Stream<Item = std::result::Result<B, E>> + Unpin,
+    B: AsRef<[u8]>,
+    F: FnMut(Value) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    let mut frames = SseFrames::default();
+    loop {
+        match tokio::time::timeout(silence, stream.next()).await {
+            Err(_) => return StreamEnd::Silent,
+            Ok(None) | Ok(Some(Err(_))) => return StreamEnd::Closed,
+            Ok(Some(Ok(chunk))) => {
+                for event in frames.push(chunk.as_ref()) {
+                    on_event(event).await;
+                }
+            }
+        }
+    }
+}
+
+/// The context window a model offers: its input limit when it has one, else its whole context.
+pub(super) fn model_window(limit: &Value) -> Option<u64> {
+    let size = |key: &str| limit.get(key).and_then(Value::as_u64).filter(|size| *size > 0);
+    size("input").or_else(|| size("context"))
+}
+
+fn event_of(ty: &str, properties: Value) -> Value {
+    json!({ "type": ty, "properties": properties })
+}
+
+/// Rules as a list, for either server API.
+fn rule_list(rules: &Value) -> Vec<Value> {
+    rules.as_array().cloned().unwrap_or_default()
+}
+
+/// Every mode's ruleset, the rules Kybern itself ever writes into a session.
+fn all_rulesets() -> Vec<Vec<Value>> {
+    [PermissionMode::Supervised, PermissionMode::AcceptEdits, PermissionMode::Auto, PermissionMode::FullAccess]
+        .into_iter()
+        .map(|mode| rule_list(&ruleset(mode)))
+        .collect()
+}
+
+/// A subagent's own rules (its agent's restrictions): what is left of its
+/// rules once the thread's policy is taken off. That policy was written by
+/// Kybern under whichever mode was current then, or copied by OpenCode when
+/// the session was made, so the mode that wrote it is read from the rules
+/// themselves instead of assumed:
+/// 1. a whole ruleset of some mode comes first (Kybern wrote it);
+/// 2. else the part of one OpenCode copies (denies and `external_directory`);
+/// 3. else the layout is unknown, and one of each rule Kybern writes is taken
+///    off, so a rule of the agent's that merely equals one of them (a `bash`
+///    deny) is still kept.
+///
+/// Only the child's own `deny` rules are kept, whatever came before them.
+fn child_own_rules(child: &[Value]) -> Vec<Value> {
+    // Only a deny can restrict the thread's mode. An `allow` or `ask` of the
+    // child's own would come last, where it wins: one OpenCode adds from an
+    // agent's own defaults, or one left by a write that went wrong, must not
+    // loosen what the thread shows.
+    unlayered_child_rules(child).into_iter().filter(|rule| rule["action"] == "deny").collect()
+}
+
+fn unlayered_child_rules(child: &[Value]) -> Vec<Value> {
+    let rulesets = all_rulesets();
+    let longest =
+        |lists: Vec<Vec<Value>>| lists.into_iter().filter(|list| !list.is_empty() && child.starts_with(list)).map(|list| list.len()).max();
+    if let Some(len) = longest(rulesets.clone()) {
+        return child[len..].to_vec();
+    }
+    let copies = rulesets.iter().map(|list| list.iter().filter(|rule| v1_inherits(rule)).cloned().collect()).collect();
+    if let Some(len) = longest(copies) {
+        return child[len..].to_vec();
+    }
+    let mut written: Vec<&Value> = Vec::new();
+    for rule in rulesets.iter().flatten() {
+        if !written.contains(&rule) {
+            written.push(rule);
+        }
+    }
+    let mut own = child.to_vec();
+    for rule in written {
+        if let Some(index) = own.iter().position(|candidate| candidate == rule) {
+            own.remove(index);
+        }
+    }
+    own
+}
+
+/// The rules a subagent session ends up with after Kybern writes the parent's
+/// policy into it: the parent's rules first, then whatever the child set for
+/// itself. Last match wins, so rules Kybern wrote under an older mode must not
+/// survive as the child's own: [`child_own_rules`] takes them off.
+fn merge_child_rules(parent: &[Value], child: &[Value]) -> Vec<Value> {
+    parent.iter().cloned().chain(child_own_rules(child)).collect()
+}
+
+/// Server start-up failed because another OpenCode holds the shared database.
+pub(super) fn is_database_locked(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    lower.contains("sqlite_busy") || lower.contains("database is locked")
+}
+
+/// Start-up tries after the first one, when OpenCode cannot get its database.
+const START_RETRIES: usize = 3;
+const START_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// A failed server start, with whether the shared database was locked.
+pub(super) struct StartFailure {
+    pub(super) error: DriverError,
+    pub(super) database_locked: bool,
+}
+
+impl StartFailure {
+    pub(super) fn plain(error: DriverError) -> Self {
+        Self { error, database_locked: false }
+    }
+}
+
+impl From<DriverError> for StartFailure {
+    fn from(error: DriverError) -> Self {
+        Self::plain(error)
+    }
+}
+
+/// Run `attempt` again after a database lock (OpenCode instances share one
+/// database, and a migration or checkpoint in another holds it briefly).
+/// Every other failure is final.
+pub(super) async fn retry_locked_start<T, F, Fut>(mut attempt: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<T, StartFailure>>,
+{
+    let mut retries = 0;
+    loop {
+        match attempt().await {
+            Ok(value) => return Ok(value),
+            Err(failure) if failure.database_locked && retries < START_RETRIES => {
+                retries += 1;
+                tracing::debug!(retries, "opencode serve could not open its database; starting again");
+                tokio::time::sleep(START_RETRY_DELAY).await;
+            }
+            Err(failure) => return Err(failure.error),
+        }
+    }
+}
+
+/// The tail of a server's stderr, kept so a failed start can say why.
+pub(super) struct StderrTail {
+    text: Arc<std::sync::Mutex<String>>,
+    reader: tokio::task::JoinHandle<()>,
+}
+
+const STDERR_TAIL_BYTES: usize = 16 * 1024;
+
+impl StderrTail {
+    pub(super) fn capture(stderr: tokio::process::ChildStderr) -> Self {
+        let text = Arc::new(std::sync::Mutex::new(String::new()));
+        let kept = text.clone();
+        let reader = tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                tracing::debug!(target: "provider.stderr", "{line}");
+                let mut kept = kept.lock().unwrap();
+                kept.push_str(&line);
+                kept.push('\n');
+                if kept.len() > STDERR_TAIL_BYTES {
+                    let mut cut = kept.len() - STDERR_TAIL_BYTES;
+                    while !kept.is_char_boundary(cut) {
+                        cut += 1;
+                    }
+                    kept.drain(..cut);
+                }
+            }
+        });
+        Self { text, reader }
+    }
+
+    /// What the server wrote, once its pipe closed (or after a short wait for it).
+    pub(super) async fn finish(self) -> String {
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(500), self.reader).await;
+        self.text.lock().unwrap().clone()
+    }
 }
 
 fn opencode_config_content(base: Option<&String>, bridge: &NativeToolBridge) -> Result<String> {
@@ -673,34 +943,84 @@ fn mcp_config(base: Option<&String>, bridge: &NativeToolBridge) -> Result<Value>
 /// plus asking the user a question and running a skill. None of them edits a file.
 const OPENCODE_READ_ONLY_TOOLS: &[&str] = &["read", "grep", "glob", "list", "webfetch", "question", "skill"];
 
+/// Permissions a mode asks for or allows one by one.
+const RESTRICTED_PERMISSIONS: [&str; 6] = ["bash", "edit", "webfetch", "websearch", "external_directory", "doom_loop"];
+
 /// Per-session permission ruleset for a kybern mode. Last matching rule wins.
+///
+/// A subagent session copies only the parent's `deny` and `external_directory`
+/// rules when it starts, before Kybern can write the whole policy into it. So
+/// the modes that ask start with denies: later rules override them in the
+/// parent, but they are all a new subagent has until it is updated, and a
+/// subagent that is never updated can do nothing without a person's say.
 fn ruleset(mode: PermissionMode) -> Value {
     let rule = |permission: &str, action: &str| json!({ "permission": permission, "pattern": "*", "action": action });
+    let denies = || std::iter::once(rule("*", "deny")).chain(RESTRICTED_PERMISSIONS.iter().map(|permission| rule(permission, "deny")));
+    let rules: Vec<Value> = match mode {
+        PermissionMode::Supervised => denies()
+            .chain([
+                rule("*", "ask"),
+                rule("read", "allow"),
+                rule("glob", "allow"),
+                rule("grep", "allow"),
+                rule("list", "allow"),
+                rule("todowrite", "allow"),
+                rule("question", "allow"),
+                rule("skill", "allow"),
+                rule("task", "allow"),
+                rule("lsp", "allow"),
+            ])
+            .collect(),
+        PermissionMode::AcceptEdits => denies()
+            .chain([
+                rule("*", "allow"),
+                rule("bash", "ask"),
+                rule("webfetch", "ask"),
+                rule("websearch", "ask"),
+                rule("external_directory", "ask"),
+                rule("doom_loop", "ask"),
+            ])
+            .collect(),
+        PermissionMode::Auto => denies().chain([rule("*", "allow"), rule("external_directory", "ask"), rule("doom_loop", "ask")]).collect(),
+        // `external_directory` is one of the two rules a subagent copies.
+        PermissionMode::FullAccess => vec![rule("*", "allow"), rule("external_directory", "allow")],
+    };
+    Value::Array(rules)
+}
+
+/// What OpenCode 1 copies from a parent session into a subagent session.
+fn v1_inherits(rule: &Value) -> bool {
+    rule["permission"] == "external_directory" || rule["action"] == "deny"
+}
+
+/// How the mode is named to people.
+pub(super) fn mode_label(mode: PermissionMode) -> &'static str {
     match mode {
-        PermissionMode::Supervised => json!([
-            rule("*", "ask"),
-            rule("read", "allow"),
-            rule("glob", "allow"),
-            rule("grep", "allow"),
-            rule("list", "allow"),
-            rule("todowrite", "allow"),
-            rule("question", "allow"),
-            rule("skill", "allow"),
-            rule("task", "allow"),
-            rule("lsp", "allow"),
-        ]),
-        PermissionMode::AcceptEdits => json!([
-            rule("*", "allow"),
-            rule("bash", "ask"),
-            rule("webfetch", "ask"),
-            rule("websearch", "ask"),
-            rule("external_directory", "ask"),
-            rule("doom_loop", "ask"),
-        ]),
-        PermissionMode::Auto => json!([rule("*", "allow"), rule("external_directory", "ask"), rule("doom_loop", "ask")]),
-        PermissionMode::FullAccess => json!([rule("*", "allow")]),
+        PermissionMode::Supervised => "Supervised",
+        PermissionMode::AcceptEdits => "Accept edits",
+        PermissionMode::Auto => "Auto",
+        PermissionMode::FullAccess => "Full access",
     }
 }
+
+/// The notice for a subagent whose rules could not be written: `stopped` says
+/// whether it was stopped, which is what keeps it from running under another mode.
+pub(super) fn unruled_child_notice(mode: PermissionMode, stopped: bool) -> DriverEvent {
+    let label = mode_label(mode);
+    let (level, text) = if stopped {
+        (NoticeLevel::Warning, format!("Stopped a subagent that couldn't switch to {label}. Ask the agent to run it again."))
+    } else {
+        (NoticeLevel::Error, format!("A subagent couldn't switch to {label} and is still running. Stop it from its task row."))
+    };
+    DriverEvent::Notice { level, text, data: None }
+}
+
+/// How many times a write of a subagent's rules is repeated when the mode
+/// changes underneath it.
+pub(super) const RULE_WRITE_TRIES: usize = 3;
+
+/// Most subagent sessions read below one thread when listing them.
+pub(super) const MAX_LISTED_CHILDREN: usize = 256;
 
 struct PartInfo {
     kind: String,
@@ -711,6 +1031,11 @@ struct PartInfo {
 #[derive(Default)]
 struct ChildRuntime {
     task_id: String,
+    /// The tool call that started (or last resumed) this child.
+    call_id: Option<String>,
+    /// The rules the child holds once Kybern wrote this thread's policy into it.
+    /// `None` until written, or when the last write failed.
+    rules: Option<Vec<Value>>,
     seen_tool_parts: HashSet<String>,
     stats: RuntimeTaskStats,
     stop_requested: bool,
@@ -851,9 +1176,16 @@ struct State {
     pending: HashMap<String, String>,
     /// Client-chosen OpenCode message id of the current turn's user message.
     current_message_id: Option<String>,
+    /// A context overflow OpenCode reported during this turn. It compacts and
+    /// carries on; the turn fails only if it goes idle without compacting.
+    context_overflow: Option<String>,
     /// Provider child session id -> runtime bookkeeping. Child output stays out
     /// of the parent transcript; only compact lifecycle/progress is projected.
     children: HashMap<String, ChildRuntime>,
+    /// One lock per subagent session, held from reading the mode to the end
+    /// of the write, so writes to one session land in the order they read the
+    /// mode and the last to land is the current one.
+    rule_locks: HashMap<String, Arc<Mutex<()>>>,
 }
 
 struct OpencodeSession {
@@ -898,7 +1230,7 @@ impl OpencodeSession {
             for provider in value["all"].as_array().into_iter().flatten() {
                 if let (Some(id), Some(models)) = (provider["id"].as_str(), provider["models"].as_object()) {
                     for (model, value) in models {
-                        if let Some(window) = value.pointer("/limit/context").and_then(Value::as_u64).filter(|w| *w > 0) {
+                        if let Some(window) = value.get("limit").and_then(model_window) {
                             windows.insert(format!("{id}/{model}"), window);
                         }
                     }
@@ -913,12 +1245,169 @@ impl OpencodeSession {
         let _ = self.events.send(ev).await;
     }
 
-    async fn observe_child(&self, child_id: String, task: DriverRuntimeTask) {
+    /// A subagent session showed up (or showed up again). Its rules are written
+    /// before it is announced, so what it does next follows this thread's mode.
+    /// One that cannot be given them is stopped, once it is announced.
+    async fn observe_child(&self, child_id: String, task: DriverRuntimeTask, rules: Option<Vec<Value>>) {
         let task_id = task.id.clone();
-        let mut state = self.state.lock().await;
-        state.children.entry(child_id).or_default().task_id = task_id;
-        drop(state);
+        {
+            let mut state = self.state.lock().await;
+            let child = state.children.entry(child_id.clone()).or_default();
+            // A new tool call for a finished child resumes it: its earlier end
+            // must not swallow the new run's, and its rules may be stale.
+            let resumed = child.terminal && matches!((&child.call_id, &task.tool_call_id), (Some(old), Some(new)) if old != new);
+            if resumed {
+                child.terminal = false;
+                child.stop_requested = false;
+                child.rules = None;
+            }
+            if task.tool_call_id.is_some() {
+                child.call_id = task.tool_call_id.clone();
+            }
+            child.task_id = task_id;
+        }
+        let failed = self.install_child_rules(&child_id, rules).await;
         self.emit(DriverEvent::RuntimeTaskStarted(task)).await;
+        if let Some(error) = failed {
+            self.child_rules_failed(&child_id, &error).await;
+        }
+    }
+
+    /// Write this thread's rules into a subagent session. OpenCode 1 gives it
+    /// only the parent's denies, so without this it would run on its agent's
+    /// defaults and never ask. `known` is the rules the session already holds,
+    /// when the event that announced it carried them. The error is the write's
+    /// failure, for [`Self::child_rules_failed`].
+    async fn install_child_rules(&self, child_id: &str, known: Option<Vec<Value>>) -> Option<DriverError> {
+        if self.state.lock().await.children.get(child_id).is_none_or(|child| child.rules.is_some()) {
+            return None;
+        }
+        self.refresh_child_rules(child_id, known).await.err()
+    }
+
+    /// The lock that orders writes to one subagent session.
+    async fn child_write_lock(&self, child_id: &str) -> Arc<Mutex<()>> {
+        self.state.lock().await.rule_locks.entry(child_id.to_string()).or_default().clone()
+    }
+
+    /// Replace a subagent's rules with this thread's current policy plus its
+    /// own. `held` is the rules it has, read from the server when `None`. The
+    /// mode can change while the write is on its way, so a write that lost that
+    /// race is done again; one that cannot settle on the current mode is an
+    /// error, never a success that leaves an older mode in place.
+    async fn refresh_child_rules(&self, child_id: &str, held: Option<Vec<Value>>) -> Result<()> {
+        let lock = self.child_write_lock(child_id).await;
+        let _writing = lock.lock().await;
+        let mut held = held;
+        for _ in 0..RULE_WRITE_TRIES {
+            let mode = self.state.lock().await.mode;
+            let parent = rule_list(&ruleset(mode));
+            let current = match held.take() {
+                Some(rules) => rules,
+                None => {
+                    let info =
+                        self.send(reqwest::Method::GET, &format!("/session/{child_id}"), Value::Null, Some(CHILD_RULES_TIMEOUT)).await?;
+                    rule_list(&info["permission"])
+                }
+            };
+            let rules = merge_child_rules(&parent, &current);
+            self.write_rules(child_id, &rules).await?;
+            let mut state = self.state.lock().await;
+            if let Some(child) = state.children.get_mut(child_id) {
+                child.rules = Some(rules.clone());
+            }
+            if state.mode == mode {
+                return Ok(());
+            }
+            held = Some(rules);
+        }
+        if let Some(child) = self.state.lock().await.children.get_mut(child_id) {
+            child.rules = None;
+        }
+        Err(DriverError::Protocol(format!("the approval mode kept changing while the rules of {child_id} were written")))
+    }
+
+    /// Replace a session's permission rules.
+    async fn write_rules(&self, session_id: &str, rules: &[Value]) -> Result<()> {
+        self.send(reqwest::Method::PATCH, &format!("/session/{session_id}"), json!({ "permission": rules }), Some(CHILD_RULES_TIMEOUT))
+            .await
+            .map(|_| ())
+    }
+
+    /// Every subagent session below `root`, nested ones too, as OpenCode lists
+    /// them. After a daemon restart this is the only record of them.
+    async fn list_children(&self, root: &str) -> Result<Vec<String>> {
+        let mut found: Vec<String> = Vec::new();
+        let mut queue = vec![root.to_string()];
+        while let Some(parent) = queue.pop() {
+            let list =
+                self.send(reqwest::Method::GET, &format!("/session/{parent}/children"), Value::Null, Some(CHILD_RULES_TIMEOUT)).await?;
+            for id in list.as_array().into_iter().flatten().filter_map(|info| info["id"].as_str()) {
+                if id != root && !found.iter().any(|known| known == id) && found.len() < MAX_LISTED_CHILDREN {
+                    found.push(id.to_string());
+                    queue.push(id.to_string());
+                }
+            }
+        }
+        if found.len() >= MAX_LISTED_CHILDREN {
+            tracing::warn!(
+                root,
+                limit = MAX_LISTED_CHILDREN,
+                "an OpenCode thread lists more subagents than are rewritten at once; the rest are written when they resume"
+            );
+        }
+        Ok(found)
+    }
+
+    /// A subagent's rules could not be written, so it may hold the rules of an
+    /// older, looser mode. One that is running is stopped: letting it carry on
+    /// is the one outcome that contradicts the mode the thread shows. A finished
+    /// one has no rules marked, so they are written again before it resumes, and
+    /// stopped then if that fails too.
+    async fn child_rules_failed(&self, child_id: &str, error: &DriverError) {
+        tracing::warn!(%error, child_id, "could not write approval rules into an OpenCode subagent");
+        let (running, mode) = {
+            let mut state = self.state.lock().await;
+            let mode = state.mode;
+            let running = state.children.get_mut(child_id).is_some_and(|child| {
+                child.rules = None;
+                !child.terminal
+            });
+            (running, mode)
+        };
+        if running {
+            let stopped = self.stop_child(child_id).await.is_ok();
+            self.emit(unruled_child_notice(mode, stopped)).await;
+        }
+    }
+
+    /// Write the thread's current rules into every subagent session, finished
+    /// ones too: a finished subagent can be resumed, and what it holds then
+    /// must not be the rules of an earlier mode. `listed` is what the server
+    /// knows of them, which after a restart is more than this driver does. A
+    /// running subagent that cannot be updated is stopped; a finished one is
+    /// marked to be written again before it resumes.
+    async fn rewrite_child_rules(&self, listed: Vec<String>) {
+        let known: Vec<(String, bool, Option<Vec<Value>>)> =
+            self.state.lock().await.children.iter().map(|(id, child)| (id.clone(), child.terminal, child.rules.clone())).collect();
+        for (id, terminal, held) in &known {
+            if let Err(error) = self.refresh_child_rules(id, held.clone()).await {
+                if *terminal {
+                    if let Some(child) = self.state.lock().await.children.get_mut(id) {
+                        child.rules = None;
+                    }
+                } else {
+                    self.child_rules_failed(id, &error).await;
+                }
+            }
+        }
+        // Sessions this driver never saw, finished by definition: when they
+        // resume they are announced and written like any other.
+        for id in listed.into_iter().filter(|id| !known.iter().any(|(known, ..)| known == id)) {
+            if let Err(error) = self.refresh_child_rules(&id, None).await {
+                tracing::warn!(%error, child_id = %id, "could not write approval rules into a finished OpenCode subagent");
+            }
+        }
     }
 
     async fn update_child(
@@ -974,32 +1463,36 @@ impl OpencodeSession {
         Ok(())
     }
 
-    async fn event_loop(self: Arc<Self>) {
+    async fn event_loop(self: Arc<Self>, first: Option<reqwest::Response>) {
+        self.event_loop_with(first, SILENT_STREAM_TIMEOUT).await
+    }
+
+    /// Read events until the server exits. A stream that closes, breaks or goes
+    /// silent is subscribed again, and the turn it may have lost the end of is
+    /// settled from the stored messages.
+    async fn event_loop_with(self: Arc<Self>, mut first: Option<reqwest::Response>, silence: std::time::Duration) {
         let mut backoff = 200u64;
+        let mut reconnect = false;
         loop {
-            let resp = self.http.get(format!("{}/event", self.base)).query(&[("directory", &self.dir)]).send().await;
-            match resp {
-                Ok(r) if r.status().is_success() => {
-                    backoff = 200;
-                    let mut stream = r.bytes_stream();
-                    let mut buf = String::new();
-                    while let Some(chunk) = stream.next().await {
-                        let Ok(chunk) = chunk else { break };
-                        buf.push_str(&String::from_utf8_lossy(&chunk));
-                        while let Some(pos) = buf.find("\n\n") {
-                            let frame = buf[..pos].to_string();
-                            buf.drain(..pos + 2);
-                            for line in frame.lines() {
-                                if let Some(data) = line.strip_prefix("data:")
-                                    && let Ok(v) = serde_json::from_str::<Value>(data.trim())
-                                {
-                                    self.handle_event(&v).await;
-                                }
-                            }
-                        }
-                    }
+            let response = match first.take() {
+                Some(response) => Some(response),
+                None => tokio::time::timeout(
+                    SUBSCRIBE_TIMEOUT,
+                    self.http.get(format!("{}/event", self.base)).query(&[("directory", &self.dir)]).send(),
+                )
+                .await
+                .ok()
+                .and_then(|response| response.ok()),
+            };
+            if let Some(response) = response.filter(|response| response.status().is_success()) {
+                backoff = 200;
+                if reconnect {
+                    self.resync_requests().await;
+                    self.settle_after_reconnect().await;
                 }
-                _ => {}
+                reconnect = true;
+                let this = &*self;
+                read_frames(response.bytes_stream(), silence, |event| async move { this.handle_event(&event).await }).await;
             }
             // Stream dropped: is the server still alive?
             if let Ok(Some(status)) = self.child.lock().await.try_wait() {
@@ -1013,6 +1506,219 @@ impl OpencodeSession {
             }
             tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
             backoff = (backoff * 2).min(5000);
+        }
+    }
+
+    /// The requests for approval and answers that are still open. After a
+    /// reconnect, one asked while the stream was down was never seen, and one
+    /// answered elsewhere was never withdrawn.
+    async fn resync_requests(&self) {
+        let get =
+            |path: &'static str| async move { self.send(reqwest::Method::GET, path, Value::Null, Some(RECONCILE_CALL_TIMEOUT)).await.ok() };
+        let before: Vec<(String, bool)> =
+            self.state.lock().await.pending.iter().map(|(id, session)| (id.clone(), session == "__question")).collect();
+        let (permissions, questions) = tokio::join!(get("/permission"), get("/question"));
+        let ids = |list: &Option<Value>| -> Option<HashSet<String>> {
+            Some(list.as_ref()?.as_array()?.iter().filter_map(|item| item["id"].as_str().map(str::to_owned)).collect())
+        };
+        for (kind, list, ty) in [(false, &permissions, "permission.asked"), (true, &questions, "question.asked")] {
+            let Some(open) = ids(list) else { continue };
+            for item in list.iter().filter_map(Value::as_array).flatten() {
+                let known = match item["id"].as_str() {
+                    Some(id) => self.state.lock().await.pending.contains_key(id),
+                    None => true,
+                };
+                if !known {
+                    self.handle_event(&event_of(ty, item.clone())).await;
+                }
+            }
+            for (id, question) in &before {
+                if *question == kind && !open.contains(id) && self.state.lock().await.pending.remove(id).is_some() {
+                    self.emit(DriverEvent::PermissionWithdrawn { request_id: id.clone() }).await;
+                }
+            }
+        }
+    }
+
+    /// The stored messages from a turn's prompt on. The newest `limit` messages
+    /// are read, and the page doubles until the prompt is in it: a long turn
+    /// pushes its own prompt out of a short page.
+    /// `None` when the prompt is not stored yet. Otherwise the messages after it
+    /// and whether it was found: not found means the turn is longer than the
+    /// most that is read.
+    async fn turn_messages(&self, session_id: &str, message_id: &str) -> Option<(Vec<Value>, bool)> {
+        let mut limit = SETTLE_PAGE;
+        loop {
+            let page = self
+                .send(
+                    reqwest::Method::GET,
+                    &format!("/session/{session_id}/message?limit={limit}"),
+                    Value::Null,
+                    Some(RECONCILE_CALL_TIMEOUT),
+                )
+                .await
+                .ok()?;
+            let messages = page.as_array().map(Vec::as_slice).unwrap_or_default();
+            if let Some(start) = messages.iter().position(|message| message.pointer("/info/id").and_then(Value::as_str) == Some(message_id))
+            {
+                return Some((messages[start + 1..].to_vec(), true));
+            }
+            // The whole history is in the page, and the prompt is not stored yet.
+            if messages.len() < limit {
+                return None;
+            }
+            // A turn that long, in a session that is idle, is over: there is no
+            // reply text to read back, but the turn must still end.
+            if limit >= SETTLE_PAGE_CAP {
+                return Some((Vec::new(), false));
+            }
+            limit *= 2;
+        }
+    }
+
+    /// The event stream was down, so the end of the running turn may have gone
+    /// by. Read what OpenCode stored: if the session is idle and the turn's
+    /// reply is there, finish the turn with the text and usage it was missing.
+    async fn settle_after_reconnect(&self) {
+        let (session_id, message_id) = {
+            let state = self.state.lock().await;
+            match (state.active, state.compact_operation.is_none(), &state.session_id, &state.current_message_id) {
+                (true, true, Some(session), Some(message)) => (session.clone(), message.clone()),
+                _ => return,
+            }
+        };
+        let Ok(status) = self.send(reqwest::Method::GET, "/session/status", Value::Null, Some(RECONCILE_CALL_TIMEOUT)).await else {
+            return;
+        };
+        if status.get(&session_id).is_some_and(|status| status["type"] != "idle") {
+            return;
+        }
+        // The prompt may not have been stored yet; then there is nothing to settle.
+        let Some((after, prompt_found)) = self.turn_messages(&session_id, &message_id).await else { return };
+        let replies: Vec<&Value> = after.iter().filter(|message| message.pointer("/info/role") == Some(&json!("assistant"))).collect();
+        if replies.is_empty() && prompt_found {
+            return;
+        }
+        // The turn may have ended, or another begun, while the messages were read.
+        if !self.is_current_turn(&message_id).await {
+            return;
+        }
+        for reply in &replies {
+            for part in
+                reply["parts"].as_array().into_iter().flatten().filter(|part| matches!(part["type"].as_str(), Some("text" | "step-finish")))
+            {
+                self.handle_part(part).await;
+            }
+        }
+        match replies.last().and_then(|reply| reply.pointer("/info/error")).filter(|error| !error.is_null()) {
+            Some(error) => {
+                if error.get("name").and_then(Value::as_str) == Some("ContextOverflowError") {
+                    let message = error.pointer("/data/message").and_then(Value::as_str).unwrap_or("");
+                    self.state.lock().await.context_overflow = Some(format!("ContextOverflowError: {message}"));
+                    self.finish_turn_idle_of(Some(&message_id), false).await;
+                } else {
+                    self.handle_session_error_of(error, Some(&message_id)).await;
+                }
+            }
+            // A reply that ended without an error is the answer to any overflow
+            // OpenCode compacted: `session.compacted` may have been missed.
+            None => self.finish_turn_idle_of(Some(&message_id), true).await,
+        }
+    }
+
+    /// Whether `message_id` is the turn still running.
+    async fn is_current_turn(&self, message_id: &str) -> bool {
+        let state = self.state.lock().await;
+        state.active && state.current_message_id.as_deref() == Some(message_id)
+    }
+
+    /// `session.idle`: the turn ended. A context overflow that was never
+    /// followed by a compaction fails it.
+    async fn finish_turn_idle(&self) {
+        self.finish_turn_idle_of(None, false).await
+    }
+
+    /// End the turn. With `turn`, only if that is the turn still running;
+    /// `forgive_overflow` drops an overflow that was already dealt with.
+    async fn finish_turn_idle_of(&self, turn: Option<&str>, forgive_overflow: bool) {
+        let (usage, cost, duration_ms, active, anchors, overflow) = {
+            let mut st = self.state.lock().await;
+            if turn.is_some_and(|turn| st.current_message_id.as_deref() != Some(turn)) {
+                return;
+            }
+            if forgive_overflow {
+                st.context_overflow = None;
+            }
+            let active = st.active;
+            st.compact_operation = None;
+            st.active = false;
+            let d = st.turn_started.take().map(|t| t.elapsed().as_millis() as u64).unwrap_or(0);
+            let anchors = crate::TurnAnchors { turn_id: st.current_message_id.take(), previous_end: None };
+            (std::mem::take(&mut st.turn_usage), st.turn_cost, d, active, anchors, st.context_overflow.take())
+        };
+        if !active {
+            return;
+        }
+        match overflow {
+            Some(text) => self.emit(DriverEvent::turn_failed(ProviderKind::Opencode, text)).await,
+            None => {
+                self.emit(DriverEvent::TurnCompleted {
+                    stop_reason: StopReason::Completed,
+                    usage,
+                    cost_usd: Some(cost),
+                    duration_ms,
+                    anchors,
+                })
+                .await
+            }
+        }
+    }
+
+    /// `session.error`.
+    async fn handle_session_error(&self, err: &Value) {
+        self.handle_session_error_of(err, None).await
+    }
+
+    /// `session.error`, for the turn `turn` only when given.
+    async fn handle_session_error_of(&self, err: &Value, turn: Option<&str>) {
+        let name = err.get("name").and_then(|n| n.as_str()).unwrap_or("error");
+        let msg = err.pointer("/data/message").and_then(|m| m.as_str()).unwrap_or("");
+        let current = {
+            let st = self.state.lock().await;
+            turn.is_none_or(|turn| st.current_message_id.as_deref() == Some(turn))
+        };
+        if !current {
+            return;
+        }
+        if name == "ContextOverflowError" && self.state.lock().await.active {
+            // OpenCode stays busy and compacts; the idle that follows decides.
+            self.state.lock().await.context_overflow = Some(format!("{name}: {msg}"));
+            return;
+        }
+        let active = {
+            let mut st = self.state.lock().await;
+            let a = st.active;
+            st.compact_operation = None;
+            st.active = false;
+            st.turn_started = None;
+            st.context_overflow = None;
+            a
+        };
+        if name == "MessageAbortedError" {
+            if active {
+                self.emit(DriverEvent::TurnCompleted {
+                    stop_reason: StopReason::Interrupted,
+                    usage: Usage::default(),
+                    cost_usd: None,
+                    duration_ms: 0,
+                    anchors: crate::TurnAnchors::default(),
+                })
+                .await;
+            }
+        } else if active {
+            self.emit(DriverEvent::turn_failed(ProviderKind::Opencode, format!("{name}: {msg}"))).await;
+        } else {
+            self.emit(DriverEvent::Notice { level: NoticeLevel::Error, text: format!("{name}: {msg}"), data: Some(err.clone()) }).await;
         }
     }
 
@@ -1035,7 +1741,7 @@ impl OpencodeSession {
             if let Some(parent_task_id) = parent_task_id
                 && let Some((child_id, task)) = opencode_child_session(info, parent_task_id)
             {
-                self.observe_child(child_id, task).await;
+                self.observe_child(child_id, task, Some(rule_list(&info["permission"]))).await;
             }
             return;
         }
@@ -1063,9 +1769,11 @@ impl OpencodeSession {
             "message.part.delta" => {
                 let part_id = p.get("partID").and_then(|s| s.as_str()).unwrap_or("");
                 let delta = p.get("delta").and_then(|s| s.as_str()).unwrap_or("");
+                // A part already reported complete takes no more text: the deltas
+                // that were buffered while a turn was settled are old news.
                 let info = {
                     let st = self.state.lock().await;
-                    st.parts.get(part_id).map(|i| (i.kind.clone(), i.message_id.clone()))
+                    st.parts.get(part_id).filter(|i| !i.started).map(|i| (i.kind.clone(), i.message_id.clone()))
                 };
                 match info.as_ref().map(|(k, m)| (k.as_str(), m.clone())) {
                     Some(("text", message_id)) => {
@@ -1134,8 +1842,10 @@ impl OpencodeSession {
                 };
                 let suggestions = p.get("always").and_then(|a| a.as_array()).cloned().unwrap_or_default();
                 let tool_call_id = p.pointer("/tool/callID").and_then(|c| c.as_str()).map(str::to_string);
-                if let Some(s) = sid.or(my_session.as_deref()) {
-                    self.state.lock().await.pending.insert(id.clone(), s.to_owned());
+                // One request is shown once, however many times it is announced.
+                let owner = sid.or(my_session.as_deref()).unwrap_or("").to_owned();
+                if self.state.lock().await.pending.insert(id.clone(), owner).is_some() {
+                    return;
                 }
                 self.emit(DriverEvent::PermissionRequest {
                     request_id: id,
@@ -1155,7 +1865,9 @@ impl OpencodeSession {
             }
             "question.asked" => {
                 let id = p.get("id").and_then(Value::as_str).unwrap_or("").to_owned();
-                self.state.lock().await.pending.insert(id.clone(), "__question".into());
+                if self.state.lock().await.pending.insert(id.clone(), "__question".into()).is_some() {
+                    return;
+                }
                 self.emit(DriverEvent::PermissionRequest {
                     request_id: id,
                     tool_call_id: p.pointer("/tool/callID").and_then(Value::as_str).map(str::to_owned),
@@ -1190,58 +1902,10 @@ impl OpencodeSession {
                     _ => {}
                 }
             }
-            "session.idle" => {
-                let (usage, cost, duration_ms, active, anchors) = {
-                    let mut st = self.state.lock().await;
-                    let active = st.active;
-                    st.compact_operation = None;
-                    st.active = false;
-                    let d = st.turn_started.take().map(|t| t.elapsed().as_millis() as u64).unwrap_or(0);
-                    let anchors = crate::TurnAnchors { turn_id: st.current_message_id.take(), previous_end: None };
-                    (std::mem::take(&mut st.turn_usage), st.turn_cost, d, active, anchors)
-                };
-                if active {
-                    self.emit(DriverEvent::TurnCompleted {
-                        stop_reason: StopReason::Completed,
-                        usage,
-                        cost_usd: Some(cost),
-                        duration_ms,
-                        anchors,
-                    })
-                    .await;
-                }
-            }
-            "session.error" => {
-                let err = &p["error"];
-                let name = err.get("name").and_then(|n| n.as_str()).unwrap_or("error");
-                let msg = err.pointer("/data/message").and_then(|m| m.as_str()).unwrap_or("");
-                let active = {
-                    let mut st = self.state.lock().await;
-                    let a = st.active;
-                    st.compact_operation = None;
-                    st.active = false;
-                    st.turn_started = None;
-                    a
-                };
-                if name == "MessageAbortedError" {
-                    if active {
-                        self.emit(DriverEvent::TurnCompleted {
-                            stop_reason: StopReason::Interrupted,
-                            usage: Usage::default(),
-                            cost_usd: None,
-                            duration_ms: 0,
-                            anchors: crate::TurnAnchors::default(),
-                        })
-                        .await;
-                    }
-                } else if active {
-                    self.emit(DriverEvent::turn_failed(ProviderKind::Opencode, format!("{name}: {msg}"))).await;
-                } else {
-                    self.emit(DriverEvent::Notice { level: NoticeLevel::Error, text: format!("{name}: {msg}"), data: Some(err.clone()) })
-                        .await;
-                }
-            }
+            "session.idle" => self.finish_turn_idle().await,
+            "session.error" => self.handle_session_error(&p["error"]).await,
             "session.compacted" => {
+                self.state.lock().await.context_overflow = None;
                 self.emit(DriverEvent::Notice { level: NoticeLevel::Info, text: "context compacted".into(), data: None }).await
             }
             "todo.updated" => {
@@ -1410,7 +2074,7 @@ impl OpencodeSession {
 
     async fn handle_child_part(&self, session_id: &str, owner_task_id: &str, part: &Value) {
         if let Some((child_id, task)) = opencode_child_task(part, Some(owner_task_id.to_string())) {
-            self.observe_child(child_id, task).await;
+            self.observe_child(child_id, task, None).await;
         }
         self.forward_child_part(session_id, owner_task_id, part).await;
 
@@ -1456,7 +2120,7 @@ impl OpencodeSession {
 
     async fn handle_part(&self, part: &Value) {
         if let Some((child_id, task)) = opencode_child_task(part, None) {
-            self.observe_child(child_id, task).await;
+            self.observe_child(child_id, task, None).await;
         }
         let id = part.get("id").and_then(|s| s.as_str()).unwrap_or("").to_string();
         let kind = part.get("type").and_then(|s| s.as_str()).unwrap_or("").to_string();
@@ -1486,8 +2150,11 @@ impl OpencodeSession {
                 let text = part.get("text").and_then(|t| t.as_str()).unwrap_or("").to_string();
                 let finished = part.pointer("/time/end").is_some_and(|e| !e.is_null());
                 let synthetic = part.get("synthetic").and_then(|b| b.as_bool()).unwrap_or(false);
+                // `started` marks the text as reported: a reply read back after a
+                // reconnect must not repeat one the event stream already delivered.
+                let report = finished && !synthetic && !text.is_empty() && !std::mem::replace(&mut info.started, true);
                 drop(st);
-                if finished && !synthetic && !text.is_empty() {
+                if report {
                     self.emit(DriverEvent::MessageCompleted { message_id, origin: EventOrigin::Root, text, thinking: None }).await;
                 }
             }
@@ -1528,7 +2195,9 @@ impl OpencodeSession {
                     _ => {}
                 }
             }
-            "step-finish" => {
+            // `started` marks the step as counted: one read back after a
+            // reconnect must not be counted again.
+            "step-finish" if !std::mem::replace(&mut info.started, true) => {
                 if let Some(t) = part.get("tokens") {
                     st.turn_usage.input_tokens += t.get("input").and_then(|v| v.as_u64()).unwrap_or(0);
                     st.turn_usage.output_tokens +=
@@ -1543,15 +2212,25 @@ impl OpencodeSession {
     }
 
     async fn post(&self, path: &str, body: Value) -> Result<Value> {
-        let r = self
-            .http
-            .post(format!("{}{path}", self.base))
-            .query(&[("directory", &self.dir)])
-            .json(&body)
-            .timeout(std::time::Duration::from_secs(600))
-            .send()
-            .await
-            .map_err(net)?;
+        self.send(reqwest::Method::POST, path, body, Some(std::time::Duration::from_secs(600))).await
+    }
+
+    /// The request for `path`; a `Null` body sends none.
+    fn request(&self, method: reqwest::Method, path: &str, body: &Value, timeout: Option<std::time::Duration>) -> reqwest::RequestBuilder {
+        let mut request = self.http.request(method, format!("{}{path}", self.base)).query(&[("directory", &self.dir)]);
+        if !body.is_null() {
+            request = request.json(body);
+        }
+        match timeout {
+            Some(timeout) => request.timeout(timeout),
+            None => request,
+        }
+    }
+
+    /// Send one request and return its JSON body (`Null` for an empty reply).
+    /// `timeout: None` waits as long as the server takes.
+    async fn send(&self, method: reqwest::Method, path: &str, body: Value, timeout: Option<std::time::Duration>) -> Result<Value> {
+        let r = self.request(method, path, &body, timeout).send().await.map_err(net)?;
         let status = r.status();
         let text = r.text().await.unwrap_or_default();
         if !status.is_success() {
@@ -1657,6 +2336,7 @@ impl AgentSession for Handle {
             state.turn_usage = Usage::default();
             state.turn_cost = 0.0;
             state.current_message_id = None;
+            state.context_overflow = None;
             state.compact_operation = Some(operation.clone());
             (id, provider, model)
         };
@@ -1743,14 +2423,33 @@ impl AgentSession for Handle {
             st.turn_started = Some(std::time::Instant::now());
             st.turn_usage = Usage::default();
             st.turn_cost = 0.0;
-            st.current_message_id = Some(oc_message_id);
+            st.current_message_id = Some(oc_message_id.clone());
+            st.context_overflow = None;
         }
         if command.is_some() {
             let session = s.clone();
             tokio::spawn(async move {
-                if let Err(error) = session.post(&format!("/session/{session_id}/command"), body).await {
-                    session.state.lock().await.active = false;
-                    session.emit(DriverEvent::turn_failed(ProviderKind::Opencode, error.to_string())).await;
+                // OpenCode answers a command only when it has finished generating,
+                // however long that takes, so this request has no time limit; the
+                // event stream reports the outcome.
+                let result = session.send(reqwest::Method::POST, &format!("/session/{session_id}/command"), body, None).await;
+                if let Err(error) = result {
+                    // Only this command's own turn fails: one the event stream
+                    // already ended, or one that a newer message replaced, is not.
+                    let failed = {
+                        let mut st = session.state.lock().await;
+                        let own = st.current_message_id.as_deref() == Some(oc_message_id.as_str());
+                        let failed = own && std::mem::take(&mut st.active);
+                        if failed {
+                            st.turn_started = None;
+                            st.current_message_id = None;
+                            st.context_overflow = None;
+                        }
+                        failed
+                    };
+                    if failed {
+                        session.emit(DriverEvent::turn_failed(ProviderKind::Opencode, error.to_string())).await;
+                    }
                 }
             });
             Ok(())
@@ -1765,10 +2464,21 @@ impl AgentSession for Handle {
         s.post(&format!("/session/{session_id}/abort"), json!({})).await.map(|_| ())
     }
 
+    /// The thread's rules are replaced in place, then its subagents'. The mode is
+    /// recorded only once the thread's own rules were written: a failure there
+    /// leaves the mode, and the thread, as they were. So does a failure to list
+    /// the subagents, which is read first: a subagent nobody can find would keep
+    /// an older mode. A subagent that cannot be updated does not undo the change:
+    /// the thread really is in the new mode, so the call succeeds and the
+    /// subagent is stopped, with a notice.
     async fn set_permission_mode(&self, mode: PermissionMode) -> Result<()> {
-        // Session rulesets are fixed at creation; the mode applies to the next session (resume creates none).
-        self.0.state.lock().await.mode = mode;
-        Err(DriverError::Unsupported("OpenCode permission rules are set when the session starts; start a new thread to change them".into()))
+        let s = &self.0;
+        let session_id = s.state.lock().await.session_id.clone().ok_or_else(|| DriverError::Protocol("no opencode session".into()))?;
+        let listed = s.list_children(&session_id).await?;
+        s.write_rules(&session_id, &rule_list(&ruleset(mode))).await?;
+        s.state.lock().await.mode = mode;
+        s.rewrite_child_rules(listed).await;
+        Ok(())
     }
 
     async fn set_model(&self, model: &str) -> Result<()> {
@@ -1857,7 +2567,9 @@ mod tests {
                 active: true,
                 pending: HashMap::new(),
                 current_message_id: None,
+                context_overflow: None,
                 children: HashMap::new(),
+                rule_locks: HashMap::new(),
             }),
         });
         let event = |ty: &str, properties: Value| json!({"type": ty, "properties": properties});
@@ -1984,7 +2696,9 @@ mod tests {
                 active: true,
                 pending: HashMap::new(),
                 current_message_id: None,
+                context_overflow: None,
                 children: HashMap::new(),
+                rule_locks: HashMap::new(),
             }),
         });
 
@@ -2084,7 +2798,9 @@ mod tests {
                 active: true,
                 pending: HashMap::new(),
                 current_message_id: None,
+                context_overflow: None,
                 children: HashMap::new(),
+                rule_locks: HashMap::new(),
             }),
         });
         // Parts can arrive before message metadata. Only assistant-authored images are emitted.
@@ -2350,6 +3066,9 @@ mod tests {
         assert_eq!(task.parent_id.as_deref(), Some("opencode:ses_parent_child"));
     }
 }
+
+#[cfg(test)]
+pub(crate) mod resilience_tests;
 
 #[cfg(test)]
 mod orchestration_part_tests {
