@@ -16,6 +16,7 @@ use std::sync::OnceLock;
 /// Where the folder goes, set once by the daemon's driver registry.
 static ROOT: OnceLock<PathBuf> = OnceLock::new();
 /// The written folder, or `None` when it could not be written.
+#[cfg(unix)]
 static READY: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 /// The programs browser helpers use to open a URL on macOS and Linux.
