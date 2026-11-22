@@ -191,6 +191,9 @@ def ask(method, params):
         if msg.get("id") == rid and "method" not in msg:
             return msg.get("result")
         handle(msg)
+def sync():
+    # Answered only once Kybern has read (and screened) every line sent before it.
+    ask("_fake/sync", {})
 def update(sid, u):
     send({"method": "session/update", "params": {"sessionId": sid, "update": u}})
 def chunk(sid, text):
@@ -296,6 +299,24 @@ def prompt(mid, sid, text):
         steps(sid, [(14, b"\x00"), (15, b"\x00")])
         chunk(sid, "\u26a0 Careful: ")
         chunk(sid, "the file is large.")
+    elif text in ("tool_error_reply", "tool_error_reply_more"):
+        # A tool fails and agy records an error step; the reply's own step comes after its text.
+        steps(sid, [(14, b"\x00"), (15, b"\x00")])
+        tool(sid, "c7", "run_command", "execute", "make", {"CommandLine": "make"})
+        steps(sid, [(17, b"\x0a\x12make: *** No rule to make target\x10")])
+        done(sid, "c7", "run_command", {"output": "make: *** No rule to make target", "exit_code": 2}, status="failed")
+        chunk(sid, "make has no target here. ")
+        sync()
+        if text == "tool_error_reply_more":
+            chunk(sid, "I ran the tests instead.")
+            sync()
+        steps(sid, [(15, b"\x00")])
+    elif text == "warn_then_tool":
+        steps(sid, [(14, b"\x00"), (15, b"\x00")])
+        chunk(sid, "\u26a0 This touches the config.")
+        tool(sid, "c8", "run_command", "execute", "cat a.txt", {"CommandLine": "cat a.txt"})
+        done(sid, "c8", "run_command", {"output": "Command exited with code 0.\n", "exit_code": 0})
+        steps(sid, [(21, b"\x00")])
     elif text == "warn_only":
         steps(sid, [(14, b"\x00"), (15, b"\x00")])
         chunk(sid, "\u26a0 nothing to change")
@@ -864,6 +885,40 @@ mod session {
         assert_eq!(texts(&only), "\u{26a0} nothing to change");
         assert!(matches!(end(&only), DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. }), "{only:?}");
         assert_eq!(texts(&send(&*session, &mut rx, "hello").await), "new answer");
+        session.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_reply_after_a_tools_error_step_shows_once_in_order() {
+        let fake = Fake::new();
+        let driver = AntigravityDriver::default();
+        let crate::SpawnedSession { session, events: mut rx } = spawn(&driver, fake.config(PermissionMode::FullAccess, &[])).await.unwrap();
+        // The tool's error step is the newest when the reply starts: the turn's success shows it.
+        let only = send(&*session, &mut rx, "tool_error_reply").await;
+        assert!(matches!(end(&only), DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. }), "{only:?}");
+        assert_eq!(texts(&only), "make has no target here. ", "{only:?}");
+        // The next chunk, with no newer error step, shows what was withheld ahead of it.
+        let more = send(&*session, &mut rx, "tool_error_reply_more").await;
+        assert!(matches!(end(&more), DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. }), "{more:?}");
+        assert_eq!(texts(&more), "make has no target here. I ran the tests instead.", "{more:?}");
+        // An API error turn still shows its failure once and no text.
+        let failed = send(&*session, &mut rx, "error404_late").await;
+        assert!(matches!(end(&failed), DriverEvent::TurnFailed { .. }), "{failed:?}");
+        assert_eq!(texts(&failed), "", "{failed:?}");
+        session.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_warning_before_a_tool_call_shows_before_its_card() {
+        let fake = Fake::new();
+        let driver = AntigravityDriver::default();
+        let crate::SpawnedSession { session, events: mut rx } = spawn(&driver, fake.config(PermissionMode::FullAccess, &[])).await.unwrap();
+        let events = send(&*session, &mut rx, "warn_then_tool").await;
+        assert!(matches!(end(&events), DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. }), "{events:?}");
+        assert_eq!(texts(&events), "\u{26a0} This touches the config.", "shown once: {events:?}");
+        let text = events.iter().position(|event| matches!(event, DriverEvent::TextDelta { .. }));
+        let card = events.iter().position(|event| matches!(event, DriverEvent::ToolStarted(_)));
+        assert!(text.is_some() && text < card, "the warning comes before the tool card: {events:?}");
         session.close().await.unwrap();
     }
 

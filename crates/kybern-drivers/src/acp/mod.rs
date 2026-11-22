@@ -177,8 +177,11 @@ pub(crate) trait AcpFlavor: Send + Sync + Sized + 'static {
     fn client_info(&self) -> Implementation {
         Implementation::new("kybern", env!("CARGO_PKG_VERSION"))
     }
-    /// See `REWRITES_INCOMING`.
-    fn rewrite_incoming(&self, _message: &mut Value) {}
+    /// See `REWRITES_INCOMING`. Returns a message to pass on just before this one (text the flavor held
+    /// back and releases ahead of it).
+    fn rewrite_incoming(&self, _message: &mut Value) -> Option<Value> {
+        None
+    }
     /// Kybern's MCP servers for `session/new` and `session/load`.
     fn mcp_servers(&self, bridge: Option<&NativeToolBridge>) -> Result<Vec<McpServer>> {
         mcp_servers(Self::NAME, bridge)
@@ -560,10 +563,10 @@ fn rewritten<F: AcpFlavor>(flavor: Arc<F>, stdout: tokio::process::ChildStdout) 
             }
             let text = String::from_utf8_lossy(&line);
             let out = match serde_json::from_str::<Value>(text.trim_end()) {
-                Ok(mut message) => {
-                    flavor.rewrite_incoming(&mut message);
-                    message.to_string()
-                }
+                Ok(mut message) => match flavor.rewrite_incoming(&mut message) {
+                    Some(before) => format!("{before}\n{message}"),
+                    None => message.to_string(),
+                },
                 Err(_) => text.trim_end_matches(['\n', '\r']).to_string(),
             };
             if writer.write_all(out.as_bytes()).await.is_err() || writer.write_all(b"\n").await.is_err() {

@@ -89,14 +89,24 @@ struct OpenPrompt {
     mark: i64,
     /// The conversation's database, open for the prompt's chunks once it exists.
     db: Option<rusqlite::Connection>,
+    /// The newest step when the last chunk was screened: only an error step after it withholds a chunk.
+    screened: i64,
     /// A warning-shaped chunk (`⚠ …`) agy hasn't recorded an error step for: shown once the turn
-    /// succeeds or more text follows, never next to the failure it may turn out to be.
+    /// succeeds or more of the reply follows, never next to the failure it may turn out to be.
     held: String,
-    /// The text of chunks withheld as a failure's words, for the failure's detail.
+    /// Chunks withheld as a failure's words: the failure's detail if the turn fails, else the reply's
+    /// own text (a tool's error step came first), shown once more of the reply follows or the turn succeeds.
     failure_text: String,
 }
 
-/// The most of a withheld failure's text kept for its detail.
+impl OpenPrompt {
+    /// What was withheld or held, in the order it came; it is shown, so it is no longer kept.
+    fn release(&mut self) -> String {
+        std::mem::take(&mut self.failure_text) + &std::mem::take(&mut self.held)
+    }
+}
+
+/// The most of a withheld failure's text used for its detail.
 const FAILURE_TEXT_BYTES: usize = 16_384;
 
 impl AgyAcp {
@@ -126,26 +136,54 @@ impl AgyAcp {
     /// On ACP agy reports a failure as chat text and `end_turn`, recording an error step first (seen on
     /// agy 1.5.14: the step is in the database when the chunk arrives). That text is the failure's, which
     /// [`AcpFlavor::prompt_outcome`] shows as a problem: the chunk is withheld so it isn't shown twice.
-    /// A `⚠` chunk with no error step yet is held until the turn's end decides. Returns the chunk's text
-    /// to send in its place (`Some("")` withholds it).
+    /// Only an error step that is new since the last chunk withholds one: a tool's error step earlier
+    /// in the turn leaves the reply after it alone. A `⚠` chunk with no error step yet is held until the
+    /// turn's end or the reply's next part decides. Returns the chunk's text to send in its place
+    /// (`Some("")` withholds it).
     fn screen_chunk(&self, session_id: &str, text: &str) -> Option<String> {
         let mut open = self.lock_prompt();
         let prompt = open.as_mut().filter(|prompt| prompt.session_id == session_id)?;
         if prompt.db.is_none() {
             prompt.db = self.conversation_db(session_id).filter(|db| db.exists()).and_then(|db| open_read_only(&db));
         }
-        if prompt.db.as_ref().is_some_and(|db| newest_is_error(db, prompt.mark)) {
+        let newest = prompt.db.as_ref().and_then(|db| newest_step(db, prompt.mark));
+        let seen = prompt.screened;
+        prompt.screened = newest.map_or(seen, |(idx, _)| idx);
+        if newest.is_some_and(|(idx, step_type)| step_type == ERROR_STEP && idx > seen) {
             let held = std::mem::take(&mut prompt.held);
-            push_bounded(&mut prompt.failure_text, &held);
-            push_bounded(&mut prompt.failure_text, text);
+            prompt.failure_text.push_str(&held);
+            prompt.failure_text.push_str(text);
             return Some(String::new());
         }
         if text.trim_start().starts_with('\u{26a0}') {
             prompt.held.push_str(text);
             return Some(String::new());
         }
-        // More text after a held warning: it was part of the answer.
-        (!prompt.held.is_empty()).then(|| std::mem::take(&mut prompt.held) + text)
+        // More of the reply after withheld or held text: that text was part of it.
+        let released = prompt.release();
+        (!released.is_empty()).then(|| released + text)
+    }
+
+    /// The text held from this prompt, as a chunk to pass on ahead of `message` when that is the next
+    /// part of the reply (a tool call, a plan, thinking): the reply went on, so the text was its own.
+    fn release_before(&self, message: &Value) -> Option<Value> {
+        if message.get("method").and_then(Value::as_str) != Some("session/update")
+            || !matches!(
+                message.pointer("/params/update/sessionUpdate").and_then(Value::as_str),
+                Some("tool_call" | "plan" | "agent_thought_chunk")
+            )
+        {
+            return None;
+        }
+        let session_id = message.pointer("/params/sessionId").and_then(Value::as_str)?;
+        let text = self.lock_prompt().as_mut().filter(|prompt| prompt.session_id == session_id)?.release();
+        (!text.is_empty()).then(|| {
+            json!({
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": { "sessionId": session_id, "update": { "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": text } } },
+            })
+        })
     }
 
     /// This conversation's own database, when its id is a plain one.
@@ -255,7 +293,8 @@ impl AcpFlavor for AgyAcp {
         acp::merge_text_blocks(acp::prompt_blocks(message))
     }
 
-    fn rewrite_incoming(&self, message: &mut Value) {
+    fn rewrite_incoming(&self, message: &mut Value) -> Option<Value> {
+        let before = self.release_before(message);
         if message.get("method").and_then(Value::as_str) == Some("session/update")
             && message.pointer("/params/update/sessionUpdate").and_then(Value::as_str) == Some("agent_message_chunk")
             && let Some(text) = message.pointer("/params/update/content/text").and_then(Value::as_str)
@@ -269,6 +308,7 @@ impl AcpFlavor for AgyAcp {
             }
         }
         rewrite(message, &self.hidden, &self.refused);
+        before
     }
 
     fn released_text(&self) -> Option<String> {
@@ -333,7 +373,8 @@ impl AcpFlavor for AgyAcp {
         let db = self.conversation_db(session_id)?;
         // A conversation without its database yet starts from nothing.
         let mark = if db.exists() { last_step_index(&db)? } else { -1 };
-        let prompt = OpenPrompt { session_id: session_id.into(), mark, db: None, held: String::new(), failure_text: String::new() };
+        let prompt =
+            OpenPrompt { session_id: session_id.into(), mark, db: None, screened: mark, held: String::new(), failure_text: String::new() };
         *self.lock_prompt() = Some(prompt);
         Some(mark)
     }
@@ -350,7 +391,10 @@ impl AcpFlavor for AgyAcp {
             Some(StepsAfter { error: Some(text), reached_model, .. }) => failed(&text, reached_model),
             step if refused => {
                 // The reset time rides in agy's quota error: its error step, else the words it sent.
-                let words = self.lock_prompt().as_mut().map(|prompt| prompt.failure_text.clone() + &prompt.held).unwrap_or_default();
+                let mut words = String::new();
+                if let Some(prompt) = self.lock_prompt().as_ref() {
+                    push_bounded(&mut words, &(prompt.failure_text.clone() + &prompt.held));
+                }
                 let detail = step
                     .and_then(|step| step.last_error)
                     .or_else(|| (!words.trim().is_empty()).then(|| words.trim().to_string()))
@@ -362,13 +406,13 @@ impl AcpFlavor for AgyAcp {
             }
             _ => event,
         };
-        // A failure's held words are its own; a success shows them (`released_text`). Replies agy starts
-        // by itself after this are no prompt's: nothing screens them.
+        // A failure's withheld and held words are its own; a success shows them, in order, once
+        // (`released_text`). Replies agy starts by itself after this are no prompt's: nothing screens them.
         let open = self.lock_prompt().take();
         if matches!(outcome, DriverEvent::TurnCompleted { .. })
-            && let Some(open) = open
+            && let Some(mut open) = open
         {
-            *self.released.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = open.held;
+            *self.released.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = open.release();
         }
         outcome
     }
@@ -738,10 +782,12 @@ pub(crate) fn steps_after(db: &Path, mark: i64) -> Option<StepsAfter> {
     Some(StepsAfter { error, reached_model, last_error })
 }
 
-/// Whether the newest step after `mark` is an error step.
-fn newest_is_error(conn: &rusqlite::Connection, mark: i64) -> bool {
-    conn.query_row("SELECT step_type FROM steps WHERE idx > ?1 ORDER BY idx DESC LIMIT 1", [mark], |row| row.get::<_, i64>(0))
-        .is_ok_and(|step_type| step_type == ERROR_STEP)
+/// The newest step after `mark`: its index and type.
+fn newest_step(conn: &rusqlite::Connection, mark: i64) -> Option<(i64, i64)> {
+    conn.query_row("SELECT idx, step_type FROM steps WHERE idx > ?1 ORDER BY idx DESC LIMIT 1", [mark], |row| {
+        Ok((row.get(0)?, row.get(1)?))
+    })
+    .ok()
 }
 
 /// `text` added to `into`, which keeps at most [`FAILURE_TEXT_BYTES`].
