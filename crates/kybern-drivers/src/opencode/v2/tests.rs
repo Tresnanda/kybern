@@ -424,8 +424,11 @@ async fn an_effort_switch_resends_the_current_model_with_the_variant() {
 
 // --- Subagent rules, resumed subagents and turn recovery --------------------------------------------------
 
+#[cfg(unix)]
 use crate::AgentDriver;
-use crate::opencode::resilience_tests::{Mock, Reply, Seen, fake_opencode, frame, session_config};
+use crate::opencode::resilience_tests::{Mock, Reply, Seen, frame};
+#[cfg(unix)]
+use crate::opencode::resilience_tests::{fake_opencode, session_config};
 
 fn drain(rx: &mut mpsc::Receiver<DriverEvent>) -> Vec<DriverEvent> {
     std::iter::from_fn(|| rx.try_recv().ok()).collect()
@@ -1132,6 +1135,7 @@ async fn approvals_asked_while_the_stream_was_down_are_surfaced_and_answered_one
 
 /// A thread saved under Full access must not start with Full access while it shows Supervised.
 #[cfg(unix)]
+#[cfg(unix)]
 #[tokio::test]
 async fn a_resumed_thread_whose_rules_cannot_be_written_does_not_start() {
     let temp = tempfile::tempdir().unwrap();
@@ -1150,6 +1154,7 @@ async fn a_resumed_thread_whose_rules_cannot_be_written_does_not_start() {
 
 /// After a daemon restart the driver has seen none of a resumed thread's subagents: the server
 /// lists them, and each is rewritten before the thread can run, not when it next resumes.
+#[cfg(unix)]
 #[cfg(unix)]
 #[tokio::test]
 async fn a_resumed_threads_subagents_are_rewritten_before_it_runs() {
