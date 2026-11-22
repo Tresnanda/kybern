@@ -3825,6 +3825,7 @@ mod harness_gap_tests {
         out
     }
 
+    #[cfg(unix)]
     async fn next_event(rx: &mut mpsc::Receiver<DriverEvent>) -> DriverEvent {
         tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv()).await.expect("an event").expect("the stream is open")
     }

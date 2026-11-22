@@ -29,6 +29,7 @@ pub enum ProcessEnd {
     /// It exited with this code.
     Code(i32),
     /// A signal stopped it (Unix). `requested` is true when Kybern sent the stop.
+    #[cfg_attr(not(unix), allow(dead_code))]
     Signal { signal: i32, requested: bool },
     /// The status could not be read.
     Unknown,
