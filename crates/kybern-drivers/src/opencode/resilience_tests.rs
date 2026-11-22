@@ -21,6 +21,7 @@ pub(super) enum Reply {
 pub(super) struct Seen {
     pub method: String,
     pub path: String,
+    pub query: String,
     pub body: Value,
 }
 
@@ -74,12 +75,14 @@ impl Mock {
                     let (head, body) = text.split_once("\r\n\r\n").unwrap_or((&text, ""));
                     let mut line = head.lines().next().unwrap_or("").split_whitespace();
                     let (method, target) = (line.next().unwrap_or("").to_string(), line.next().unwrap_or("").to_string());
-                    let path = target.split('?').next().unwrap_or("").to_string();
+                    let (path, query) = target.split_once('?').unwrap_or((&target, ""));
+                    let (path, query) = (path.to_string(), query.to_string());
                     let nth = {
                         let mut log = log.lock().unwrap();
                         log.push(Seen {
                             method: method.clone(),
                             path: path.clone(),
+                            query,
                             body: serde_json::from_str(body).unwrap_or(Value::Null),
                         });
                         log.iter().filter(|seen| seen.method == method && seen.path == path).count() - 1
@@ -352,12 +355,12 @@ fn a_subagent_keeps_its_own_restrictions_after_the_parents_rules() {
     let own = json!({"permission": "todowrite", "pattern": "*", "action": "deny"});
     let copied: Vec<Value> = parent.iter().filter(|rule| v1_inherits(rule)).cloned().collect();
     let child: Vec<Value> = copied.iter().cloned().chain([own.clone()]).collect();
-    let merged = merge_child_rules(&parent, &child, &parent, v1_inherits);
+    let merged = merge_child_rules(&parent, &child);
     assert_eq!(&merged[..parent.len()], parent.as_slice());
     assert_eq!(&merged[parent.len()..], std::slice::from_ref(&own), "the copied denies are not kept twice");
     // A mode change replaces the parent's part and keeps the child's own.
     let next = rule_list(&ruleset(PermissionMode::FullAccess));
-    let again = merge_child_rules(&next, &merged, &parent, v1_inherits);
+    let again = merge_child_rules(&next, &merged);
     assert_eq!(again, next.iter().cloned().chain([own]).collect::<Vec<_>>());
 }
 
@@ -468,7 +471,7 @@ async fn the_permission_mode_changes_in_place_for_the_thread_and_its_running_sub
     let parent = rule_list(&ruleset(PermissionMode::Supervised));
     let given: Vec<Value> = parent.iter().filter(|rule| v1_inherits(rule)).cloned().chain([own.clone()]).collect();
     session.handle_event(&child_created("ses_kid", json!(given))).await;
-    // A finished subagent is left alone.
+    // A finished subagent is rewritten as well.
     session.handle_event(&child_created("ses_done", json!([]))).await;
     session.handle_event(&event("session.idle", json!({"sessionID": "ses_done"}))).await;
 
@@ -482,18 +485,158 @@ async fn the_permission_mode_changes_in_place_for_the_thread_and_its_running_sub
     let kid = mock.requests("PATCH", "/session/ses_kid");
     assert_eq!(kid.len(), 2, "written when it appeared, and again for the new mode");
     assert_eq!(kid[1].body["permission"], json!(full.iter().cloned().chain([own]).collect::<Vec<_>>()));
-    assert_eq!(mock.requests("PATCH", "/session/ses_done").len(), 1, "only its creation");
+    // A finished subagent can be resumed: it is rewritten too, so it never holds an older mode.
+    let done = mock.requests("PATCH", "/session/ses_done");
+    assert_eq!(done.len(), 2, "written when it appeared, and again for the new mode");
+    assert_eq!(done[1].body["permission"], json!(full));
 }
 
 #[tokio::test]
-async fn a_failed_mode_change_is_reported() {
+async fn a_failed_mode_change_is_reported_and_leaves_the_mode_as_it_was() {
     let mock = Mock::start(|_, _, _| Reply::Json(400, json!({"error": "bad"}))).await;
     let (session, _rx) = v1_session(&mock.base, PermissionMode::Supervised);
-    let handle = Handle(session, std::sync::Mutex::new(None), None);
+    let handle = Handle(session.clone(), std::sync::Mutex::new(None), None);
     assert!(matches!(handle.set_permission_mode(PermissionMode::Auto).await, Err(DriverError::Protocol(_))));
+    // The thread's rules were not written, and the daemon keeps the old mode:
+    // the driver must not hand later subagents the new one.
+    assert_eq!(session.state.lock().await.mode, PermissionMode::Supervised);
+}
+
+/// The thread is in the new mode once its own rules are written; a subagent that
+/// cannot be updated is a warning, not a failure that leaves the two disagreeing.
+#[tokio::test]
+async fn a_subagent_that_cannot_follow_a_mode_change_is_a_warning_and_the_mode_still_changes() {
+    let mock = Mock::start(|method, path, _| {
+        if (method, path) == ("PATCH", "/session/ses_kid") { Reply::Json(500, json!({"error": "no"})) } else { Reply::Json(200, json!({})) }
+    })
+    .await;
+    let (session, mut rx) = v1_session(&mock.base, PermissionMode::FullAccess);
+    let handle = Handle(session.clone(), std::sync::Mutex::new(None), None);
+    // Registered without a write: the first write is the one that fails.
+    session.state.lock().await.children.insert("ses_kid".into(), ChildRuntime { task_id: "opencode:ses_kid".into(), ..Default::default() });
+    handle.set_permission_mode(PermissionMode::Supervised).await.expect("the thread itself changed mode");
+    assert_eq!(session.state.lock().await.mode, PermissionMode::Supervised);
+    let root = mock.requests("PATCH", "/session/ses_root");
+    assert_eq!(root[0].body["permission"], json!(rule_list(&ruleset(PermissionMode::Supervised))));
+    let events = drain(&mut rx);
+    let warnings = events.iter().filter(|event| matches!(event, DriverEvent::Notice { level: NoticeLevel::Warning, .. })).count();
+    assert_eq!(warnings, 1, "{events:?}");
 }
 
 // --- 1.x: resumed subagents --------------------------------------------------------------------------------
+
+fn own_task_deny() -> Value {
+    json!({"permission": "task", "pattern": "*", "action": "deny"})
+}
+
+fn task_part(call: &str, status: &str) -> Value {
+    event(
+        "message.part.updated",
+        json!({"sessionID": "ses_root", "part": {"id": format!("part-{call}"), "type": "tool", "tool": "task", "callID": call, "messageID": "m",
+            "state": {"status": status, "input": {"description": "Look around"}, "metadata": {"sessionId": "ses_kid"}}}}),
+    )
+}
+
+/// A subagent that Kybern wrote the rules of an older mode into must not keep
+/// them once it is resumed in a stricter one: the last matching rule wins, so
+/// kept as its own they would out-vote the new mode's.
+#[tokio::test]
+async fn a_subagent_resumed_in_a_stricter_mode_does_not_keep_the_old_modes_rules() {
+    for older in [PermissionMode::FullAccess, PermissionMode::AcceptEdits, PermissionMode::Auto] {
+        // What the server holds after Kybern wrote `older` into the subagent.
+        let stored: Vec<Value> = rule_list(&ruleset(older)).into_iter().chain([own_task_deny()]).collect();
+        let held = stored.clone();
+        let mock = Mock::start(move |method, path, _| match (method, path) {
+            ("GET", "/session/ses_kid") => Reply::Json(200, json!({"id": "ses_kid", "permission": held})),
+            _ => Reply::Json(200, json!({})),
+        })
+        .await;
+        // The daemon restarted: this driver has never seen the subagent, and is Supervised.
+        let (session, _rx) = v1_session(&mock.base, PermissionMode::Supervised);
+        session.handle_event(&task_part("call-1", "running")).await;
+        let patches = mock.requests("PATCH", "/session/ses_kid");
+        assert_eq!(patches.len(), 1, "{older:?}");
+        let written: Vec<Value> = patches[0].body["permission"].as_array().unwrap().clone();
+        assert_eq!(action(&written, "bash"), "ask", "{older:?}");
+        assert_eq!(action(&written, "edit"), "ask", "{older:?}");
+        assert_eq!(action(&written, "read"), "allow", "{older:?}");
+        assert_eq!(action(&written, "task"), "deny", "the agent's own restriction stays ({older:?})");
+        let supervised: Vec<Value> = rule_list(&ruleset(PermissionMode::Supervised)).into_iter().chain([own_task_deny()]).collect();
+        assert_eq!(written, supervised, "{older:?}");
+    }
+}
+
+/// Full access, finished, then Supervised, then resumed: the same leak by the
+/// route that does not involve a restart.
+#[tokio::test]
+async fn a_finished_subagent_is_rewritten_for_a_new_mode_and_resumes_under_it() {
+    let stored: Arc<StdMutex<Value>> = Arc::new(StdMutex::new(json!([])));
+    let served = stored.clone();
+    let mock = Mock::start(move |method, path, _| match (method, path) {
+        ("GET", "/session/ses_kid") => Reply::Json(200, json!({"id": "ses_kid", "permission": served.lock().unwrap().clone()})),
+        _ => Reply::Json(200, json!({})),
+    })
+    .await;
+    let (session, _rx) = v1_session(&mock.base, PermissionMode::FullAccess);
+    let handle = Handle(session.clone(), std::sync::Mutex::new(None), None);
+    let store_last_write = || {
+        let writes = mock.requests("PATCH", "/session/ses_kid");
+        *stored.lock().unwrap() = writes.last().unwrap().body["permission"].clone();
+    };
+    // OpenCode gave the new subagent the one rule a Full access parent passes on, and its own.
+    let copied = json!({"permission": "external_directory", "pattern": "*", "action": "allow"});
+    session.handle_event(&child_created("ses_kid", json!([copied, own_task_deny()]))).await;
+    store_last_write();
+    session.handle_event(&event("session.idle", json!({"sessionID": "ses_kid"}))).await;
+
+    handle.set_permission_mode(PermissionMode::Supervised).await.unwrap();
+    let writes = mock.requests("PATCH", "/session/ses_kid");
+    assert_eq!(writes.len(), 2, "the finished subagent is rewritten when the mode changes");
+    store_last_write();
+
+    session.handle_event(&task_part("call-1", "running")).await;
+    session.handle_event(&event("session.idle", json!({"sessionID": "ses_kid"}))).await;
+    session.handle_event(&task_part("call-2", "running")).await;
+    let writes = mock.requests("PATCH", "/session/ses_kid");
+    let last: Vec<Value> = writes.last().unwrap().body["permission"].as_array().unwrap().clone();
+    assert_eq!((action(&last, "bash"), action(&last, "edit")), ("ask".to_string(), "ask".to_string()));
+    assert_eq!(action(&last, "task"), "deny");
+}
+
+#[test]
+fn what_kybern_wrote_under_any_mode_is_never_taken_for_a_subagents_own_rules() {
+    let own = [own_task_deny(), json!({"permission": "todowrite", "pattern": "*", "action": "deny"})];
+    for mode in [PermissionMode::Supervised, PermissionMode::AcceptEdits, PermissionMode::Auto, PermissionMode::FullAccess] {
+        let written: Vec<Value> = rule_list(&ruleset(mode)).into_iter().chain(own.clone()).collect();
+        assert_eq!(child_own_rules(&written), own, "written under {mode:?}");
+        let copied: Vec<Value> = rule_list(&ruleset(mode)).into_iter().filter(v1_inherits).chain(own.clone()).collect();
+        assert_eq!(child_own_rules(&copied), own, "copied under {mode:?}");
+        // The agent's own rules first, then the copy.
+        let reversed: Vec<Value> = own.iter().cloned().chain(rule_list(&ruleset(mode)).into_iter().filter(v1_inherits)).collect();
+        assert_eq!(child_own_rules(&reversed), own, "copied after its own, under {mode:?}");
+    }
+}
+
+/// A rule of the agent's own that equals one Kybern writes (a `bash` deny from
+/// the agent's restrictions) is the agent's, and stays.
+#[test]
+fn a_subagents_own_deny_that_equals_a_seeded_deny_is_kept() {
+    let bash_deny = json!({"permission": "bash", "pattern": "*", "action": "deny"});
+    for mode in [PermissionMode::Supervised, PermissionMode::AcceptEdits, PermissionMode::Auto] {
+        let parent = rule_list(&ruleset(mode));
+        let copied: Vec<Value> = parent.iter().filter(|rule| v1_inherits(rule)).cloned().collect();
+        for given in [
+            copied.iter().cloned().chain([bash_deny.clone()]).collect::<Vec<_>>(),
+            [bash_deny.clone()].into_iter().chain(copied.iter().cloned()).collect::<Vec<_>>(),
+        ] {
+            let merged = merge_child_rules(&parent, &given);
+            assert_eq!(action(&merged, "bash"), "deny", "{mode:?}: the agent's restriction holds");
+            assert_eq!(merged.len(), parent.len() + 1, "{mode:?}: only that one rule is added");
+            // Writing again changes nothing.
+            assert_eq!(merge_child_rules(&parent, &merged), merged, "{mode:?}");
+        }
+    }
+}
 
 #[tokio::test]
 async fn a_resumed_subagent_reports_its_new_run_and_gets_the_current_rules() {
@@ -683,6 +826,9 @@ async fn a_silent_stream_is_resubscribed_and_a_missed_end_of_turn_is_settled_fro
     };
     assert_eq!((text.as_str(), *stop_reason, anchors.turn_id.as_deref()), ("The final answer.", StopReason::Completed, Some("msg_user")));
     assert!(mock.requests("GET", "/event").len() >= 2, "the silent stream was dropped and subscribed again");
+    // The steps' tokens and cost come with the text: a settled turn is not a free one.
+    let Some(DriverEvent::TurnCompleted { usage, cost_usd, .. }) = events.last() else { unreachable!() };
+    assert_eq!((usage.input_tokens, usage.output_tokens, *cost_usd), (5, 7, Some(0.25)));
 }
 
 #[tokio::test]
@@ -763,4 +909,257 @@ async fn a_prompt_that_is_not_stored_yet_is_not_mistaken_for_a_finished_turn() {
     session.settle_after_reconnect().await;
     assert!(drain(&mut rx).is_empty());
     assert!(session.state.lock().await.active);
+}
+
+// --- 1.x: settling a long turn, a compaction, late text, gap approvals ---------------------------------------
+
+/// Put a turn waiting on `msg_user` into `session`.
+async fn waiting_turn(session: &OpencodeSession) {
+    let mut state = session.state.lock().await;
+    state.active = true;
+    state.turn_started = Some(std::time::Instant::now());
+    state.current_message_id = Some("msg_user".into());
+}
+
+fn stored_reply(id: &str, parts: Value) -> Value {
+    json!({"info": {"id": id, "role": "assistant"}, "parts": parts})
+}
+
+#[tokio::test]
+async fn a_turn_longer_than_one_page_of_messages_still_settles() {
+    let filler = |n: usize| -> Vec<Value> { (0..n).map(|i| stored_reply(&format!("msg_tool_{i}"), json!([]))).collect() };
+    let mock = Mock::start(move |method, path, nth| match (method, path) {
+        ("GET", "/session/status") => Reply::Json(200, json!({})),
+        // The first page holds only the newest messages of a long turn: its prompt is further back.
+        ("GET", "/session/ses_root/message") if nth == 0 => Reply::Json(200, json!(filler(SETTLE_PAGE))),
+        ("GET", "/session/ses_root/message") => {
+            let mut all = vec![json!({"info": {"id": "msg_user", "role": "user"}, "parts": []})];
+            all.extend(filler(SETTLE_PAGE - 1));
+            all.push(stored_reply(
+                "msg_last",
+                json!([{"id": "t", "type": "text", "messageID": "msg_last", "text": "All done.", "time": {"start": 1, "end": 2}}]),
+            ));
+            Reply::Json(200, json!(all))
+        }
+        _ => Reply::Json(200, json!({})),
+    })
+    .await;
+    let (session, mut rx) = v1_session(&mock.base, PermissionMode::Supervised);
+    waiting_turn(&session).await;
+    session.settle_after_reconnect().await;
+    let events = drain(&mut rx);
+    assert!(
+        matches!(events.as_slice(), [DriverEvent::MessageCompleted { text, .. }, DriverEvent::TurnCompleted { .. }] if text == "All done."),
+        "{events:?}"
+    );
+    let reads = mock.requests("GET", "/session/ses_root/message");
+    let limits: Vec<&str> = reads.iter().map(|read| read.query.split('&').next().unwrap()).collect();
+    assert_eq!(limits, [format!("limit={SETTLE_PAGE}"), format!("limit={}", SETTLE_PAGE * 2)]);
+}
+
+#[tokio::test]
+async fn a_turn_whose_prompt_is_beyond_every_page_read_is_still_ended_once_the_session_is_idle() {
+    let mock = Mock::start(|method, path, _| match (method, path) {
+        ("GET", "/session/status") => Reply::Json(200, json!({})),
+        ("GET", "/session/ses_root/message") => {
+            Reply::Json(200, json!((0..SETTLE_PAGE_CAP).map(|i| stored_reply(&format!("msg_{i}"), json!([]))).collect::<Vec<_>>()))
+        }
+        _ => Reply::Json(200, json!({})),
+    })
+    .await;
+    let (session, mut rx) = v1_session(&mock.base, PermissionMode::Supervised);
+    waiting_turn(&session).await;
+    session.settle_after_reconnect().await;
+    let events = drain(&mut rx);
+    assert!(matches!(events.as_slice(), [DriverEvent::TurnCompleted { .. }]), "{events:?}");
+}
+
+#[tokio::test]
+async fn a_reconnect_during_a_compaction_does_not_fail_the_turn_that_succeeded() {
+    let mock = Mock::start(|method, path, _| match (method, path) {
+        ("GET", "/session/status") => Reply::Json(200, json!({})),
+        ("GET", "/session/ses_root/message") => Reply::Json(
+            200,
+            json!([
+                {"info": {"id": "msg_user", "role": "user"}, "parts": []},
+                stored_reply("msg_reply", json!([{"id": "t", "type": "text", "messageID": "msg_reply", "text": "Fine.", "time": {"start": 1, "end": 2}}]))
+            ]),
+        ),
+        _ => Reply::Json(200, json!({})),
+    })
+    .await;
+    let (session, mut rx) = v1_session(&mock.base, PermissionMode::Supervised);
+    waiting_turn(&session).await;
+    // `session.compacted` went by while the stream was down.
+    session
+        .handle_event(&event(
+            "session.error",
+            json!({"sessionID": "ses_root", "error": {"name": "ContextOverflowError", "data": {"message": "too long"}}}),
+        ))
+        .await;
+    session.settle_after_reconnect().await;
+    let events = drain(&mut rx);
+    assert!(
+        events.iter().any(|event| matches!(event, DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. })),
+        "{events:?}"
+    );
+    assert!(!events.iter().any(|event| matches!(event, DriverEvent::TurnFailed { .. })), "{events:?}");
+}
+
+#[tokio::test]
+async fn text_that_was_buffered_behind_a_settled_turn_is_dropped() {
+    let mock = Mock::start(|method, path, _| match (method, path) {
+        ("GET", "/session/status") => Reply::Json(200, json!({})),
+        ("GET", "/session/ses_root/message") => Reply::Json(
+            200,
+            json!([
+                {"info": {"id": "msg_user", "role": "user"}, "parts": []},
+                stored_reply("msg_reply", json!([{"id": "t", "type": "text", "messageID": "msg_reply", "text": "Done.", "time": {"start": 1, "end": 2}}]))
+            ]),
+        ),
+        _ => Reply::Json(200, json!({})),
+    })
+    .await;
+    let (session, mut rx) = v1_session(&mock.base, PermissionMode::Supervised);
+    waiting_turn(&session).await;
+    session.settle_after_reconnect().await;
+    drain(&mut rx);
+    // The stream was resubscribed before the status was read: what it buffered arrives now.
+    session
+        .handle_event(&event("message.part.delta", json!({"sessionID": "ses_root", "partID": "t", "field": "text", "delta": "Done."})))
+        .await;
+    assert!(drain(&mut rx).is_empty(), "the reply was delivered whole already");
+}
+
+#[tokio::test]
+async fn a_step_the_stream_counted_is_not_counted_again_when_the_turn_is_settled() {
+    let step = |id: &str, input: u64| json!({"id": id, "type": "step-finish", "messageID": "msg_reply", "tokens": {"input": input, "output": 1}, "cost": 0.5});
+    let steps = [step("s1", 10), step("s2", 20)];
+    let stored = steps.clone();
+    let mock = Mock::start(move |method, path, _| match (method, path) {
+        ("GET", "/session/status") => Reply::Json(200, json!({})),
+        ("GET", "/session/ses_root/message") => {
+            Reply::Json(200, json!([{"info": {"id": "msg_user", "role": "user"}, "parts": []}, stored_reply("msg_reply", json!(stored))]))
+        }
+        _ => Reply::Json(200, json!({})),
+    })
+    .await;
+    let (session, mut rx) = v1_session(&mock.base, PermissionMode::Supervised);
+    waiting_turn(&session).await;
+    session.handle_event(&event("message.part.updated", json!({"sessionID": "ses_root", "part": steps[0]}))).await;
+    session.settle_after_reconnect().await;
+    let events = drain(&mut rx);
+    let Some(DriverEvent::TurnCompleted { usage, cost_usd, .. }) = events.last() else { panic!("{events:?}") };
+    assert_eq!((usage.input_tokens, usage.output_tokens, *cost_usd), (30, 2, Some(1.0)));
+}
+
+#[tokio::test]
+async fn approvals_asked_while_the_stream_was_down_are_surfaced_and_answered_ones_withdrawn() {
+    let mock = Mock::start(|method, path, _| match (method, path) {
+        ("GET", "/permission") => Reply::Json(
+            200,
+            json!([
+                {"id": "per_old", "sessionID": "ses_root", "permission": "bash", "patterns": ["ls"], "metadata": {"command": "ls"}, "always": []},
+                {"id": "per_new", "sessionID": "ses_root", "permission": "bash", "patterns": ["rm x"], "metadata": {"command": "rm x"}, "always": []},
+                {"id": "per_other", "sessionID": "ses_elsewhere", "permission": "bash", "patterns": ["id"], "metadata": {}, "always": []}
+            ]),
+        ),
+        ("GET", "/question") => Reply::Json(200, json!([{"id": "que_new", "sessionID": "ses_root", "questions": [{"question": "Which?"}]}])),
+        _ => Reply::Json(200, json!({})),
+    })
+    .await;
+    let (session, mut rx) = v1_session(&mock.base, PermissionMode::Supervised);
+    {
+        let mut state = session.state.lock().await;
+        state.pending.insert("per_old".into(), "ses_root".into());
+        state.pending.insert("per_answered".into(), "ses_root".into());
+        state.pending.insert("que_answered".into(), "__question".into());
+    }
+    session.resync_requests().await;
+    let events = drain(&mut rx);
+    let asked: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            DriverEvent::PermissionRequest { request_id, .. } => Some(request_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(asked, ["per_new", "que_new"], "{events:?}");
+    let mut withdrawn: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            DriverEvent::PermissionWithdrawn { request_id } => Some(request_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    withdrawn.sort();
+    assert_eq!(withdrawn, ["per_answered", "que_answered"], "{events:?}");
+    // The same request announced again by the stream is not shown twice.
+    session
+        .handle_event(&event(
+            "permission.asked",
+            json!({"id": "per_new", "sessionID": "ses_root", "permission": "bash", "patterns": ["rm x"]}),
+        ))
+        .await;
+    assert!(drain(&mut rx).is_empty());
+    // It can still be answered.
+    assert!(session.state.lock().await.pending.contains_key("per_new"));
+}
+
+#[tokio::test]
+async fn a_failed_command_does_not_fail_a_newer_turn() {
+    let mock = Mock::start(|method, path, _| {
+        if (method, path) == ("POST", "/session/ses_root/command") {
+            Reply::After(Duration::from_millis(250), 500, json!({"error": "connection lost"}))
+        } else {
+            Reply::Json(200, json!({}))
+        }
+    })
+    .await;
+    let (session, mut rx) = v1_session(&mock.base, PermissionMode::Supervised);
+    let handle = Handle(session.clone(), std::sync::Mutex::new(None), None);
+    handle.send_message("m1", &UserMessage::text("/review now")).await.unwrap();
+    // The command's turn ended and the user already sent something else.
+    {
+        let mut state = session.state.lock().await;
+        state.current_message_id = Some("msg_newer".into());
+        state.active = true;
+    }
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert!(drain(&mut rx).is_empty(), "the newer turn is not the command's");
+    let state = session.state.lock().await;
+    assert!(state.active && state.current_message_id.as_deref() == Some("msg_newer"));
+}
+
+#[tokio::test]
+async fn a_turn_replaced_while_it_is_settled_is_left_alone() {
+    let mock = Mock::start(|method, path, _| match (method, path) {
+        ("GET", "/session/status") => Reply::Json(200, json!({})),
+        ("GET", "/session/ses_root/message") => Reply::After(
+            Duration::from_millis(300),
+            200,
+            json!([
+                {"info": {"id": "msg_user", "role": "user"}, "parts": []},
+                stored_reply("msg_reply", json!([{"id": "t", "type": "text", "messageID": "msg_reply", "text": "Done.", "time": {"start": 1, "end": 2}}]))
+            ]),
+        ),
+        _ => Reply::Json(200, json!({})),
+    })
+    .await;
+    let (session, mut rx) = v1_session(&mock.base, PermissionMode::Supervised);
+    waiting_turn(&session).await;
+    let settling = tokio::spawn({
+        let session = session.clone();
+        async move { session.settle_after_reconnect().await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    // While the messages are read the turn ends by itself and another begins.
+    session.handle_event(&event("session.idle", json!({"sessionID": "ses_root"}))).await;
+    session.state.lock().await.current_message_id = Some("msg_next".into());
+    session.state.lock().await.active = true;
+    drain(&mut rx);
+    settling.await.unwrap();
+    assert!(drain(&mut rx).is_empty(), "the settled turn was not this one");
+    let state = session.state.lock().await;
+    assert!(state.active && state.current_message_id.as_deref() == Some("msg_next"));
 }

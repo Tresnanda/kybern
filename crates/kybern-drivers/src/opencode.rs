@@ -604,6 +604,10 @@ pub(super) const SUBSCRIBE_TIMEOUT: std::time::Duration = std::time::Duration::f
 pub(super) const FIRST_SUBSCRIBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// One read or write while settling a turn after a reconnect.
 pub(super) const RECONCILE_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// Messages read per request while looking for a turn's prompt, and how many
+/// are read at most (the page doubles until it holds the prompt).
+const SETTLE_PAGE: usize = 100;
+const SETTLE_PAGE_CAP: usize = 1600;
 /// One rules update sent to a subagent session.
 pub(super) const CHILD_RULES_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
@@ -672,20 +676,65 @@ pub(super) fn model_window(limit: &Value) -> Option<u64> {
     size("input").or_else(|| size("context"))
 }
 
+fn event_of(ty: &str, properties: Value) -> Value {
+    json!({ "type": ty, "properties": properties })
+}
+
 /// Rules as a list, for either server API.
 fn rule_list(rules: &Value) -> Vec<Value> {
     rules.as_array().cloned().unwrap_or_default()
 }
 
+/// Every mode's ruleset, the rules Kybern itself ever writes into a session.
+fn all_rulesets() -> Vec<Vec<Value>> {
+    [PermissionMode::Supervised, PermissionMode::AcceptEdits, PermissionMode::Auto, PermissionMode::FullAccess]
+        .into_iter()
+        .map(|mode| rule_list(&ruleset(mode)))
+        .collect()
+}
+
+/// A subagent's own rules (its agent's restrictions): what is left of its
+/// rules once the thread's policy is taken off. That policy was written by
+/// Kybern under whichever mode was current then, or copied by OpenCode when
+/// the session was made, so the mode that wrote it is read from the rules
+/// themselves instead of assumed:
+/// 1. a whole ruleset of some mode comes first (Kybern wrote it);
+/// 2. else the part of one OpenCode copies (denies and `external_directory`);
+/// 3. else the layout is unknown, and one of each rule Kybern writes is taken
+///    off, so a rule of the agent's that merely equals one of them (a `bash`
+///    deny) is still kept.
+fn child_own_rules(child: &[Value]) -> Vec<Value> {
+    let rulesets = all_rulesets();
+    let longest =
+        |lists: Vec<Vec<Value>>| lists.into_iter().filter(|list| !list.is_empty() && child.starts_with(list)).map(|list| list.len()).max();
+    if let Some(len) = longest(rulesets.clone()) {
+        return child[len..].to_vec();
+    }
+    let copies = rulesets.iter().map(|list| list.iter().filter(|rule| v1_inherits(rule)).cloned().collect()).collect();
+    if let Some(len) = longest(copies) {
+        return child[len..].to_vec();
+    }
+    let mut written: Vec<&Value> = Vec::new();
+    for rule in rulesets.iter().flatten() {
+        if !written.contains(&rule) {
+            written.push(rule);
+        }
+    }
+    let mut own = child.to_vec();
+    for rule in written {
+        if let Some(index) = own.iter().position(|candidate| candidate == rule) {
+            own.remove(index);
+        }
+    }
+    own
+}
+
 /// The rules a subagent session ends up with after Kybern writes the parent's
 /// policy into it: the parent's rules first, then whatever the child set for
-/// itself (its agent's restrictions). `inherits` says which rules OpenCode
-/// itself copies from a parent; `previous` are the parent rules written into
-/// the child earlier, so they are not kept as the child's own.
-fn merge_child_rules(parent: &[Value], child: &[Value], previous: &[Value], inherits: impl Fn(&Value) -> bool) -> Vec<Value> {
-    let inherited: Vec<&Value> = parent.iter().filter(|rule| inherits(rule)).chain(previous).collect();
-    let own = child.iter().filter(|rule| !inherited.contains(rule));
-    parent.iter().cloned().chain(own.cloned()).collect()
+/// itself. Last match wins, so rules Kybern wrote under an older mode must not
+/// survive as the child's own: [`child_own_rules`] takes them off.
+fn merge_child_rules(parent: &[Value], child: &[Value]) -> Vec<Value> {
+    parent.iter().cloned().chain(child_own_rules(child)).collect()
 }
 
 /// Server start-up failed because another OpenCode holds the shared database.
@@ -944,10 +993,9 @@ struct ChildRuntime {
     task_id: String,
     /// The tool call that started (or last resumed) this child.
     call_id: Option<String>,
-    /// The rules the child holds once Kybern wrote this thread's policy into it,
-    /// and the parent rules those include. `None` until written.
+    /// The rules the child holds once Kybern wrote this thread's policy into it.
+    /// `None` until written, or when the last write failed.
     rules: Option<Vec<Value>>,
-    inherited: Vec<Value>,
     rules_warned: bool,
     seen_tool_parts: HashSet<String>,
     stats: RuntimeTaskStats,
@@ -1183,29 +1231,43 @@ impl OpencodeSession {
     /// defaults and never ask. `known` is the rules the session already holds,
     /// when the event that announced it carried them.
     async fn install_child_rules(&self, child_id: &str, known: Option<Vec<Value>>) {
-        let mode = {
-            let state = self.state.lock().await;
-            if state.children.get(child_id).is_none_or(|child| child.rules.is_some()) {
-                return;
+        if self.state.lock().await.children.get(child_id).is_none_or(|child| child.rules.is_some()) {
+            return;
+        }
+        if let Err(error) = self.refresh_child_rules(child_id, known).await {
+            self.child_rules_failed(child_id, &error).await;
+        }
+    }
+
+    /// Replace a subagent's rules with this thread's current policy plus its
+    /// own. `held` is the rules it has, read from the server when `None`. The
+    /// mode can change while the write is on its way, so a write that lost that
+    /// race is done again.
+    async fn refresh_child_rules(&self, child_id: &str, held: Option<Vec<Value>>) -> Result<()> {
+        let mut held = held;
+        for _ in 0..3 {
+            let mode = self.state.lock().await.mode;
+            let parent = rule_list(&ruleset(mode));
+            let current = match held.take() {
+                Some(rules) => rules,
+                None => {
+                    let info =
+                        self.send(reqwest::Method::GET, &format!("/session/{child_id}"), Value::Null, Some(CHILD_RULES_TIMEOUT)).await?;
+                    rule_list(&info["permission"])
+                }
+            };
+            let rules = merge_child_rules(&parent, &current);
+            self.write_rules(child_id, &rules).await?;
+            let mut state = self.state.lock().await;
+            if let Some(child) = state.children.get_mut(child_id) {
+                child.rules = Some(rules.clone());
             }
-            state.mode
-        };
-        let parent = rule_list(&ruleset(mode));
-        let current = match known {
-            Some(rules) => rules,
-            None => match self.send(reqwest::Method::GET, &format!("/session/{child_id}"), Value::Null, Some(CHILD_RULES_TIMEOUT)).await {
-                Ok(info) => rule_list(&info["permission"]),
-                Err(error) => return self.child_rules_failed(child_id, &error).await,
-            },
-        };
-        let rules = merge_child_rules(&parent, &current, &parent, v1_inherits);
-        if let Err(error) = self.write_rules(child_id, &rules).await {
-            return self.child_rules_failed(child_id, &error).await;
+            if state.mode == mode {
+                return Ok(());
+            }
+            held = Some(rules);
         }
-        if let Some(child) = self.state.lock().await.children.get_mut(child_id) {
-            child.rules = Some(rules);
-            child.inherited = parent;
-        }
+        Ok(())
     }
 
     /// Replace a session's permission rules.
@@ -1215,15 +1277,18 @@ impl OpencodeSession {
             .map(|_| ())
     }
 
-    /// A subagent kept only the denies it copied: it is blocked, not unguarded.
+    /// A subagent kept only the denies it copied (or the rules of an earlier
+    /// mode): say so once per mode change.
     async fn child_rules_failed(&self, child_id: &str, error: &DriverError) {
         tracing::warn!(%error, child_id, "could not write approval rules into an OpenCode subagent");
-        let first =
-            self.state.lock().await.children.get_mut(child_id).is_some_and(|child| !std::mem::replace(&mut child.rules_warned, true));
+        let first = self.state.lock().await.children.get_mut(child_id).is_some_and(|child| {
+            child.rules = None;
+            !std::mem::replace(&mut child.rules_warned, true)
+        });
         if first {
             self.emit(DriverEvent::Notice {
                 level: NoticeLevel::Warning,
-                text: "A subagent could not get this thread's approval rules, so OpenCode may block its tools. Stop it and ask again."
+                text: "A subagent could not get this thread's approval rules, so it may follow an older mode or be blocked. Stop it and ask again."
                     .into(),
                 data: None,
             })
@@ -1231,39 +1296,34 @@ impl OpencodeSession {
         }
     }
 
-    /// Write a new mode's rules into every subagent session still running.
-    async fn rewrite_child_rules(&self, mode: PermissionMode) -> Result<()> {
-        let parent = rule_list(&ruleset(mode));
-        let children: Vec<(String, Vec<Value>, Vec<Value>)> = {
-            let state = self.state.lock().await;
+    /// Write the thread's current rules into every subagent session, finished
+    /// ones too: a finished subagent can be resumed, and what it holds then
+    /// must not be the rules of an earlier mode. A running subagent that cannot
+    /// be updated is reported; a finished one is simply marked to be read again
+    /// when it resumes.
+    async fn rewrite_child_rules(&self) {
+        let children: Vec<(String, bool, Option<Vec<Value>>)> = {
+            let mut state = self.state.lock().await;
             state
                 .children
-                .iter()
-                .filter(|(_, child)| !child.terminal)
-                .filter_map(|(id, child)| Some((id.clone(), child.rules.clone()?, child.inherited.clone())))
+                .iter_mut()
+                .map(|(id, child)| {
+                    child.rules_warned = false;
+                    (id.clone(), child.terminal, child.rules.clone())
+                })
                 .collect()
         };
-        let mut first_error = None;
-        let unwritten: Vec<String> = {
-            let state = self.state.lock().await;
-            state.children.iter().filter(|(_, child)| !child.terminal && child.rules.is_none()).map(|(id, _)| id.clone()).collect()
-        };
-        for id in unwritten {
-            self.install_child_rules(&id, None).await;
-        }
-        for (id, current, inherited) in children {
-            let rules = merge_child_rules(&parent, &current, &inherited, v1_inherits);
-            match self.write_rules(&id, &rules).await {
-                Ok(()) => {
+        for (id, terminal, held) in children {
+            if let Err(error) = self.refresh_child_rules(&id, held).await {
+                if terminal {
                     if let Some(child) = self.state.lock().await.children.get_mut(&id) {
-                        child.rules = Some(rules);
-                        child.inherited = parent.clone();
+                        child.rules = None;
                     }
+                } else {
+                    self.child_rules_failed(&id, &error).await;
                 }
-                Err(error) => first_error = first_error.or(Some(error)),
             }
         }
-        first_error.map_or(Ok(()), Err)
     }
 
     async fn update_child(
@@ -1343,6 +1403,7 @@ impl OpencodeSession {
             if let Some(response) = response.filter(|response| response.status().is_success()) {
                 backoff = 200;
                 if reconnect {
+                    self.resync_requests().await;
                     self.settle_after_reconnect().await;
                 }
                 reconnect = true;
@@ -1364,9 +1425,76 @@ impl OpencodeSession {
         }
     }
 
+    /// The requests for approval and answers that are still open. After a
+    /// reconnect, one asked while the stream was down was never seen, and one
+    /// answered elsewhere was never withdrawn.
+    async fn resync_requests(&self) {
+        let get =
+            |path: &'static str| async move { self.send(reqwest::Method::GET, path, Value::Null, Some(RECONCILE_CALL_TIMEOUT)).await.ok() };
+        let before: Vec<(String, bool)> =
+            self.state.lock().await.pending.iter().map(|(id, session)| (id.clone(), session == "__question")).collect();
+        let (permissions, questions) = tokio::join!(get("/permission"), get("/question"));
+        let ids = |list: &Option<Value>| -> Option<HashSet<String>> {
+            Some(list.as_ref()?.as_array()?.iter().filter_map(|item| item["id"].as_str().map(str::to_owned)).collect())
+        };
+        for (kind, list, ty) in [(false, &permissions, "permission.asked"), (true, &questions, "question.asked")] {
+            let Some(open) = ids(list) else { continue };
+            for item in list.iter().filter_map(Value::as_array).flatten() {
+                let known = match item["id"].as_str() {
+                    Some(id) => self.state.lock().await.pending.contains_key(id),
+                    None => true,
+                };
+                if !known {
+                    self.handle_event(&event_of(ty, item.clone())).await;
+                }
+            }
+            for (id, question) in &before {
+                if *question == kind && !open.contains(id) && self.state.lock().await.pending.remove(id).is_some() {
+                    self.emit(DriverEvent::PermissionWithdrawn { request_id: id.clone() }).await;
+                }
+            }
+        }
+    }
+
+    /// The stored messages from a turn's prompt on. The newest `limit` messages
+    /// are read, and the page doubles until the prompt is in it: a long turn
+    /// pushes its own prompt out of a short page.
+    /// `None` when the prompt is not stored yet. Otherwise the messages after it
+    /// and whether it was found: not found means the turn is longer than the
+    /// most that is read.
+    async fn turn_messages(&self, session_id: &str, message_id: &str) -> Option<(Vec<Value>, bool)> {
+        let mut limit = SETTLE_PAGE;
+        loop {
+            let page = self
+                .send(
+                    reqwest::Method::GET,
+                    &format!("/session/{session_id}/message?limit={limit}"),
+                    Value::Null,
+                    Some(RECONCILE_CALL_TIMEOUT),
+                )
+                .await
+                .ok()?;
+            let messages = page.as_array().map(Vec::as_slice).unwrap_or_default();
+            if let Some(start) = messages.iter().position(|message| message.pointer("/info/id").and_then(Value::as_str) == Some(message_id))
+            {
+                return Some((messages[start + 1..].to_vec(), true));
+            }
+            // The whole history is in the page, and the prompt is not stored yet.
+            if messages.len() < limit {
+                return None;
+            }
+            // A turn that long, in a session that is idle, is over: there is no
+            // reply text to read back, but the turn must still end.
+            if limit >= SETTLE_PAGE_CAP {
+                return Some((Vec::new(), false));
+            }
+            limit *= 2;
+        }
+    }
+
     /// The event stream was down, so the end of the running turn may have gone
     /// by. Read what OpenCode stored: if the session is idle and the turn's
-    /// reply is there, finish the turn with the text it was missing.
+    /// reply is there, finish the turn with the text and usage it was missing.
     async fn settle_after_reconnect(&self) {
         let (session_id, message_id) = {
             let state = self.state.lock().await;
@@ -1375,39 +1503,68 @@ impl OpencodeSession {
                 _ => return,
             }
         };
-        let get = |path: String| async move { self.send(reqwest::Method::GET, &path, Value::Null, Some(RECONCILE_CALL_TIMEOUT)).await };
-        let Ok(status) = get("/session/status".into()).await else { return };
+        let Ok(status) = self.send(reqwest::Method::GET, "/session/status", Value::Null, Some(RECONCILE_CALL_TIMEOUT)).await else {
+            return;
+        };
         if status.get(&session_id).is_some_and(|status| status["type"] != "idle") {
             return;
         }
-        let Ok(messages) = get(format!("/session/{session_id}/message?limit=100")).await else { return };
-        let messages = messages.as_array().map(Vec::as_slice).unwrap_or_default();
         // The prompt may not have been stored yet; then there is nothing to settle.
-        let Some(start) = messages.iter().position(|message| message.pointer("/info/id").and_then(Value::as_str) == Some(&message_id))
-        else {
+        let Some((after, prompt_found)) = self.turn_messages(&session_id, &message_id).await else { return };
+        let replies: Vec<&Value> = after.iter().filter(|message| message.pointer("/info/role") == Some(&json!("assistant"))).collect();
+        if replies.is_empty() && prompt_found {
             return;
-        };
-        let replies: Vec<&Value> =
-            messages[start + 1..].iter().filter(|message| message.pointer("/info/role") == Some(&json!("assistant"))).collect();
-        if replies.is_empty() {
+        }
+        // The turn may have ended, or another begun, while the messages were read.
+        if !self.is_current_turn(&message_id).await {
             return;
         }
         for reply in &replies {
-            for part in reply["parts"].as_array().into_iter().flatten().filter(|part| part["type"] == "text") {
+            for part in
+                reply["parts"].as_array().into_iter().flatten().filter(|part| matches!(part["type"].as_str(), Some("text" | "step-finish")))
+            {
                 self.handle_part(part).await;
             }
         }
         match replies.last().and_then(|reply| reply.pointer("/info/error")).filter(|error| !error.is_null()) {
-            Some(error) => self.handle_session_error(error).await,
-            None => self.finish_turn_idle().await,
+            Some(error) => {
+                if error.get("name").and_then(Value::as_str) == Some("ContextOverflowError") {
+                    let message = error.pointer("/data/message").and_then(Value::as_str).unwrap_or("");
+                    self.state.lock().await.context_overflow = Some(format!("ContextOverflowError: {message}"));
+                    self.finish_turn_idle_of(Some(&message_id), false).await;
+                } else {
+                    self.handle_session_error_of(error, Some(&message_id)).await;
+                }
+            }
+            // A reply that ended without an error is the answer to any overflow
+            // OpenCode compacted: `session.compacted` may have been missed.
+            None => self.finish_turn_idle_of(Some(&message_id), true).await,
         }
+    }
+
+    /// Whether `message_id` is the turn still running.
+    async fn is_current_turn(&self, message_id: &str) -> bool {
+        let state = self.state.lock().await;
+        state.active && state.current_message_id.as_deref() == Some(message_id)
     }
 
     /// `session.idle`: the turn ended. A context overflow that was never
     /// followed by a compaction fails it.
     async fn finish_turn_idle(&self) {
+        self.finish_turn_idle_of(None, false).await
+    }
+
+    /// End the turn. With `turn`, only if that is the turn still running;
+    /// `forgive_overflow` drops an overflow that was already dealt with.
+    async fn finish_turn_idle_of(&self, turn: Option<&str>, forgive_overflow: bool) {
         let (usage, cost, duration_ms, active, anchors, overflow) = {
             let mut st = self.state.lock().await;
+            if turn.is_some_and(|turn| st.current_message_id.as_deref() != Some(turn)) {
+                return;
+            }
+            if forgive_overflow {
+                st.context_overflow = None;
+            }
             let active = st.active;
             st.compact_operation = None;
             st.active = false;
@@ -1435,8 +1592,20 @@ impl OpencodeSession {
 
     /// `session.error`.
     async fn handle_session_error(&self, err: &Value) {
+        self.handle_session_error_of(err, None).await
+    }
+
+    /// `session.error`, for the turn `turn` only when given.
+    async fn handle_session_error_of(&self, err: &Value, turn: Option<&str>) {
         let name = err.get("name").and_then(|n| n.as_str()).unwrap_or("error");
         let msg = err.pointer("/data/message").and_then(|m| m.as_str()).unwrap_or("");
+        let current = {
+            let st = self.state.lock().await;
+            turn.is_none_or(|turn| st.current_message_id.as_deref() == Some(turn))
+        };
+        if !current {
+            return;
+        }
         if name == "ContextOverflowError" && self.state.lock().await.active {
             // OpenCode stays busy and compacts; the idle that follows decides.
             self.state.lock().await.context_overflow = Some(format!("{name}: {msg}"));
@@ -1516,9 +1685,11 @@ impl OpencodeSession {
             "message.part.delta" => {
                 let part_id = p.get("partID").and_then(|s| s.as_str()).unwrap_or("");
                 let delta = p.get("delta").and_then(|s| s.as_str()).unwrap_or("");
+                // A part already reported complete takes no more text: the deltas
+                // that were buffered while a turn was settled are old news.
                 let info = {
                     let st = self.state.lock().await;
-                    st.parts.get(part_id).map(|i| (i.kind.clone(), i.message_id.clone()))
+                    st.parts.get(part_id).filter(|i| !i.started).map(|i| (i.kind.clone(), i.message_id.clone()))
                 };
                 match info.as_ref().map(|(k, m)| (k.as_str(), m.clone())) {
                     Some(("text", message_id)) => {
@@ -1587,8 +1758,10 @@ impl OpencodeSession {
                 };
                 let suggestions = p.get("always").and_then(|a| a.as_array()).cloned().unwrap_or_default();
                 let tool_call_id = p.pointer("/tool/callID").and_then(|c| c.as_str()).map(str::to_string);
-                if let Some(s) = sid.or(my_session.as_deref()) {
-                    self.state.lock().await.pending.insert(id.clone(), s.to_owned());
+                // One request is shown once, however many times it is announced.
+                let owner = sid.or(my_session.as_deref()).unwrap_or("").to_owned();
+                if self.state.lock().await.pending.insert(id.clone(), owner).is_some() {
+                    return;
                 }
                 self.emit(DriverEvent::PermissionRequest {
                     request_id: id,
@@ -1608,7 +1781,9 @@ impl OpencodeSession {
             }
             "question.asked" => {
                 let id = p.get("id").and_then(Value::as_str).unwrap_or("").to_owned();
-                self.state.lock().await.pending.insert(id.clone(), "__question".into());
+                if self.state.lock().await.pending.insert(id.clone(), "__question".into()).is_some() {
+                    return;
+                }
                 self.emit(DriverEvent::PermissionRequest {
                     request_id: id,
                     tool_call_id: p.pointer("/tool/callID").and_then(Value::as_str).map(str::to_owned),
@@ -1936,7 +2111,9 @@ impl OpencodeSession {
                     _ => {}
                 }
             }
-            "step-finish" => {
+            // `started` marks the step as counted: one read back after a
+            // reconnect must not be counted again.
+            "step-finish" if !std::mem::replace(&mut info.started, true) => {
                 if let Some(t) = part.get("tokens") {
                     st.turn_usage.input_tokens += t.get("input").and_then(|v| v.as_u64()).unwrap_or(0);
                     st.turn_usage.output_tokens +=
@@ -2162,7 +2339,7 @@ impl AgentSession for Handle {
             st.turn_started = Some(std::time::Instant::now());
             st.turn_usage = Usage::default();
             st.turn_cost = 0.0;
-            st.current_message_id = Some(oc_message_id);
+            st.current_message_id = Some(oc_message_id.clone());
             st.context_overflow = None;
         }
         if command.is_some() {
@@ -2173,8 +2350,20 @@ impl AgentSession for Handle {
                 // event stream reports the outcome.
                 let result = session.send(reqwest::Method::POST, &format!("/session/{session_id}/command"), body, None).await;
                 if let Err(error) = result {
-                    // A turn the event stream already ended is not failed twice.
-                    if std::mem::take(&mut session.state.lock().await.active) {
+                    // Only this command's own turn fails: one the event stream
+                    // already ended, or one that a newer message replaced, is not.
+                    let failed = {
+                        let mut st = session.state.lock().await;
+                        let own = st.current_message_id.as_deref() == Some(oc_message_id.as_str());
+                        let failed = own && std::mem::take(&mut st.active);
+                        if failed {
+                            st.turn_started = None;
+                            st.current_message_id = None;
+                            st.context_overflow = None;
+                        }
+                        failed
+                    };
+                    if failed {
                         session.emit(DriverEvent::turn_failed(ProviderKind::Opencode, error.to_string())).await;
                     }
                 }
@@ -2191,16 +2380,18 @@ impl AgentSession for Handle {
         s.post(&format!("/session/{session_id}/abort"), json!({})).await.map(|_| ())
     }
 
+    /// The thread's rules are replaced in place, then its subagents'. The mode is
+    /// recorded only once the thread's own rules were written: a failure there
+    /// leaves the mode, and the thread, as they were. A subagent that cannot be
+    /// updated does not undo that: the thread really is in the new mode, so the
+    /// call succeeds and a warning names the subagent that kept older rules.
     async fn set_permission_mode(&self, mode: PermissionMode) -> Result<()> {
         let s = &self.0;
-        let session_id = {
-            let mut state = s.state.lock().await;
-            state.mode = mode;
-            state.session_id.clone().ok_or_else(|| DriverError::Protocol("no opencode session".into()))?
-        };
-        // The session's rules are replaceable in place, and so are its running subagents'.
+        let session_id = s.state.lock().await.session_id.clone().ok_or_else(|| DriverError::Protocol("no opencode session".into()))?;
         s.write_rules(&session_id, &rule_list(&ruleset(mode))).await?;
-        s.rewrite_child_rules(mode).await
+        s.state.lock().await.mode = mode;
+        s.rewrite_child_rules().await;
+        Ok(())
     }
 
     async fn set_model(&self, model: &str) -> Result<()> {
