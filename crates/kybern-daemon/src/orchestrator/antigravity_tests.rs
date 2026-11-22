@@ -157,3 +157,338 @@ fn antigravity_has_one_account_per_machine() {
     settings.providers.insert(ProviderKind::Antigravity, provider);
     assert!(crate::provider_accounts::validate(&settings).is_err(), "a named Antigravity account can't be saved");
 }
+
+#[derive(Clone)]
+struct AgyRecord {
+    resume_session_id: Option<String>,
+    messages: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+struct ScriptedAntigravity {
+    spawns: Arc<std::sync::Mutex<Vec<AgyRecord>>>,
+    /// Events emitted automatically when `send_message` is called, one script per call.
+    scripts: Arc<std::sync::Mutex<std::collections::VecDeque<Vec<DriverEvent>>>>,
+}
+
+impl ScriptedAntigravity {
+    fn new(scripts: Vec<Vec<DriverEvent>>) -> Self {
+        Self {
+            spawns: Arc::new(std::sync::Mutex::new(Vec::new())),
+            scripts: Arc::new(std::sync::Mutex::new(scripts.into())),
+        }
+    }
+}
+
+struct ScriptedAgySession {
+    messages: Arc<std::sync::Mutex<Vec<String>>>,
+    tx: tokio::sync::mpsc::Sender<DriverEvent>,
+    scripts: Arc<std::sync::Mutex<std::collections::VecDeque<Vec<DriverEvent>>>>,
+}
+
+#[async_trait::async_trait]
+impl kybern_drivers::AgentSession for ScriptedAgySession {
+    async fn send_message(&self, _id: &str, message: &UserMessage) -> kybern_drivers::Result<()> {
+        self.messages.lock().unwrap().push(message.plain_text());
+        let batch = self.scripts.lock().unwrap().pop_front().unwrap_or_default();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            for event in batch {
+                let _ = tx.send(event).await;
+            }
+        });
+        Ok(())
+    }
+    async fn interrupt(&self) -> kybern_drivers::Result<()> {
+        Ok(())
+    }
+    async fn set_permission_mode(&self, _: PermissionMode) -> kybern_drivers::Result<()> {
+        Ok(())
+    }
+    async fn set_model(&self, _: &str) -> kybern_drivers::Result<()> {
+        Ok(())
+    }
+    async fn set_effort(&self, _: &str) -> kybern_drivers::Result<()> {
+        Ok(())
+    }
+    async fn respond_permission(&self, _: &str, _: &ApprovalDecision) -> kybern_drivers::Result<()> {
+        Ok(())
+    }
+    async fn close(&self) -> kybern_drivers::Result<()> {
+        let _ = self.tx.send(DriverEvent::Exited { code: Some(0), error: None }).await;
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl kybern_drivers::AgentDriver for ScriptedAntigravity {
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::Antigravity
+    }
+    fn supports_fork(&self) -> bool {
+        false
+    }
+    async fn probe(&self, _: Option<&std::path::PathBuf>) -> ProviderStatus {
+        ProviderStatus {
+            kind: ProviderKind::Antigravity,
+            display_name: "Antigravity".into(),
+            available: true,
+            binary_path: None,
+            version: Some("1.5.14".into()),
+            unavailable_reason: None,
+            supported_permission_modes: vec![PermissionMode::FullAccess],
+            supports_fork: false,
+            supports_model_switch: true,
+            supports_effort_switch: true,
+            supported_efforts: vec![],
+            models: vec![],
+            instances: vec!["default".into()],
+        }
+    }
+    async fn spawn(&self, config: kybern_drivers::SessionConfig) -> kybern_drivers::Result<kybern_drivers::SpawnedSession> {
+        let (tx, events) = tokio::sync::mpsc::channel(64);
+        let messages = Arc::new(std::sync::Mutex::new(Vec::new()));
+        self.spawns.lock().unwrap().push(AgyRecord {
+            resume_session_id: config.resume_session_id,
+            messages: messages.clone(),
+        });
+        Ok(kybern_drivers::SpawnedSession {
+            session: Box::new(ScriptedAgySession { messages, tx, scripts: self.scripts.clone() }),
+            events,
+        })
+    }
+}
+
+async fn wait_for_status(store: &kybern_store::Store, thread_id: ThreadId, expected: ThreadStatus) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if store.thread_get(thread_id).unwrap().is_some_and(|t| t.status == expected) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("thread did not reach {expected:?}: {:?}", store.thread_get(thread_id).unwrap().map(|t| t.status)));
+}
+
+#[tokio::test]
+async fn antigravity_thinking_signature_failure_retries_once_on_a_fresh_conversation_with_context() {
+    let raw_sig_err = r#"Error 400, Message: {"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.0.thinking.signature: Field required"}}, Status: INVALID_ARGUMENT"#;
+    let sig_problem = kybern_protocol::rpc::Problem::new(kybern_protocol::rpc::ProblemKind::Internal, raw_sig_err)
+        .with_subject("antigravity");
+
+    let driver = Arc::new(ScriptedAntigravity::new(vec![
+        // Turn 1 succeeds and binds the conversation id.
+        vec![
+            DriverEvent::SessionBound { session_id: "conv-poisoned".into(), model: None },
+            DriverEvent::MessageCompleted {
+                message_id: "m1".into(),
+                origin: EventOrigin::Root,
+                text: "earlier answer".into(),
+                thinking: None,
+            },
+            completed_response(StopReason::Completed),
+        ],
+        // Turn 2 fails on the poisoned conversation with a missing thinking signature.
+        vec![DriverEvent::TurnFailed {
+            error: "Antigravity's saved conversation can no longer be sent to the model.".into(),
+            problem: Some(sig_problem.clone()),
+        }],
+        // Automatic retry on a fresh conversation succeeds.
+        vec![
+            DriverEvent::SessionBound { session_id: "conv-fresh".into(), model: None },
+            DriverEvent::MessageCompleted {
+                message_id: "m2".into(),
+                origin: EventOrigin::Root,
+                text: "recovered answer".into(),
+                thinking: None,
+            },
+            completed_response(StopReason::Completed),
+        ],
+        // Turn 3 fails twice in a row: must stop after one retry instead of looping.
+        vec![DriverEvent::TurnFailed { error: raw_sig_err.into(), problem: Some(sig_problem.clone()) }],
+        vec![
+            DriverEvent::SessionBound { session_id: "conv-also-bad".into(), model: None },
+            DriverEvent::TurnFailed { error: raw_sig_err.into(), problem: Some(sig_problem) },
+        ],
+    ]));
+
+    let mut drivers = DriverRegistry::default();
+    drivers.register(driver.clone());
+    let fixture = Fixture::with_drivers_and_gateway(drivers, None);
+    std::fs::create_dir_all(&fixture.root).unwrap();
+    let mut thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Antigravity);
+    thread.permission_mode = PermissionMode::FullAccess;
+    thread.provider_session_id = None;
+    fixture.store.thread_upsert(&thread).unwrap();
+
+    // Turn 1 establishes the conversation.
+    fixture.orchestrator.send(thread.id, UserMessage::text("earlier question")).await.unwrap();
+    wait_for_status(&fixture.store, thread.id, ThreadStatus::Idle).await;
+    assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().provider_session_id.as_deref(), Some("conv-poisoned"));
+
+    // Turn 2 hits the thinking-signature error and recovers automatically on a fresh conversation.
+    fixture.orchestrator.send(thread.id, UserMessage::text("follow-up question")).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let current = fixture.store.thread_get(thread.id).unwrap().unwrap();
+            if current.status == ThreadStatus::Idle && current.provider_session_id.as_deref() == Some("conv-fresh") {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("recovered onto conv-fresh");
+
+    let spawns = driver.spawns.lock().unwrap().clone();
+    assert_eq!(spawns.len(), 2, "second spawn was a fresh conversation");
+    assert_eq!(spawns[1].resume_session_id, None, "poisoned conversation id must be dropped");
+    let retried_prompt = spawns[1].messages.lock().unwrap()[0].clone();
+    assert!(retried_prompt.contains("earlier question"), "missing prior user turn: {retried_prompt}");
+    assert!(retried_prompt.contains("earlier answer"), "missing prior assistant turn: {retried_prompt}");
+    assert!(retried_prompt.contains("follow-up question"), "missing current user turn: {retried_prompt}");
+
+    // Turn 3 fails twice: only one automatic retry occurs, then the turn fails cleanly.
+    fixture.orchestrator.send(thread.id, UserMessage::text("third question")).await.unwrap();
+    wait_for_status(&fixture.store, thread.id, ThreadStatus::Failed).await;
+    assert_eq!(driver.spawns.lock().unwrap().len(), 3, "only one retry spawn for the double failure");
+}
+
+#[tokio::test]
+async fn antigravity_revert_rewinds_by_starting_a_fresh_conversation_seeded_with_kept_transcript() {
+    let driver = Arc::new(ScriptedAntigravity::new(vec![
+        // Turn 1
+        vec![
+            DriverEvent::SessionBound { session_id: "conv-1".into(), model: None },
+            DriverEvent::MessageCompleted {
+                message_id: "m1".into(),
+                origin: EventOrigin::Root,
+                text: "keep this answer".into(),
+                thinking: None,
+            },
+            completed_response(StopReason::Completed),
+        ],
+        // Turn 2 (will be rewound)
+        vec![
+            DriverEvent::MessageCompleted {
+                message_id: "m2".into(),
+                origin: EventOrigin::Root,
+                text: "drop this answer".into(),
+                thinking: None,
+            },
+            completed_response(StopReason::Completed),
+        ],
+        // Turn 3 (after first rewind)
+        vec![
+            DriverEvent::SessionBound { session_id: "conv-2".into(), model: None },
+            DriverEvent::MessageCompleted {
+                message_id: "m3".into(),
+                origin: EventOrigin::Root,
+                text: "second branch answer".into(),
+                thinking: None,
+            },
+            completed_response(StopReason::Completed),
+        ],
+        // Turn 4 (will also be rewound)
+        vec![
+            DriverEvent::MessageCompleted {
+                message_id: "m4".into(),
+                origin: EventOrigin::Root,
+                text: "drop second branch tail".into(),
+                thinking: None,
+            },
+            completed_response(StopReason::Completed),
+        ],
+        // Turn 5 (after second rewind)
+        vec![
+            DriverEvent::SessionBound { session_id: "conv-3".into(), model: None },
+            DriverEvent::MessageCompleted {
+                message_id: "m5".into(),
+                origin: EventOrigin::Root,
+                text: "final answer".into(),
+                thinking: None,
+            },
+            completed_response(StopReason::Completed),
+        ],
+    ]));
+
+    let mut drivers = DriverRegistry::default();
+    drivers.register(driver.clone());
+    let fixture = Fixture::with_drivers_and_gateway(drivers, None);
+    std::fs::create_dir_all(&fixture.root).unwrap();
+    let git = |args: &[&str]| {
+        assert!(std::process::Command::new("git").arg("-C").arg(&fixture.root).args(args).status().unwrap().success());
+    };
+    git(&["init", "-q"]);
+    git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]);
+
+    let mut thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Antigravity);
+    thread.permission_mode = PermissionMode::FullAccess;
+    thread.provider_session_id = None;
+    fixture.store.thread_upsert(&thread).unwrap();
+
+    let wait_checkpoint = |turn_id: TurnId| {
+        let store = fixture.store.clone();
+        async move {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    if store.checkpoint_get(turn_id).unwrap().is_some_and(|c| c.after.is_some()) {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("checkpoint recorded");
+        }
+    };
+
+    // Turn 1
+    let (t1, _) = fixture.orchestrator.send(thread.id, UserMessage::text("keep this question")).await.unwrap();
+    wait_for_status(&fixture.store, thread.id, ThreadStatus::Idle).await;
+    wait_checkpoint(t1).await;
+
+    // Turn 2
+    let (t2, _) = fixture.orchestrator.send(thread.id, UserMessage::text("drop this question")).await.unwrap();
+    wait_for_status(&fixture.store, thread.id, ThreadStatus::Idle).await;
+    wait_checkpoint(t2).await;
+
+    // Rewind to before Turn 2.
+    let (_, rewound) = fixture.orchestrator.revert(thread.id, t2).await.unwrap();
+    assert!(rewound, "Antigravity rewind must report conversation_rewound=true");
+    assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().provider_session_id, None);
+
+    // Turn 3 starts fresh with Turn 1's transcript and none of Turn 2.
+    let (t3, _) = fixture.orchestrator.send(thread.id, UserMessage::text("edited replacement")).await.unwrap();
+    wait_for_status(&fixture.store, thread.id, ThreadStatus::Idle).await;
+    wait_checkpoint(t3).await;
+
+    let spawns = driver.spawns.lock().unwrap().clone();
+    assert_eq!(spawns.len(), 2);
+    assert_eq!(spawns[1].resume_session_id, None);
+    let seeded = spawns[1].messages.lock().unwrap()[0].clone();
+    assert!(seeded.contains("keep this question") && seeded.contains("keep this answer"), "{seeded}");
+    assert!(!seeded.contains("drop this question") && !seeded.contains("drop this answer"), "rewound turn leaked: {seeded}");
+    assert!(seeded.contains("edited replacement"), "{seeded}");
+
+    // Turn 4, then a second rewind to before Turn 4: Turn 5 must keep Turn 1 + Turn 3, and omit Turn 2 + Turn 4.
+    let (t4, _) = fixture.orchestrator.send(thread.id, UserMessage::text("drop second branch question")).await.unwrap();
+    wait_for_status(&fixture.store, thread.id, ThreadStatus::Idle).await;
+    wait_checkpoint(t4).await;
+    let (_, rewound2) = fixture.orchestrator.revert(thread.id, t4).await.unwrap();
+    assert!(rewound2);
+
+    fixture.orchestrator.send(thread.id, UserMessage::text("final replacement")).await.unwrap();
+    wait_for_status(&fixture.store, thread.id, ThreadStatus::Idle).await;
+
+    let spawns = driver.spawns.lock().unwrap().clone();
+    assert_eq!(spawns.len(), 3);
+    assert_eq!(spawns[2].resume_session_id, None);
+    let seeded2 = spawns[2].messages.lock().unwrap()[0].clone();
+    assert!(seeded2.contains("keep this question") && seeded2.contains("keep this answer"), "{seeded2}");
+    assert!(seeded2.contains("edited replacement") && seeded2.contains("second branch answer"), "{seeded2}");
+    assert!(!seeded2.contains("drop this question") && !seeded2.contains("drop this answer"), "{seeded2}");
+    assert!(!seeded2.contains("drop second branch question") && !seeded2.contains("drop second branch tail"), "{seeded2}");
+    assert!(seeded2.contains("final replacement"), "{seeded2}");
+}

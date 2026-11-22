@@ -462,7 +462,7 @@ impl Orchestrator {
         };
         let (after, through): (EventSeq, EventSeq) = serde_json::from_str(&range)?;
         let events = self.inner.store.events_for_thread(thread.id)?;
-        let entries = kybern_store::project_transcript(&events.iter().filter(|event| event.seq <= through).cloned().collect::<Vec<_>>());
+        let entries = kybern_store::project_transcript(&super::antigravity_rules::events_without_reverted(&events, through));
         let mut items = Vec::new();
         for entry in entries {
             let item = match entry {

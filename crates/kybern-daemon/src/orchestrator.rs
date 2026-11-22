@@ -4342,10 +4342,14 @@ impl Orchestrator {
         let anchors = |c: &Checkpoint| TurnAnchors { turn_id: c.provider_turn_id.clone(), previous_end: c.provider_turn_end.clone() };
         let conversation_rewound = if idx == 0 || t.provider_session_id.is_none() {
             t.provider_session_id = None;
+            let _ = self.inner.store.meta_set(&format!("handoff:{thread_id}"), "");
             true
         } else if driver_supports_fork && (c.provider_turn_id.is_some() || all[idx - 1].provider_turn_end.is_some()) {
             let point = RewindPoint { drop_from: anchors(&c), keep_through: Some(anchors(&all[idx - 1])) };
             self.inner.pending_rewinds.lock().await.insert(thread_id, point);
+            true
+        } else if t.provider.kind == ProviderKind::Antigravity {
+            self.prepare_antigravity_rewind(&mut t, turn_id)?;
             true
         } else {
             false
@@ -5792,6 +5796,13 @@ impl Orchestrator {
                     *turn_guard = None;
                     drop(turn_guard);
                     self.run_resend(thread_id, live, plan).await;
+                    return Ok(());
+                }
+                if turn.internal.is_none()
+                    && !retiring
+                    && self.recover_antigravity_thinking_signature(thread_id, live, turn.id, &error, problem.as_ref()).await
+                {
+                    *turn_guard = None;
                     return Ok(());
                 }
                 turn.completed = true;
