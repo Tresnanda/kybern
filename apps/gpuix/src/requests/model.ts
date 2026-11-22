@@ -130,7 +130,10 @@ function cursorAlways(approval: ApprovalRequest): Part[] | null {
 
 type Noun = 'command' | 'edit' | 'read' | 'other'
 
-/** Kybern's Codex driver answers later commands, and edits inside the workspace, on the same thread until the mode changes. */
+/**
+ * Kybern's Codex driver answers later commands, and edits inside the workspace, on the same thread until the mode changes. Network
+ * access, extra permissions, runs outside the sandbox and writes outside the workspace always ask, so their cards offer no session row.
+ */
 function codexNoun(noun: Noun): string {
   if (noun === 'command') return 'commands'
   if (noun === 'edit') return 'edits'
@@ -310,19 +313,19 @@ export function approvalCard(approval: ApprovalRequest, provider: string | undef
   if (kind === 'edit' || kind === 'write') {
     const diff = editDiff(approval.input)
     const creating = kind === 'write'
-    // Codex's "accept for session" on an edit that asks for a write root also grants writes under that root.
+    // A Codex edit that asks for a write root is answered once: writes outside the workspace always ask again.
     const root = provider === 'codex' ? string(record(approval.input).grant_root) : ''
     return {
       kind: 'edit', glyph: 'pencil', agent, chip, title: creating ? 'Create this file?' : 'Apply this edit?',
       meta: root ? `${agent} also asks to write in ${root} for the rest of the session.` : undefined,
       well: diff ? { kind: 'diff', diff } : detail ? { kind: 'file', path: detail } : null,
-      rows: withSession(decide('once', [text(creating ? 'Create file' : 'Apply edit')], { decision: 'allow_once' }), root ? [text('Allow writes in '), code(root), text(' for this session')] : session('edit'), deniedRow(agent)),
+      rows: withSession(decide('once', [text(creating ? 'Create file' : 'Apply edit')], { decision: 'allow_once' }), root ? null : session('edit'), deniedRow(agent)),
     }
   }
   return {
     kind: 'grant', glyph: 'shield', agent, chip: { label: agent }, title: approval.summary && !lines.length ? `${approval.summary}?` : 'Grant these permissions?',
     well: lines.length ? { kind: 'grants', lines } : { kind: 'text', text: permissionBody(approval.input) },
-    rows: withSession(decide('once', [text('Grant once')], { decision: 'allow_once' }), provider === 'codex' ? [text('Grant for this session')] : session('other'), deniedRow(agent)),
+    rows: withSession(decide('once', [text('Grant once')], { decision: 'allow_once' }), provider === 'codex' ? null : session('other'), deniedRow(agent)),
   }
 }
 
