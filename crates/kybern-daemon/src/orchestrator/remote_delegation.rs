@@ -305,7 +305,7 @@ impl Orchestrator {
             .or_else(|| (same_kind && asked_model.is_none()).then(|| parent.effort.clone()).flatten());
         let permission_mode =
             super::delegation::resolve_child_permission(parent.permission_mode, parent.provider.kind, kind, request.permission_mode)?;
-        super::antigravity_rules::require_full_access(kind, permission_mode)?;
+        super::antigravity_rules::require_full_access(&self.inner.drivers, kind, permission_mode)?;
 
         // The repository, so the target can find its checkout of it; the base for a worktree.
         let (repo_identity, base_commit, group) = if super::group_git::is_group(parent) {
@@ -1328,7 +1328,7 @@ impl Orchestrator {
             .map_err(|error| RpcError::new(codes::PROVIDER_UNAVAILABLE, format!("{error:#}")))?;
         // The mode can only narrow: never above what the delegating parent held.
         let permission_mode = narrower(params.permission_mode, origin.permission_cap);
-        super::antigravity_rules::require_full_access(kind, permission_mode)
+        super::antigravity_rules::require_full_access(&self.inner.drivers, kind, permission_mode)
             .map_err(|error| RpcError::invalid_params(error.to_string()))?;
 
         let child_id = Uuid::now_v7();

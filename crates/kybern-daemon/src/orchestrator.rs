@@ -917,6 +917,13 @@ fn instructions_key(session_id: &str) -> String {
     format!("instructions_delivered:{session_id}")
 }
 
+/// Harnesses that reply by themselves after a turn settled (Claude's background tasks, Antigravity's
+/// backgrounded commands on ACP): that reply reopens the settled turn (`TurnResumed`) instead of
+/// arriving with no turn.
+fn resumes_settled_turns(kind: ProviderKind) -> bool {
+    matches!(kind, ProviderKind::ClaudeCode | ProviderKind::Antigravity)
+}
+
 /// Harnesses with no system channel: Kybern's instructions block is the start of the first prompt.
 fn carries_instructions_in_conversation(kind: ProviderKind) -> bool {
     matches!(kind, ProviderKind::Cursor | ProviderKind::Antigravity | ProviderKind::GrokBuild)
@@ -1495,7 +1502,7 @@ impl Orchestrator {
     }
 
     fn update_thread(&self, thread: Thread) -> Result<Thread> {
-        antigravity_rules::require_full_access(thread.provider.kind, thread.permission_mode)?;
+        antigravity_rules::require_full_access(&self.inner.drivers, thread.provider.kind, thread.permission_mode)?;
         if thread.coordinator_project_id.is_some() {
             antigravity_rules::refuse_lead(thread.provider.kind)?;
         }
@@ -1934,7 +1941,7 @@ impl Orchestrator {
         let permission_mode =
             params.permission_mode.unwrap_or_else(|| default_provider_permission(params.provider.kind, settings.default_permission_mode));
         // Before anything is created: Antigravity only runs in Full access.
-        antigravity_rules::require_full_access(params.provider.kind, permission_mode)?;
+        antigravity_rules::require_full_access(&self.inner.drivers, params.provider.kind, permission_mode)?;
         let configured_model = settings.providers.get(&params.provider.kind).and_then(|provider| provider.model.clone());
         let selected_model = params.model.as_deref().or(configured_model.as_deref());
         self.validate_provider_selection(project.id, &params.provider, selected_model, params.effort.as_deref()).await?;
@@ -2441,7 +2448,7 @@ impl Orchestrator {
         let mode = self.pending_permission_for(&receiving, &target.provider)?.unwrap_or(receiving.permission_mode);
         receiving.provider_session_id = self.compatible_native_session(&receiving, &target.provider)?;
         receiving.provider = target.provider.clone();
-        accounts::validate_permission(&receiving, mode)?;
+        accounts::validate_permission(&self.inner.drivers, &receiving, mode)?;
         self.inner.store.meta_set_many(&[
             (&format!("queue_target:{}", message.id), &serde_json::to_string(&target)?),
             (&format!("queue_permission:{}", message.id), &serde_json::to_string(&mode)?),
@@ -2556,7 +2563,7 @@ impl Orchestrator {
                     let mut receiving = thread.clone();
                     receiving.provider_session_id = self.compatible_native_session(&thread, &target.provider)?;
                     receiving.provider = target.provider.clone();
-                    accounts::validate_permission(&receiving, mode)?;
+                    accounts::validate_permission(&self.inner.drivers, &receiving, mode)?;
                     self.inner.store.meta_set_many(&[
                         (&format!("steer_request:{}", params.id), &serde_json::to_string(&params)?),
                         (&format!("steer_target:{}", params.id), &serde_json::to_string(&target)?),
@@ -5284,7 +5291,7 @@ impl Orchestrator {
                 let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
                 if let Some(mut thread) = self.inner.store.thread_get(thread_id)? {
                     waiting_for_start = thread.status == ThreadStatus::Running;
-                    if thread.provider.kind == ProviderKind::ClaudeCode
+                    if resumes_settled_turns(thread.provider.kind)
                         && thread.status == ThreadStatus::Idle
                         && let Some(mut turn) = continuation.take()
                     {
@@ -5741,7 +5748,7 @@ impl Orchestrator {
                 turn.messages.clear();
                 turn.active_messages.clear();
                 let settled = turn_guard.take();
-                if settled.as_ref().is_some_and(|turn| turn.provider == ProviderKind::ClaudeCode) && stop_reason == StopReason::Completed {
+                if settled.as_ref().is_some_and(|turn| resumes_settled_turns(turn.provider)) && stop_reason == StopReason::Completed {
                     *live.continuation.lock().await = settled;
                 }
                 drop(turn_guard);

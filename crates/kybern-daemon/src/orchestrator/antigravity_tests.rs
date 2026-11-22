@@ -44,6 +44,47 @@ async fn antigravity_threads_are_created_and_changed_only_in_full_access() {
     fixture.orchestrator.update_thread_fields(set_mode(&thread, PermissionMode::FullAccess)).unwrap();
 }
 
+/// An Antigravity whose `agy` runs on ACP: Kybern answers its permission requests, so it takes every mode.
+struct AcpAntigravity;
+
+#[async_trait::async_trait]
+impl kybern_drivers::AgentDriver for AcpAntigravity {
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::Antigravity
+    }
+    fn accepts_permission_mode(&self, _: PermissionMode) -> bool {
+        true
+    }
+    async fn probe(&self, _: Option<&std::path::PathBuf>) -> ProviderStatus {
+        unreachable!("not probed")
+    }
+    async fn spawn(&self, _: kybern_drivers::SessionConfig) -> kybern_drivers::Result<kybern_drivers::SpawnedSession> {
+        unreachable!("not spawned")
+    }
+}
+
+#[tokio::test]
+async fn antigravity_on_acp_takes_every_mode_wherever_one_is_set() {
+    let mut drivers = DriverRegistry::default();
+    drivers.register(Arc::new(AcpAntigravity));
+    let fixture = Fixture::with_drivers(drivers);
+    std::fs::create_dir_all(&fixture.root).unwrap();
+    let thread = fixture.orchestrator.create_thread(antigravity_create(&fixture.project, Some(PermissionMode::Supervised))).await.unwrap();
+    assert_eq!((thread.provider.kind, thread.permission_mode), (ProviderKind::Antigravity, PermissionMode::Supervised));
+    for mode in [PermissionMode::AcceptEdits, PermissionMode::Auto, PermissionMode::FullAccess, PermissionMode::Supervised] {
+        fixture.orchestrator.update_thread_fields(set_mode(&thread, mode)).unwrap();
+        assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().permission_mode, mode);
+    }
+    // Switching a Supervised thread to Antigravity is admitted as it is, never widened.
+    let mut other = fixture.thread(ThreadStatus::Idle);
+    assert_eq!(other.permission_mode, PermissionMode::Supervised);
+    let target = SessionTarget { provider: ProviderInstance::default_for(ProviderKind::Antigravity), model: None, effort: None };
+    fixture.orchestrator.admit_target(&mut other, target).unwrap();
+    assert_eq!((other.provider.kind, other.permission_mode), (ProviderKind::Antigravity, PermissionMode::Supervised));
+    // It still can't lead a project: Kybern can't make it read-only.
+    assert!(super::antigravity_rules::refuse_lead(ProviderKind::Antigravity).is_err());
+}
+
 #[tokio::test]
 async fn switching_a_thread_to_antigravity_never_grants_it_full_access() {
     let fixture = Fixture::new();
@@ -58,8 +99,8 @@ async fn switching_a_thread_to_antigravity_never_grants_it_full_access() {
     // The queue and steer admission use the same check.
     let mut receiving = thread.clone();
     receiving.provider = target.provider.clone();
-    assert_eq!(super::accounts::validate_permission(&receiving, PermissionMode::Supervised).unwrap_err().to_string(), ONLY_FULL_ACCESS);
-    super::accounts::validate_permission(&receiving, PermissionMode::FullAccess).unwrap();
+    assert_eq!(super::accounts::validate_permission(&fixture.orchestrator.inner.drivers, &receiving, PermissionMode::Supervised).unwrap_err().to_string(), ONLY_FULL_ACCESS);
+    super::accounts::validate_permission(&fixture.orchestrator.inner.drivers, &receiving, PermissionMode::FullAccess).unwrap();
     // Full access first, then the switch is admitted.
     thread.permission_mode = PermissionMode::FullAccess;
     fixture.orchestrator.admit_target(&mut thread, target).unwrap();
@@ -71,7 +112,7 @@ fn delegation_to_antigravity_needs_a_full_access_parent_and_never_narrows() {
     use super::antigravity_rules::require_full_access;
     let child = |parent: PermissionMode, requested: Option<PermissionMode>| {
         let mode = super::delegation::resolve_child_permission(parent, ProviderKind::ClaudeCode, ProviderKind::Antigravity, requested)?;
-        require_full_access(ProviderKind::Antigravity, mode).map(|()| mode)
+        require_full_access(&DriverRegistry::default(), ProviderKind::Antigravity, mode).map(|()| mode)
     };
     assert_eq!(child(PermissionMode::FullAccess, None).unwrap(), PermissionMode::FullAccess);
     for parent in [PermissionMode::Supervised, PermissionMode::AcceptEdits, PermissionMode::Auto] {
