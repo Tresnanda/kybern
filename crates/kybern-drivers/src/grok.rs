@@ -55,6 +55,39 @@ const LOAD_REPLAY_IDLE: Duration = Duration::from_secs(2);
 /// The longest Kybern waits for `session/load` (or a quiet replay) before giving up.
 const LOAD_TIMEOUT: Duration = Duration::from_secs(90);
 
+/// How long Grok has to answer a Stop or Close before the turn ends as interrupted without it.
+const CANCEL_GRACE: Duration = Duration::from_secs(5);
+
+/// A session's waits. Tests shorten them through the session's env (`KYBERN_TEST_GROK_*_MS`), since a
+/// real `grok` child runs on real time.
+#[derive(Debug, Clone, Copy)]
+struct Timings {
+    replay_idle: Duration,
+    cancel_grace: Duration,
+}
+
+#[cfg(test)]
+const TEST_REPLAY_IDLE_MS: &str = "KYBERN_TEST_GROK_REPLAY_IDLE_MS";
+#[cfg(test)]
+const TEST_CANCEL_GRACE_MS: &str = "KYBERN_TEST_GROK_CANCEL_GRACE_MS";
+
+impl Timings {
+    fn for_session(config: &SessionConfig) -> Self {
+        let timings = Self { replay_idle: LOAD_REPLAY_IDLE, cancel_grace: CANCEL_GRACE };
+        #[cfg(test)]
+        let timings = {
+            let ms = |key: &str| config.env.get(key).and_then(|ms| ms.parse().ok()).map(Duration::from_millis);
+            Self {
+                replay_idle: ms(TEST_REPLAY_IDLE_MS).unwrap_or(timings.replay_idle),
+                cancel_grace: ms(TEST_CANCEL_GRACE_MS).unwrap_or(timings.cancel_grace),
+            }
+        };
+        #[cfg(not(test))]
+        let _ = config;
+        timings
+    }
+}
+
 /// JSON-RPC error code Grok uses for a usage limit (T3 Code, `xAiRateLimitedErrorCode`).
 const RATE_LIMITED: i32 = -32003;
 
@@ -364,106 +397,142 @@ fn is_workspace_edit(fields: &ToolCallUpdateFields, cwd: &Path) -> bool {
     };
     let mut paths: Vec<PathBuf> = fields.locations.iter().flatten().map(|location| location.path.clone()).collect();
     let named = fields.raw_input.as_ref().map(input_paths).unwrap_or_default();
-    if kind == ToolKind::Move && !named.iter().any(|(key, _)| is_destination_key(key)) {
+    if kind == ToolKind::Move && !named.iter().any(|named| named.destination) {
         return false;
     }
-    paths.extend(named.into_iter().map(|(_, path)| path));
+    paths.extend(named.into_iter().map(|named| PathBuf::from(named.text)));
     !paths.is_empty() && paths.iter().all(|path| inside_workspace(path, cwd))
 }
 
-/// Keys of a tool's input whose string (or list of strings) is a path it reads or writes.
-const PATH_KEYS: &[&str] = &[
-    "path",
-    "paths",
-    "file",
-    "files",
-    "filepath",
-    "filepaths",
-    "filename",
-    "source",
-    "sourcepath",
-    "src",
-    "from",
-    "frompath",
-    "oldpath",
-    "destination",
-    "destinationpath",
-    "dest",
-    "destpath",
-    "to",
-    "topath",
-    "target",
-    "targetpath",
-    "targetfile",
-    "newpath",
-    "newfile",
-    "newfilepath",
-    "newname",
-    "output",
-    "outputpath",
-];
-
-/// Keys that name where a move puts the file.
-const DESTINATION_KEYS: &[&str] = &[
-    "destination",
-    "destinationpath",
-    "dest",
-    "destpath",
-    "to",
-    "topath",
-    "target",
-    "targetpath",
-    "targetfile",
-    "newpath",
-    "newfilepath",
-    "newname",
-];
+/// Parts of a key that mark its value as a path: `file_path`, `targetDir`, `new_location`, `outputUri`.
+/// Matched anywhere in the key, so an unlisted spelling still counts; a false match only makes a
+/// relative value be checked as a path too.
+const PATH_KEY_PARTS: &[&str] =
+    &["path", "file", "dir", "folder", "uri", "url", "location", "dest", "target", "output", "source", "src", "name", "from"];
 
 /// `file_path`, `filePath` and `FilePath` alike.
 fn normalized_key(key: &str) -> String {
     key.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_lowercase()).collect()
 }
 
-fn is_destination_key(key: &str) -> bool {
-    DESTINATION_KEYS.contains(&key)
+/// A key (normalized) whose value is a path. `to` counts as a whole key or a key's end (`to`, `moveTo`),
+/// since inside a word it is too common (`total`, `token`).
+fn is_path_key(key: &str) -> bool {
+    PATH_KEY_PARTS.iter().any(|part| key.contains(part)) || key.ends_with("to")
 }
 
-/// Every path a tool's input names, at any depth, with its normalized key.
-fn input_paths(input: &Value) -> Vec<(String, PathBuf)> {
-    fn walk(value: &Value, key: Option<&str>, out: &mut Vec<(String, PathBuf)>) {
+/// A path key (normalized) that names where a move puts the file.
+fn is_destination_key(key: &str) -> bool {
+    ["dest", "target", "output"].iter().any(|part| key.contains(part)) || key.starts_with("new") || key.ends_with("to")
+}
+
+/// A path a tool's input names.
+#[derive(Debug)]
+struct NamedPath {
+    text: String,
+    /// It sits under a key that names a move's destination.
+    destination: bool,
+}
+
+/// Every path a tool's input names, at any depth. A string is a path when it sits under a path key, at
+/// any depth below it (`{"file": {"value": "x"}}`, `{"paths": ["a", "b"]}`), or when it looks like an
+/// absolute or home path under any key at all: an unknown key must not carry a write out of the workspace.
+fn input_paths(input: &Value) -> Vec<NamedPath> {
+    fn walk(value: &Value, path: bool, destination: bool, out: &mut Vec<NamedPath>) {
         match value {
             Value::Object(map) => {
                 for (key, value) in map {
                     let key = normalized_key(key);
-                    walk(value, PATH_KEYS.contains(&key.as_str()).then_some(key.as_str()), out);
+                    let is_path = is_path_key(&key);
+                    walk(value, path || is_path, destination || (is_path && is_destination_key(&key)), out);
                 }
             }
-            Value::Array(items) => items.iter().for_each(|item| walk(item, key, out)),
+            Value::Array(items) => items.iter().for_each(|item| walk(item, path, destination, out)),
             Value::String(text) => {
-                if let Some(key) = key.filter(|_| !text.trim().is_empty()) {
-                    out.push((key.to_owned(), PathBuf::from(text.trim())));
+                let text = text.trim();
+                if !text.is_empty() && (path || looks_like_path(text)) {
+                    out.push(NamedPath { text: text.to_owned(), destination: path && destination });
                 }
             }
             _ => {}
         }
     }
     let mut out = Vec::new();
-    walk(input, None, &mut out);
+    walk(input, false, false, &mut out);
     out
 }
 
+/// A string under no path key that still reads as an absolute path, a home path or a `file:` URI. Text
+/// over several lines is content, not a path, and so is a one-line code comment (`// x`, `/* x */`),
+/// which as a path would only name a folder at the root whose name starts with a space or `*`.
+fn looks_like_path(text: &str) -> bool {
+    if text.contains(['\n', '\r']) {
+        return false;
+    }
+    let comment = text.strip_prefix("//").is_some_and(|rest| rest.starts_with(char::is_whitespace)) || text.starts_with("/*");
+    let bytes = text.as_bytes();
+    let drive = bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && matches!(bytes[2], b'/' | b'\\');
+    !comment && (text.starts_with(['/', '\\', '~']) || drive || text.get(..5).is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:")))
+}
+
+/// A path whose meaning Kybern can't settle without expanding or interpreting it the way some other
+/// program might: `~` and environment variables (`$HOME`, `%USERPROFILE%`), URIs (`file:///etc`), Windows
+/// verbatim, device and UNC prefixes (`\\?\`, `\\.\`, `\\server`), and drive-relative paths (`C:foo`).
+fn needs_interpretation(text: &str) -> bool {
+    if text.starts_with('~') || text.contains('$') || text.starts_with(r"\\") || has_percent_variable(text) {
+        return true;
+    }
+    if cfg!(windows) && text.starts_with("//") {
+        return true;
+    }
+    // `scheme:` as URIs spell it. One letter is a drive: only `C:\` and `C:/` on Windows are plain paths.
+    let scheme = text.find(':').map(|colon| &text[..colon]).filter(|scheme| {
+        scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+            && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    });
+    match scheme {
+        Some(scheme) if scheme.len() == 1 => !(cfg!(windows) && text[2..].starts_with(['/', '\\'])),
+        Some(_) => true,
+        None => false,
+    }
+}
+
+/// `%NAME%`, as Windows expands it.
+fn has_percent_variable(text: &str) -> bool {
+    let parts: Vec<&str> = text.split('%').collect();
+    // Only the parts with a `%` on both sides can be names.
+    parts.len() >= 3
+        && parts[1..parts.len() - 1]
+            .iter()
+            .any(|name| !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '(' | ')')))
+}
+
+/// A `.git` folder or file, which holds hooks and config that run code later. Windows drops trailing dots
+/// and spaces and ignores case, so `.GIT.` is the same name there.
+fn is_git_dir(component: Component<'_>) -> bool {
+    matches!(component, Component::Normal(name) if name.to_string_lossy().trim_end_matches(['.', ' ']).eq_ignore_ascii_case(".git"))
+}
+
 /// Whether `path` (relative to `cwd`, or absolute) is inside `cwd` once every symlink on the way is followed.
+/// The workspace folder itself and anything in a `.git` folder don't count: deleting the root or writing a
+/// hook is not an ordinary edit. Nor does a path that needs expanding or interpreting first.
 ///
 /// This checks the file system as it is now. A symlink created between this check and Grok's write
 /// can't be prevented here; Accept edits trusts the workspace's own contents that far.
 fn inside_workspace(path: &Path, cwd: &Path) -> bool {
+    if needs_interpretation(&path.to_string_lossy()) {
+        return false;
+    }
     let path = if path.is_absolute() { path.to_path_buf() } else { cwd.join(path) };
     if path.components().any(|component| matches!(component, Component::ParentDir)) {
         return false;
     }
-    match (canonical_existing(&path, 0), cwd.canonicalize()) {
-        (Some(path), Ok(root)) => path.starts_with(root),
-        _ => false,
+    let (Some(path), Ok(root)) = (canonical_existing(&path, 0), cwd.canonicalize()) else {
+        return false;
+    };
+    match path.strip_prefix(&root) {
+        Ok(rest) => rest.components().next().is_some() && !rest.components().any(is_git_dir),
+        Err(_) => false,
     }
 }
 
@@ -872,9 +941,11 @@ fn rejects_arguments(stderr: &str) -> bool {
 
 /// What a failed start means: an outdated `grok`, a cause `failure::classify` names (signed out, offline,
 /// a usage limit), or else the step that failed. `detail` is the technical text, kept for Show details.
-fn startup_problem(step: Startup, detail: &str) -> Problem {
+/// Only `grok`'s own `stderr` while it launches or initializes can say it rejected an option: an error a
+/// later request answers with (`session/new`, `session/load`) is about that request, whatever its words.
+fn startup_problem(step: Startup, detail: &str, stderr: &str) -> Problem {
     let kind = ProviderKind::GrokBuild;
-    if rejects_arguments(detail) {
+    if matches!(step, Startup::Launch | Startup::Initialize) && rejects_arguments(stderr) {
         return crate::failure::update_needed_problem(kind, detail);
     }
     if let Some(problem) = crate::failure::classify(kind, detail) {
@@ -902,7 +973,7 @@ fn startup_exit_error(tail: &std::sync::Mutex<String>) -> DriverError {
     } else {
         format!("grok agent exited during startup: {stderr}")
     };
-    DriverError::problem(startup_problem(Startup::Launch, &detail))
+    DriverError::problem(startup_problem(Startup::Launch, &detail, &stderr))
 }
 
 /// Fail the session start: the caller of `spawn` gets `problem`, not just "exited during startup".
@@ -1103,17 +1174,22 @@ struct Settled {
 /// Grok's own completion notice settles it only when it names this `prompt_id`: a notice without one, a
 /// late one for an earlier prompt or a background task's wake would end this turn early and leave its
 /// real output with no turn open. Cancel cancels; Close, or a closed command channel, cancels once and
-/// is not polled again.
+/// is not polled again. After the first cancel Grok has `grace` to answer; then the turn ends as
+/// interrupted anyway, so a Grok that ignores the cancel can't hold the turn (or, after Close, its
+/// process) open.
 async fn settle_prompt(
     answer: impl std::future::Future<Output = DriverEvent>,
     prompt_id: &str,
     started: std::time::Instant,
     completions: &mut mpsc::UnboundedReceiver<PromptComplete>,
     commands: &mut mpsc::Receiver<SessionCommand>,
+    grace: Duration,
     mut cancel: impl FnMut(),
 ) -> Settled {
     let mut answer = std::pin::pin!(answer);
     let mut close = false;
+    let mut cancelled = false;
+    let mut deadline = std::pin::pin!(tokio::time::sleep(grace));
     loop {
         tokio::select! {
             event = &mut answer => return Settled { event, close },
@@ -1122,14 +1198,31 @@ async fn settle_prompt(
                     return Settled { event: completion_event(&complete, started.elapsed().as_millis() as u64), close };
                 }
             }
-            command = commands.recv(), if !close => match command {
-                Some(SessionCommand::Cancel) => cancel(),
-                Some(SessionCommand::Close) | None => {
-                    cancel();
-                    close = true;
+            () = &mut deadline, if cancelled => {
+                let duration_ms = started.elapsed().as_millis() as u64;
+                let event = DriverEvent::TurnCompleted {
+                    stop_reason: StopReason::Interrupted,
+                    usage: Usage::default(),
+                    cost_usd: None,
+                    duration_ms,
+                    anchors: Default::default(),
+                };
+                return Settled { event, close };
+            }
+            command = commands.recv(), if !close => {
+                match command {
+                    Some(SessionCommand::Cancel) => cancel(),
+                    Some(SessionCommand::Close) | None => {
+                        cancel();
+                        close = true;
+                    }
+                    Some(SessionCommand::Prompt { .. }) => continue,
                 }
-                Some(SessionCommand::Prompt { .. }) => {}
-            },
+                if !cancelled {
+                    cancelled = true;
+                    deadline.as_mut().reset(tokio::time::Instant::now() + grace);
+                }
+            }
         }
     }
 }
@@ -1144,6 +1237,7 @@ async fn run_connection(
     stderr_closed_tx: tokio::sync::watch::Sender<bool>,
 ) -> Result<()> {
     let mut bound = Some(bound);
+    let timings = Timings::for_session(&config);
     // Checked before `grok` starts, so a refused bridge costs no process.
     let native_mcp_servers = match grok_mcp_servers(config.native_tool_bridge.as_ref()) {
         Ok(servers) => servers,
@@ -1380,7 +1474,7 @@ async fn run_connection(
                 stderr_settled(&mut stderr_closed).await;
                 let stderr = stderr_text(&stderr_tail);
                 let detail = if stderr.is_empty() { format!("initialize: {e}") } else { format!("initialize: {e}\n{stderr}") };
-                return Err(fail_startup(&mut bound, startup_problem(Startup::Initialize, &detail)));
+                return Err(fail_startup(&mut bound, startup_problem(Startup::Initialize, &detail, &stderr)));
             }
 
             // Assume already authenticated (grok login or XAI_API_KEY). Explicit auth can be added later.
@@ -1388,7 +1482,7 @@ async fn run_connection(
                 Some(id) => {
                     loading.store(true, std::sync::atomic::Ordering::Relaxed);
                     let request = LoadSessionRequest::new(id.clone(), cwd.clone()).mcp_servers(native_mcp_servers.clone());
-                    let loaded = await_session_load(cx.send_request(request).block_task(), &last_replay, LOAD_REPLAY_IDLE, LOAD_TIMEOUT).await;
+                    let loaded = await_session_load(cx.send_request(request).block_task(), &last_replay, timings.replay_idle, LOAD_TIMEOUT).await;
                     match loaded {
                         LoadOutcome::Answered(Ok(_)) => {
                             loading.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -1400,11 +1494,11 @@ async fn run_connection(
                         // A fresh session here would silently drop the conversation, so the
                         // thread is told it could not be resumed (as Cursor's is).
                         LoadOutcome::Answered(Err(e)) => {
-                            return Err(fail_startup(&mut bound, startup_problem(Startup::Resume, &format!("session/load {id}: {e}"))));
+                            return Err(fail_startup(&mut bound, startup_problem(Startup::Resume, &format!("session/load {id}: {e}"), "")));
                         }
                         LoadOutcome::TimedOut => {
                             let detail = format!("session/load {id}: no answer or replay in {} seconds", LOAD_TIMEOUT.as_secs());
-                            return Err(fail_startup(&mut bound, startup_problem(Startup::ResumeTimedOut, &detail)));
+                            return Err(fail_startup(&mut bound, startup_problem(Startup::ResumeTimedOut, &detail, "")));
                         }
                     }
                 }
@@ -1413,7 +1507,7 @@ async fn run_connection(
                     match cx.send_request(request).block_task().await {
                         Ok(created) => created.session_id,
                         Err(e) => {
-                            return Err(fail_startup(&mut bound, startup_problem(Startup::NewSession, &format!("session/new: {e}"))));
+                            return Err(fail_startup(&mut bound, startup_problem(Startup::NewSession, &format!("session/new: {e}"), "")));
                         }
                     }
                 }
@@ -1465,7 +1559,8 @@ async fn run_connection(
                         let cancel = || {
                             let _ = cx.send_notification(CancelNotification::new(session_id.clone()));
                         };
-                        let settled = settle_prompt(answer, &prompt_id, started, &mut completions, &mut commands, cancel).await;
+                        let settled =
+                            settle_prompt(answer, &prompt_id, started, &mut completions, &mut commands, timings.cancel_grace, cancel).await;
                         shared.withdraw_all().await;
                         let _ = shared.events.send(settled.event).await;
                         if settled.close {
@@ -1650,7 +1745,7 @@ mod grok_meta_tests {
     fn a_failed_start_reaches_the_caller_and_stderr_explains_an_early_exit() {
         let (tx, mut rx) = oneshot::channel::<Result<String>>();
         let mut bound = Some(tx);
-        let _ = fail_startup(&mut bound, startup_problem(Startup::NewSession, "session/new: Internal error: boom"));
+        let _ = fail_startup(&mut bound, startup_problem(Startup::NewSession, "session/new: Internal error: boom", ""));
         assert!(bound.is_none());
         let Ok(Err(error)) = rx.try_recv() else { panic!("expected the startup error") };
         assert_eq!(error.to_string(), "session/new: Internal error: boom", "the error's text is the technical detail");
