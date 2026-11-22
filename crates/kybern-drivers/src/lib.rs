@@ -90,6 +90,9 @@ pub enum DriverError {
     Protocol(String),
     #[error("unsupported: {0}")]
     Unsupported(String),
+    /// The running turn could not accept this steering message; deliver it as a normal follow-up instead.
+    #[error("steering was not accepted for the running turn; deliver as a follow-up instead")]
+    SteerFallback,
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -543,6 +546,12 @@ pub trait AgentSession: Send + Sync {
     }
     /// Graceful shutdown. The event stream ends with `Exited`.
     async fn close(&self) -> Result<()>;
+    /// Whether a driver that tracks checkpoint-level delivery (Cursor SDK) has confirmed
+    /// that Kybern's in-conversation instructions reached the provider's history.
+    /// Returns `None` when the daemon should infer delivery from turn completion.
+    fn instructions_delivered(&self) -> Option<bool> {
+        None
+    }
 }
 
 pub struct SpawnedSession {

@@ -16,9 +16,10 @@ import {
   modelError,
   handleUnhandledRejection,
   configureAgentTransport,
+  STEER_TIMEOUT_MS,
 } from "./host.mjs";
 
-function fixture({ duringStart, failStart, warmGate, fetch, platform, checkpoint, runRecord, runSteer } = {}) {
+function fixture({ duringStart, failStart, warmGate, fetch, platform, checkpoint, runRecord, agentRecord, runSteer, steerTimeoutMs, checkpointSettleMs, checkpointPersistChain } = {}) {
   const terminal = Promise.withResolvers();
   const started = Promise.withResolvers();
   const events = [];
@@ -34,16 +35,28 @@ function fixture({ duringStart, failStart, warmGate, fetch, platform, checkpoint
     },
     ...(runSteer !== undefined ? { steer: runSteer } : {}),
   };
-  const agent = { summarize: async () => { calls.push(["summarize"]); return run; }, agentId: "a1", close: () => calls.push(["close"]), send: async (message, options) => {
-    callback = options.onDelta;
-    calls.push(["send", message, options]);
-    sends++;
-    if (failStart && sends === 1) throw new Error("Agent already has active run");
-    callback({ update: { type: "text-delta", text: "before start" } });
-    started.resolve();
-    if (duringStart) await duringStart;
-    return run;
-  } };
+  const agent = {
+    summarize: async () => { calls.push(["summarize"]); return run; },
+    agentId: "a1",
+    close: () => calls.push(["close"]),
+    ...(checkpointPersistChain !== undefined ? { checkpointPersistChain } : {}),
+    send: async (message, options) => {
+      callback = options.onDelta;
+      calls.push(["send", message, options]);
+      sends++;
+      if (failStart && sends === 1) throw new Error("Agent already has active run");
+      callback({ update: { type: "text-delta", text: "before start" } });
+      started.resolve();
+      if (duringStart) await duringStart;
+      return run;
+    },
+  };
+  const storeObj = (runRecord !== undefined || agentRecord !== undefined)
+    ? {
+        ...(runRecord !== undefined ? { getRun: async (agentId, runId) => (typeof runRecord === "function" ? runRecord(agentId, runId) : runRecord) } : {}),
+        ...(agentRecord !== undefined ? { getAgent: async (agentId) => (typeof agentRecord === "function" ? agentRecord(agentId) : agentRecord) } : {}),
+      }
+    : undefined;
   const sdk = { Agent: {
     create: async (options) => { calls.push(["create", options]); return agent; },
     resume: async (id, options) => { calls.push(["resume", id, options]); return agent; },
@@ -58,10 +71,16 @@ function fixture({ duringStart, failStart, warmGate, fetch, platform, checkpoint
     resumeAgent: async (id,options) => sdk.Agent.resume(id,options),
     prewarmLocalWorkspace: async (options) => { calls.push(["prime", options]); await warmGate; return () => {}; },
     ...(checkpoint !== undefined ? { checkpointStore: { loadLatest: async () => (typeof checkpoint === "function" ? checkpoint() : checkpoint) } } : {}),
-    ...(runRecord !== undefined ? { store: { getRun: async (agentId, runId) => (typeof runRecord === "function" ? runRecord(agentId, runId) : runRecord) } } : {}),
+    ...(storeObj ? { store: storeObj } : {}),
   }) };
-  const host = createHost(sdk, async (event) => { await Promise.resolve(); events.push(event); }, { apiKey: "secret", fetch, ...(platform ? { platform } : {}) });
-  return { host, events, calls, terminal, started, delta: (update) => callback({ update }) };
+  const host = createHost(sdk, async (event) => { await Promise.resolve(); events.push(event); }, {
+    apiKey: "secret",
+    fetch,
+    ...(platform ? { platform } : {}),
+    ...(steerTimeoutMs !== undefined ? { steerTimeoutMs } : {}),
+    ...(checkpointSettleMs !== undefined ? { checkpointSettleMs } : {}),
+  });
+  return { host, agent, events, calls, terminal, started, delta: (update) => callback({ update }) };
 }
 const open = (host, extra = {}) => host.request({ type: "open", cwd: "/repo", mode: "auto", model: "model", ...extra });
 const tick = () => new Promise((done) => setImmediate(done));
@@ -534,6 +553,7 @@ test("run_completed includes contextUsage from checkpointStore.loadLatest and ch
   const f2 = fixture({
     checkpoint: { tokenDetails: { usedTokens: 0, maxTokens: 0 } },
     runRecord: { startCheckpointRef: { blobId: "b0" }, latestCheckpointRef: { blobId: "b0" } },
+    checkpointSettleMs: 0,
   });
   await open(f2.host);
   await f2.host.request({ type: "send", message: { text: "hi" } });
@@ -558,21 +578,130 @@ test("run_completed includes contextUsage from checkpointStore.loadLatest and ch
   await f3.host.close();
 });
 
-test("steer forwards run.steer(text) and reports acknowledgement outcomes", async () => {
+test("cancel awaits in-flight checkpoint persistence, re-reads after settle, and treats read errors as checkpointed", async () => {
+  // 1. SDK cancel resolves wait() while agent.checkpointPersistChain is still persisting.
+  let latest = "b0";
+  const persist = Promise.withResolvers();
+  const f1 = fixture({
+    runRecord: () => ({ startCheckpointRef: { blobId: "b0" }, latestCheckpointRef: { blobId: latest } }),
+    checkpointPersistChain: persist.promise,
+    checkpointSettleMs: 10,
+  });
+  await open(f1.host);
+  await f1.host.request({ type: "send", message: { text: "hi" } });
+  await f1.host.request({ type: "cancel" });
+  await tick();
+  // Finish checkpoint persistence slightly after wait() resolved.
+  latest = "b1";
+  persist.resolve();
+  await new Promise((done) => setTimeout(done, 20));
+  const c1 = f1.events.find((e) => e.type === "run_completed");
+  assert.equal(c1.result.checkpointed, true);
+  await f1.host.close();
+
+  // 2. Without checkpointPersistChain, a short settle re-read catches a late store write.
+  let reads = 0;
+  const f2 = fixture({
+    runRecord: () => {
+      reads++;
+      return { startCheckpointRef: { blobId: "b0" }, latestCheckpointRef: { blobId: reads >= 2 ? "b1" : "b0" } };
+    },
+    checkpointSettleMs: 10,
+  });
+  await open(f2.host);
+  await f2.host.request({ type: "send", message: { text: "hi" } });
+  await f2.host.request({ type: "cancel" });
+  await new Promise((done) => setTimeout(done, 30));
+  const c2 = f2.events.find((e) => e.type === "run_completed");
+  assert.equal(c2.result.checkpointed, true);
+  assert.equal(reads, 2);
+  await f2.host.close();
+
+  // 3. Agent latestCheckpointRef advancing between before-send and cancel also counts as checkpointed.
+  let agentBlob = "a0";
+  const f3 = fixture({
+    runRecord: { startCheckpointRef: { blobId: "b0" }, latestCheckpointRef: { blobId: "b0" } },
+    agentRecord: () => ({ latestCheckpointRef: { blobId: agentBlob } }),
+    checkpointSettleMs: 0,
+  });
+  await open(f3.host);
+  await f3.host.request({ type: "send", message: { text: "hi" } });
+  agentBlob = "a1";
+  await f3.host.request({ type: "cancel" });
+  await tick();
+  const c3 = f3.events.find((e) => e.type === "run_completed");
+  assert.equal(c3.result.checkpointed, true);
+  await f3.host.close();
+
+  // 4. Store read errors err toward checkpointed=true so the prompt is never sent twice.
+  const f4 = fixture({
+    runRecord: async () => { throw new Error("disk busy"); },
+    checkpointSettleMs: 0,
+  });
+  await open(f4.host);
+  await f4.host.request({ type: "send", message: { text: "hi" } });
+  await f4.host.request({ type: "cancel" });
+  await tick();
+  const c4 = f4.events.find((e) => e.type === "run_completed");
+  assert.equal(c4.result.checkpointed, true);
+  await f4.host.close();
+});
+
+test("steer forwards run.steer(text), reverts during prewarm/idle, and times out before the pool deadline", async () => {
+  assert.ok(STEER_TIMEOUT_MS > 0 && STEER_TIMEOUT_MS < 60_000, "steer timeout stays well under pool.rs 60 s deadline");
   const steered = [];
   let outcome = "complete_delivered";
   const f = fixture({ runSteer: async (text) => { steered.push(text); return outcome; } });
   await open(f.host);
-  await assert.rejects(f.host.request({ type: "steer", text: "too early" }), /ended/);
+  // No active turn: reverts cleanly instead of throwing an error.
+  assert.deepEqual(await f.host.request({ type: "steer", text: "too early" }), { outcome: "revert_to_followup" });
   await f.host.request({ type: "send", message: { text: "start" } });
   assert.deepEqual(await f.host.request({ type: "steer", text: "change direction" }), { outcome: "complete_delivered" });
   assert.deepEqual(steered, ["change direction"]);
   outcome = "revert_to_followup";
   assert.deepEqual(await f.host.request({ type: "steer", text: "too late" }), { outcome: "revert_to_followup" });
-  await assert.rejects(f.host.request({ type: "steer", text: "   " }), /requires text/);
+  await assert.rejects(f.host.request({ type: "steer", text: "   " }), /Write a message/);
   f.terminal.resolve({ id: "r1", status: "finished" });
   await tick();
   await f.host.close();
+
+  // A steer sent during workspace prewarm (while turn.run is still null) reverts to follow-up cleanly.
+  const gate = Promise.withResolvers();
+  const warming = fixture({ warmGate: gate.promise });
+  await open(warming.host);
+  const sending = warming.host.request({ type: "send", message: { text: "start" } });
+  await tick();
+  assert.deepEqual(await warming.host.request({ type: "steer", text: "during prewarm" }), { outcome: "revert_to_followup" });
+  await warming.host.request({ type: "cancel" });
+  gate.resolve();
+  await sending;
+  await warming.host.close();
+
+  // A slow steer (SDK cleared its 15 s timer after server queued) times out with revert_to_followup,
+  // and a late rejection from the unawaited SDK promise never triggers unhandledRejection.
+  const late = Promise.withResolvers();
+  const slow = fixture({ runSteer: () => late.promise, steerTimeoutMs: 25 });
+  await open(slow.host);
+  await slow.host.request({ type: "send", message: { text: "long tool" } });
+  const started = performance.now();
+  const timedOut = await slow.host.request({ type: "steer", text: "redirect" });
+  assert.deepEqual(timedOut, { outcome: "revert_to_followup" });
+  assert.ok(performance.now() - started < 500, "steer timeout should resolve promptly");
+  // Trigger a late rejection on the now-unawaited SDK promise and verify no unhandledRejection fires.
+  const unhandled = [];
+  const onUnhandled = (reason) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    late.reject(new Error("late stream close"));
+    await tick();
+    await new Promise((done) => setTimeout(done, 15));
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+  slow.terminal.resolve({ id: "r1", status: "finished" });
+  await tick();
+  await slow.host.close();
 
   // A run without steer() falls back to revert_to_followup.
   const plain = fixture();

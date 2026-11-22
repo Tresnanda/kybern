@@ -675,6 +675,11 @@ impl AgentSession for Handle {
             .map_err(|_| DriverError::ProcessExited("cursor session closed".into()))
     }
 
+    async fn steer(&self, _message_id: &str, _message: &UserMessage) -> Result<()> {
+        // Legacy Cursor ACP sessions have no live steering channel; let the daemon deliver as a follow-up.
+        Err(DriverError::SteerFallback)
+    }
+
     async fn interrupt(&self) -> Result<()> {
         self.commands.send(SessionCommand::Cancel).await.map_err(|_| DriverError::ProcessExited("cursor session closed".into()))
     }
@@ -761,6 +766,28 @@ mod tests {
             serde_json::json!({ "outcome": "answered", "answers": answers })
         );
         assert_eq!(super::question_outcome(None)["outcome"], "skipped");
+    }
+
+    #[tokio::test]
+    async fn legacy_acp_steer_falls_back_to_followup() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let (events_tx, _events_rx) = tokio::sync::mpsc::channel(1);
+        let (_done_tx, closed) = tokio::sync::watch::channel(());
+        let handle = super::Handle {
+            closed,
+            _worker: crate::process_tree::SessionTask(tokio::spawn(async {})),
+            commands: tx,
+            shared: std::sync::Arc::new(super::Shared {
+                events: events_tx,
+                pending: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+                questions: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+                mode: kybern_protocol::PermissionMode::Auto,
+            }),
+        };
+        assert!(matches!(
+            super::AgentSession::steer(&handle, "s1", &UserMessage::text("nudge")).await,
+            Err(crate::DriverError::SteerFallback)
+        ));
     }
 }
 

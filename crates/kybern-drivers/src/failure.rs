@@ -56,7 +56,7 @@ pub fn classify(kind: ProviderKind, text: &str) -> Option<Problem> {
     if rate_limited(&lower) {
         return Some(rate_limited_problem(kind, text));
     }
-    if unreachable(&lower) {
+    if unreachable(kind, &lower) {
         return Some(network_problem(kind, text));
     }
     None
@@ -163,8 +163,8 @@ fn rate_limited(lower: &str) -> bool {
     NEEDLES.iter().any(|needle| lower.contains(needle))
 }
 
-fn unreachable(lower: &str) -> bool {
-    const NEEDLES: &[&str] = &[
+fn unreachable(kind: ProviderKind, lower: &str) -> bool {
+    const COMMON: &[&str] = &[
         "econnrefused",
         "econnreset",
         "enotfound",
@@ -188,13 +188,28 @@ fn unreachable(lower: &str) -> bool {
         "service unavailable",
         "bad gateway",
         "api error: 5",
+    ];
+    if COMMON.iter().any(|needle| lower.contains(needle)) {
+        return true;
+    }
+    kind == ProviderKind::Cursor && cursor_transport_unreachable(lower)
+}
+
+fn cursor_transport_unreachable(lower: &str) -> bool {
+    const CURSOR: &[&str] = &[
         "connecterror: [unavailable]",
         "connecterror: [aborted]",
         "connecterror: [deadline_exceeded]",
-        "retriableerror:",
         "something went wrong communicating with the server",
     ];
-    NEEDLES.iter().any(|needle| lower.contains(needle))
+    if CURSOR.iter().any(|needle| lower.contains(needle)) {
+        return true;
+    }
+    // Match `cursor/stream.rs`: Cursor's RetriableError is a transport failure except for `[internal]`.
+    lower.match_indices("retriableerror:").any(|(idx, matched)| {
+        let rest = lower[idx + matched.len()..].trim_start();
+        !rest.is_empty() && !rest.starts_with("[internal]")
+    })
 }
 
 fn signed_out_problem(kind: ProviderKind, detail: &str) -> Problem {
@@ -366,6 +381,12 @@ mod tests {
         assert!(classify(ProviderKind::ClaudeCode, "claude: error_during_execution").is_none());
         assert!(classify(ProviderKind::Codex, "turn failed").is_none());
         assert!(classify(ProviderKind::Pi, "tool call schema was invalid").is_none());
+        // Cursor transport patterns apply only to Cursor and exclude `[internal]`, matching `cursor/stream.rs`.
+        assert!(classify(ProviderKind::Cursor, "Error: RetriableError: [internal] something else").is_none());
+        assert!(classify(ProviderKind::Cursor, "Error: ConnectError: [internal] something else").is_none());
+        assert!(classify(ProviderKind::ClaudeCode, "Error: RetriableError: WritableIterable is closed").is_none());
+        assert!(classify(ProviderKind::Codex, "Error: ConnectError: [unavailable] transport closed").is_none());
+        assert!(classify(ProviderKind::Opencode, "Something went wrong communicating with the server. Please try again.").is_none());
     }
 
     #[test]

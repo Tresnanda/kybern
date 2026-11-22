@@ -264,6 +264,12 @@ export function errorText(error, secrets = []) {
 // that workspace shares one. A lease outlives its last session by this long so
 // the next conversation there starts warm.
 export const WORKSPACE_LINGER_MS = 10 * 60_000;
+// Bounded well under pool.rs's 60 s call deadline so a steer waiting on a long
+// tool run reverts to a follow-up instead of retiring the whole account host.
+export const STEER_TIMEOUT_MS = 20_000;
+// Brief settle re-read on cancel because the SDK's cancelled branch resolves
+// run.wait() without awaiting agent.checkpointPersistChain.
+export const CHECKPOINT_SETTLE_MS = 50;
 
 /** Kybern's per-conversation MCP tools, run in this host as SDK custom tools.
  * Agent-level MCP servers are part of the executor cache key, so a scoped
@@ -319,18 +325,74 @@ async function readContextUsage(platform, agentId) {
   }
 }
 
-async function readRunCheckpointed(platform, agentId, runId) {
+async function readAgentCheckpoint(platform, agentId) {
+  if (typeof platform?.store?.getAgent !== "function") return { available: false };
   try {
-    const run = await platform?.store?.getRun?.(agentId, runId);
-    const checkpoint = run?.latestCheckpointRef?.blobId;
-    return Boolean(checkpoint && checkpoint !== run?.startCheckpointRef?.blobId);
+    const record = await platform.store.getAgent(agentId);
+    return { available: true, blobId: record?.latestCheckpointRef?.blobId ?? null };
   } catch {
-    return false;
+    return { available: true, failed: true };
   }
 }
 
+async function checkRunCheckpointed(platform, agentId, runId, beforeAgent) {
+  if (beforeAgent?.failed) return true;
+  let observed = false;
+  if (typeof platform?.store?.getRun === "function") {
+    observed = true;
+    try {
+      const run = await platform.store.getRun(agentId, runId);
+      const checkpoint = run?.latestCheckpointRef?.blobId;
+      if (checkpoint && checkpoint !== run?.startCheckpointRef?.blobId) return true;
+    } catch {
+      // Err toward not resending the prompt if checkpoint state cannot be read.
+      return true;
+    }
+  }
+  if (beforeAgent?.available && typeof platform?.store?.getAgent === "function") {
+    observed = true;
+    try {
+      const record = await platform.store.getAgent(agentId);
+      const latest = record?.latestCheckpointRef?.blobId ?? null;
+      if (latest && latest !== beforeAgent.blobId) return true;
+    } catch {
+      return true;
+    }
+  }
+  return !observed;
+}
+
+async function readRunCheckpointed(platform, turnAgent, agentId, runId, beforeAgent, settleMs = CHECKPOINT_SETTLE_MS) {
+  // In @cursor/sdk 1.2.0, the cancelled path in sendImpl does not await
+  // agent.checkpointPersistChain before run.wait() settles.
+  const chain = turnAgent?.checkpointPersistChain;
+  if (chain && typeof chain.then === "function") {
+    let timer;
+    try {
+      await Promise.race([
+        Promise.resolve(chain).catch(() => {}),
+        new Promise((resolve) => {
+          timer = setTimeout(resolve, Math.max(settleMs * 4, 200));
+          timer.unref?.();
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  if (await checkRunCheckpointed(platform, agentId, runId, beforeAgent)) return true;
+  if (settleMs > 0) {
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, settleMs);
+      timer.unref?.();
+    });
+    return checkRunCheckpointed(platform, agentId, runId, beforeAgent);
+  }
+  return false;
+}
+
 /** One agent per logical session. emit is ordered and applies stdout backpressure. */
-export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}, sessionId, ensureCatalog, fetch, platform: hostPlatform = process.platform } = {}) {
+export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}, sessionId, ensureCatalog, fetch, platform: hostPlatform = process.platform, steerTimeoutMs = STEER_TIMEOUT_MS, checkpointSettleMs = CHECKPOINT_SETTLE_MS } = {}) {
   let agent;
   let activePlatform;
   let options;
@@ -538,6 +600,14 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
         if (active === turn) active = null;
         return {cancelled:true};
       }
+      const turnAgent = agent;
+      const turnAgentId = agent.agentId;
+      const turnPlatform = activePlatform;
+      const beforeAgent = await readAgentCheckpoint(turnPlatform, turnAgentId);
+      if (turn.cancelled || closing) {
+        if (active === turn) active = null;
+        return {cancelled:true};
+      }
       try { turn.run = await start(); } catch (error) {
         // T3 recovers a stale persisted run only on the first send after resume.
         // Never force every prompt: it could cancel a legitimately active run.
@@ -557,16 +627,16 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
       turn.pending.length = 0;
       turn.ready = true;
       if (turn.cancelled || closing) await cancelRun(turn);
-      const turnAgentId = agent.agentId;
-      const turnPlatform = activePlatform;
       turn.done = (async () => {
         try {
           const result = await turn.run.wait();
           await turn.updates;
           if (active === turn) active = null;
           const finalStatus = turn.cancelled ? "cancelled" : result.status;
+          const checkpointed = finalStatus === "finished"
+            ? true
+            : await readRunCheckpointed(turnPlatform, turnAgent, turnAgentId, turn.run.id, beforeAgent, checkpointSettleMs);
           const contextUsage = await readContextUsage(turnPlatform, turnAgentId);
-          const checkpointed = finalStatus === "finished" ? true : await readRunCheckpointed(turnPlatform, turnAgentId, turn.run.id);
           await emit({ type: "run_completed", result: {
             id: result.id, status: finalStatus,
             result: result.result, usage: result.usage, durationMs: result.durationMs,
@@ -577,8 +647,8 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
         } catch (error) {
           await turn.updates.catch(() => {});
           if (active === turn) active = null;
+          const checkpointed = await readRunCheckpointed(turnPlatform, turnAgent, turnAgentId, turn.run.id, beforeAgent, checkpointSettleMs);
           const contextUsage = await readContextUsage(turnPlatform, turnAgentId);
-          const checkpointed = await readRunCheckpointed(turnPlatform, turnAgentId, turn.run.id);
           if (turn.cancelled && isAbort(error)) {
             await emit({ type: "run_completed", result: {
               id: turn.run.id, status: "cancelled", checkpointed,
@@ -601,17 +671,33 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
 
   async function steer(request) {
     if (closing) throw new Error("Cursor session is closing.");
-    const turn = active;
-    if (!turn || !turn.run) {
-      throw new Error("The turn has ended. Send your message to start the next turn.");
-    }
     const text = typeof request.text === "string" ? request.text : "";
     if (!text.trim()) {
-      throw new Error("Cursor steering requires text.");
+      throw new Error("Write a message before steering Cursor.");
     }
-    const outcome = typeof turn.run.steer === "function"
-      ? await turn.run.steer(text)
-      : "revert_to_followup";
+    const turn = active;
+    if (!turn || !turn.run || turn.cancelled) {
+      return { outcome: "revert_to_followup", ...(turn?.cancelled ? { interrupted: true } : {}) };
+    }
+    if (typeof turn.run.steer !== "function") {
+      return { outcome: "revert_to_followup" };
+    }
+    const steerPromise = Promise.resolve().then(() => turn.run.steer(text));
+    // Once the server confirms "queued", the SDK clears its 15 s ack timer and
+    // has no cancel-injection API. If our host timeout wins, silence any late
+    // rejection from the unawaited SDK promise so it never crashes the host.
+    steerPromise.catch(() => {});
+    let timer;
+    const timeout = new Promise((resolve) => {
+      timer = setTimeout(() => resolve("revert_to_followup"), steerTimeoutMs);
+      timer.unref?.();
+    });
+    let outcome;
+    try {
+      outcome = await Promise.race([steerPromise, timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
     return { outcome, ...(turn.cancelled ? { interrupted: true } : {}) };
   }
 

@@ -193,41 +193,40 @@ impl AgentDriver for CursorDriver {
 struct DeliveryState {
     /// Kybern's guide, until a turn that carries it checkpoints or completes.
     guide: Option<String>,
-    /// Prompt from a stopped run that never saved a checkpoint, carried into the next turn.
-    interrupted_prompt: Option<String>,
+    /// Whether this session's guide was confirmed persisted in Cursor's conversation history.
+    guide_delivered: bool,
+    /// Raw user prompts from consecutive stopped runs that never saved a checkpoint.
+    interrupted_prompts: Vec<String>,
     in_flight: Option<InFlightPrompt>,
 }
 
 struct InFlightPrompt {
     guide: Option<String>,
-    prior_interrupted: Option<String>,
-    /// User text sent on this turn (including any carried-over interrupted prompt), before the guide.
-    prompt: Option<String>,
+    prior_interrupted: Vec<String>,
+    /// Raw user text sent on this turn (never wrapped in `interrupted_followup`).
+    raw_prompt: String,
 }
 
 impl DeliveryState {
     fn new(guide: Option<String>) -> Self {
-        Self { guide, interrupted_prompt: None, in_flight: None }
+        Self { guide, guide_delivered: false, interrupted_prompts: Vec::new(), in_flight: None }
     }
 
     fn prepare(&mut self, text: &str) -> String {
         // Slash commands (skills, /compress) must stay at the start of the prompt;
-        // the guide and any interrupted prompt wait for the next ordinary one.
+        // the guide and any interrupted prompts wait for the next ordinary one.
         if text.trim_start().starts_with('/') {
             self.in_flight = None;
             return text.to_owned();
         }
         let guide = self.guide.take();
-        let prior_interrupted = self.interrupted_prompt.take();
-        let prompt = match &prior_interrupted {
-            Some(previous) => interrupted_followup(previous, text),
-            None => text.to_owned(),
-        };
+        let prior_interrupted = std::mem::take(&mut self.interrupted_prompts);
+        let prompt = if prior_interrupted.is_empty() { text.to_owned() } else { interrupted_followup(&prior_interrupted, text) };
         let outbound = match &guide {
             Some(guide) => with_guide(guide, &prompt),
-            None => prompt.clone(),
+            None => prompt,
         };
-        self.in_flight = Some(InFlightPrompt { guide, prior_interrupted, prompt: Some(prompt) });
+        self.in_flight = Some(InFlightPrompt { guide, prior_interrupted, raw_prompt: text.to_owned() });
         outbound
     }
 
@@ -236,8 +235,8 @@ impl DeliveryState {
         if self.guide.is_none() {
             self.guide = flight.guide;
         }
-        if self.interrupted_prompt.is_none() {
-            self.interrupted_prompt = flight.prior_interrupted;
+        if self.interrupted_prompts.is_empty() {
+            self.interrupted_prompts = flight.prior_interrupted;
         }
     }
 
@@ -246,8 +245,10 @@ impl DeliveryState {
         if self.guide.is_none() {
             self.guide = flight.guide;
         }
-        if self.interrupted_prompt.is_none() {
-            self.interrupted_prompt = flight.prompt;
+        if self.interrupted_prompts.is_empty() {
+            let mut carried = flight.prior_interrupted;
+            carried.push(flight.raw_prompt);
+            self.interrupted_prompts = carried;
         }
     }
 
@@ -256,33 +257,47 @@ impl DeliveryState {
         match outcome {
             stream::TurnOutcome::Completed
             | stream::TurnOutcome::Cancelled { checkpointed: true }
-            | stream::TurnOutcome::Failed { checkpointed: true } => {}
+            | stream::TurnOutcome::Failed { checkpointed: true } => {
+                if flight.guide.is_some() {
+                    self.guide_delivered = true;
+                }
+            }
             stream::TurnOutcome::Cancelled { checkpointed: false } => {
                 // Cursor keeps a run in conversation history only after its first
-                // checkpoint, so carry both the guide and the interrupted prompt forward.
+                // checkpoint, so carry both the guide and the raw interrupted prompts forward.
                 if self.guide.is_none() {
                     self.guide = flight.guide;
                 }
-                if self.interrupted_prompt.is_none() {
-                    self.interrupted_prompt = flight.prompt;
+                if self.interrupted_prompts.is_empty() {
+                    let mut carried = flight.prior_interrupted;
+                    carried.push(flight.raw_prompt);
+                    self.interrupted_prompts = carried;
                 }
             }
             stream::TurnOutcome::Failed { checkpointed: false } => {
                 if self.guide.is_none() {
                     self.guide = flight.guide;
                 }
-                if self.interrupted_prompt.is_none() {
-                    self.interrupted_prompt = flight.prior_interrupted;
+                if self.interrupted_prompts.is_empty() {
+                    self.interrupted_prompts = flight.prior_interrupted;
                 }
             }
         }
     }
 }
 
-fn interrupted_followup(previous: &str, next: &str) -> String {
-    format!(
-        "Your previous turn was interrupted and is missing from your history. Some of its work may already be done. Its request was:\n\n{previous}\n\nThe new message, which may continue or change that request:\n\n{next}"
-    )
+fn interrupted_followup(previous: &[String], next: &str) -> String {
+    match previous {
+        [single] => format!(
+            "Your previous turn was interrupted and is missing from your history. Some of its work may already be done. Its request was:\n\n{single}\n\nThe new message, which may continue or change that request:\n\n{next}"
+        ),
+        many => {
+            let list = many.iter().enumerate().map(|(i, text)| format!("{}. {text}", i + 1)).collect::<Vec<_>>().join("\n\n");
+            format!(
+                "Your previous turns were interrupted and are missing from your history. Some of their work may already be done. Their requests were:\n\n{list}\n\nThe new message, which may continue or change those requests:\n\n{next}"
+            )
+        }
+    }
 }
 
 struct Session {
@@ -331,22 +346,22 @@ impl AgentSession for Session {
     async fn steer(&self, _message_id: &str, message: &UserMessage) -> Result<()> {
         let payload = sdk_message(message);
         if payload["images"].as_array().is_some_and(|images| !images.is_empty()) {
-            return Err(DriverError::Unsupported("Cursor cannot attach images to a mid-turn steer message".into()));
+            return Err(DriverError::Unsupported(
+                "Cursor cannot attach images to a mid-turn steer message. Queue the message for the next turn instead.".into(),
+            ));
         }
         let text = payload["text"].as_str().unwrap_or("");
         if text.trim().is_empty() {
-            return Err(DriverError::Protocol("Cannot steer Cursor with an empty message".into()));
+            return Err(DriverError::Protocol("Write a message before steering Cursor.".into()));
         }
         let result = self.connection.call("steer", json!({"text": text})).await?;
         match result["outcome"].as_str() {
             Some("complete_delivered") => Ok(()),
-            Some("revert_to_followup") if result["interrupted"].as_bool() == Some(true) => {
-                Err(DriverError::Protocol("Cursor turn was interrupted before the steer arrived".into()))
+            Some("revert_to_followup") => Err(DriverError::SteerFallback),
+            other => {
+                tracing::warn!(outcome = ?other, "Cursor SDK returned an unrecognized steer outcome; falling back to follow-up");
+                Err(DriverError::SteerFallback)
             }
-            Some("revert_to_followup") => {
-                Err(DriverError::Protocol("Cursor could not steer the running turn; send it as a follow-up instead".into()))
-            }
-            other => Err(DriverError::Protocol(format!("Unexpected Cursor steer outcome: {}", other.unwrap_or("unknown")))),
         }
     }
     async fn compact(&self) -> Result<()> {
@@ -377,6 +392,9 @@ impl AgentSession for Session {
     }
     async fn close(&self) -> Result<()> {
         self.connection.close().await
+    }
+    fn instructions_delivered(&self) -> Option<bool> {
+        Some(self.delivery.lock().unwrap_or_else(|poison| poison.into_inner()).guide_delivered)
     }
 }
 
@@ -661,9 +679,9 @@ for line in sys.stdin:
         msg_id = request['messageId']
         print(json.dumps({'id': request['id'], 'result': {'runId': msg_id}}), flush=True)
         print(json.dumps({'session': session, 'type': 'run_started', 'runId': msg_id}), flush=True)
-        if msg_id == 'm1-uncheckpointed':
+        if msg_id == 'm1-uncheckpointed' or msg_id == 'm2-uncheckpointed':
             print(json.dumps({'session': session, 'type': 'run_completed', 'runId': msg_id, 'result': {'status': 'cancelled', 'checkpointed': False}}), flush=True)
-        elif msg_id == 'm2-checkpointed':
+        elif msg_id == 'm3-checkpointed':
             print(json.dumps({'session': session, 'type': 'run_completed', 'runId': msg_id, 'result': {'status': 'cancelled', 'checkpointed': True}}), flush=True)
         else:
             print(json.dumps({'session': session, 'type': 'run_completed', 'runId': msg_id, 'result': {'status': 'finished', 'checkpointed': True}}), flush=True)
@@ -709,23 +727,34 @@ for line in sys.stdin:
         }
 
         // Turn 1: cancelled before checkpoint -> neither guide nor prompt reached history.
+        assert_eq!(spawned.session.instructions_delivered(), Some(false));
         spawned.session.send_message("m1-uncheckpointed", &UserMessage::text("First task")).await.unwrap();
         wait_turn(&mut spawned.events).await;
-        // Turn 2: must carry both the guide and the interrupted first prompt, then cancels AFTER checkpoint.
-        spawned.session.send_message("m2-checkpointed", &UserMessage::text("Refined task")).await.unwrap();
+        assert_eq!(spawned.session.instructions_delivered(), Some(false));
+        // Turn 2: also cancelled before checkpoint -> carries guide + First task, then keeps both flat (never nested).
+        spawned.session.send_message("m2-uncheckpointed", &UserMessage::text("Second task")).await.unwrap();
         wait_turn(&mut spawned.events).await;
-        // Turn 3: since turn 2 checkpointed, neither the guide nor turn 2's prompt should be repeated.
-        spawned.session.send_message("m3-normal", &UserMessage::text("Third task")).await.unwrap();
+        assert_eq!(spawned.session.instructions_delivered(), Some(false));
+        // Turn 3: carries guide + flat list of First & Second tasks, then cancels AFTER checkpoint.
+        spawned.session.send_message("m3-checkpointed", &UserMessage::text("Refined task")).await.unwrap();
         wait_turn(&mut spawned.events).await;
+        assert_eq!(spawned.session.instructions_delivered(), Some(true));
+        // Turn 4: since turn 3 checkpointed, neither the guide nor prior prompts should be repeated.
+        spawned.session.send_message("m4-normal", &UserMessage::text("Fourth task")).await.unwrap();
+        wait_turn(&mut spawned.events).await;
+        assert_eq!(spawned.session.instructions_delivered(), Some(true));
         spawned.session.close().await.unwrap();
 
         let requests: Vec<Value> = std::fs::read_to_string(log).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect();
         let sends: Vec<&str> =
             requests.iter().filter(|req| req["type"] == "send").map(|req| req["message"]["text"].as_str().unwrap()).collect();
-        assert_eq!(sends.len(), 3);
+        assert_eq!(sends.len(), 4);
         assert_eq!(sends[0], with_guide("GUIDE TEXT", "First task"));
-        assert_eq!(sends[1], with_guide("GUIDE TEXT", &interrupted_followup("First task", "Refined task")));
-        assert_eq!(sends[2], "Third task");
+        assert_eq!(sends[1], with_guide("GUIDE TEXT", &interrupted_followup(&["First task".into()], "Second task")));
+        let third_expected = with_guide("GUIDE TEXT", &interrupted_followup(&["First task".into(), "Second task".into()], "Refined task"));
+        assert_eq!(sends[2], third_expected);
+        assert_eq!(sends[2].matches("missing from your history").count(), 1, "interrupted wrappers must never nest: {}", sends[2]);
+        assert_eq!(sends[3], "Fourth task");
     }
 
     #[cfg(unix)]
@@ -751,6 +780,8 @@ for line in sys.stdin:
             print(json.dumps({'id': request['id'], 'result': {'outcome': 'revert_to_followup'}}), flush=True)
         elif 'interrupted' in text:
             print(json.dumps({'id': request['id'], 'result': {'outcome': 'revert_to_followup', 'interrupted': True}}), flush=True)
+        elif 'unknown' in text:
+            print(json.dumps({'id': request['id'], 'result': {'outcome': 'future_state'}}), flush=True)
         else:
             print(json.dumps({'id': request['id'], 'result': {'outcome': 'complete_delivered'}}), flush=True)
     elif op == 'close':
@@ -778,10 +809,9 @@ for line in sys.stdin:
         };
         let spawned = CursorDriver.spawn(config).await.unwrap();
         spawned.session.steer("s1", &UserMessage::text("Focus on tests")).await.unwrap();
-        let declined = spawned.session.steer("s2", &UserMessage::text("please decline")).await.unwrap_err();
-        assert!(declined.to_string().contains("follow-up"), "unexpected declined error: {declined}");
-        let interrupted = spawned.session.steer("s3", &UserMessage::text("was interrupted")).await.unwrap_err();
-        assert!(interrupted.to_string().contains("interrupted"), "unexpected interrupted error: {interrupted}");
+        assert!(matches!(spawned.session.steer("s2", &UserMessage::text("please decline")).await, Err(DriverError::SteerFallback)));
+        assert!(matches!(spawned.session.steer("s3", &UserMessage::text("was interrupted")).await, Err(DriverError::SteerFallback)));
+        assert!(matches!(spawned.session.steer("s3b", &UserMessage::text("unknown outcome")).await, Err(DriverError::SteerFallback)));
         let with_image = UserMessage {
             parts: vec![
                 ContentPart::Text { text: "look".into() },
@@ -793,7 +823,7 @@ for line in sys.stdin:
 
         let requests: Vec<Value> = std::fs::read_to_string(log).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect();
         let steers: Vec<&str> = requests.iter().filter(|req| req["type"] == "steer").map(|req| req["text"].as_str().unwrap()).collect();
-        assert_eq!(steers, vec!["Focus on tests", "please decline", "was interrupted"]);
+        assert_eq!(steers, vec!["Focus on tests", "please decline", "was interrupted", "unknown outcome"]);
     }
 }
 

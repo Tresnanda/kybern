@@ -64,6 +64,19 @@ impl TransportFailure {
         failure
     }
 
+    /// Whether the accumulated message could still turn out to be a standalone transport error dump.
+    /// Normal assistant replies disqualify on the first non-matching prefix so they stream immediately.
+    fn may_be_dump(&self) -> bool {
+        if self.disqualified {
+            return false;
+        }
+        if self.failure.is_some() {
+            may_be_transport_error_line(&self.line) || may_be_stack_frame_line(&self.line)
+        } else {
+            may_be_transport_error_line(&self.line)
+        }
+    }
+
     fn consume_line(disqualified: &mut bool, failure: &mut Option<String>, line: &str) {
         if *disqualified {
             return;
@@ -76,6 +89,47 @@ impl TransportFailure {
             *failure = None;
         }
     }
+}
+
+fn is_prefix_of_or_starts_with(text: &str, prefix: &str) -> bool {
+    prefix.starts_with(text) || text.starts_with(prefix)
+}
+
+fn may_be_transport_error_line(text: &str) -> bool {
+    let text = text.trim_end();
+    if text.is_empty() {
+        return true;
+    }
+    if TRANSPORT_SERVER_ERROR.starts_with(text) {
+        return true;
+    }
+    const RETRIABLE: &str = "Error: RetriableError: ";
+    if is_prefix_of_or_starts_with(text, RETRIABLE) {
+        if let Some(rest) = text.strip_prefix(RETRIABLE) {
+            return !rest.starts_with("[internal]");
+        }
+        return true;
+    }
+    const CONNECT: &str = "Error: ConnectError: ";
+    if is_prefix_of_or_starts_with(text, CONNECT) {
+        if let Some(rest) = text.strip_prefix(CONNECT) {
+            return ["[unavailable]", "[aborted]", "[deadline_exceeded]"].iter().any(|code| is_prefix_of_or_starts_with(rest, code));
+        }
+        return true;
+    }
+    false
+}
+
+fn may_be_stack_frame_line(text: &str) -> bool {
+    let text = text.trim_end_matches('\r');
+    if text.trim().is_empty() {
+        return true;
+    }
+    let trimmed = text.trim_start();
+    if trimmed.len() == text.len() {
+        return false;
+    }
+    "at ".starts_with(trimmed) || is_stack_frame_line(text)
 }
 
 fn is_transport_error_line(text: &str) -> bool {
@@ -102,6 +156,8 @@ struct Message {
     text: String,
     thinking: String,
     thinking_open: bool,
+    /// Root text held back while it still matches a transport error dump prefix.
+    held: bool,
 }
 
 #[derive(Default)]
@@ -186,14 +242,17 @@ impl Stream {
                     self.flush(scope, out);
                 }
                 let origin = self.origin(scope);
-                if scope == "root" && !thinking {
+                let hold_root = if scope == "root" && !thinking {
                     // Classify each assistant message on its own, so earlier
                     // commentary does not hide a later standalone transport dump.
                     if self.messages.get("root").is_none_or(|m| m.text.is_empty()) {
                         self.assistant_reply = TransportFailure::default();
                     }
                     self.assistant_reply.push(text);
-                }
+                    self.assistant_reply.may_be_dump()
+                } else {
+                    false
+                };
                 let message = self.message(scope);
                 if thinking {
                     message.thinking.push_str(text);
@@ -205,7 +264,17 @@ impl Stream {
                         out.push(DriverEvent::ThinkingCompleted { message_id: message.id.clone(), origin: origin.clone() });
                     }
                     message.text.push_str(text);
-                    out.push(DriverEvent::TextDelta { message_id: message.id.clone(), origin, delta: text.into() });
+                    if hold_root {
+                        message.held = true;
+                    } else {
+                        let delta = if message.held {
+                            message.held = false;
+                            message.text.clone()
+                        } else {
+                            text.into()
+                        };
+                        out.push(DriverEvent::TextDelta { message_id: message.id.clone(), origin, delta });
+                    }
                 }
             }
             "thinking-completed" => {
@@ -230,8 +299,9 @@ impl Stream {
             }
             "shell-output-delta" => {
                 let event = &update["event"];
-                // Preserve explicit identity when supplied. Never attach a
-                // parallel shell's output to whichever command started last.
+                // In @cursor/sdk 1.2.0, shell-output-delta carries only {case, value} without a toolCallId.
+                // Honor an explicit id if a newer SDK adds one; otherwise attribute only when a single shell
+                // is running, and drop output when multiple shells run concurrently to avoid misattribution.
                 let explicit = event["toolCallId"].as_str().or_else(|| event["callId"].as_str()).or_else(|| update["callId"].as_str());
                 let shells: Vec<_> = self.tools.iter().filter(|(_, kind)| *kind == "shell").map(|(id, _)| id.as_str()).collect();
                 let id = explicit.or_else(|| (shells.len() == 1).then(|| shells[0]));
@@ -376,6 +446,14 @@ impl Stream {
                 self.message("root").text = final_text.to_string();
             }
         }
+        let transport_failure = (status != "cancelled").then(|| self.assistant_reply.failure()).flatten();
+        if transport_failure.is_some()
+            && let Some(message) = self.messages.remove("root")
+            && message.thinking_open
+        {
+            // Drop the root transport-error dump so the transcript shows only the problem row.
+            out.push(DriverEvent::ThinkingCompleted { message_id: message.id, origin: EventOrigin::Root });
+        }
         for scope in self.messages.keys().cloned().collect::<Vec<_>>() {
             self.flush(&scope, out);
         }
@@ -395,7 +473,6 @@ impl Stream {
         if let Some(context) = context_usage(&result["contextUsage"]) {
             out.push(DriverEvent::UsageUpdated(ProviderUsage { context: Some(context), limits: None, prompt_cache: None }));
         }
-        let transport_failure = (status != "cancelled").then(|| self.assistant_reply.failure()).flatten();
         let outcome = if let Some(failure) = transport_failure {
             out.push(DriverEvent::turn_failed(ProviderKind::Cursor, failure));
             TurnOutcome::Failed { checkpointed }
@@ -673,33 +750,52 @@ mod tests {
     }
 
     #[test]
-    fn shell_output_delta_parses_sdk_case_value_shape_and_tool_call_id() {
+    fn shell_output_delta_attributes_real_sdk_shape_only_when_one_shell_is_running() {
         let mut stream = started();
-        update(&mut stream, json!({"type":"tool-call-started","callId":"sh1","toolCall":{"type":"shell","args":{"command":"a"}}}));
-        update(&mut stream, json!({"type":"tool-call-started","callId":"sh2","toolCall":{"type":"shell","args":{"command":"b"}}}));
-
-        let stdout = update(
-            &mut stream,
-            json!({
-                "type": "shell-output-delta",
-                "event": {"case": "stdout", "value": {"data": "hello\n"}, "toolCallId": "sh2"}
-            }),
+        // In @cursor/sdk 1.2.0, `shell-output-delta` carries only `{case, value}` with no toolCallId.
+        // Without a running shell, output is dropped.
+        assert!(
+            update(&mut stream, json!({"type": "shell-output-delta", "event": {"case": "stdout", "value": {"data": "orphan\n"}}}))
+                .is_empty()
         );
+
+        // With exactly one running shell, stdout and stderr attach to it; exit carries no output text.
+        update(&mut stream, json!({"type":"tool-call-started","callId":"sh1","toolCall":{"type":"shell","args":{"command":"a"}}}));
+        let stdout = update(&mut stream, json!({"type": "shell-output-delta", "event": {"case": "stdout", "value": {"data": "hello\n"}}}));
         assert!(matches!(
             stdout.as_slice(),
-            [DriverEvent::ToolOutputDelta { tool_call_id, delta }] if tool_call_id == "cursor-sdk:r1:tool:sh2" && delta == "hello\n"
+            [DriverEvent::ToolOutputDelta { tool_call_id, delta }] if tool_call_id == "cursor-sdk:r1:tool:sh1" && delta == "hello\n"
         ));
-
-        let stderr = update(
-            &mut stream,
-            json!({
-                "type": "shell-output-delta",
-                "event": {"case": "stderr", "value": {"data": "warn\n"}, "toolCallId": "sh1"}
-            }),
-        );
+        let stderr = update(&mut stream, json!({"type": "shell-output-delta", "event": {"case": "stderr", "value": {"data": "warn\n"}}}));
         assert!(matches!(
             stderr.as_slice(),
             [DriverEvent::ToolOutputDelta { tool_call_id, delta }] if tool_call_id == "cursor-sdk:r1:tool:sh1" && delta == "warn\n"
+        ));
+        assert!(
+            update(
+                &mut stream,
+                json!({"type": "shell-output-delta", "event": {"case": "exit", "value": {"code": 0, "cwd": "/tmp", "aborted": false}}})
+            )
+            .is_empty()
+        );
+
+        // When two shells run concurrently, output has no id and is dropped rather than misattributed.
+        update(&mut stream, json!({"type":"tool-call-started","callId":"sh2","toolCall":{"type":"shell","args":{"command":"b"}}}));
+        assert!(
+            update(&mut stream, json!({"type": "shell-output-delta", "event": {"case": "stdout", "value": {"data": "ambiguous\n"}}}))
+                .is_empty()
+        );
+
+        // Once sh1 finishes, sh2 is the sole running shell again and receives output cleanly.
+        update(
+            &mut stream,
+            json!({"type":"tool-call-completed","callId":"sh1","toolCall":{"type":"shell","args":{"command":"a"},"result":{"status":"success","value":{"exitCode":0}}}}),
+        );
+        let remaining =
+            update(&mut stream, json!({"type": "shell-output-delta", "event": {"case": "stdout", "value": {"data": "from-sh2\n"}}}));
+        assert!(matches!(
+            remaining.as_slice(),
+            [DriverEvent::ToolOutputDelta { tool_call_id, delta }] if tool_call_id == "cursor-sdk:r1:tool:sh2" && delta == "from-sh2\n"
         ));
     }
 
@@ -784,7 +880,7 @@ mod tests {
     }
 
     #[test]
-    fn transport_error_dump_replies_fail_the_turn_while_prose_completes() {
+    fn transport_error_dump_replies_drop_the_root_message_and_fail_while_prose_completes() {
         for dump in [
             "Error: RetriableError: WritableIterable is closed\n    at onClose (file:///sdk/index.js:12:4)",
             "Error: ConnectError: [unavailable] transport closed\n    at Stream.end (node:internal/streams:1:1)",
@@ -792,8 +888,17 @@ mod tests {
             TRANSPORT_SERVER_ERROR,
         ] {
             let mut stream = started();
-            update(&mut stream, json!({"type": "text-delta", "text": dump}));
-            let events = stream.handle(&json!({"type": "run_completed", "result": {"status": "finished", "checkpointed": false}}));
+            let streamed = update(&mut stream, json!({"type": "text-delta", "text": dump}));
+            assert!(
+                !streamed.iter().any(|event| matches!(event, DriverEvent::TextDelta { origin: EventOrigin::Root, .. })),
+                "transport dump must be held back from TextDelta for {dump:?}, got {streamed:?}"
+            );
+            let events =
+                stream.handle(&json!({"type": "run_completed", "result": {"status": "finished", "result": dump, "checkpointed": false}}));
+            assert!(
+                !events.iter().any(|event| matches!(event, DriverEvent::MessageCompleted { origin: EventOrigin::Root, .. })),
+                "transport dump must not flush as a root MessageCompleted for {dump:?}, got {events:?}"
+            );
             let Some(DriverEvent::TurnFailed { problem, .. }) = events.last() else {
                 panic!("expected TurnFailed for dump {dump:?}, got {events:?}");
             };
@@ -801,30 +906,53 @@ mod tests {
             assert_eq!(stream.take_outcome(), Some(TurnOutcome::Failed { checkpointed: false }));
         }
 
-        // Earlier normal commentary followed by a tool call and then a standalone transport dump still fails.
+        // Earlier normal commentary followed by a tool call and then a standalone transport dump keeps
+        // the commentary, drops the dump message, and fails the turn.
         let mut after_tool = started();
-        update(&mut after_tool, json!({"type": "text-delta", "text": "Checking files..."}));
-        update(
+        let intro = update(&mut after_tool, json!({"type": "text-delta", "text": "Checking files..."}));
+        assert!(intro.iter().any(|event| matches!(event, DriverEvent::TextDelta { delta, .. } if delta == "Checking files...")));
+        let tool_start = update(
             &mut after_tool,
             json!({"type": "tool-call-started", "callId": "r1", "toolCall": {"type": "read", "args": {"path": "a.rs"}}}),
         );
+        assert!(tool_start.iter().any(|event| matches!(event, DriverEvent::MessageCompleted { text, .. } if text == "Checking files...")));
         update(
             &mut after_tool,
             json!({"type": "tool-call-completed", "callId": "r1", "toolCall": {"type": "read", "args": {"path": "a.rs"}, "result": {"status": "success", "value": {}}}}),
         );
-        update(&mut after_tool, json!({"type": "text-delta", "text": "Error: ConnectError: [aborted] stream reset"}));
+        let dump_delta = update(&mut after_tool, json!({"type": "text-delta", "text": "Error: ConnectError: [aborted] stream reset"}));
+        assert!(dump_delta.is_empty());
         let events = after_tool.handle(&json!({"type": "run_completed", "result": {"status": "finished", "checkpointed": true}}));
+        assert!(!events.iter().any(|event| matches!(event, DriverEvent::MessageCompleted { origin: EventOrigin::Root, .. })));
         assert!(matches!(events.last(), Some(DriverEvent::TurnFailed { .. })));
 
-        // Normal prose quoting the error or an internal error code stays a normal completed reply.
+        // Normal prose (including messages that begin with a transport-like prefix) releases and completes cleanly.
         for normal in [
             "I saw this error in the logs:\nError: RetriableError: WritableIterable is closed",
             "Error: RetriableError: [internal] something else",
             "Error: ConnectError: [internal] not a transport disconnect",
+            "Error: ConnectError: [aborted] stream reset\nHere is what caused that error.",
+            "Something else went right.",
         ] {
             let mut stream = started();
-            update(&mut stream, json!({"type": "text-delta", "text": normal}));
+            // Feed in small chunks to exercise held-prefix release mid-stream.
+            let mut streamed = String::new();
+            for chunk in normal.as_bytes().chunks(7) {
+                let text = std::str::from_utf8(chunk).unwrap();
+                for event in update(&mut stream, json!({"type": "text-delta", "text": text})) {
+                    if let DriverEvent::TextDelta { origin: EventOrigin::Root, delta, .. } = event {
+                        streamed.push_str(&delta);
+                    }
+                }
+            }
             let events = stream.handle(&json!({"type": "run_completed", "result": {"status": "finished", "checkpointed": true}}));
+            assert_eq!(streamed, normal, "normal reply must stream intact without loss or duplication");
+            assert!(
+                events
+                    .iter()
+                    .any(|event| matches!(event, DriverEvent::MessageCompleted { origin: EventOrigin::Root, text, .. } if text == normal)),
+                "expected MessageCompleted for normal reply {normal:?}, got {events:?}"
+            );
             assert!(
                 events.iter().any(|event| matches!(event, DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. })),
                 "expected completed for normal reply {normal:?}, got {events:?}"
