@@ -649,11 +649,17 @@ pub trait AgentDriver: Send + Sync {
     fn supports_fork(&self) -> bool {
         true
     }
-    /// Whether a session can run in (or switch to) `mode` on this machine now. Every harness takes
-    /// every mode the daemon offers it, except Antigravity: only its ACP transport (agy 1.5.0 or
-    /// later) can ask before acting, so without it Antigravity takes Full access alone.
+    /// Why a session can't run in (or switch to) `mode` on this machine now, or `None` when it can.
+    /// Every harness takes every mode the daemon offers it, except Antigravity: only its ACP
+    /// transport (agy 1.5.0 or later) can ask before acting, so without it Antigravity takes Full
+    /// access alone. The error carries the problem people see (update, try again, Full access).
+    fn permission_mode_refusal(&self, mode: PermissionMode) -> Option<DriverError> {
+        (self.kind() == ProviderKind::Antigravity && mode != PermissionMode::FullAccess)
+            .then(|| DriverError::problem(antigravity::full_access_only_problem()))
+    }
+    /// Whether a session can run in (or switch to) `mode` on this machine now.
     fn accepts_permission_mode(&self, mode: PermissionMode) -> bool {
-        self.kind() != ProviderKind::Antigravity || mode == PermissionMode::FullAccess
+        self.permission_mode_refusal(mode).is_none()
     }
     /// Run a single tool-free prompt and return the model's text. Used for thread titles.
     /// `env` is the account environment of whoever the prompt is for (a named account's

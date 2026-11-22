@@ -535,6 +535,18 @@ fn config(binary: &Path, cwd: &Path) -> SessionConfig {
     }
 }
 
+#[test]
+fn an_acp_check_holds_for_its_version_and_a_failure_only_for_a_while() {
+    let now = Instant::now();
+    let binary = Path::new("/opt/agy/agy.cmd");
+    let check = |usable| AcpCheck { binary: binary.into(), version: "1.5.14".into(), usable, at: now };
+    assert_eq!(check(false).answer(binary, "1.5.14", now + ACP_RETRY - Duration::from_secs(1)), Some(false));
+    assert_eq!(check(false).answer(binary, "1.5.14", now + ACP_RETRY), None, "a failure is checked again");
+    assert_eq!(check(true).answer(binary, "1.5.14", now + Duration::from_secs(86_400)), Some(true));
+    assert_eq!(check(true).answer(binary, "1.5.15", now), None, "a new version is checked again");
+    assert_eq!(check(true).answer(Path::new("/usr/bin/agy"), "1.5.14", now), None);
+}
+
 #[tokio::test]
 async fn spawn_refuses_what_agy_cannot_do() {
     let root = tempfile::tempdir().unwrap();
@@ -546,7 +558,8 @@ async fn spawn_refuses_what_agy_cannot_do() {
         let mut refused = config(&binary, root.path());
         refused.permission_mode = mode;
         let Err(error) = driver.spawn(refused).await else { panic!("{mode:?} must be refused") };
-        assert!(error.to_string().contains(NEEDS_ACP), "{error}");
+        let problem = crate::failure::classify_error(ProviderKind::Antigravity, &error).expect("a worded problem");
+        assert_eq!(problem.title.as_deref(), Some("Antigravity couldn't start in this permission mode"), "{error}");
         // Forced to `-p`, it only runs in Full access.
         let mut forced = config(&binary, root.path());
         forced.permission_mode = mode;

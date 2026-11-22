@@ -125,6 +125,11 @@ impl Pair {
     }
 
     async fn build(group_on_b: Option<&[&str]>) -> Option<Self> {
+        Self::build_with(group_on_b, |_| {}).await
+    }
+
+    /// Like `build`, with `extra` adding drivers to machine b's.
+    async fn build_with(group_on_b: Option<&[&str]>, extra: impl FnOnce(&mut DriverRegistry)) -> Option<Self> {
         let cluster = Cluster::new(&[NodeSpec::owner("a"), NodeSpec::owner("b")])?;
         let spawned = Arc::new(std::sync::Mutex::new(Vec::new()));
         let (repo_a, repo_b, project_a, project_b) = match group_on_b {
@@ -140,7 +145,9 @@ impl Pair {
             }
         };
         let a = cluster.start_with("a", true, scripted_drivers(&Arc::new(std::sync::Mutex::new(Vec::new())))).await;
-        let b = cluster.start_with("b", true, scripted_drivers(&spawned)).await;
+        let mut b_drivers = scripted_drivers(&spawned);
+        extra(&mut b_drivers);
+        let b = cluster.start_with("b", true, b_drivers).await;
         cluster.form(&a, &[&b], JoinVia::Auto).await;
         a.state.store.project_insert(&project_a).unwrap();
         b.state.store.project_insert(&project_b).unwrap();
@@ -247,6 +254,66 @@ impl Pair {
         self.b = self.cluster.start_with("b", true, scripted_drivers(&self.spawned)).await;
         wait_until("a and the restarted b linked", WAIT, || crate::network::harness::linked(&self.a, &self.b)).await;
     }
+}
+
+/// Antigravity as a machine whose `agy` runs on ACP sees it (`refusal: None`: every mode), or one that
+/// refuses modes other than Full access with `refusal`.
+struct AntigravityThere {
+    scripted: ScriptedDriver,
+    refusal: Option<kybern_protocol::rpc::Problem>,
+}
+
+#[async_trait::async_trait]
+impl kybern_drivers::AgentDriver for AntigravityThere {
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::Antigravity
+    }
+    fn permission_mode_refusal(&self, mode: PermissionMode) -> Option<kybern_drivers::DriverError> {
+        self.refusal.clone().filter(|_| mode != PermissionMode::FullAccess).map(kybern_drivers::DriverError::problem)
+    }
+    async fn probe(&self, binary: Option<&PathBuf>) -> ProviderStatus {
+        ProviderStatus { kind: ProviderKind::Antigravity, ..self.scripted.probe(binary).await }
+    }
+    async fn spawn(&self, config: kybern_drivers::SessionConfig) -> kybern_drivers::Result<kybern_drivers::SpawnedSession> {
+        self.scripted.spawn(config).await
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_machine_that_runs_antigravity_decides_its_mode_and_names_itself_when_it_refuses() {
+    // Machine a has no Antigravity that asks before acting; b's runs on ACP and takes Supervised.
+    let antigravity = json!("antigravity");
+    let Some(p) = Pair::build_with(None, |drivers| {
+        let spawned = Arc::new(std::sync::Mutex::new(Vec::new()));
+        drivers.register(Arc::new(AntigravityThere { scripted: ScriptedDriver { kind: ProviderKind::Antigravity, spawned }, refusal: None }));
+    })
+    .await
+    else {
+        return;
+    };
+    assert!(super::antigravity_rules::require_full_access(&p.a.state.orchestrator.inner.drivers, ProviderKind::Antigravity, PermissionMode::Supervised).is_err());
+    let started = p.delegate(json!({"task": "Tidy the readme", "provider": antigravity})).await;
+    let child = eventually(|| async { p.child_on_b(task_id_of(&started)) }).await;
+    assert_eq!((child.provider.kind, child.permission_mode), (ProviderKind::Antigravity, PermissionMode::Supervised), "{started}");
+    drop(p);
+
+    // A b whose agy is too old says so, naming itself, with no button that would act on a.
+    let Some(p) = Pair::build_with(None, |drivers| {
+        let spawned = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let refusal = Some(kybern_drivers::antigravity::needs_update_problem());
+        drivers.register(Arc::new(AntigravityThere { scripted: ScriptedDriver { kind: ProviderKind::Antigravity, spawned }, refusal }));
+    })
+    .await
+    else {
+        return;
+    };
+    let refused = p.delegate(json!({"task": "Tidy the readme", "provider": antigravity})).await;
+    let task_id = task_id_of(&refused);
+    let row = eventually(|| async { Some(p.row(task_id)).filter(|row| row.state.is_terminal()) }).await;
+    let error = row.info.error.clone().unwrap_or_default();
+    let b = p.a.state.orchestrator.machine_name(&p.b.id());
+    assert_eq!(error, format!("{b} could not start the agent: {}", kybern_drivers::antigravity::NEEDS_ACP));
+    assert!(p.child_on_b(task_id).is_none());
 }
 
 fn task_id_of(value: &serde_json::Value) -> Uuid {

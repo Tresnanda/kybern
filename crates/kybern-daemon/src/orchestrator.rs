@@ -1502,11 +1502,19 @@ impl Orchestrator {
     }
 
     fn update_thread(&self, thread: Thread) -> Result<Thread> {
-        antigravity_rules::require_full_access(&self.inner.drivers, thread.provider.kind, thread.permission_mode)?;
         if thread.coordinator_project_id.is_some() {
             antigravity_rules::refuse_lead(thread.provider.kind)?;
         }
         let _updates = self.inner.thread_updates.lock().map_err(|_| anyhow!("thread update lock poisoned"))?;
+        // Only a chosen or changed mode or harness is checked: a thread already in its mode keeps saving
+        // its turns, status and title whatever this machine's `agy` was last found to take.
+        if antigravity_rules::changes_mode_or_provider(
+            self.inner.store.thread_get(thread.id)?.as_ref(),
+            thread.provider.kind,
+            thread.permission_mode,
+        ) {
+            antigravity_rules::require_full_access(&self.inner.drivers, thread.provider.kind, thread.permission_mode)?;
+        }
         self.write_thread_update(thread, true)
     }
 
@@ -2444,11 +2452,12 @@ impl Orchestrator {
             return Ok(());
         }
         let target = self.thread_target(message.thread_id)?.target;
-        let mut receiving = self.inner.store.thread_get(message.thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
-        let mode = self.pending_permission_for(&receiving, &target.provider)?.unwrap_or(receiving.permission_mode);
-        receiving.provider_session_id = self.compatible_native_session(&receiving, &target.provider)?;
+        let stored = self.inner.store.thread_get(message.thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
+        let mode = self.pending_permission_for(&stored, &target.provider)?.unwrap_or(stored.permission_mode);
+        let mut receiving = stored.clone();
+        receiving.provider_session_id = self.compatible_native_session(&stored, &target.provider)?;
         receiving.provider = target.provider.clone();
-        accounts::validate_permission(&self.inner.drivers, &receiving, mode)?;
+        accounts::validate_permission(&self.inner.drivers, &stored, &receiving, mode)?;
         self.inner.store.meta_set_many(&[
             (&format!("queue_target:{}", message.id), &serde_json::to_string(&target)?),
             (&format!("queue_permission:{}", message.id), &serde_json::to_string(&mode)?),
@@ -2563,7 +2572,7 @@ impl Orchestrator {
                     let mut receiving = thread.clone();
                     receiving.provider_session_id = self.compatible_native_session(&thread, &target.provider)?;
                     receiving.provider = target.provider.clone();
-                    accounts::validate_permission(&self.inner.drivers, &receiving, mode)?;
+                    accounts::validate_permission(&self.inner.drivers, &thread, &receiving, mode)?;
                     self.inner.store.meta_set_many(&[
                         (&format!("steer_request:{}", params.id), &serde_json::to_string(&params)?),
                         (&format!("steer_target:{}", params.id), &serde_json::to_string(&target)?),

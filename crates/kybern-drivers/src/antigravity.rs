@@ -36,11 +36,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
-use std::time::SystemTime;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use kybern_protocol::process::NoWindow;
+use kybern_protocol::rpc::{Problem, ProblemAction, ProblemKind};
 use kybern_protocol::*;
 use serde_json::{Value, json};
 use tokio::process::Command;
@@ -63,9 +63,11 @@ pub const FULL_ACCESS_ONLY: &str = "Antigravity only runs in Full access. Choose
 /// Kybern cannot narrow Antigravity's tools, so it cannot lead a project.
 pub const NO_LEAD: &str = "Antigravity can't lead a project: Kybern can't limit its tools. Choose Claude Code or Codex for the lead.";
 pub(crate) const SIGN_IN: &str = "Antigravity isn't signed in. Sign in from Settings → Agents → Antigravity, then send your message again.";
-/// The sentence for a mode only the ACP transport can run, when this session can't use it.
+/// The detail for a mode only the ACP transport can run, when the installed agy is too old for it.
 pub const NEEDS_ACP: &str =
     "Antigravity needs agy 1.5 or later for this permission mode. Update it with `agy update`, or choose Full access.";
+/// The detail for a mode only the ACP transport can run, when `agy acp` didn't start.
+pub const ACP_DIDNT_START: &str = "agy acp didn't start or answer initialize; only Full access runs without it.";
 /// Set to `1` in the Antigravity environment to always use `-p` (one process per turn, Full access only).
 pub const PRINT_MODE_ENV: &str = "KYBERN_ANTIGRAVITY_PRINT_MODE";
 
@@ -76,9 +78,33 @@ const MODELS_TTL: Duration = Duration::from_secs(10 * 60);
 const MODELS_TIMEOUT: Duration = Duration::from_secs(20);
 const ONE_SHOT_TIMEOUT: Duration = Duration::from_secs(90);
 
+/// How long a failed `agy acp` check holds before the next session or probe checks again.
+const ACP_RETRY: Duration = Duration::from_secs(5 * 60);
+
 /// Refuses every permission mode but Full access.
 pub fn require_full_access(mode: PermissionMode) -> std::result::Result<(), &'static str> {
     if mode == PermissionMode::FullAccess { Ok(()) } else { Err(FULL_ACCESS_ONLY) }
+}
+
+/// A mode other than Full access, refused where only `-p` runs (forced, or no Antigravity driver).
+pub fn full_access_only_problem() -> Problem {
+    Problem::new(ProblemKind::InvalidInput, FULL_ACCESS_ONLY)
+        .with_subject("antigravity")
+        .with_copy("Antigravity only runs in Full access", "Choose Full access, or pick another agent.")
+}
+
+/// A mode other than Full access on an `agy` older than 1.5: update it.
+pub fn needs_update_problem() -> Problem {
+    crate::failure::update_needed_problem(ProviderKind::Antigravity, NEEDS_ACP)
+        .with_copy("Update Antigravity to use this permission mode", "This mode needs agy 1.5 or later. Update it, or choose Full access.")
+}
+
+/// A mode other than Full access when `agy acp` didn't start: it may next time.
+pub fn acp_failed_problem() -> Problem {
+    Problem::new(ProblemKind::Internal, ACP_DIDNT_START)
+        .with_subject("antigravity")
+        .with_copy("Antigravity couldn't start in this permission mode", "Try again. If it keeps failing, choose Full access.")
+        .with_action(ProblemAction::retry("Try again"))
 }
 
 #[derive(Default)]
@@ -87,15 +113,54 @@ pub struct AntigravityDriver {
     catalog_file: Option<PathBuf>,
     /// Whether the installed `agy` takes ACP, as last checked.
     acp_check: std::sync::Mutex<Option<AcpCheck>>,
-    /// The last probe found ACP usable: every permission mode works.
-    acp_ready: AtomicBool,
+    /// What the last probe or session start found: which permission modes work.
+    acp: std::sync::Mutex<Acp>,
 }
 
-/// One check of whether a binary takes ACP; it holds until the binary changes.
+/// Whether sessions run on `agy acp`, as the last probe or session start found.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Acp {
+    /// Not checked since the daemon started: the session's start decides.
+    #[default]
+    Unknown,
+    /// Every permission mode works.
+    Ready,
+    /// `PRINT_MODE_ENV` forces `-p`.
+    Forced,
+    /// `agy` is older than 1.5.0.
+    TooOld,
+    /// `agy acp` didn't start or initialize (or agy's version couldn't be read).
+    Failed,
+}
+
+impl Acp {
+    /// Why a mode other than Full access can't run, or `None` when it can (or the start decides).
+    fn refusal(self) -> Option<Problem> {
+        match self {
+            Acp::Unknown | Acp::Ready => None,
+            Acp::Forced => Some(full_access_only_problem()),
+            Acp::TooOld => Some(needs_update_problem()),
+            Acp::Failed => Some(acp_failed_problem()),
+        }
+    }
+}
+
+/// One check of whether a binary takes ACP, keyed on the version `agy` reports (a `.cmd` or npm
+/// launcher doesn't change on disk when agy updates). A success holds for that version; a failure
+/// holds for [`ACP_RETRY`], and nothing holds across a daemon restart.
 struct AcpCheck {
     binary: PathBuf,
-    modified: SystemTime,
+    version: String,
     usable: bool,
+    at: Instant,
+}
+
+impl AcpCheck {
+    /// The cached answer for `binary` at `version`, while it holds.
+    fn answer(&self, binary: &Path, version: &str, now: Instant) -> Option<bool> {
+        let holds = self.usable || now.saturating_duration_since(self.at) < ACP_RETRY;
+        (self.binary == binary && self.version == version && holds).then_some(self.usable)
+    }
 }
 
 /// `PRINT_MODE_ENV` is on.
@@ -116,35 +181,43 @@ impl AntigravityDriver {
     }
 
     /// Whether a session should run on ACP: not forced to `-p`, `agy` 1.5.0 or later, and `agy acp`
-    /// initializes. Checked once per binary (until it changes on disk).
-    async fn acp_usable(&self, binary: &Path, env: &BTreeMap<String, String>) -> bool {
+    /// initializes. The last check is reused while it holds ([`AcpCheck::answer`]); with `recheck`, a
+    /// failure is checked again at once.
+    async fn acp_state(&self, binary: &Path, env: &BTreeMap<String, String>, recheck: bool) -> Acp {
         if forced_print(env.get(PRINT_MODE_ENV)) {
-            return false;
+            return Acp::Forced;
         }
-        let modified = std::fs::metadata(binary).and_then(|meta| meta.modified()).ok();
-        if let Some(modified) = modified
-            && let Some(check) = self.acp_check.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
-            && check.binary == binary
-            && check.modified == modified
-        {
-            return check.usable;
+        let Some(version) = version_of(binary, &["--version"]).await else { return Acp::Failed };
+        if !at_least(&version, acp::MIN_ACP_VERSION) {
+            return Acp::TooOld;
         }
-        let usable = match version_of(binary, &["--version"]).await {
-            Some(version) => at_least(&version, acp::MIN_ACP_VERSION) && acp::initializes(binary, env).await,
-            None => false,
+        let cached = self.lock_check().as_ref().and_then(|check| check.answer(binary, &version, Instant::now()));
+        let usable = match cached {
+            Some(usable) if usable || !recheck => usable,
+            _ => {
+                let usable = acp::initializes(binary, env).await;
+                *self.lock_check() = Some(AcpCheck { binary: binary.to_path_buf(), version, usable, at: Instant::now() });
+                usable
+            }
         };
-        if let Some(modified) = modified {
-            *self.acp_check.lock().unwrap_or_else(|e| e.into_inner()) = Some(AcpCheck { binary: binary.to_path_buf(), modified, usable });
-        }
-        usable
+        if usable { Acp::Ready } else { Acp::Failed }
     }
 
-    /// ACP failed to start for this binary: use `-p` until the binary changes.
+    fn lock_check(&self) -> std::sync::MutexGuard<'_, Option<AcpCheck>> {
+        self.acp_check.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn record(&self, state: Acp) {
+        *self.acp.lock().unwrap_or_else(|e| e.into_inner()) = state;
+    }
+
+    /// ACP failed to start for this binary: `-p` until the check is due again.
     fn forget_acp(&self, binary: &Path) {
-        if let Some(check) = self.acp_check.lock().unwrap_or_else(|e| e.into_inner()).as_mut().filter(|check| check.binary == binary) {
+        if let Some(check) = self.lock_check().as_mut().filter(|check| check.binary == binary) {
             check.usable = false;
+            check.at = Instant::now();
         }
-        self.acp_ready.store(false, Ordering::SeqCst);
+        self.record(Acp::Failed);
     }
 
     fn cached(&self, binary: &Path, max_age: Duration) -> Option<Vec<ProviderModel>> {
@@ -234,9 +307,9 @@ impl AntigravityDriver {
         }
         if status.available {
             status.models = self.models(&binary, context, fresh).await;
-            let acp = self.acp_usable(&binary, &context.env).await;
-            self.acp_ready.store(acp, Ordering::SeqCst);
-            if acp {
+            let acp = self.acp_state(&binary, &context.env, false).await;
+            self.record(acp);
+            if acp == Acp::Ready {
                 status.supported_permission_modes = PermissionMode::ALL.to_vec();
             }
         }
@@ -384,8 +457,11 @@ impl AgentDriver for AntigravityDriver {
         false
     }
 
-    fn accepts_permission_mode(&self, mode: PermissionMode) -> bool {
-        mode == PermissionMode::FullAccess || self.acp_ready.load(Ordering::SeqCst)
+    fn permission_mode_refusal(&self, mode: PermissionMode) -> Option<DriverError> {
+        if mode == PermissionMode::FullAccess {
+            return None;
+        }
+        self.acp.lock().unwrap_or_else(|e| e.into_inner()).refusal().map(DriverError::problem)
     }
 
     async fn probe(&self, binary: Option<&PathBuf>) -> ProviderStatus {
@@ -467,21 +543,27 @@ impl AgentDriver for AntigravityDriver {
         }
         let binary = resolve(ProviderKind::Antigravity, config.binary.as_ref())?;
         let env: BTreeMap<String, String> = config.env.iter().map(|(key, value)| (key.clone(), value.clone())).collect();
-        if self.acp_usable(&binary, &env).await {
+        let full_access = config.permission_mode == PermissionMode::FullAccess;
+        // A mode only ACP runs checks an earlier failure again: it can't run otherwise.
+        let state = self.acp_state(&binary, &env, !full_access).await;
+        self.record(state);
+        if state == Acp::Ready {
             let flavor = acp::AgyAcp::new(env_home(&env), config.native_tool_bridge.as_ref())?;
             let failed_to_start = flavor.failed_to_start.clone();
             match crate::acp::spawn(flavor, config.clone()).await {
                 Ok(session) => return Ok(session),
-                // `agy acp` didn't come up: `-p` takes Full access sessions over, as if ACP had never been there.
-                Err(error) if failed_to_start.load(Ordering::SeqCst) && config.permission_mode == PermissionMode::FullAccess => {
-                    tracing::warn!(target: "kybern::antigravity", %error, "agy acp didn't start; using -p");
+                Err(error) if failed_to_start.load(Ordering::SeqCst) => {
                     self.forget_acp(&binary);
+                    if !full_access {
+                        return Err(error);
+                    }
+                    // `agy acp` didn't come up: `-p` takes Full access sessions over, as if ACP had never been there.
+                    tracing::warn!(target: "kybern::antigravity", %error, "agy acp didn't start; using -p");
                 }
                 Err(error) => return Err(error),
             }
-        } else if config.permission_mode != PermissionMode::FullAccess {
-            let sentence = if forced_print(env.get(PRINT_MODE_ENV)) { FULL_ACCESS_ONLY } else { NEEDS_ACP };
-            return Err(DriverError::Unsupported(sentence.into()));
+        } else if !full_access && let Some(problem) = state.refusal() {
+            return Err(DriverError::problem(problem));
         }
         self.spawn_print(config, binary).await
     }

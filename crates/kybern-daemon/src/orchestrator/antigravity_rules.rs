@@ -12,7 +12,9 @@
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
+use kybern_drivers::DriverError;
 use kybern_drivers::registry::DriverRegistry;
+use kybern_protocol::rpc::{RpcError, codes};
 use kybern_protocol::{EventPayload, EventSeq, PermissionMode, ProviderKind, Thread, ThreadEvent, ThreadId, ThreadStatus, TurnId};
 
 use super::{LiveSession, Orchestrator, resend};
@@ -23,11 +25,51 @@ pub(super) fn is_signature_failure(error: &str, problem: Option<&kybern_protocol
 }
 
 /// Refuses any mode but Full access for an Antigravity thread, unless this machine's Antigravity takes it.
+/// The error carries the problem people see: update agy, try again, or choose Full access.
+///
+/// Call it where a mode or a provider is chosen or changed, never for a thread whose stored mode
+/// and provider stay as they are: what this machine's `agy` can do changes with each probe, and a
+/// thread already in a mode must still finish its turns and be archived.
 pub(crate) fn require_full_access(drivers: &DriverRegistry, kind: ProviderKind, mode: PermissionMode) -> Result<()> {
-    if kind == ProviderKind::Antigravity && !drivers.get(kind).is_some_and(|driver| driver.accepts_permission_mode(mode)) {
-        kybern_drivers::antigravity::require_full_access(mode).map_err(|sentence| anyhow!(sentence))?;
+    if kind != ProviderKind::Antigravity || mode == PermissionMode::FullAccess {
+        return Ok(());
     }
-    Ok(())
+    let refusal = match drivers.get(kind) {
+        Some(driver) => driver.permission_mode_refusal(mode),
+        None => Some(DriverError::problem(kybern_drivers::antigravity::full_access_only_problem())),
+    };
+    refusal.map_or(Ok(()), |error| Err(error.into()))
+}
+
+/// Whether running `stored` on harness `kind` in `mode` chooses or changes its harness or permission mode.
+pub(super) fn changes_mode_or_provider(stored: Option<&Thread>, kind: ProviderKind, mode: PermissionMode) -> bool {
+    stored.is_none_or(|stored| stored.provider.kind != kind || stored.permission_mode != mode)
+}
+
+/// [`require_full_access`] for a thread another machine asked this one for (fork, move,
+/// delegation): the refusal names this machine, and a fix only this machine can run becomes words.
+pub(super) fn require_full_access_here(
+    drivers: &DriverRegistry,
+    kind: ProviderKind,
+    mode: PermissionMode,
+    machine: &str,
+) -> std::result::Result<(), RpcError> {
+    require_full_access(drivers, kind, mode).map_err(|error| refused_on(&error, machine))
+}
+
+fn refused_on(error: &anyhow::Error, machine: &str) -> RpcError {
+    let mut problem = crate::problem::problem_from(error);
+    let title = problem.title.take().unwrap_or_else(|| "Antigravity can't run in this permission mode".into());
+    problem.title = Some(format!("{title} on {machine}"));
+    // The asking machine's buttons would act on itself: only Try again stays a button.
+    if let Some(action) = problem.action.take_if(|action| action.id != "retry") {
+        let fix = if action.id == "update_agent" { "Update Antigravity" } else { "Fix it" };
+        problem.hint = Some(format!("{fix} on {machine}, or choose Full access."));
+    }
+    problem.secondary = None;
+    // The asking machine puts this machine's name in front of the message ("SatyaMas could not start
+    // the agent: …"); the headline names it for clients that show the problem.
+    RpcError::new(codes::INVALID_PARAMS, crate::problem::detail(error)).with_problem(&problem)
 }
 
 /// Refuses Antigravity as the harness of a project's Coordinator.
