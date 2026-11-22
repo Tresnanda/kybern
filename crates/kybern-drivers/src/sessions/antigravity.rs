@@ -243,7 +243,7 @@ fn workspace(value: &Sql) -> Option<String> {
 
 /// The folder a `file://` URI names. Windows drive letters (`file:///C:/x`, also with an
 /// encoded colon) come back as `C:/x`, and a host other than `localhost` as `//host/x`.
-pub(super) fn uri_path(uri: &str) -> Option<String> {
+pub(crate) fn uri_path(uri: &str) -> Option<String> {
     let uri = uri.trim();
     let Some(rest) = uri.get(..7).filter(|scheme| scheme.eq_ignore_ascii_case("file://")).map(|_| &uri[7..]) else {
         // A bare path, in either style: the summary may name a folder of another OS than this one's.

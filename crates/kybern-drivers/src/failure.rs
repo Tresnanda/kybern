@@ -149,6 +149,7 @@ fn signed_out(kind: ProviderKind, text: &str, lower: &str) -> bool {
         ProviderKind::Antigravity => &[
             "authentication required",
             "authentication failed",
+            "waiting for authentication",
             "not authenticated",
             "unauthenticated",
             "please sign in",
@@ -253,8 +254,9 @@ pub(crate) fn rate_limited_problem(kind: ProviderKind, detail: &str) -> Problem 
 fn rate_limited_problem_at(kind: ProviderKind, detail: &str, now: chrono::DateTime<chrono::Utc>) -> Problem {
     let hint = if kind == ProviderKind::Antigravity
         && let Some(reset_at) = parse_antigravity_quota_reset(detail, now)
+        && let Some(sentence) = format_quota_reset_sentence(reset_at, now)
     {
-        format!("{} Switch to another account or model, or send your message again then.", format_quota_reset_sentence(reset_at, now))
+        format!("{sentence} Switch to another account or model, or send your message again then.")
     } else {
         "Wait for the limit to reset, or switch to another account or model, then send your message again.".to_string()
     };
@@ -337,30 +339,12 @@ fn parse_go_duration_ms(text: &str) -> Option<i64> {
     (parts > 0 && total_ms.is_finite() && total_ms > 0.0).then_some(total_ms.round() as i64)
 }
 
-fn format_quota_reset_sentence(reset_at: chrono::DateTime<chrono::Utc>, now: chrono::DateTime<chrono::Utc>) -> String {
-    let utc = reset_at.format("%Y-%m-%d %H:%M UTC");
-    let delta = (reset_at - now).num_seconds();
-    if delta <= 0 {
-        return format!("Your limit resets at {utc}.");
+fn format_quota_reset_sentence(reset_at: chrono::DateTime<chrono::Utc>, now: chrono::DateTime<chrono::Utc>) -> Option<String> {
+    if reset_at <= now {
+        return None;
     }
-    if delta < 60 {
-        let unit = if delta == 1 { "second" } else { "seconds" };
-        return format!("Your limit resets in {delta} {unit}.");
-    }
-    let minutes = (delta + 30) / 60;
-    if minutes < 60 {
-        let unit = if minutes == 1 { "minute" } else { "minutes" };
-        return format!("Your limit resets in {minutes} {unit} ({utc}).");
-    }
-    let hours = minutes / 60;
-    let rem_minutes = minutes % 60;
-    let hour_unit = if hours == 1 { "hour" } else { "hours" };
-    if rem_minutes == 0 {
-        format!("Your limit resets in {hours} {hour_unit} ({utc}).")
-    } else {
-        let min_unit = if rem_minutes == 1 { "minute" } else { "minutes" };
-        format!("Your limit resets in {hours} {hour_unit} {rem_minutes} {min_unit} ({utc}).")
-    }
+    let fmt = if reset_at.timestamp().rem_euclid(60) == 0 { "%Y-%m-%d %H:%M UTC" } else { "%Y-%m-%d %H:%M:%S UTC" };
+    Some(format!("Your limit resets at {}.", reset_at.format(fmt)))
 }
 
 /// The harness started but never answered, so Kybern stopped it. Nothing is wrong with the account; sending
@@ -541,6 +525,7 @@ mod tests {
         // Real sign-in failures still classify as signed out.
         for real in [
             "Authentication required. Please visit the URL to log in:",
+            "Waiting for authentication (timeout 60s)...",
             "authentication failed or timed out",
             "Error: Please sign in to view available models.",
             "UNAUTHENTICATED (code 401): Request had invalid authentication credentials.",
@@ -569,16 +554,23 @@ mod tests {
         assert_eq!((problem.kind, problem.subject.as_deref()), (ProblemKind::Permission, Some("rate_limit")));
         assert!(problem.retryable);
         let hint = problem.hint.unwrap();
-        assert!(hint.starts_with("Your limit resets in 1 hour (2026-11-22 11:00 UTC)."), "{hint}");
+        assert!(hint.starts_with("Your limit resets at 2026-11-22 11:00 UTC."), "{hint}");
+        assert!(!hint.contains("in 1 hour"), "stored hint must not freeze a relative phrase: {hint}");
 
         // Valid RFC3339 quotaResetTimeStamp is preferred.
         let stamped = "Error 429, Status: RESOURCE_EXHAUSTED, Details: [metadata:map[quotaResetDelay:3600s quotaResetTimeStamp:2026-11-22T12:30:00Z] reason:QUOTA_EXHAUSTED]";
         let stamped_hint = classify_at(ProviderKind::Antigravity, stamped, now).unwrap().hint.unwrap();
-        assert!(stamped_hint.starts_with("Your limit resets in 2 hours 30 minutes (2026-11-22 12:30 UTC)."), "{stamped_hint}");
+        assert!(stamped_hint.starts_with("Your limit resets at 2026-11-22 12:30 UTC."), "{stamped_hint}");
 
         // Plain rate limit falls back to retryDelay.
         let retry_only = "Error 429, Message: Resource has been exhausted, Status: RESOURCE_EXHAUSTED, Details: [map[@type:type.googleapis.com/google.rpc.RetryInfo retryDelay:42s]]";
         let retry_hint = classify_at(ProviderKind::Antigravity, retry_only, now).unwrap().hint.unwrap();
-        assert!(retry_hint.starts_with("Your limit resets in 42 seconds."), "{retry_hint}");
+        assert!(retry_hint.starts_with("Your limit resets at 2026-11-22 10:00:42 UTC."), "{retry_hint}");
+
+        // A reset time that has already passed is omitted.
+        let past = "Error 429, Status: RESOURCE_EXHAUSTED, Details: [metadata:map[quotaResetTimeStamp:2026-11-22T09:59:00Z] reason:QUOTA_EXHAUSTED]";
+        let past_hint = classify_at(ProviderKind::Antigravity, past, now).unwrap().hint.unwrap();
+        assert!(!past_hint.contains("Your limit resets"), "past reset time must be omitted: {past_hint}");
+        assert!(past_hint.starts_with("Wait for the limit to reset"), "{past_hint}");
     }
 }

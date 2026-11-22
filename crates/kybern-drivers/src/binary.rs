@@ -26,17 +26,30 @@ fn resolve_with_home(kind: ProviderKind, override_path: Option<&PathBuf>, home: 
 }
 
 fn user_home() -> Option<PathBuf> {
-    std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).filter(|value| !value.is_empty()).map(PathBuf::from)
+    home_from_env(std::env::var_os("HOME"), std::env::var_os("USERPROFILE"))
 }
 
-/// Expand a leading `~`, `~/…`, or `~\…` against `home`. Leaves `~other/…` untouched.
+fn home_from_env(home: Option<std::ffi::OsString>, userprofile: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    #[cfg(windows)]
+    let ordered = [userprofile, home];
+    #[cfg(not(windows))]
+    let ordered = [home, userprofile];
+    ordered.into_iter().flatten().find(|value| !value.is_empty()).map(PathBuf::from)
+}
+
+/// Expand a leading `~` or `~/…` (and `~\…` on Windows) against `home`.
+/// Leaves `~other/…` untouched.
 pub(crate) fn expand_tilde(path: &Path, home: Option<&Path>) -> PathBuf {
     let Some(home) = home else { return path.to_path_buf() };
     let Some(text) = path.to_str() else { return path.to_path_buf() };
     if text == "~" {
         return home.to_path_buf();
     }
-    if let Some(rest) = text.strip_prefix("~/").or_else(|| text.strip_prefix("~\\")) {
+    if let Some(rest) = text.strip_prefix("~/") {
+        return home.join(rest);
+    }
+    #[cfg(windows)]
+    if let Some(rest) = text.strip_prefix("~\\") {
         return home.join(rest);
     }
     path.to_path_buf()
@@ -45,7 +58,7 @@ pub(crate) fn expand_tilde(path: &Path, home: Option<&Path>) -> PathBuf {
 /// Where a harness's own installer puts its binary when that folder is not on
 /// the daemon's PATH (a desktop app starts with a short PATH).
 fn installed_location(kind: ProviderKind) -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
+    let home = user_home();
     let local_app_data = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
     let candidates = match kind {
         ProviderKind::Antigravity => antigravity_candidates(home.as_deref(), local_app_data.as_deref()),
@@ -357,10 +370,35 @@ mod tests {
         let bin = file(home.path(), &[".local", "bin", "agy"]);
         assert_eq!(resolve_with_home(ProviderKind::Antigravity, Some(&PathBuf::from("~/.local/bin/agy")), Some(home.path())).unwrap(), bin);
         assert_eq!(expand_tilde(Path::new("~"), Some(home.path())), home.path());
-        assert_eq!(expand_tilde(Path::new(r"~\bin\agy.exe"), Some(home.path())), home.path().join(r"bin\agy.exe"));
+        #[cfg(windows)]
+        {
+            let win_bin = file(home.path(), &["bin", "agy.exe"]);
+            assert_eq!(
+                resolve_with_home(ProviderKind::Antigravity, Some(&PathBuf::from(r"~\bin\agy.exe")), Some(home.path())).unwrap(),
+                win_bin
+            );
+        }
+        #[cfg(not(windows))]
+        {
+            // On Unix `\` is a valid filename character, not a path separator.
+            assert_eq!(expand_tilde(Path::new(r"~\bin\agy.exe"), Some(home.path())), PathBuf::from(r"~\bin\agy.exe"));
+        }
         // `~other/...` is a username reference, not the current user's home: leave it alone.
         assert_eq!(expand_tilde(Path::new("~other/bin/agy"), Some(home.path())), PathBuf::from("~other/bin/agy"));
         let missing = resolve_with_home(ProviderKind::Antigravity, Some(&PathBuf::from("~/missing/agy")), Some(home.path())).unwrap_err();
         assert!(matches!(missing, DriverError::BinaryNotFound(ref path) if path == &home.path().join("missing/agy").display().to_string()));
+    }
+
+    #[test]
+    fn home_from_env_prefers_platform_variable_and_skips_empty() {
+        let home = Some(std::ffi::OsString::from("/home/unix"));
+        let profile = Some(std::ffi::OsString::from(r"C:\Users\win"));
+        #[cfg(windows)]
+        assert_eq!(home_from_env(home.clone(), profile.clone()), Some(PathBuf::from(r"C:\Users\win")));
+        #[cfg(not(windows))]
+        assert_eq!(home_from_env(home.clone(), profile.clone()), Some(PathBuf::from("/home/unix")));
+        assert_eq!(home_from_env(Some(std::ffi::OsString::new()), profile.clone()), Some(PathBuf::from(r"C:\Users\win")));
+        assert_eq!(home_from_env(home, Some(std::ffi::OsString::new())), Some(PathBuf::from("/home/unix")));
+        assert_eq!(home_from_env(None, None), None);
     }
 }

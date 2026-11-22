@@ -382,6 +382,14 @@ function turnFailureView(failure: TurnFailure, context: TurnFailureContext): Pro
       secondary: retry("Check again"),
     })
   }
+  if (problem.kind === "not_found" && problem.subject === tool) {
+    return view({
+      title: `${label} couldn't use this model`,
+      body: "Choose another model, then send your message again.",
+      action: { id: "choose_model", label: "Choose another model", params: { provider: tool } },
+      retryable: false,
+    })
+  }
   const generic = describeProblem({ message: failure.error, data: { problem } }, { action: "send your message", ...(context.machine ? { machine: context.machine } : {}) })
   // A harness's own failure text is technical: the headline says what happened, the text stays in Details.
   return generic.kind === "internal" ? { ...generic, title: `${label} stopped before it could answer`, body: "Send your message again. If it keeps happening, copy the details and report them." } : generic

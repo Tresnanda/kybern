@@ -414,6 +414,10 @@ fn failed(raw: &str, reached_model: bool) -> DriverEvent {
                 Problem::new(ProblemKind::NotFound, raw)
                     .with_subject("antigravity")
                     .with_copy("Antigravity couldn't use this model", "Choose another model, then send your message again.")
+                    .with_action(
+                        ProblemAction::new("choose_model", "Choose another model")
+                            .with_params(serde_json::json!({ "provider": "antigravity" })),
+                    )
             });
         }
         None

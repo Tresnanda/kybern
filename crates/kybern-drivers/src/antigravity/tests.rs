@@ -270,6 +270,12 @@ fn a_failed_turn_with_an_error_step_still_fails() {
     let [DriverEvent::TurnFailed { error, problem }] = &events[..] else { panic!("{events:?}") };
     assert!(error.contains("NOT_FOUND"), "{error}");
     let problem = problem.as_ref().expect("404 problem");
+    assert_eq!((problem.kind, problem.subject.as_deref()), (kybern_protocol::rpc::ProblemKind::NotFound, Some("antigravity")));
+    assert_eq!(problem.title.as_deref(), Some("Antigravity couldn't use this model"));
+    assert_eq!(problem.hint.as_deref(), Some("Choose another model, then send your message again."));
+    let action = problem.action.as_ref().expect("model-picker action");
+    assert_eq!((action.id.as_str(), action.label.as_str()), ("choose_model", "Choose another model"));
+    assert_eq!(action.params, Some(json!({ "provider": "antigravity" })));
     assert!(!problem.retryable, "a 404 before reaching the model is not retryable: {problem:?}");
 
     // A 404 after the model already answered in this turn is a transient edge error and retryable.
@@ -287,8 +293,11 @@ fn a_failed_turn_with_an_error_step_still_fails() {
     let events = mid_turn.finish(Some(1), None, false);
     let [DriverEvent::TurnFailed { problem, .. }] = &events[..] else { panic!("{events:?}") };
     let problem = problem.as_ref().expect("mid-turn 404 problem");
+    assert_eq!((problem.kind, problem.subject.as_deref()), (kybern_protocol::rpc::ProblemKind::Internal, Some("antigravity")));
+    assert_eq!(problem.title.as_deref(), Some("Antigravity hit a temporary error"));
+    assert_eq!(problem.hint.as_deref(), Some("Send your message again to continue."));
     assert!(problem.retryable, "a mid-turn 404 is retryable: {problem:?}");
-    assert_eq!(problem.action.as_ref().map(|a| a.id.as_str()), Some("retry"));
+    assert_eq!(problem.action.as_ref().map(|a| (a.id.as_str(), a.label.as_str())), Some(("retry", "Try again")));
 }
 
 #[test]
@@ -675,6 +684,74 @@ fn agy_is_found_where_its_installer_puts_it() {
     assert_eq!(candidates[1], local.join("agy/bin/agy.exe"));
 }
 
+#[test]
+fn env_home_prefers_platform_home_variable_and_skips_empty() {
+    let both = BTreeMap::from([("HOME".into(), "/home/unix".into()), ("USERPROFILE".into(), r"C:\Users\win".into())]);
+    #[cfg(windows)]
+    assert_eq!(env_home_with(&both, |_| None), Some(PathBuf::from(r"C:\Users\win")));
+    #[cfg(not(windows))]
+    assert_eq!(env_home_with(&both, |_| None), Some(PathBuf::from("/home/unix")));
+    let empty_primary = BTreeMap::from([("HOME".into(), String::new()), ("USERPROFILE".into(), r"C:\Users\win".into())]);
+    assert_eq!(env_home_with(&empty_primary, |_| None), Some(PathBuf::from(r"C:\Users\win")));
+    assert_eq!(
+        env_home_with(&BTreeMap::new(), |key| (key == "USERPROFILE").then(|| r"C:\Users\fallback".into())),
+        Some(PathBuf::from(r"C:\Users\fallback"))
+    );
+}
+
+#[test]
+fn one_shot_cleanup_only_deletes_summary_rows_for_its_scratch_workspace() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let scratch_work = root.path().join("scratch/work");
+    std::fs::create_dir_all(&scratch_work).unwrap();
+    let agy_dir = home.join(".gemini/antigravity-cli");
+    std::fs::create_dir_all(agy_dir.join("conversations")).unwrap();
+    std::fs::create_dir_all(agy_dir.join("brain/conv-scratch")).unwrap();
+    std::fs::create_dir_all(agy_dir.join("brain/conv-real")).unwrap();
+    std::fs::write(agy_dir.join("conversations/conv-scratch.db"), "scratch").unwrap();
+    std::fs::write(agy_dir.join("conversations/conv-real.db"), "real").unwrap();
+
+    let slash = scratch_work.display().to_string().replace('\\', "/");
+    let scratch_uri = if slash.starts_with('/') { format!("file://{slash}") } else { format!("file:///{slash}") };
+    let db = rusqlite::Connection::open(agy_dir.join("conversation_summaries.db")).unwrap();
+    db.execute_batch(
+        "CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT, preview TEXT, last_modified_time INTEGER, workspace_uris TEXT, parent_conversation_id TEXT);",
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO conversation_summaries VALUES ('conv-scratch', 'Title', '', 1790000100, ?1, NULL)",
+        [serde_json::to_string(&vec![scratch_uri]).unwrap()],
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO conversation_summaries VALUES ('conv-real', 'Real', '', 1790000200, '[\"file:///work/real-project\"]', NULL)",
+        [],
+    )
+    .unwrap();
+    drop(db);
+
+    // Matching scratch workspace: both the summary row and files are removed.
+    cleanup_one_shot_conversation(&home, "conv-scratch", &scratch_work);
+    assert!(!agy_dir.join("conversations/conv-scratch.db").exists());
+    assert!(!agy_dir.join("brain/conv-scratch").exists());
+
+    // Mismatched workspace: neither the summary row nor the files are touched.
+    cleanup_one_shot_conversation(&home, "conv-real", &scratch_work);
+    assert!(agy_dir.join("conversations/conv-real.db").exists());
+    assert!(agy_dir.join("brain/conv-real").exists());
+
+    let db = rusqlite::Connection::open(agy_dir.join("conversation_summaries.db")).unwrap();
+    let remaining: Vec<String> = db
+        .prepare("SELECT conversation_id FROM conversation_summaries ORDER BY conversation_id")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(std::result::Result::unwrap)
+        .collect();
+    assert_eq!(remaining, ["conv-real"]);
+}
+
 #[cfg(unix)]
 mod process {
     use super::*;
@@ -832,13 +909,7 @@ printf '%s\n\n' '{"event":"result","result":{"conversation_id":"conv-1","status"
             matches!(ended.last(), Some(DriverEvent::TurnFailed { error, .. }) if error.contains("Settings → Agents → Antigravity")),
             "{ended:?}"
         );
-        // Wait until the session frees itself, then send again.
-        for _ in 0..100 {
-            if session.send_message("m2", &UserMessage::text("again")).await.is_ok() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        session.send_message("m2", &UserMessage::text("again")).await.unwrap();
         next_turn_end(&mut events).await;
         let stdin = std::fs::read_to_string(root.path().join("stdin.log")).unwrap();
         assert_eq!(stdin.matches("GUIDE").count(), 2, "{stdin}");
@@ -975,11 +1046,6 @@ printf '%s\n\n' '{{"event":"result","result":{{"conversation_id":"conv-temp","st
             agy = agy_dir.display()
         );
         let binary = fake_agy(root.path(), &script);
-        // Also insert the summary row as `agy` would.
-        let db = rusqlite::Connection::open(agy_dir.join("conversation_summaries.db")).unwrap();
-        db.execute("INSERT INTO conversation_summaries VALUES ('conv-temp', 'Title', '', 1790000100, '[\"file:///work\"]', NULL)", [])
-            .unwrap();
-        drop(db);
 
         let env = BTreeMap::from([("HOME".to_string(), home.display().to_string())]);
         let answer = AntigravityDriver::default().one_shot(root.path(), "title please", Some(&binary), &env).await.unwrap();
@@ -1019,12 +1085,7 @@ printf '%s\n\n' '{{"event":"result","result":{{"conversation_id":"conv-fresh","s
         session.send_message("m1", &UserMessage::text("first")).await.unwrap();
         let failed = next_turn_end(&mut events).await;
         assert!(matches!(failed.last(), Some(DriverEvent::TurnFailed { .. })), "{failed:?}");
-        for _ in 0..100 {
-            if session.send_message("m2", &UserMessage::text("retry")).await.is_ok() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        session.send_message("m2", &UserMessage::text("retry")).await.unwrap();
         let recovered = next_turn_end(&mut events).await;
         assert!(matches!(recovered.last(), Some(DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. })), "{recovered:?}");
         let args = std::fs::read_to_string(root.path().join("args.log")).unwrap();

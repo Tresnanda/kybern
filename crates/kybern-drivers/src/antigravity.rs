@@ -373,7 +373,8 @@ impl AgentDriver for AntigravityDriver {
         if let Some(conversation_id) = mapper.conversation().map(str::to_string)
             && let Some(home) = env_home(env)
         {
-            cleanup_one_shot_conversation(&home, &conversation_id);
+            let scratch_dir = work_dir.clone();
+            let _ = tokio::task::spawn_blocking(move || cleanup_one_shot_conversation(&home, &conversation_id, &scratch_dir)).await;
         }
         match result {
             Ok(result) => result,
@@ -404,12 +405,8 @@ impl AgentDriver for AntigravityDriver {
             (None, _) | (Some(_), true) => config.native_tool_bridge.as_ref().and_then(|bridge| bridge.provider_instructions()),
             (Some(_), false) => None,
         };
-        let home = ["HOME", "USERPROFILE"]
-            .iter()
-            .find_map(|key| config.env.get(*key).cloned().or_else(|| std::env::var(key).ok()))
-            .filter(|home| !home.is_empty())
-            .map(PathBuf::from);
         let mut env: BTreeMap<String, String> = config.env.into_iter().collect();
+        let home = env_home(&env);
         // The bridge process `agy` starts inherits these; without them it serves no tools.
         for key in [BRIDGE_URL, BRIDGE_AUTHORIZATION] {
             env.remove(key);
@@ -458,11 +455,19 @@ impl Scratch {
     }
 }
 
+#[cfg(windows)]
+const HOME_KEYS: [&str; 2] = ["USERPROFILE", "HOME"];
+#[cfg(not(windows))]
+const HOME_KEYS: [&str; 2] = ["HOME", "USERPROFILE"];
+
 fn env_home(env: &BTreeMap<String, String>) -> Option<PathBuf> {
-    ["HOME", "USERPROFILE"]
+    env_home_with(env, |key| std::env::var(key).ok())
+}
+
+fn env_home_with(env: &BTreeMap<String, String>, host: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    HOME_KEYS
         .iter()
-        .find_map(|key| env.get(*key).cloned().or_else(|| std::env::var(key).ok()))
-        .filter(|home| !home.is_empty())
+        .find_map(|key| env.get(*key).cloned().filter(|home| !home.is_empty()).or_else(|| host(key).filter(|home| !home.is_empty())))
         .map(PathBuf::from)
 }
 
@@ -470,9 +475,24 @@ fn valid_conversation_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 128 && id.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
+fn summary_workspace_matches(raw: &str, expected: &Path) -> bool {
+    let expected_canon = std::fs::canonicalize(expected).unwrap_or_else(|_| expected.to_path_buf());
+    let uris: Vec<String> = match serde_json::from_str::<Value>(raw) {
+        Ok(Value::Array(items)) => items.into_iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
+        Ok(Value::String(uri)) => vec![uri],
+        _ => vec![raw.to_string()],
+    };
+    uris.into_iter().filter_map(|uri| crate::sessions::antigravity::uri_path(&uri)).any(|path| {
+        let candidate = PathBuf::from(&path);
+        let candidate_canon = std::fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
+        candidate == expected || candidate_canon == expected_canon
+    })
+}
+
 /// Remove the files and summary row `agy` wrote for a temporary `one_shot` conversation.
-/// Best-effort: never fails the caller when a file is already gone or locked.
-pub(crate) fn cleanup_one_shot_conversation(home: &Path, conversation_id: &str) {
+/// Best-effort: never fails the caller when a file is already gone or locked, and refuses
+/// to delete a summary row (or its files) whose workspace is not `scratch_work_dir`.
+pub(crate) fn cleanup_one_shot_conversation(home: &Path, conversation_id: &str, scratch_work_dir: &Path) {
     if !valid_conversation_id(conversation_id) {
         return;
     }
@@ -480,13 +500,6 @@ pub(crate) fn cleanup_one_shot_conversation(home: &Path, conversation_id: &str) 
     if !root.is_dir() {
         return;
     }
-    let conversations = root.join("conversations");
-    for suffix in [".db", ".db-wal", ".db-shm", ".db-journal", ".meta"] {
-        let _ = std::fs::remove_file(conversations.join(format!("{conversation_id}{suffix}")));
-    }
-    let _ = std::fs::remove_dir_all(root.join("brain").join(conversation_id));
-    let _ = std::fs::remove_file(root.join("annotations").join(format!("{conversation_id}.pbtxt")));
-    let _ = std::fs::remove_file(root.join("presence").join(format!("{conversation_id}.lock")));
     let summaries = root.join("conversation_summaries.db");
     if summaries.is_file()
         && let Ok(conn) = rusqlite::Connection::open_with_flags(
@@ -495,8 +508,32 @@ pub(crate) fn cleanup_one_shot_conversation(home: &Path, conversation_id: &str) 
         )
     {
         let _ = conn.busy_timeout(Duration::from_millis(500));
-        let _ = conn.execute("DELETE FROM conversation_summaries WHERE conversation_id = ?1", [conversation_id]);
+        match conn.query_row("SELECT workspace_uris FROM conversation_summaries WHERE conversation_id = ?1", [conversation_id], |row| {
+            row.get::<_, rusqlite::types::Value>(0)
+        }) {
+            Ok(rusqlite::types::Value::Text(raw)) if summary_workspace_matches(&raw, scratch_work_dir) => {
+                let _ = conn.execute("DELETE FROM conversation_summaries WHERE conversation_id = ?1", [conversation_id]);
+            }
+            Ok(rusqlite::types::Value::Blob(bytes))
+                if std::str::from_utf8(&bytes).is_ok_and(|raw| summary_workspace_matches(raw, scratch_work_dir)) =>
+            {
+                let _ = conn.execute("DELETE FROM conversation_summaries WHERE conversation_id = ?1", [conversation_id]);
+            }
+            // A summary row exists for a different workspace (or without a verifiable workspace):
+            // leave both the row and its conversation files untouched.
+            Ok(_) => return,
+            // No summary row was written yet (e.g. timed out early) or schema differs: keep going
+            // for any temporary files without deleting any summary row.
+            Err(rusqlite::Error::QueryReturnedNoRows) | Err(_) => {}
+        }
     }
+    let conversations = root.join("conversations");
+    for suffix in [".db", ".db-wal", ".db-shm", ".db-journal", ".meta"] {
+        let _ = std::fs::remove_file(conversations.join(format!("{conversation_id}{suffix}")));
+    }
+    let _ = std::fs::remove_dir_all(root.join("brain").join(conversation_id));
+    let _ = std::fs::remove_file(root.join("annotations").join(format!("{conversation_id}.pbtxt")));
+    let _ = std::fs::remove_file(root.join("presence").join(format!("{conversation_id}.lock")));
 }
 
 impl Drop for Scratch {
@@ -742,13 +779,9 @@ async fn run_turn(
     let started = mapper.saw_init();
     let events = mapper.finish(code, last_stderr.as_deref(), was_interrupted);
     let poisoned = mapper.conversation_poisoned();
-    for event in events {
-        if run.tx.send(event).await.is_err() {
-            return;
-        }
-    }
-    let Some(state) = state.upgrade() else { return };
-    let turn = {
+    // Update session state and release the turn slot before delivering the terminal event so an
+    // immediate follow-up `send_message` sees the freed slot and updated conversation id.
+    let turn = if let Some(state) = state.upgrade() {
         let mut state = state.lock().await;
         if poisoned {
             // The saved conversation's thinking block has a bad/missing signature:
@@ -767,7 +800,14 @@ async fn run_turn(
             }
         }
         if state.turn.as_ref().is_some_and(|turn| turn.id == id) { state.turn.take() } else { None }
+    } else {
+        None
     };
+    for event in events {
+        if run.tx.send(event).await.is_err() {
+            break;
+        }
+    }
     // Dropping the turn stops this task, so it is the last thing done.
     drop(turn);
 }
