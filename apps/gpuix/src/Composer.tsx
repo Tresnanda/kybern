@@ -28,7 +28,7 @@ import { load as loadEnvironmentPreference, save as saveEnvironmentPreference } 
 // `ThreadComposer` and `DraftComposer` wire it the way `views/Thread.tsx` and
 // `views/Draft.tsx` do; the pickers and data live in `src/composer/`.
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { formatEffort, PROVIDER_LABEL } from '@/lib/format'
 import { createComposerMentionReference, nextAttachmentLabel, type AttachmentReference } from '../../../packages/kybern-client/src/composerTokens.ts'
 import { findModel, modelQualifier, selectedVariant, selectorEffort, triggerTraits, variantSelector } from '../../../packages/kybern-client/src/models.ts'
@@ -63,7 +63,7 @@ import { keyboardAnswer } from './requests/Panel.tsx'
 import { isUserInput, connectorApproval } from '../../../packages/kybern-client/src/userInput.ts'
 import { ANSWER_COPY } from '../../../packages/kybern-client/src/visualAnswer.ts'
 import { isVisualAnswerCard, pendingVisualAnswer, replyToVisual } from './requests/VisualAnswer.tsx'
-import { setThreadComposerFocus } from './composer/focus.ts'
+import { registerThreadModelPicker, setThreadComposerFocus } from './composer/focus.ts'
 import { markLaunchEnter } from './draft/store.ts'
 import { handleCardKey, isRowCard } from './requests/actions.ts'
 import { cardKeyHandler, focusCard, setComposerEmpty } from './requests/ui.ts'
@@ -648,6 +648,10 @@ export function ComposerView(input: ComposerViewProps) {
   const submitLatest = useRef<() => Promise<void>>(async () => {})
   const [promptMode, setPromptMode] = useState<'queue' | 'steer'>('queue')
   const [changingModel, setChangingModel] = useState(false)
+  const registerModelPicker = useCallback(
+    (open: () => void) => (props.currentThreadId ? registerThreadModelPicker(props.currentThreadId, open) : undefined),
+    [props.currentThreadId],
+  )
   const editor = useRef<PublicInstance | null>(null)
   const tokenEditor = useRef<TokenTextareaHandle>(null)
   const card = useRef<PublicInstance | null>(null)
@@ -1188,6 +1192,7 @@ export function ComposerView(input: ComposerViewProps) {
                 accountInstance={provider.instance}
                 accountFollowsDefaults={props.accountFollowsDefaults}
                 onAccountChange={props.onAccountChange ? (instance) => busyRun(() => props.onAccountChange!(instance)) : undefined}
+                onRegisterOpen={props.currentThreadId ? registerModelPicker : undefined}
                 onOpenChange={(open) => {
                   // Self-heal a stale catalog without re-probing on every open.
                   if (!open || !canReload || Date.now() - lastModelRefresh.current < 60_000) return

@@ -4,6 +4,7 @@
 import { useMemo } from 'react'
 import { describeTurnFailure } from '../../../../packages/kybern-client/src/problems.ts'
 import type { ContentPart, Problem, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
+import { openThreadModelPicker } from '../composer/focus.ts'
 import { ProblemRow } from '../kit/Problem.tsx'
 import { describe } from '../problems/describe.ts'
 import { problemProps } from '../problems/props.ts'
@@ -15,12 +16,23 @@ function resend(threadId: ThreadId, parts: ContentPart[]) {
 }
 
 export function TurnProblem({ threadId, error, problem, parts, projectId }: { threadId: ThreadId; error: string; problem: Problem; parts?: ContentPart[]; projectId?: string }) {
-  const provider = useApp((s) => (s.open.thread?.id === threadId ? s.open.thread.provider : undefined))
+  const thread = useApp((s) => (s.open.thread?.id === threadId ? s.open.thread : undefined))
+  const provider = thread?.provider
+  const readOnly = !!thread?.subagent
   const props = useMemo(() => {
     if (!provider) return null
     const view = describeTurnFailure({ error, problem }, { provider: provider.kind, instance: provider.instance })
-    return view ? problemProps(view, { retry: parts?.length ? () => resend(threadId, parts) : undefined }, 'turn-problem') : null
-  }, [provider?.kind, provider?.instance, error, problem, threadId, parts])
+    return view
+      ? problemProps(
+          view,
+          {
+            retry: parts?.length ? () => resend(threadId, parts) : undefined,
+            chooseModel: readOnly ? undefined : () => { openThreadModelPicker(threadId) },
+          },
+          'turn-problem',
+        )
+      : null
+  }, [provider?.kind, provider?.instance, readOnly, error, problem, threadId, parts])
   return props ? <div style={{ marginTop: 8 }}><ProblemRow {...props} /></div> : <TurnTextProblem error={error} projectId={projectId} />
 }
 

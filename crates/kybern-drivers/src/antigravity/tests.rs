@@ -703,16 +703,28 @@ fn env_home_prefers_platform_home_variable_and_skips_empty() {
 fn one_shot_cleanup_only_deletes_summary_rows_for_its_scratch_workspace() {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("home");
-    let scratch_work = root.path().join("scratch/work");
-    std::fs::create_dir_all(&scratch_work).unwrap();
+    let real_scratch = root.path().join("real-scratch/work");
+    std::fs::create_dir_all(&real_scratch).unwrap();
+    #[cfg(unix)]
+    let scratch_work = {
+        let link = root.path().join("link-scratch");
+        std::os::unix::fs::symlink(root.path().join("real-scratch"), &link).unwrap();
+        link.join("work")
+    };
+    #[cfg(not(unix))]
+    let scratch_work = real_scratch.clone();
+    let canonical_work = std::fs::canonicalize(&real_scratch).unwrap();
+    #[cfg(unix)]
+    assert_ne!(scratch_work, canonical_work, "test must compare a non-canonical path against a canonical file:// URI");
+
     let agy_dir = home.join(".gemini/antigravity-cli");
     std::fs::create_dir_all(agy_dir.join("conversations")).unwrap();
-    std::fs::create_dir_all(agy_dir.join("brain/conv-scratch")).unwrap();
-    std::fs::create_dir_all(agy_dir.join("brain/conv-real")).unwrap();
-    std::fs::write(agy_dir.join("conversations/conv-scratch.db"), "scratch").unwrap();
-    std::fs::write(agy_dir.join("conversations/conv-real.db"), "real").unwrap();
+    for id in ["conv-scratch", "conv-null", "conv-empty", "conv-real"] {
+        std::fs::create_dir_all(agy_dir.join("brain").join(id)).unwrap();
+        std::fs::write(agy_dir.join(format!("conversations/{id}.db")), id).unwrap();
+    }
 
-    let slash = scratch_work.display().to_string().replace('\\', "/");
+    let slash = canonical_work.display().to_string().replace('\\', "/");
     let scratch_uri = if slash.starts_with('/') { format!("file://{slash}") } else { format!("file:///{slash}") };
     let db = rusqlite::Connection::open(agy_dir.join("conversation_summaries.db")).unwrap();
     db.execute_batch(
@@ -724,6 +736,8 @@ fn one_shot_cleanup_only_deletes_summary_rows_for_its_scratch_workspace() {
         [serde_json::to_string(&vec![scratch_uri]).unwrap()],
     )
     .unwrap();
+    db.execute("INSERT INTO conversation_summaries VALUES ('conv-null', 'No workspace', '', 1790000101, NULL, NULL)", []).unwrap();
+    db.execute("INSERT INTO conversation_summaries VALUES ('conv-empty', 'Empty workspace', '', 1790000102, '[]', NULL)", []).unwrap();
     db.execute(
         "INSERT INTO conversation_summaries VALUES ('conv-real', 'Real', '', 1790000200, '[\"file:///work/real-project\"]', NULL)",
         [],
@@ -731,10 +745,13 @@ fn one_shot_cleanup_only_deletes_summary_rows_for_its_scratch_workspace() {
     .unwrap();
     drop(db);
 
-    // Matching scratch workspace: both the summary row and files are removed.
-    cleanup_one_shot_conversation(&home, "conv-scratch", &scratch_work);
-    assert!(!agy_dir.join("conversations/conv-scratch.db").exists());
-    assert!(!agy_dir.join("brain/conv-scratch").exists());
+    // Matching scratch workspace (via canonical URI vs symlinked path), NULL workspace, and `[]`:
+    // all have their summary rows and files removed.
+    for id in ["conv-scratch", "conv-null", "conv-empty"] {
+        cleanup_one_shot_conversation(&home, id, &scratch_work);
+        assert!(!agy_dir.join(format!("conversations/{id}.db")).exists(), "{id} db leaked");
+        assert!(!agy_dir.join("brain").join(id).exists(), "{id} brain leaked");
+    }
 
     // Mismatched workspace: neither the summary row nor the files are touched.
     cleanup_one_shot_conversation(&home, "conv-real", &scratch_work);
@@ -1033,7 +1050,8 @@ printf '%s\n\n' '{"event":"result","result":{"conversation_id":"conv-1","status"
         .unwrap();
         drop(db);
 
-        // Fake `agy` writes all the artifacts a real `-p=` run creates for `conv-temp`.
+        // Fake `agy` writes all the artifacts a real `-p=` run creates for `conv-temp`,
+        // including a summary row whose workspace is `pwd -P`.
         let script = format!(
             r#"mkdir -p "{agy}/brain/conv-temp/.system_generated/logs"
 printf '{{"step_index":0,"type":"USER_INPUT","content":"title"}}\n' > "{agy}/brain/conv-temp/.system_generated/logs/transcript.jsonl"
@@ -1041,6 +1059,12 @@ printf 'x' > "{agy}/conversations/conv-temp.db"
 printf 'x' > "{agy}/conversations/conv-temp.db-wal"
 printf 'x' > "{agy}/annotations/conv-temp.pbtxt"
 printf 'x' > "{agy}/presence/conv-temp.lock"
+ws=$(pwd -P)
+python3 -c 'import json, sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+conn.execute("INSERT INTO conversation_summaries VALUES (?, ?, ?, ?, ?, NULL)", ("conv-temp", "Title", "", 1790000100, json.dumps(["file://" + sys.argv[2]])))
+conn.commit()
+conn.close()' "{agy}/conversation_summaries.db" "$ws"
 printf '%s\n\n' '{{"event":"init","conversation_id":"conv-temp","init":{{"model":"gemini-3.8-flash-low"}}}}'
 printf '%s\n\n' '{{"event":"result","result":{{"conversation_id":"conv-temp","status":"SUCCESS","response":"Short title"}}}}'"#,
             agy = agy_dir.display()
@@ -1055,12 +1079,65 @@ printf '%s\n\n' '{{"event":"result","result":{{"conversation_id":"conv-temp","st
         assert!(!agy_dir.join("brain/conv-temp").exists());
         assert!(!agy_dir.join("annotations/conv-temp.pbtxt").exists());
         assert!(!agy_dir.join("presence/conv-temp.lock").exists());
-        // The real conversation stays intact and is the only one listed by the session scanner.
+        // The real conversation stays intact and is the only one listed in SQLite and the session scanner.
+        let db = rusqlite::Connection::open(agy_dir.join("conversation_summaries.db")).unwrap();
+        let rows: Vec<String> = db
+            .prepare("SELECT conversation_id FROM conversation_summaries ORDER BY conversation_id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(std::result::Result::unwrap)
+            .collect();
+        assert_eq!(rows, ["keep-conv"]);
+        drop(db);
         assert!(agy_dir.join("conversations/keep-conv.db").exists());
         assert!(keep_logs.join("transcript.jsonl").exists());
         let listed = crate::sessions::list(ProviderKind::Antigravity, &ProbeContext { env, ..Default::default() }, None, "").await.unwrap();
         let ids: Vec<&str> = listed.sessions.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, ["keep-conv"]);
+    }
+
+    #[tokio::test]
+    async fn one_shot_cleans_up_summary_row_with_no_workspace() {
+        for (conv_id, workspace_sql) in [("conv-null-ws", "NULL"), ("conv-empty-ws", "'[]'")] {
+            let root = tempfile::tempdir().unwrap();
+            let home = root.path().join("home");
+            let agy_dir = home.join(".gemini/antigravity-cli");
+            std::fs::create_dir_all(agy_dir.join("conversations")).unwrap();
+            let db = rusqlite::Connection::open(agy_dir.join("conversation_summaries.db")).unwrap();
+            db.execute_batch(
+                "CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT, preview TEXT, last_modified_time INTEGER, workspace_uris TEXT, parent_conversation_id TEXT);",
+            )
+            .unwrap();
+            drop(db);
+
+            let script = format!(
+                r#"mkdir -p "{agy}/brain/{id}/.system_generated/logs"
+printf '{{"step_index":0,"type":"USER_INPUT","content":"title"}}\n' > "{agy}/brain/{id}/.system_generated/logs/transcript.jsonl"
+printf 'x' > "{agy}/conversations/{id}.db"
+python3 -c 'import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+conn.execute(f"INSERT INTO conversation_summaries VALUES (?, ?, ?, ?, {ws}, NULL)", (sys.argv[2], "Title", "", 1790000100))
+conn.commit()
+conn.close()' "{agy}/conversation_summaries.db" "{id}"
+printf '%s\n\n' '{{"event":"init","conversation_id":"{id}","init":{{"model":"gemini-3.8-flash-low"}}}}'
+printf '%s\n\n' '{{"event":"result","result":{{"conversation_id":"{id}","status":"SUCCESS","response":"Done"}}}}'"#,
+                agy = agy_dir.display(),
+                id = conv_id,
+                ws = workspace_sql,
+            );
+            let binary = fake_agy(root.path(), &script);
+            let env = BTreeMap::from([("HOME".to_string(), home.display().to_string())]);
+            let answer = AntigravityDriver::default().one_shot(root.path(), "title", Some(&binary), &env).await.unwrap();
+            assert_eq!(answer, "Done");
+            assert!(!agy_dir.join(format!("conversations/{conv_id}.db")).exists(), "{conv_id} db leaked");
+            assert!(!agy_dir.join("brain").join(conv_id).exists(), "{conv_id} brain leaked");
+            let db = rusqlite::Connection::open(agy_dir.join("conversation_summaries.db")).unwrap();
+            let count: i64 = db
+                .query_row("SELECT COUNT(*) FROM conversation_summaries WHERE conversation_id = ?1", [conv_id], |row| row.get(0))
+                .unwrap();
+            assert_eq!(count, 0, "{conv_id} summary row leaked");
+        }
     }
 
     #[tokio::test]

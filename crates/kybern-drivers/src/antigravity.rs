@@ -475,23 +475,62 @@ fn valid_conversation_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 128 && id.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
-fn summary_workspace_matches(raw: &str, expected: &Path) -> bool {
-    let expected_canon = std::fs::canonicalize(expected).unwrap_or_else(|_| expected.to_path_buf());
-    let uris: Vec<String> = match serde_json::from_str::<Value>(raw) {
-        Ok(Value::Array(items)) => items.into_iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
-        Ok(Value::String(uri)) => vec![uri],
-        _ => vec![raw.to_string()],
+enum WorkspaceOwnership {
+    /// No workspace URI was recorded on the summary row (`NULL`, empty, or `[]`).
+    Absent,
+    /// At least one recorded workspace URI points at `expected`.
+    Matches,
+    /// One or more workspace URIs are present and none match `expected`.
+    Different,
+}
+
+fn summary_workspace_ownership_text(raw: &str, expected: &Path) -> WorkspaceOwnership {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return WorkspaceOwnership::Absent;
+    }
+    let uris: Vec<String> = match serde_json::from_str::<Value>(trimmed) {
+        Ok(Value::Null) => return WorkspaceOwnership::Absent,
+        Ok(Value::Array(items)) => {
+            items.into_iter().filter_map(|v| v.as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)).collect()
+        }
+        Ok(Value::String(uri)) => {
+            let uri = uri.trim();
+            if uri.is_empty() {
+                return WorkspaceOwnership::Absent;
+            }
+            vec![uri.to_string()]
+        }
+        _ => vec![trimmed.to_string()],
     };
-    uris.into_iter().filter_map(|uri| crate::sessions::antigravity::uri_path(&uri)).any(|path| {
+    if uris.is_empty() {
+        return WorkspaceOwnership::Absent;
+    }
+    let expected_canon = std::fs::canonicalize(expected).unwrap_or_else(|_| expected.to_path_buf());
+    let matches = uris.into_iter().filter_map(|uri| crate::sessions::antigravity::uri_path(&uri)).any(|path| {
         let candidate = PathBuf::from(&path);
         let candidate_canon = std::fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
         candidate == expected || candidate_canon == expected_canon
-    })
+    });
+    if matches { WorkspaceOwnership::Matches } else { WorkspaceOwnership::Different }
+}
+
+fn summary_workspace_ownership(value: &rusqlite::types::Value, expected: &Path) -> WorkspaceOwnership {
+    match value {
+        rusqlite::types::Value::Null => WorkspaceOwnership::Absent,
+        rusqlite::types::Value::Text(raw) => summary_workspace_ownership_text(raw, expected),
+        rusqlite::types::Value::Blob(bytes) => match std::str::from_utf8(bytes) {
+            Ok(raw) => summary_workspace_ownership_text(raw, expected),
+            Err(_) => WorkspaceOwnership::Different,
+        },
+        _ => WorkspaceOwnership::Different,
+    }
 }
 
 /// Remove the files and summary row `agy` wrote for a temporary `one_shot` conversation.
 /// Best-effort: never fails the caller when a file is already gone or locked, and refuses
-/// to delete a summary row (or its files) whose workspace is not `scratch_work_dir`.
+/// to delete a summary row (or its files) when a workspace is present and doesn't match
+/// `scratch_work_dir`.
 pub(crate) fn cleanup_one_shot_conversation(home: &Path, conversation_id: &str, scratch_work_dir: &Path) {
     if !valid_conversation_id(conversation_id) {
         return;
@@ -508,23 +547,20 @@ pub(crate) fn cleanup_one_shot_conversation(home: &Path, conversation_id: &str, 
         )
     {
         let _ = conn.busy_timeout(Duration::from_millis(500));
-        match conn.query_row("SELECT workspace_uris FROM conversation_summaries WHERE conversation_id = ?1", [conversation_id], |row| {
-            row.get::<_, rusqlite::types::Value>(0)
-        }) {
-            Ok(rusqlite::types::Value::Text(raw)) if summary_workspace_matches(&raw, scratch_work_dir) => {
-                let _ = conn.execute("DELETE FROM conversation_summaries WHERE conversation_id = ?1", [conversation_id]);
+        // When no summary row was written yet (e.g. timed out early) or schema differs,
+        // keep going for any temporary files without deleting any summary row.
+        if let Ok(value) =
+            conn.query_row("SELECT workspace_uris FROM conversation_summaries WHERE conversation_id = ?1", [conversation_id], |row| {
+                row.get::<_, rusqlite::types::Value>(0)
+            })
+        {
+            match summary_workspace_ownership(&value, scratch_work_dir) {
+                WorkspaceOwnership::Matches | WorkspaceOwnership::Absent => {
+                    let _ = conn.execute("DELETE FROM conversation_summaries WHERE conversation_id = ?1", [conversation_id]);
+                }
+                // A summary row exists for a different workspace: leave both the row and its files untouched.
+                WorkspaceOwnership::Different => return,
             }
-            Ok(rusqlite::types::Value::Blob(bytes))
-                if std::str::from_utf8(&bytes).is_ok_and(|raw| summary_workspace_matches(raw, scratch_work_dir)) =>
-            {
-                let _ = conn.execute("DELETE FROM conversation_summaries WHERE conversation_id = ?1", [conversation_id]);
-            }
-            // A summary row exists for a different workspace (or without a verifiable workspace):
-            // leave both the row and its conversation files untouched.
-            Ok(_) => return,
-            // No summary row was written yet (e.g. timed out early) or schema differs: keep going
-            // for any temporary files without deleting any summary row.
-            Err(rusqlite::Error::QueryReturnedNoRows) | Err(_) => {}
         }
     }
     let conversations = root.join("conversations");

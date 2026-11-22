@@ -99,6 +99,28 @@ test('a large catalog lists its models in a native virtual list; a small one kee
   expect(large.children.get(list)!.length).toBe(1 + 1 + 3 * (1 + 6 + 1) + 1)
 })
 
+test('onRegisterOpen exposes an opener that opens the model picker panel', () => {
+  const h = harness()
+  let opener: (() => void) | undefined
+  let opened = 0
+  const models = catalog(3)
+  const providers: ProviderStatus[] = [{ kind: 'antigravity', display_name: 'Antigravity', available: true, supported_permission_modes: ['full-access'], supports_fork: false, supports_model_switch: true, models, instances: ['default'] }]
+  h.render(
+    <ThemeProvider>
+      <ModelPicker provider={{ kind: 'antigravity', instance: 'default' }} providers={providers} model={models[0]!.id} canPickModel canPickProvider={false} canReload={false}
+        loading={false} busy={false} accounts={[]} onOpenChange={(open) => { if (open) opened++ }}
+        onRegisterOpen={(open) => { opener = open; return () => { opener = undefined } }}
+        onModelChange={async () => true} onEffortChange={async () => true} onProviderChange={async () => true}
+        onReload={() => {}} label={() => null} />
+    </ThemeProvider>,
+  )
+  expect(h.find('model-picker-panel')).toBeUndefined()
+  expect(opener).toBeDefined()
+  flushSync(() => opener!())
+  expect(h.find('model-picker-panel')).toBeDefined()
+  expect(opened).toBe(1)
+})
+
 test('search results are one item each in the virtual list, and rows that stay listed are not rebuilt', () => {
   const h = harness()
   const { search, list } = open(h, catalog(600))
