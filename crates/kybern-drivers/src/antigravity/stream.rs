@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Instant;
 
+use kybern_protocol::rpc::{Problem, ProblemAction, ProblemKind};
 use kybern_protocol::{EventOrigin, ProviderKind, StopReason, ToolCall, Usage};
 use serde_json::Value;
 
@@ -27,6 +28,10 @@ pub(crate) struct TurnMapper {
     conversation: Option<String>,
     started: Instant,
     saw_init: bool,
+    /// Whether this turn reached the model (saw an assistant or tool step).
+    reached_model: bool,
+    /// Whether this turn failed with Claude's invalid/missing thinking signature error.
+    conversation_poisoned: bool,
     /// Text of each `agent_response` step, as streamed so far.
     messages: HashMap<u64, String>,
     /// The last assistant message that carried text: its id and text.
@@ -53,6 +58,8 @@ impl TurnMapper {
             conversation,
             started: Instant::now(),
             saw_init: false,
+            reached_model: false,
+            conversation_poisoned: false,
             messages: HashMap::new(),
             last_message: None,
             started_tools: HashSet::new(),
@@ -72,6 +79,12 @@ impl TurnMapper {
     /// Whether `agy` got far enough to open a conversation for the prompt.
     pub(crate) fn saw_init(&self) -> bool {
         self.saw_init
+    }
+
+    /// Whether this turn failed with a poisoned thinking signature, so the
+    /// session must drop its `--conversation` id instead of reusing it.
+    pub(crate) fn conversation_poisoned(&self) -> bool {
+        self.conversation_poisoned
     }
 
     /// The final text of a run that ended in success (titles).
@@ -131,13 +144,19 @@ impl TurnMapper {
         let state = update.get("state").and_then(Value::as_str);
         let done = state == Some("DONE");
         match update.get("step_type").and_then(Value::as_str) {
-            Some("agent_response") => self.agent_response(update, index, done),
+            Some("agent_response") => {
+                self.reached_model = true;
+                self.agent_response(update, index, done)
+            }
             Some("error_message") => {
                 self.error_step = true;
                 Vec::new()
             }
             // A tool that fails ends in ERROR, not DONE: it still needs its result card.
-            Some("tool") => self.tool(update, index, done || matches!(state, Some("ERROR" | "FAILED" | "CANCELED" | "CANCELLED"))),
+            Some("tool") => {
+                self.reached_model = true;
+                self.tool(update, index, done || matches!(state, Some("ERROR" | "FAILED" | "CANCELED" | "CANCELLED")))
+            }
             _ => Vec::new(),
         }
     }
@@ -170,8 +189,8 @@ impl TurnMapper {
         let Some(usage) = update.get("usage").filter(|_| self.counted_usage.insert(index)) else { return };
         let number = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
         self.usage.input_tokens += number("input_tokens");
-        // Thinking is billed as output and no text of it is streamed.
-        self.usage.output_tokens += number("output_tokens") + number("thinking_tokens");
+        // `agy`'s `output_tokens` already includes `thinking_tokens` (`input + output = total`).
+        self.usage.output_tokens += number("output_tokens");
         self.usage.cache_read_tokens += number("cache_read_tokens");
     }
 
@@ -267,13 +286,23 @@ impl TurnMapper {
             }
             Some(Outcome::Interrupted) => vec![completed(StopReason::Interrupted)],
             Some(Outcome::Failed(_)) if interrupted => vec![completed(StopReason::Interrupted)],
-            Some(Outcome::Failed(error)) => vec![failed(&error)],
+            Some(Outcome::Failed(error)) => {
+                if is_invalid_thinking_signature(&error) {
+                    self.conversation_poisoned = true;
+                }
+                vec![failed(&error, self.reached_model)]
+            }
             // No result at all: killed (an interrupt that had to escalate), or it crashed.
             None if interrupted => vec![completed(StopReason::Interrupted)],
             None => {
                 let raw = stderr.map(str::to_string).or_else(|| self.error_event.take());
                 vec![match (raw, code) {
-                    (Some(raw), _) => failed(&raw),
+                    (Some(raw), _) => {
+                        if is_invalid_thinking_signature(&raw) {
+                            self.conversation_poisoned = true;
+                        }
+                        failed(&raw, self.reached_model)
+                    }
                     (None, Some(0)) | (None, None) => {
                         DriverEvent::turn_failed(ProviderKind::Antigravity, "Antigravity ended without an answer. Send your message again.")
                     }
@@ -318,19 +347,87 @@ fn error_text(value: Option<&Value>) -> Option<&str> {
     value.as_str().or_else(|| value.get("message").and_then(Value::as_str))
 }
 
-/// A sentence that says what to do next, whatever `agy` printed.
-/// A failed run, in Antigravity's friendly words, with the cause the raw text names.
-fn failed(raw: &str) -> DriverEvent {
-    DriverEvent::TurnFailed { error: friendly_error(raw), problem: crate::failure::classify(ProviderKind::Antigravity, raw) }
+/// Claude rejects a saved thinking block without a valid signature. That block
+/// sits in `agy`'s saved conversation, so every later turn with `--conversation`
+/// fails the same way until the thread moves to a fresh conversation.
+pub fn is_invalid_thinking_signature(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let needle = "messages.";
+    let mut offset = 0;
+    while let Some(pos) = text[offset..].find(needle) {
+        let start = offset + pos;
+        let boundary_ok = start == 0 || (!bytes[start - 1].is_ascii_alphanumeric() && bytes[start - 1] != b'_');
+        offset = start + needle.len();
+        if !boundary_ok {
+            continue;
+        }
+        let rest = &text[offset..];
+        let digits1 = rest.bytes().take_while(|byte| byte.is_ascii_digit()).count();
+        if digits1 == 0 {
+            continue;
+        }
+        let Some(after_content) = rest[digits1..].strip_prefix(".content.") else { continue };
+        let digits2 = after_content.bytes().take_while(|byte| byte.is_ascii_digit()).count();
+        if digits2 == 0 {
+            continue;
+        }
+        let tail = &after_content[digits2..];
+        if tail.starts_with(".thinking.signature: Field required") || tail.starts_with(": Invalid `signature` in `thinking` block") {
+            return true;
+        }
+    }
+    false
 }
 
-pub(crate) fn friendly_error(raw: &str) -> String {
+/// Whether `raw` is a Google/Antigravity HTTP 404 (`Error 404, …` or `NOT_FOUND (code 404): …`).
+fn is_not_found_error(raw: &str) -> bool {
     let lower = raw.to_ascii_lowercase();
-    if ["authenticat", "oauth", "unauthorized", "sign in", "sign-in", "login", "log in", "credential", "401"]
-        .iter()
-        .any(|needle| lower.contains(needle))
-    {
+    lower.contains("not_found (code 404)")
+        || lower.contains("error 404,")
+        || lower.contains("http 404")
+        || (lower.contains("404") && lower.contains("status: not_found"))
+}
+
+/// A failed run, in Antigravity's friendly words, with the cause the raw text names.
+fn failed(raw: &str, reached_model: bool) -> DriverEvent {
+    let problem = crate::failure::classify(ProviderKind::Antigravity, raw).or_else(|| {
+        if is_invalid_thinking_signature(raw) {
+            return Some(
+                Problem::new(ProblemKind::Internal, raw)
+                    .with_subject("antigravity")
+                    .with_copy(
+                        "Antigravity's saved conversation can no longer continue",
+                        "Send your message again to continue in a fresh conversation with this thread's context.",
+                    )
+                    .with_action(ProblemAction::retry("Try again")),
+            );
+        }
+        if is_not_found_error(raw) {
+            return Some(if reached_model {
+                // A 404 after the model already answered in this turn is a transient edge error.
+                Problem::new(ProblemKind::Internal, raw)
+                    .with_subject("antigravity")
+                    .with_copy("Antigravity hit a temporary error", "Send your message again to continue.")
+                    .with_action(ProblemAction::retry("Try again"))
+            } else {
+                // A 404 before the model answered is an unknown or unentitled model.
+                Problem::new(ProblemKind::NotFound, raw)
+                    .with_subject("antigravity")
+                    .with_copy("Antigravity couldn't use this model", "Choose another model, then send your message again.")
+            });
+        }
+        None
+    });
+    DriverEvent::TurnFailed { error: friendly_error(raw), problem }
+}
+
+/// A sentence that says what to do next, whatever `agy` printed.
+pub(crate) fn friendly_error(raw: &str) -> String {
+    if crate::failure::is_signed_out(ProviderKind::Antigravity, raw) {
         return SIGN_IN.to_string();
+    }
+    if is_invalid_thinking_signature(raw) {
+        return "Antigravity's saved conversation can no longer be sent to the model. Send your message again to continue in a fresh conversation with this thread's context.".to_string();
     }
     let raw: String = raw.trim().chars().take(300).collect();
     if raw.is_empty() {

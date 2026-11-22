@@ -57,6 +57,16 @@ test("rate limits, a lost connection and an old agent name the agent and what to
   const limit = describeTurnFailure(failure({ kind: "permission", subject: "rate_limit" }), { provider: "codex" });
   assert.equal(limit.title, "Codex reached its usage limit");
   assert.equal(limit.action.id, "use_another_account");
+  const timedLimit = describeTurnFailure(
+    failure({
+      kind: "permission",
+      subject: "rate_limit",
+      hint: "Your limit resets in 1 hour (2026-11-22 11:00 UTC). Switch to another account or model, or send your message again then.",
+    }),
+    { provider: "antigravity" },
+  );
+  assert.equal(timedLimit.title, "Antigravity reached its usage limit");
+  assert.match(timedLimit.body, /^Your limit resets in 1 hour \(2026-11-22 11:00 UTC\)\./);
   const network = describeTurnFailure(failure({ kind: "offline", subject: "network" }), { provider: "cursor" });
   assert.equal(network.title, "Couldn't reach Cursor");
   assert.equal(network.action.id, "retry");

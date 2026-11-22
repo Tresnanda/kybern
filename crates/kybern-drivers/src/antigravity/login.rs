@@ -33,6 +33,7 @@ pub struct StoredLogin {
     access_token: String,
     pub email: Option<String>,
     pub expiry: Option<DateTime<Utc>>,
+    pub auth_method: Option<String>,
 }
 
 impl std::fmt::Debug for StoredLogin {
@@ -42,6 +43,7 @@ impl std::fmt::Debug for StoredLogin {
             .field("access_token", &"<redacted>")
             .field("email", &self.email)
             .field("expiry", &self.expiry)
+            .field("auth_method", &self.auth_method)
             .finish()
     }
 }
@@ -109,7 +111,9 @@ pub fn parse_login(text: &str) -> Option<StoredLogin> {
         .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
         .map(|at| at.with_timezone(&Utc));
     let email = json.get("id_token_email").and_then(Value::as_str).map(str::trim).filter(|email| !email.is_empty()).map(str::to_string);
-    Some(StoredLogin { access_token, email, expiry })
+    let auth_method =
+        json.get("auth_method").and_then(Value::as_str).map(str::trim).filter(|method| !method.is_empty()).map(str::to_string);
+    Some(StoredLogin { access_token, email, expiry, auth_method })
 }
 
 fn token_files(home: &Path) -> [PathBuf; 2] {

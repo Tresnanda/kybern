@@ -357,9 +357,13 @@ function turnFailureView(failure: TurnFailure, context: TurnFailureContext): Pro
     })
   }
   if (problem.kind === "permission" && problem.subject === "rate_limit") {
+    const reset = problem.hint ? /^Your limit resets [^.]+\./.exec(problem.hint)?.[0] : undefined
+    const actionHint = phone
+      ? `Wait for the limit to reset, or switch accounts on ${there}, then send your message again.`
+      : "Wait for the limit to reset, or use another account or model, then send your message again."
     return view({
       title: `${label} reached its usage limit`,
-      body: phone ? `Wait for the limit to reset, or switch accounts on ${there}, then send your message again.` : "Wait for the limit to reset, or use another account or model, then send your message again.",
+      body: reset ? `${reset} ${actionHint}` : actionHint,
       action: { id: "use_another_account", label: "Use another account", params: { provider: tool } },
     })
   }

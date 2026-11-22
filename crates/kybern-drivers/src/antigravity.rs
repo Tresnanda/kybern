@@ -18,6 +18,7 @@ pub(crate) mod tools;
 mod usage;
 
 pub use login::{LoginRead, StoredLogin, parse_login, read_login, read_login_state};
+pub use stream::is_invalid_thinking_signature;
 pub use usage::{
     ANTIGRAVITY_USER_AGENT_PREFIX, QuotaBucket, QuotaReading, forget_sign_in_waits, merge_buckets, parse_load_code_assist,
     parse_quota_summary, plan_name, read_account_usage, to_limits,
@@ -345,19 +346,22 @@ impl AgentDriver for AntigravityDriver {
         crate::sessions::reader(ProviderKind::Antigravity, context).await
     }
 
-    /// A single tool-free run. `--mode plan` keeps the model from editing the
-    /// checkout; it still reads files if it chooses to, which a title does not need.
-    async fn one_shot(&self, cwd: &Path, prompt: &str, binary: Option<&PathBuf>, env: &BTreeMap<String, String>) -> Result<String> {
+    /// A single tool-free run. Runs in a scratch folder with `--mode plan` so it
+    /// never touches the checkout, and removes the temporary conversation `agy`
+    /// wrote so one-shots do not clutter `agy`'s history or Kybern's session scan.
+    async fn one_shot(&self, _cwd: &Path, prompt: &str, binary: Option<&PathBuf>, env: &BTreeMap<String, String>) -> Result<String> {
         let bin = resolve(ProviderKind::Antigravity, binary)?;
         let scratch = Scratch::new()?;
+        let work_dir = scratch.work_dir();
+        std::fs::create_dir_all(&work_dir)?;
         let mut command = Command::new(&bin).no_window();
-        command.current_dir(cwd).args(["--output-format", "stream-json", "--input-format", "stream-json", "--mode", "plan"]);
+        command.current_dir(&work_dir).args(["--output-format", "stream-json", "--input-format", "stream-json", "--mode", "plan"]);
         command.arg("--log-file").arg(scratch.log_file()).arg("-p=").envs(env);
         let child = NdjsonChild::spawn(command)?;
+        let mut mapper = TurnMapper::new(None);
         let run = async {
             child.write(&prompt_line(prompt)).await?;
             child.close_stdin().await?;
-            let mut mapper = TurnMapper::new(None);
             let mut lines = child.lines.lock().await;
             while let Some(line) = lines.recv().await {
                 mapper.handle(&line);
@@ -366,6 +370,11 @@ impl AgentDriver for AntigravityDriver {
         };
         let result = tokio::time::timeout(ONE_SHOT_TIMEOUT, run).await;
         child.kill().await;
+        if let Some(conversation_id) = mapper.conversation().map(str::to_string)
+            && let Some(home) = env_home(env)
+        {
+            cleanup_one_shot_conversation(&home, &conversation_id);
+        }
         match result {
             Ok(result) => result,
             Err(_) => Err(DriverError::Protocol("Antigravity one-shot timed out".into())),
@@ -440,8 +449,53 @@ impl Scratch {
         self.0.join("agy.log")
     }
 
+    fn work_dir(&self) -> PathBuf {
+        self.0.join("work")
+    }
+
     fn image_dir(&self) -> PathBuf {
         self.0.join("images")
+    }
+}
+
+fn env_home(env: &BTreeMap<String, String>) -> Option<PathBuf> {
+    ["HOME", "USERPROFILE"]
+        .iter()
+        .find_map(|key| env.get(*key).cloned().or_else(|| std::env::var(key).ok()))
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
+}
+
+fn valid_conversation_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 128 && id.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
+/// Remove the files and summary row `agy` wrote for a temporary `one_shot` conversation.
+/// Best-effort: never fails the caller when a file is already gone or locked.
+pub(crate) fn cleanup_one_shot_conversation(home: &Path, conversation_id: &str) {
+    if !valid_conversation_id(conversation_id) {
+        return;
+    }
+    let root = home.join(".gemini").join("antigravity-cli");
+    if !root.is_dir() {
+        return;
+    }
+    let conversations = root.join("conversations");
+    for suffix in [".db", ".db-wal", ".db-shm", ".db-journal", ".meta"] {
+        let _ = std::fs::remove_file(conversations.join(format!("{conversation_id}{suffix}")));
+    }
+    let _ = std::fs::remove_dir_all(root.join("brain").join(conversation_id));
+    let _ = std::fs::remove_file(root.join("annotations").join(format!("{conversation_id}.pbtxt")));
+    let _ = std::fs::remove_file(root.join("presence").join(format!("{conversation_id}.lock")));
+    let summaries = root.join("conversation_summaries.db");
+    if summaries.is_file()
+        && let Ok(conn) = rusqlite::Connection::open_with_flags(
+            &summaries,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+    {
+        let _ = conn.busy_timeout(Duration::from_millis(500));
+        let _ = conn.execute("DELETE FROM conversation_summaries WHERE conversation_id = ?1", [conversation_id]);
     }
 }
 
@@ -686,7 +740,9 @@ async fn run_turn(
     let was_interrupted = interrupted.load(Ordering::SeqCst);
     let conversation = mapper.conversation().map(str::to_string);
     let started = mapper.saw_init();
-    for event in mapper.finish(code, last_stderr.as_deref(), was_interrupted) {
+    let events = mapper.finish(code, last_stderr.as_deref(), was_interrupted);
+    let poisoned = mapper.conversation_poisoned();
+    for event in events {
         if run.tx.send(event).await.is_err() {
             return;
         }
@@ -694,12 +750,21 @@ async fn run_turn(
     let Some(state) = state.upgrade() else { return };
     let turn = {
         let mut state = state.lock().await;
-        if let Some(conversation) = conversation {
-            state.conversation = Some(conversation);
-        }
-        // The prompt never reached a conversation: carry the guide on the retry.
-        if !started && state.guide.is_none() {
-            state.guide = guide;
+        if poisoned {
+            // The saved conversation's thinking block has a bad/missing signature:
+            // never reuse it on the next turn.
+            state.conversation = None;
+            if state.guide.is_none() {
+                state.guide = guide;
+            }
+        } else {
+            if let Some(conversation) = conversation {
+                state.conversation = Some(conversation);
+            }
+            // The prompt never reached a conversation: carry the guide on the retry.
+            if !started && state.guide.is_none() {
+                state.guide = guide;
+            }
         }
         if state.turn.as_ref().is_some_and(|turn| turn.id == id) { state.turn.take() } else { None }
     };

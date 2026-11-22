@@ -54,9 +54,16 @@ const HOSTS: [&str; 2] = ["https://daily-cloudcode-pa.googleapis.com", "https://
 /// A stand-in for both hosts, for tests of the whole read.
 #[cfg(test)]
 pub(crate) static TEST_HOST: Mutex<Option<String>> = Mutex::new(None);
+/// Separate stand-ins for `(daily, production)` hosts, for tests of host preference.
+#[cfg(test)]
+pub(crate) static TEST_HOSTS: Mutex<Option<(String, String)>> = Mutex::new(None);
 
 /// The daily and the production host.
 fn hosts() -> [String; 2] {
+    #[cfg(test)]
+    if let Some((daily, production)) = TEST_HOSTS.lock().ok().and_then(|hosts| hosts.clone()) {
+        return [daily, production];
+    }
     #[cfg(test)]
     if let Some(host) = TEST_HOST.lock().ok().and_then(|host| host.clone()) {
         return [host.clone(), host];
@@ -279,19 +286,41 @@ fn has_gemini(buckets: &[QuotaBucket]) -> bool {
     })
 }
 
-/// Different calls return different groups, so readings merge by bucket id and
-/// keep the most-used one.
+/// Different calls return different groups, so readings merge by bucket id;
+/// the first reading for a bucket id (the host the account is metered on) wins.
 pub fn merge_buckets(readings: impl IntoIterator<Item = Vec<QuotaBucket>>) -> Vec<QuotaBucket> {
     let mut merged: HashMap<String, QuotaBucket> = HashMap::new();
     for bucket in readings.into_iter().flatten() {
-        match merged.get(&bucket.id) {
-            Some(existing) if existing.used >= bucket.used => {}
-            _ => {
-                merged.insert(bucket.id.clone(), bucket);
-            }
-        }
+        merged.entry(bucket.id.clone()).or_insert(bucket);
     }
     merged.into_values().collect()
+}
+
+/// Whether this account is billed/metered on the production host (`cloudcode-pa`)
+/// rather than the consumer daily host (`daily-cloudcode-pa`).
+pub(crate) fn is_business_account(auth_method: Option<&str>, loaded: &Value) -> bool {
+    if let Some(method) = auth_method.map(|value| value.trim().to_ascii_lowercase()) {
+        match method.as_str() {
+            "oauth-business" | "business" | "enterprise" | "workspace" => return true,
+            "oauth-personal" | "consumer" => return false,
+            _ => {}
+        }
+    }
+    let user_defined = ["/paidTier/userDefinedCloudaicompanionProject", "/currentTier/userDefinedCloudaicompanionProject"]
+        .iter()
+        .any(|pointer| loaded.pointer(pointer).and_then(Value::as_bool) == Some(true));
+    if user_defined {
+        return true;
+    }
+    if let Some(paid) = loaded.pointer("/paidTier/id").and_then(Value::as_str).map(|id| id.trim().to_ascii_lowercase())
+        && !paid.is_empty()
+    {
+        return !paid.starts_with("g1-") && paid != "free-tier" && paid != "legacy-tier";
+    }
+    if let Some(current) = loaded.pointer("/currentTier/id").and_then(Value::as_str).map(|id| id.trim().to_ascii_lowercase()) {
+        return current.contains("enterprise") || current.contains("business") || current.contains("workspace");
+    }
+    false
 }
 
 /// Where a group sits in the list: the Gemini models, then Gemini 4 Argon, then Claude and GPT.
@@ -646,7 +675,7 @@ async fn read_with_login(
 ) -> TokenRead {
     let mark = Some(login.fingerprint());
     let agent = user_agent(&agy_version(binary).await);
-    let result = tokio::time::timeout(TOTAL_TIMEOUT, read_with_token(login.access_token(), &agent)).await;
+    let result = tokio::time::timeout(TOTAL_TIMEOUT, read_with_token(login.access_token(), login.auth_method.as_deref(), &agent)).await;
     let outcome = match result {
         Ok(outcome) => outcome,
         Err(_) => Err(Failure::Network("the read timed out".into())),
@@ -733,7 +762,7 @@ async fn read_with_agy(
     }
 }
 
-async fn read_with_token(token: &str, agent: &str) -> Result<QuotaReading, Failure> {
+async fn read_with_token(token: &str, auth_method: Option<&str>, agent: &str) -> Result<QuotaReading, Failure> {
     let client = reqwest::Client::builder().timeout(REQUEST_TIMEOUT).build().map_err(|error| Failure::Network(error.to_string()))?;
     let [daily_host, production_host] = hosts();
     // A generic User-Agent gets an answer with no project.
@@ -748,13 +777,16 @@ async fn read_with_token(token: &str, agent: &str) -> Result<QuotaReading, Failu
     let (project, plan) = parse_load_code_assist(&loaded);
     let Some(project) = project else { return Err(Failure::Network("no Antigravity project for this account".into())) };
     let body = json!({"project": project});
-    let (daily, production) = tokio::join!(
-        post(&client, format!("{daily_host}/v1internal:retrieveUserQuotaSummary"), token, agent, &body),
-        post(&client, format!("{production_host}/v1internal:retrieveUserQuotaSummary"), token, agent, &body),
+    let ordered = if is_business_account(auth_method, &loaded) { [production_host, daily_host] } else { [daily_host, production_host] };
+    let (primary, fallback) = tokio::join!(
+        post(&client, format!("{}/v1internal:retrieveUserQuotaSummary", ordered[0]), token, agent, &body),
+        post(&client, format!("{}/v1internal:retrieveUserQuotaSummary", ordered[1]), token, agent, &body),
     );
     let mut failure = None;
     let mut readings = Vec::new();
-    for result in [daily, production] {
+    // Keep the metered host's reading first so its bucket values win in `merge_buckets`,
+    // while the fallback host only fills in quota groups that the primary omitted.
+    for result in [primary, fallback] {
         match result {
             Ok(body) => readings.push(parse_quota_summary(&body)),
             Err(error) => failure = Some(error),
