@@ -88,7 +88,10 @@ fn layout(kind: ProviderKind, env: &BTreeMap<String, String>, home: &Path) -> (P
         ProviderKind::Cursor => (home.join(".cursor"), skills),
         // Kybern links nothing into `agy`'s storage.
         ProviderKind::Antigravity => (home.join(".gemini/antigravity-cli"), vec![]),
-        ProviderKind::GrokBuild => (home.join(".grok"), vec![]),
+        ProviderKind::GrokBuild => {
+            let configured = env.get("GROK_HOME").cloned().or_else(|| std::env::var("GROK_HOME").ok());
+            (kybern_drivers::binary::grok_home(Some(home), configured.as_deref()).unwrap_or_else(|| home.join(".grok")), vec![])
+        }
         ProviderKind::Pi => (
             configured("PI_CODING_AGENT_DIR", home.join(".pi/agent")),
             vec![("skills", "skills", true), ("extensions", "extensions", true)],
@@ -401,6 +404,15 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn grok_storage_follows_grok_home() {
+        let home = Path::new("/home/me");
+        let env = BTreeMap::from([("GROK_HOME".to_string(), "~/xai".to_string())]);
+        assert_eq!(layout(ProviderKind::GrokBuild, &env, home).0, home.join("xai"));
+        let env = BTreeMap::from([("GROK_HOME".to_string(), "/opt/grok".to_string())]);
+        assert_eq!(layout(ProviderKind::GrokBuild, &env, home).0, PathBuf::from("/opt/grok"));
     }
 
     #[test]

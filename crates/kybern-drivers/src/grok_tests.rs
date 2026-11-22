@@ -269,7 +269,7 @@ const FAKE_GROK: &str = r##"#!/usr/bin/env python3
 import json, os, sys
 scenario = os.environ.get("FAKE_GROK", "")
 with open("argv.json", "w") as f:
-    json.dump({"argv": sys.argv[1:], "autoupdater": os.environ.get("GROK_DISABLE_AUTOUPDATER")}, f)
+    json.dump({"argv": sys.argv[1:], "autoupdater": os.environ.get("GROK_DISABLE_AUTOUPDATER"), "grok_home": os.environ.get("GROK_HOME")}, f)
 log = open("received.jsonl", "a")
 def send(msg):
     msg["jsonrpc"] = "2.0"
@@ -359,6 +359,11 @@ impl Run {
 /// One turn against the fake `grok`; every card is answered with `answer`.
 #[cfg(unix)]
 async fn run_turn(scenario: &str, mode: PermissionMode, resume: Option<&str>, answer: ApprovalDecision) -> Run {
+    run_turn_with(scenario, mode, resume, answer, &[]).await
+}
+
+#[cfg(unix)]
+async fn run_turn_with(scenario: &str, mode: PermissionMode, resume: Option<&str>, answer: ApprovalDecision, env: &[(&str, &str)]) -> Run {
     let root = tempfile::tempdir().unwrap();
     let binary = root.path().join("grok");
     kybern_protocol::process::write_executable(&binary, FAKE_GROK).unwrap();
@@ -373,7 +378,7 @@ async fn run_turn(scenario: &str, mode: PermissionMode, resume: Option<&str>, an
         fork: false,
         rewind: None,
         binary: Some(binary),
-        env: HashMap::from([("FAKE_GROK".into(), scenario.into())]),
+        env: [("FAKE_GROK", scenario)].iter().chain(env).map(|(key, value)| (key.to_string(), value.to_string())).collect(),
         compaction: Default::default(),
     };
     // Another test's forked child can briefly hold the new script open (Linux ETXTBSY).
@@ -481,4 +486,14 @@ async fn a_resume_grok_never_answers_opens_once_its_replay_goes_quiet() {
     // The replay is history: only the new answer is output.
     assert_eq!(run.texts(), "new answer");
     assert!(matches!(run.end(), DriverEvent::TurnCompleted { .. }));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn grok_gets_its_home_with_the_tilde_expanded() {
+    let run = run_turn_with("", PermissionMode::Supervised, None, ApprovalDecision::AllowOnce, &[("GROK_HOME", "~/xai-grok")]).await;
+    let home = std::env::var("HOME").unwrap();
+    assert_eq!(run.argv["grok_home"], json!(format!("{home}/xai-grok")));
+    let run = run_turn_with("", PermissionMode::Supervised, None, ApprovalDecision::AllowOnce, &[("GROK_HOME", "/opt/grok")]).await;
+    assert_eq!(run.argv["grok_home"], "/opt/grok");
 }

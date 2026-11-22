@@ -31,6 +31,9 @@ pub(crate) fn brew_package(kind: ProviderKind, path: &Path) -> Option<(PathBuf, 
             ProviderKind::Codex => package == "codex",
             ProviderKind::Opencode => package == "opencode",
             ProviderKind::Omp => package == "omp",
+            // Grok Build's cask (T3 Code, 393a9f8950). A formula keg such as `node` holding an npm
+            // global is not Grok's, so only the cask counts.
+            ProviderKind::GrokBuild => cask && package == "grok-build",
             _ => false,
         };
         if valid {
@@ -78,6 +81,8 @@ async fn plan_in(
     }
     let mut help = crate::binary::command(binary).no_window();
     help.arg("--help").envs(env).current_dir(cwd).stdin(Stdio::null()).kill_on_drop(true);
+    // Reading the help must not start Grok Build's own updater beside the one Kybern runs.
+    help.env(crate::grok::DISABLE_AUTOUPDATER.0, crate::grok::DISABLE_AUTOUPDATER.1);
     let output = tokio::time::timeout(Duration::from_secs(10), crate::process_tree::output(&mut help)).await??;
     // Some CLIs (including OpenCode) write successful help to stderr.
     let text = format!("{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
@@ -211,6 +216,30 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn reading_grok_s_help_never_starts_its_updater() {
+        let root = tempfile::tempdir().unwrap();
+        let binary = root.path().join("grok");
+        kybern_protocol::process::write_executable(
+            &binary,
+            "#!/bin/sh\n[ \"$GROK_DISABLE_AUTOUPDATER\" = 1 ] || touch updater-started\necho '  update  Check for updates'\n",
+        )
+        .unwrap();
+        let env = BTreeMap::new();
+        let command = unbusy(|| plan(ProviderKind::GrokBuild, &binary, &env, root.path())).await.unwrap();
+        assert_eq!(command.args, ["update"]);
+        assert!(!root.path().join("updater-started").exists());
+    }
+
+    #[test]
+    fn a_homebrew_grok_cask_updates_through_brew() {
+        let (_, name, cask) = brew_package(ProviderKind::GrokBuild, Path::new("/opt/homebrew/Caskroom/grok-build/1.2.3,456/grok")).unwrap();
+        assert_eq!((name.as_str(), cask), ("grok-build", true));
+        assert!(brew_package(ProviderKind::GrokBuild, Path::new("/opt/homebrew/Cellar/node/22/lib/node_modules/grok/grok")).is_none());
+        assert!(brew_package(ProviderKind::GrokBuild, Path::new("/opt/homebrew/Cellar/grok-build/1/bin/grok")).is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn timeout_stops_the_launcher_and_its_background_children() {
         let root = tempfile::tempdir().unwrap();
         let binary = root.path().join("updater");
@@ -231,7 +260,13 @@ mod tests {
     #[tokio::test]
     async fn a_script_install_without_an_updater_reruns_the_vendor_script() {
         let root = tempfile::tempdir().unwrap();
-        let places = crate::latest::Places { home: Some(root.path().to_path_buf()), local_app_data: None, os: "linux", arch: "x86_64" };
+        let places = crate::latest::Places {
+            home: Some(root.path().to_path_buf()),
+            local_app_data: None,
+            grok_home: None,
+            os: "linux",
+            arch: "x86_64",
+        };
         let agy = root.path().join(".local/bin/agy");
         std::fs::create_dir_all(agy.parent().unwrap()).unwrap();
         kybern_protocol::process::write_executable(&agy, "#!/bin/sh\necho '  login  Sign in'\n").unwrap();

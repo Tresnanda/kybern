@@ -218,6 +218,8 @@ pub fn npm_package(kind: ProviderKind) -> Option<&'static str> {
         ProviderKind::Opencode => "opencode-ai",
         ProviderKind::Pi => "@earendil-works/pi-coding-agent",
         ProviderKind::Omp => "@oh-my-pi/pi-coding-agent",
+        // Its `latest` is the stable channel `grok update` installs (T3 Code, 3e2dff4206).
+        ProviderKind::GrokBuild => "@xai-official/grok",
         _ => return None,
     })
 }
@@ -227,6 +229,8 @@ pub fn npm_package(kind: ProviderKind) -> Option<&'static str> {
 pub struct Places {
     pub home: Option<PathBuf>,
     pub local_app_data: Option<PathBuf>,
+    /// The `GROK_HOME` variable, as set.
+    pub grok_home: Option<String>,
     /// `std::env::consts::OS` and `ARCH`, or a fixture's.
     pub os: &'static str,
     pub arch: &'static str,
@@ -237,6 +241,7 @@ impl Places {
         Self {
             home: std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from),
             local_app_data: std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+            grok_home: std::env::var("GROK_HOME").ok(),
             os: std::env::consts::OS,
             arch: std::env::consts::ARCH,
         }
@@ -294,7 +299,11 @@ pub fn detect(kind: ProviderKind, binary: &Path, places: &Places) -> Install {
                 .any(|candidate| slashes(candidate) == shown || slashes(candidate) == resolved);
             script.then(|| Source::Antigravity { platform: antigravity_platform(places.os, places.arch) })
         }
-        ProviderKind::GrokBuild if resolved.contains("/.grok/") => Some(Source::Grok { channel: grok_channel(home) }),
+        ProviderKind::GrokBuild => {
+            let grok = crate::binary::grok_home(home, places.grok_home.as_deref());
+            let script = resolved.contains("/.grok/") || grok.as_deref().is_some_and(|grok| within(&resolved, grok));
+            script.then(|| Source::Grok { channel: grok_channel(grok.as_deref()) })
+        }
         ProviderKind::Pi => {
             let managed = home.is_some_and(|home| home.join(".pi/agent/install/managed-install.json").is_file());
             managed.then_some(Source::PiManaged)
@@ -332,9 +341,10 @@ fn claude_channel(home: Option<&Path>) -> String {
     }
 }
 
-/// Grok Build's `channel` from `~/.grok/config.toml`: `stable` (its default), `alpha` or `enterprise`.
-fn grok_channel(home: Option<&Path>) -> String {
-    let text = home.and_then(|home| std::fs::read_to_string(home.join(".grok/config.toml")).ok()).unwrap_or_default();
+/// Grok Build's `channel` from `config.toml` in its folder (`$GROK_HOME`, else `~/.grok`): `stable` (its
+/// default), `alpha` or `enterprise`.
+fn grok_channel(grok_home: Option<&Path>) -> String {
+    let text = grok_home.and_then(|grok| std::fs::read_to_string(grok.join("config.toml")).ok()).unwrap_or_default();
     let channel = text.lines().find_map(|line| {
         let (key, value) = line.split_once('=')?;
         (key.trim() == "channel").then(|| value.trim().trim_matches(['"', '\'']).to_string())
@@ -385,7 +395,7 @@ mod tests {
 
     #[cfg(unix)]
     fn places(home: &Path) -> Places {
-        Places { home: Some(home.to_path_buf()), local_app_data: None, os: "linux", arch: "x86_64" }
+        Places { home: Some(home.to_path_buf()), local_app_data: None, grok_home: None, os: "linux", arch: "x86_64" }
     }
 
     fn file(path: &Path) {
@@ -436,6 +446,22 @@ mod tests {
         std::fs::write(home.join(".grok/config.toml"), "[update]\nchannel = \"alpha\"\n").unwrap();
         let found = detect(ProviderKind::GrokBuild, &home.join(".grok/bin/grok"), &places(&home));
         assert_eq!(found, Install::new(HarnessInstall::Script, Some(Source::Grok { channel: "alpha".into() })));
+        // One installed under a custom GROK_HOME reads its channel there.
+        let custom = home.join("xai/downloads/1.5.0/grok");
+        file(&custom);
+        link(&custom, &home.join("xai/bin/grok"));
+        std::fs::write(home.join("xai/config.toml"), "channel = \"enterprise\"\n").unwrap();
+        let grok_home = Places { grok_home: Some("~/xai".into()), ..places(&home) };
+        let found = detect(ProviderKind::GrokBuild, &home.join("xai/bin/grok"), &grok_home);
+        assert_eq!(found, Install::new(HarnessInstall::Script, Some(Source::Grok { channel: "enterprise".into() })));
+        // Grok's npm package.
+        let npm = home.join(".npm-global/lib/node_modules/@xai-official/grok/bin/grok");
+        file(&npm);
+        link(&npm, &bin.join("grok"));
+        assert_eq!(
+            at(ProviderKind::GrokBuild, "grok"),
+            Install::new(HarnessInstall::Npm, Some(Source::Npm { package: "@xai-official/grok".into() }))
+        );
 
         // Grok's `agent` is not Cursor's; Cursor's own layout is.
         link(&grok, &bin.join("agent"));
@@ -499,7 +525,13 @@ mod tests {
     fn windows_script_installs_and_npm_shims_are_recognised() {
         let root = tempfile::tempdir().unwrap();
         let local = root.path().join("AppData/Local");
-        let windows = Places { home: Some(root.path().join("me")), local_app_data: Some(local.clone()), os: "windows", arch: "x86_64" };
+        let windows = Places {
+            home: Some(root.path().join("me")),
+            local_app_data: Some(local.clone()),
+            grok_home: None,
+            os: "windows",
+            arch: "x86_64",
+        };
         file(&local.join("agy/bin/agy.exe"));
         assert_eq!(
             detect(ProviderKind::Antigravity, &local.join("agy/bin/agy.exe"), &windows).source,

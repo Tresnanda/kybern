@@ -127,6 +127,9 @@ async fn discover_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<P
         cmd.env(k, v);
     }
     cmd.env(DISABLE_AUTOUPDATER.0, DISABLE_AUTOUPDATER.1);
+    if let Some(grok_home) = grok_home_for_child(context.env.get("GROK_HOME").map(String::as_str)) {
+        cmd.env("GROK_HOME", grok_home);
+    }
 
     let output = tokio::time::timeout(std::time::Duration::from_secs(8), crate::process_tree::output(&mut cmd))
         .await
@@ -136,6 +139,14 @@ async fn discover_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<P
 
     let Some(output) = output else { return Vec::new() };
     parse_models(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// `GROK_HOME` with a leading `~` expanded, from the provider's own environment or else the daemon's,
+/// when it needs expanding: `grok` does not expand it itself.
+fn grok_home_for_child(configured: Option<&str>) -> Option<PathBuf> {
+    let inherited = std::env::var("GROK_HOME").ok();
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
+    crate::binary::grok_home_override(home.as_deref(), configured.or(inherited.as_deref()))
 }
 
 /// How to get Grok Build when it is not installed. The shell installer is for macOS and Linux only.
@@ -867,6 +878,9 @@ async fn run_connection(
         cmd.env(k, v);
     }
     cmd.env(DISABLE_AUTOUPDATER.0, DISABLE_AUTOUPDATER.1);
+    if let Some(grok_home) = grok_home_for_child(config.env.get("GROK_HOME").map(String::as_str)) {
+        cmd.env("GROK_HOME", grok_home);
+    }
     #[cfg(unix)]
     cmd.process_group(0);
 

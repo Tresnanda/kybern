@@ -158,8 +158,13 @@ fn roots(cwd: &Path, provider: ProviderKind, env: &BTreeMap<String, String>, hom
             }
         }
         ProviderKind::GrokBuild => {
-            add(cwd.join(".agents/skills"), SkillScope::Project, MAX_DEPTH);
+            for relative in [".grok/skills", ".agents/skills"] {
+                add(cwd.join(relative), SkillScope::Project, MAX_DEPTH);
+            }
             if let Some(home) = home {
+                let grok = kybern_drivers::binary::grok_home(Some(home), env.get("GROK_HOME").map(String::as_str))
+                    .unwrap_or_else(|| home.join(".grok"));
+                add(grok.join("skills"), SkillScope::User, MAX_DEPTH);
                 add(home.join(".agents/skills"), SkillScope::User, MAX_DEPTH);
             }
         }
@@ -517,6 +522,21 @@ mod tests {
         ] {
             assert!(!roots(&cwd, provider, &BTreeMap::new(), Some(&home)).is_empty(), "{provider} has no skill roots");
         }
+    }
+
+    #[test]
+    fn grok_catalog_includes_its_own_skill_folders_under_grok_home() {
+        let cwd = PathBuf::from("/workspace");
+        let home = PathBuf::from("/home/test");
+        let paths = |env: &BTreeMap<String, String>| -> Vec<PathBuf> {
+            roots(&cwd, ProviderKind::GrokBuild, env, Some(&home)).into_iter().map(|root| root.path).collect()
+        };
+        let default = paths(&BTreeMap::new());
+        for path in [cwd.join(".grok/skills"), cwd.join(".agents/skills"), home.join(".grok/skills"), home.join(".agents/skills")] {
+            assert!(default.contains(&path), "{path:?} in {default:?}");
+        }
+        let custom = paths(&BTreeMap::from([("GROK_HOME".to_string(), "~/xai".to_string())]));
+        assert!(custom.contains(&home.join("xai/skills")) && !custom.contains(&home.join(".grok/skills")), "{custom:?}");
     }
 
     #[test]
