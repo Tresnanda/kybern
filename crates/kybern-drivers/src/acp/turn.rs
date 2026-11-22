@@ -1,9 +1,12 @@
 //! A prompt's life: how it settles (its answer, the agent's own completion notice, or a Stop the agent
 //! ignores), steering by a follow-up prompt, and the wait for a resumed session's replay.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
+
+use futures::StreamExt;
 
 use agent_client_protocol::schema::v1::{ContentBlock, StopReason as AcpStop};
 use kybern_protocol::{PermissionMode, StopReason, Usage};
@@ -53,6 +56,91 @@ impl Timings {
         let _ = config;
         timings
     }
+}
+
+/// How long a held turn's agent must stay quiet after its reply closed before the turn ends.
+pub(crate) const HOLD_QUIET: Duration = Duration::from_secs(3);
+/// How long a reply the agent opened by itself may stay quiet without closing before the turn ends anyway.
+pub(crate) const OPEN_REPLY_QUIET: Duration = Duration::from_secs(120);
+/// How often a held or watched turn looks at what the agent is doing.
+const WATCH_TICK: Duration = Duration::from_millis(250);
+/// A tick this much later than asked means the host slept: that is not the agent's silence.
+const HOST_SLEEP_TOLERANCE: Duration = Duration::from_secs(10);
+
+/// What the agent is doing, as its updates say. The update handler writes it; a prompt's wait reads it.
+#[derive(Debug)]
+pub(crate) struct Activity {
+    /// A prompt, or a reply the agent started by itself, is open.
+    pub(crate) turn_open: bool,
+    /// The open turn is a reply the agent started with no prompt open.
+    pub(crate) background: bool,
+    /// Running tool calls, and whether each goes on after its prompt answers (a backgrounded command).
+    pub(crate) tools: HashMap<String, bool>,
+    /// Output arrived after the agent last closed a reply (with `usage_update`, or a prompt's answer).
+    pub(crate) reply_open: bool,
+    /// Cards waiting for the user.
+    pub(crate) cards: usize,
+    /// The agent's last update.
+    pub(crate) last_progress: tokio::time::Instant,
+}
+
+impl Activity {
+    pub(crate) fn new() -> Self {
+        Self {
+            turn_open: false,
+            background: false,
+            tools: HashMap::new(),
+            reply_open: false,
+            cards: 0,
+            last_progress: tokio::time::Instant::now(),
+        }
+    }
+
+    fn outliving(&self) -> bool {
+        self.tools.values().any(|outlives| *outlives)
+    }
+
+    /// Waiting on a tool or on the user is not silence.
+    fn busy(&self) -> bool {
+        !self.tools.is_empty() || self.cards > 0
+    }
+
+    /// A held turn can end: nothing outlives it, nobody is asked, and its last reply closed (or never closes).
+    fn released(&self, now: tokio::time::Instant) -> bool {
+        if self.outliving() || self.cards > 0 {
+            return false;
+        }
+        let quiet = now.saturating_duration_since(self.last_progress);
+        if self.reply_open { quiet >= OPEN_REPLY_QUIET } else { quiet >= HOLD_QUIET }
+    }
+}
+
+/// What, besides the prompt's answer, ends a turn: work that outlives the prompt holds it open, and an
+/// agent that goes silent for too long fails it.
+pub(crate) struct Watch<'a> {
+    pub(crate) activity: &'a std::sync::Mutex<Activity>,
+    /// Hold a completed prompt while a tool that outlives it runs, until the agent's reply to it closes.
+    pub(crate) holds: bool,
+    /// Fail a prompt whose agent says nothing (and runs no tool, and asks nothing) for this long.
+    pub(crate) inactivity: Option<Duration>,
+    /// The turn's end when the agent went silent.
+    pub(crate) silent: fn() -> DriverEvent,
+    /// The turn starts held: a reply the agent started by itself, ended by this event once it closes.
+    pub(crate) held: Option<DriverEvent>,
+}
+
+impl Watch<'_> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Activity> {
+        self.activity.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+/// `event` with `extra` added to its usage, when it is a turn's completion.
+fn with_usage(mut event: DriverEvent, extra: &Usage) -> DriverEvent {
+    if let DriverEvent::TurnCompleted { usage, .. } = &mut event {
+        usage.add(extra);
+    }
+    event
 }
 
 /// What a session handle asks its worker to do.
@@ -124,6 +212,8 @@ pub(crate) struct Settled {
     pub(crate) event: DriverEvent,
     /// Kybern closed the session (or dropped its handle) meanwhile: stop once this turn has ended.
     pub(crate) close: bool,
+    /// A prompt sent while the agent was replying by itself: it ends that reply and is sent next.
+    pub(crate) next: Option<Vec<ContentBlock>>,
 }
 
 /// Wait for one prompt to end. `answer` is its `session/prompt` response, already as the turn's end.
@@ -133,6 +223,7 @@ pub(crate) struct Settled {
 /// and is not polled again. After the first cancel the agent has `grace` to answer; then the turn ends
 /// as interrupted anyway, so an agent that ignores the cancel can't hold the turn (or, after Close, its
 /// process) open. A steer sends the next prompt, whose answer (or notice) then ends the turn instead.
+#[cfg(test)]
 pub(crate) async fn settle_prompt<'a, C: Completion>(
     answer: impl Future<Output = DriverEvent> + Send + 'a,
     prompt_id: &str,
@@ -140,31 +231,109 @@ pub(crate) async fn settle_prompt<'a, C: Completion>(
     completions: &mut mpsc::UnboundedReceiver<C>,
     commands: &mut mpsc::Receiver<SessionCommand>,
     grace: Duration,
+    control: impl PromptControl<'a>,
+) -> Settled {
+    settle_watched(answer, prompt_id, started, completions, commands, grace, control, None).await
+}
+
+/// [`settle_prompt`], and what `watch` adds: a completed prompt stays open while work that outlives it
+/// runs, a prompt whose agent goes silent fails, and a turn can start held (a reply the agent began by
+/// itself). The answers of prompts a steer replaced still count their usage towards the turn.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn settle_watched<'a, C: Completion>(
+    answer: impl Future<Output = DriverEvent> + Send + 'a,
+    prompt_id: &str,
+    started: std::time::Instant,
+    completions: &mut mpsc::UnboundedReceiver<C>,
+    commands: &mut mpsc::Receiver<SessionCommand>,
+    grace: Duration,
     mut control: impl PromptControl<'a>,
+    mut watch: Option<Watch<'_>>,
 ) -> Settled {
     let mut answer: PromptAnswer<'a> = Box::pin(answer);
     let mut prompt_id = prompt_id.to_owned();
     let mut close = false;
     let mut cancelled = false;
     let mut deadline = std::pin::pin!(tokio::time::sleep(grace));
+    // A reply the agent started by itself: there is no prompt to answer, and a prompt ends it.
+    let background = watch.as_ref().is_some_and(|watch| watch.held.is_some());
+    let mut held: Option<DriverEvent> = watch.as_mut().and_then(|watch| watch.held.take());
+    if held.is_some() {
+        answer = Box::pin(std::future::pending());
+    }
+    // Answers of prompts a steer replaced: they still cost tokens.
+    let mut superseded = futures::stream::FuturesUnordered::<PromptAnswer<'a>>::new();
+    let mut extra = Usage::default();
+    let watching = watch.as_ref().is_some_and(|watch| watch.holds || watch.inactivity.is_some());
+    let mut tick = tokio::time::interval(WATCH_TICK);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut last_tick = tokio::time::Instant::now();
     loop {
         tokio::select! {
-            event = &mut answer => return Settled { event, close },
+            event = &mut answer, if held.is_none() => {
+                let hold = watch.as_ref().filter(|watch| watch.holds).is_some_and(|watch| {
+                    let mut activity = watch.lock();
+                    // The answer closes the agent's reply; what it says after this is its reply to the work.
+                    activity.reply_open = false;
+                    activity.outliving()
+                });
+                if hold && !cancelled && matches!(event, DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. }) {
+                    held = Some(event);
+                    answer = Box::pin(std::future::pending());
+                    continue;
+                }
+                return Settled { event: with_usage(event, &extra), close, next: None };
+            }
+            Some(event) = superseded.next(), if !superseded.is_empty() => {
+                if let DriverEvent::TurnCompleted { usage, .. } = &event {
+                    extra.add(usage);
+                }
+            }
             Some(complete) = completions.recv() => {
-                if complete.prompt_id() == Some(prompt_id.as_str()) {
-                    return Settled { event: complete.event(started.elapsed().as_millis() as u64), close };
+                if held.is_none() && complete.prompt_id() == Some(prompt_id.as_str()) {
+                    let event = complete.event(started.elapsed().as_millis() as u64);
+                    return Settled { event: with_usage(event, &extra), close, next: None };
+                }
+            }
+            now = tick.tick(), if watching && !cancelled => {
+                let Some(watch) = watch.as_ref() else { continue };
+                let mut activity = watch.lock();
+                // A late tick is the host waking from sleep, not the agent's silence.
+                if now.saturating_duration_since(last_tick) > WATCH_TICK + HOST_SLEEP_TOLERANCE || activity.busy() {
+                    activity.last_progress = now;
+                }
+                last_tick = now;
+                if let Some(event) = held.as_ref() {
+                    if activity.released(now) {
+                        drop(activity);
+                        let mut event = with_usage(event.clone(), &extra);
+                        if let DriverEvent::TurnCompleted { duration_ms, .. } = &mut event {
+                            *duration_ms = started.elapsed().as_millis() as u64;
+                        }
+                        return Settled { event, close, next: None };
+                    }
+                } else if let Some(limit) = watch.inactivity
+                    && now.saturating_duration_since(activity.last_progress) >= limit
+                {
+                    drop(activity);
+                    control.cancel();
+                    return Settled { event: (watch.silent)(), close, next: None };
                 }
             }
             () = &mut deadline, if cancelled => {
                 let duration_ms = started.elapsed().as_millis() as u64;
+                let mut usage = extra.clone();
+                if let Some(DriverEvent::TurnCompleted { usage: held, .. }) = &held {
+                    usage.add(held);
+                }
                 let event = DriverEvent::TurnCompleted {
                     stop_reason: StopReason::Interrupted,
-                    usage: Usage::default(),
+                    usage,
                     cost_usd: None,
                     duration_ms,
                     anchors: Default::default(),
                 };
-                return Settled { event, close };
+                return Settled { event, close, next: None };
             }
             command = commands.recv(), if !close => {
                 match command {
@@ -173,6 +342,11 @@ pub(crate) async fn settle_prompt<'a, C: Completion>(
                         control.cancel();
                         close = true;
                     }
+                    // The agent's own reply ends here; the prompt goes next as a turn of its own.
+                    Some(SessionCommand::Prompt { blocks }) if background && held.is_some() && !cancelled => {
+                        let event = held.take().map(|event| with_usage(event, &extra)).expect("held");
+                        return Settled { event, close, next: Some(blocks) };
+                    }
                     Some(SessionCommand::Prompt { .. }) => continue,
                     Some(SessionCommand::Steer { blocks, reply }) => {
                         // A stopping turn takes no more input: the daemon sends it as a follow-up.
@@ -180,7 +354,13 @@ pub(crate) async fn settle_prompt<'a, C: Completion>(
                         let sent = match next {
                             Some((id, next)) => {
                                 prompt_id = id;
-                                answer = next;
+                                let replaced = std::mem::replace(&mut answer, next);
+                                match held.take() {
+                                    // The held prompt already answered: its usage is in hand.
+                                    Some(DriverEvent::TurnCompleted { usage, .. }) => extra.add(&usage),
+                                    Some(_) => {}
+                                    None => superseded.push(replaced),
+                                }
                                 Ok(())
                             }
                             None => Err(DriverError::SteerFallback),
