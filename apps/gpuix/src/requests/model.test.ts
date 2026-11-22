@@ -104,11 +104,17 @@ describe('the rows of each card, in key order', () => {
     expect(card?.kind).toBe('grant')
     expect(rowLabels(card)).toEqual(['Grant once', 'Decline and tell Codex what to do instead'])
   })
-  test('a Codex edit that asks for a write root has no session option: writes outside the workspace always ask', () => {
+  test('a Codex edit that asks for a write root still offers edits for the session, like any Codex edit', () => {
     const card = approvalCard(request('apply_patch', { changes: [{ path: '/w/a.ts', diff: '+x' }], grant_root: '/w/out' }), 'codex')
     expect(card?.kind).toBe('edit')
     expect(card?.meta).toBe('Codex also asks to write in /w/out for the rest of the session.')
-    expect(rowLabels(card)).toEqual(['Apply edit', 'Decline and tell Codex what to do instead'])
+    expect(rowLabels(card)).toEqual(['Apply edit', 'Allow edits for this session', 'Decline and tell Codex what to do instead'])
+  })
+  test('Codex session rows say they last until the permission mode changes; other harnesses add nothing', () => {
+    const note = (card: ReturnType<typeof approvalCard>) => card?.rows.find((row) => row.id === 'session')?.description
+    expect(note(approvalCard(request('shell', { command: 'cargo test', reason: 'Needs the network' }), 'codex'))).toBe('Until the permission mode changes')
+    expect(note(approvalCard(request('apply_patch', { changes: [{ path: '/w/a.ts', diff: '+x' }] }), 'codex'))).toBe('Until the permission mode changes')
+    expect(note(approvalCard(request('Edit', { file_path: '/a' }, [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }]), 'claude-code'))).toBeUndefined()
   })
   test('an edit shows its diff', () => {
     const card = approvalCard(request('Edit', { file_path: '/p/src/date.ts', old_string: 'a\nb', new_string: 'a\nc\nd' }, [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }]), 'claude-code')

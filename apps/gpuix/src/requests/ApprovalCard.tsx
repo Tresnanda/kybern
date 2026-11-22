@@ -43,7 +43,7 @@ export function ApprovalCard({ threadId, approval, count }: { threadId: ThreadId
           const open = declining && ui.note
           return (
             <OptionRow
-              key={row.id} n={i + 1} label={row.label} testId={`approval-row-${i + 1}`}
+              key={row.id} n={i + 1} label={row.label} description={row.description} testId={`approval-row-${i + 1}`}
               highlighted={highlight === i && (!sending || ui.sending === i)} dim={sending && ui.sending !== i}
               sending={ui.sending === i} disabled={sending}
               onClick={() => { patchCardUi(approval.id, { highlight: i }); if (!open) chooseRow(approval, i, false) }}
