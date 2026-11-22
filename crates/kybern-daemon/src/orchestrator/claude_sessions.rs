@@ -3,10 +3,10 @@
 //! * [`Orchestrator::switch_live_target`]: a new model or effort is applied to the running process
 //!   (`set_model`, `apply_flag_settings`) instead of restarting it, so background subagents keep running.
 //!   A process that refuses keeps the restart.
-//! * [`Orchestrator::recover_missing_conversation`]: Claude Code no longer has the conversation a session
+//! * [`Orchestrator::plan_missing_conversation`]: Claude Code no longer has the conversation a session
 //!   resumes (`No conversation found with session ID`). Kybern forgets the id, hands a fresh session the
-//!   conversation so far and sends the user's message once more. A Stop between the two sessions
-//!   ([`Orchestrator::stop_pending_resend`]) ends the turn instead of sending it.
+//!   conversation so far and sends the user's message once more, through the resend guard (`resend.rs`) that
+//!   lets a Stop between the two sessions end the turn instead.
 //! * Retained sessions (any harness, kept for their background work): a background agent's result is shown
 //!   in the thread, and one that stays quiet for [`RETAINED_QUIET_LIMIT`] is stopped.
 
@@ -16,19 +16,27 @@ use super::*;
 /// that never report would otherwise keep a whole harness process until the thread is deleted.
 pub(super) const RETAINED_QUIET_LIMIT: Duration = Duration::from_secs(30 * 60);
 
-/// The turn of a thread being resent to a new session (`resend:<thread>`), and whether Stop came for it
-/// meanwhile (`resend_stopped:<turn>`).
-fn resend_key(thread_id: ThreadId) -> String {
-    format!("resend:{thread_id}")
+/// The longest result of a retained agent the thread shows, in characters; its own thread has all of it.
+pub(super) const RETAINED_RESULT_CHARS: usize = 2000;
+
+/// `text` trimmed and cut at `chars` characters, with an ellipsis when it was cut.
+fn capped(text: &str, chars: usize) -> String {
+    let text = text.trim();
+    match text.char_indices().nth(chars) {
+        Some((end, _)) => format!("{}…", text[..end].trim_end()),
+        None => text.to_string(),
+    }
 }
+
+/// Why background work ends when Claude Code exits while changing model or effort.
+const EXITED_WHILE_SWITCHING: &str = "Stopped because Claude Code exited while changing its model or effort.";
+
+/// How long closing a quiet retained session may take before Kybern stops waiting for it.
+const RETAINED_CLOSE_LIMIT: Duration = Duration::from_secs(30);
 
 /// The last session id Kybern forgot because Claude Code no longer had its conversation.
 fn forgotten_key(thread_id: ThreadId) -> String {
     format!("forgotten_session:{thread_id}")
-}
-
-fn resend_stopped_key(turn_id: TurnId) -> String {
-    format!("resend_stopped:{turn_id}")
 }
 
 /// Claude Code's answer to a `--resume` whose conversation is gone, as a result error and on stderr.
@@ -116,6 +124,10 @@ impl Orchestrator {
             let selector = thread.model.as_deref().unwrap_or("default");
             if let Err(error) = live.session.set_model(selector).await {
                 tracing::info!(thread_id = %thread.id, %error, "Claude Code refused the model change; restarting its session");
+                if matches!(error, kybern_drivers::DriverError::ProcessExited(_)) {
+                    // Not a refusal: the process is gone, and there is nothing to keep.
+                    self.close_unknown_target(thread.id, live, EXITED_WHILE_SWITCHING).await;
+                }
                 return Ok(false);
             }
         }
@@ -123,11 +135,15 @@ impl Orchestrator {
             && let Err(error) = live.session.set_effort(level).await
         {
             tracing::info!(thread_id = %thread.id, %error, "Claude Code refused the effort change; restarting its session");
+            if matches!(error, kybern_drivers::DriverError::ProcessExited(_)) {
+                self.close_unknown_target(thread.id, live, EXITED_WHILE_SWITCHING).await;
+                return Ok(false);
+            }
             // The caller may keep this process for its background work under the identity it had: it must
             // run that identity's model again, or be closed.
             if model_switched && let Err(error) = live.session.set_model(model.as_deref().unwrap_or("default")).await {
                 tracing::warn!(thread_id = %thread.id, %error, "Claude Code could not switch back to its model; closing its session");
-                self.close_unknown_target(thread.id, live).await;
+                self.close_unknown_target(thread.id, live, "Stopped because Claude Code couldn't switch back to its model.").await;
             }
             return Ok(false);
         }
@@ -139,9 +155,9 @@ impl Orchestrator {
         Ok(true)
     }
 
-    /// A live process whose model Kybern no longer knows: close it, background work included, so nothing
-    /// reuses it under an identity it does not have.
-    async fn close_unknown_target(&self, thread_id: ThreadId, live: &Arc<LiveSession>) {
+    /// A live process whose model Kybern no longer knows, or that exited: close it, background work included
+    /// (`detail` says why), so nothing reuses it under an identity it does not have.
+    async fn close_unknown_target(&self, thread_id: ThreadId, live: &Arc<LiveSession>, detail: &str) {
         {
             let mut sessions = self.inner.sessions.lock().await;
             if sessions.get(&thread_id).is_some_and(|current| Arc::ptr_eq(current, live)) {
@@ -150,7 +166,7 @@ impl Orchestrator {
         }
         live.mark_released();
         self.revoke_native_session(live);
-        self.interrupt_runtime_tasks(thread_id, live, "Stopped because Claude Code couldn't switch back to its model.").await;
+        self.interrupt_runtime_tasks(thread_id, live, detail).await;
         if let Err(error) = live.session.close().await {
             tracing::debug!(%thread_id, %error, "closing a Claude session on an unknown model failed");
         }
@@ -186,32 +202,27 @@ impl Orchestrator {
     }
 
     /// A turn failed, or its process exited, because Claude Code could not resume the conversation. Forget
-    /// the dead session and, once per turn, send the same message to a fresh one with the conversation so
-    /// far. Returns whether the turn was taken over (it then neither fails nor completes here). `exited`:
-    /// the event pump already released `live`.
-    pub(super) async fn recover_missing_conversation(
+    /// the dead session and, once per turn, plan to send the same message to a fresh one with the conversation
+    /// so far. Call while holding `live.turn` (the guard is registered before Stop can see no turn), then
+    /// [`Orchestrator::run_resend`] once it is released. `None`: the turn is not taken over. `exited`: the
+    /// event pump already released `live`.
+    pub(super) fn plan_missing_conversation(
         &self,
         thread_id: ThreadId,
         live: &Arc<LiveSession>,
         turn_id: TurnId,
         cause: &str,
         exited: bool,
-    ) -> bool {
-        let Ok(Some(thread)) = self.inner.store.thread_get(thread_id) else { return false };
+    ) -> Option<resend::PlannedResend> {
+        let thread = self.inner.store.thread_get(thread_id).ok().flatten()?;
         // A result's error is Claude Code's own answer; an exit's stderr tail must name this session.
         let dead = if exited {
-            match missing_conversation_on_exit(&thread, cause) {
-                Some(id) => Some(id),
-                None => return false,
-            }
+            Some(missing_conversation_on_exit(&thread, cause)?)
         } else {
-            match missing_conversation_id(thread.provider.kind, cause) {
-                Some(id) => id,
-                None => return false,
-            }
+            missing_conversation_id(thread.provider.kind, cause)?
         };
         if (!exited && live.is_released()) || thread.status == ThreadStatus::Archived {
-            return false;
+            return None;
         }
         let retry_key = format!("fresh_session_retry:{turn_id}");
         let started = self.inner.store.turn_started_message(thread_id, turn_id).ok().flatten();
@@ -223,124 +234,19 @@ impl Orchestrator {
         });
         match self.forget_missing_conversation(thread_id, dead.as_deref(), through) {
             Ok(true) => {}
-            Ok(false) => return false,
+            Ok(false) => return None,
             Err(error) => {
                 tracing::warn!(%thread_id, %error, "could not forget the missing Claude conversation");
-                return false;
+                return None;
             }
         }
         let retried = self.inner.store.meta_get(&retry_key).ok().flatten().is_some();
-        let Some((message_id, mut message)) = started.filter(|_| !retried) else { return false };
-        if self.inner.store.meta_set(&retry_key, "1").is_err() {
-            return false;
-        }
+        let (message_id, mut message) = started.filter(|_| !retried)?;
+        self.inner.store.meta_set(&retry_key, "1").ok()?;
         // The stored prompt holds large images as references (#298); the agent gets them inline again.
         self.resolve_attachments(&mut message);
-        // From here until the fresh session holds the turn there is no live session: Stop records itself.
-        if let Err(error) = self.begin_resend(thread_id, turn_id) {
-            tracing::warn!(%thread_id, %error, "could not record the resend");
-            return false;
-        }
-        {
-            let mut sessions = self.inner.sessions.lock().await;
-            if sessions.get(&thread_id).is_some_and(|current| Arc::ptr_eq(current, live)) {
-                sessions.remove(&thread_id);
-            }
-        }
-        live.mark_released();
-        self.revoke_native_session(live);
-        let (this, live) = (self.clone(), live.clone());
-        tokio::spawn(async move {
-            if let Err(error) = live.session.close().await {
-                tracing::debug!(%error, %thread_id, "closing a session whose conversation was gone failed");
-            }
-            let Some(thread) = this.resend_still_wanted(thread_id, turn_id) else { return };
-            // start_turn reports its own failures.
-            if let Err(error) = this.start_turn_erased(thread, turn_id, message_id, message).await {
-                tracing::info!(%thread_id, %error, "the fresh Claude session could not take the turn");
-            }
-            this.finish_resend(thread_id, turn_id).await;
-        });
-        true
-    }
-
-    /// A turn is about to move to a new session (a lost conversation, a rejected login).
-    pub(super) fn begin_resend(&self, thread_id: ThreadId, turn_id: TurnId) -> Result<()> {
-        self.inner.store.meta_set(&resend_key(thread_id), &turn_id.to_string())
-    }
-
-    fn resend_turn(&self, thread_id: ThreadId) -> Option<TurnId> {
-        self.inner.store.meta_get(&resend_key(thread_id)).ok().flatten().and_then(|turn| turn.parse().ok())
-    }
-
-    /// Stop came while the thread's turn is between two sessions: record it, so the turn ends instead of
-    /// being sent. Returns whether a turn was waiting.
-    pub(super) fn stop_pending_resend(&self, thread_id: ThreadId) -> Result<bool> {
-        let Some(turn_id) = self.resend_turn(thread_id) else { return Ok(false) };
-        tracing::info!(%thread_id, %turn_id, "stopped a turn waiting for its new session");
-        self.inner.store.meta_set(&resend_stopped_key(turn_id), "1")?;
-        Ok(true)
-    }
-
-    fn resend_was_stopped(&self, turn_id: TurnId) -> bool {
-        self.inner.store.meta_get(&resend_stopped_key(turn_id)).ok().flatten().is_some_and(|stopped| !stopped.is_empty())
-    }
-
-    /// The thread, when its turn should still be sent: not stopped, still running and not archived.
-    /// Otherwise the turn is ended as interrupted and `None` returned.
-    pub(super) fn resend_still_wanted(&self, thread_id: ThreadId, turn_id: TurnId) -> Option<Thread> {
-        let thread = self.inner.store.thread_get(thread_id).ok().flatten();
-        let running = thread.as_ref().is_some_and(|thread| matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval));
-        if running && !self.resend_was_stopped(turn_id) {
-            return thread;
-        }
-        tracing::info!(%thread_id, %turn_id, "not resending a turn that was stopped meanwhile");
-        self.clear_resend(thread_id, turn_id);
-        if running {
-            let _ = self.emit(
-                thread_id,
-                Some(turn_id),
-                EventPayload::TurnCompleted {
-                    stop_reason: StopReason::Interrupted,
-                    usage: Usage::default(),
-                    cost_usd: None,
-                    duration_ms: 0,
-                    terminal_message_id: None,
-                },
-            );
-            if let Some(mut thread) = thread {
-                thread.status = ThreadStatus::Idle;
-                let _ = self.update_thread(thread);
-            }
-            self.delegation_turn_finished(
-                thread_id,
-                turn_id,
-                delegation::TurnOutcome::Completed { stop_reason: StopReason::Interrupted, terminal_message_id: None },
-            );
-        }
-        None
-    }
-
-    /// The new session took the turn (or failed to): a Stop that came while it started reaches it now.
-    pub(super) async fn finish_resend(&self, thread_id: ThreadId, turn_id: TurnId) {
-        let stopped = self.resend_was_stopped(turn_id);
-        self.clear_resend(thread_id, turn_id);
-        if stopped && let Err(error) = self.interrupt_turn_erased(thread_id).await {
-            tracing::debug!(%thread_id, %error, "the resent turn had nothing left to stop");
-        }
-    }
-
-    /// `interrupt_turn` behind a boxed future: a resend runs inside an event pump's task, and interrupting
-    /// can reach that pump again (see `start_turn_erased`).
-    fn interrupt_turn_erased(&self, thread_id: ThreadId) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
-        Box::pin(self.interrupt_turn(thread_id, "stop while the turn moved to a new session"))
-    }
-
-    pub(super) fn clear_resend(&self, thread_id: ThreadId, turn_id: TurnId) {
-        if self.resend_turn(thread_id) == Some(turn_id) {
-            let _ = self.inner.store.meta_set(&resend_key(thread_id), "");
-        }
-        let _ = self.inner.store.meta_set(&resend_stopped_key(turn_id), "");
+        let guard = self.begin_resend(thread_id, turn_id, resend::ResendReason::MissingConversation);
+        Some(resend::PlannedResend { guard, message_id, message, login: None })
     }
 
     /// A process that exited outside a turn because its conversation is gone: forget the id, so the next
@@ -356,37 +262,47 @@ impl Orchestrator {
     }
 
     /// A background agent of a retained session ended. The receiving session never sees its result, so the
-    /// thread shows it; the agent's own thread keeps the whole conversation.
+    /// thread shows it; the agent's own thread keeps the whole conversation. A failure is a plain sentence
+    /// with the harness's error behind Show details; a result is cut at [`RETAINED_RESULT_CHARS`].
     pub(super) fn report_retained_agent(&self, thread_id: ThreadId, task: &RuntimeTask) {
         if task.kind != RuntimeTaskKind::Agent || task.status.is_active() {
             return;
         }
-        let ended = match task.status {
-            RuntimeTaskStatus::Failed => "failed",
-            RuntimeTaskStatus::Stopped | RuntimeTaskStatus::Interrupted => "stopped",
-            _ => "finished",
-        };
         let name = if task.title.trim().is_empty() { "A background agent".to_string() } else { format!("“{}”", task.title.trim()) };
-        let result = self.subagent_result(thread_id, &task.id).or_else(|| task.detail.clone()).filter(|text| !text.trim().is_empty());
-        let text = match result {
-            Some(result) => {
-                format!("{name} {ended} in the session this thread had before. The agent here didn't get its result:\n\n{}", result.trim())
-            }
-            None => format!("{name} {ended} in the session this thread had before. Its result is in its own thread."),
+        let data = Some(serde_json::json!({ "retained_task": task.id }));
+        let (level, text, problem) = if task.status == RuntimeTaskStatus::Failed {
+            let problem = task
+                .detail
+                .as_deref()
+                .map(str::trim)
+                .filter(|detail| !detail.is_empty())
+                .map(|detail| kybern_protocol::rpc::Problem::new(kybern_protocol::rpc::ProblemKind::Internal, detail));
+            let text = format!("{name} failed in the session this thread had before. Its own thread shows how far it got.");
+            (NoticeLevel::Warning, text, problem)
+        } else {
+            let ended =
+                if matches!(task.status, RuntimeTaskStatus::Stopped | RuntimeTaskStatus::Interrupted) { "stopped" } else { "finished" };
+            let result = self.subagent_result(thread_id, &task.id).or_else(|| task.detail.clone()).filter(|text| !text.trim().is_empty());
+            let text = match result {
+                Some(result) => format!(
+                    "{name} {ended} in the session this thread had before. The agent here didn't get its result:\n\n{}",
+                    capped(&result, RETAINED_RESULT_CHARS)
+                ),
+                None => format!("{name} {ended} in the session this thread had before. Its result is in its own thread."),
+            };
+            (NoticeLevel::Info, text, None)
         };
-        let level = if task.status == RuntimeTaskStatus::Failed { NoticeLevel::Warning } else { NoticeLevel::Info };
-        if let Err(error) = self.emit(
-            thread_id,
-            None,
-            EventPayload::ProviderNotice { level, text, data: Some(serde_json::json!({ "retained_task": task.id })), problem: None },
-        ) {
+        if let Err(error) = self.emit(thread_id, None, EventPayload::ProviderNotice { level, text, data, problem }) {
             tracing::warn!(%thread_id, %error, "could not show a retained agent's result");
         }
     }
 
     /// Close retained sessions kept only for background agents that sent nothing for `RETAINED_QUIET_LIMIT`.
-    /// A session that also runs a process or monitor (a dev server) is the person's to stop.
-    pub(super) async fn close_quiet_retained_sessions(&self, now: Instant, wall_now: SystemTime) -> Result<()> {
+    /// A session that also runs a process or monitor (a dev server) is the person's to stop. Quiet time is
+    /// monotonic (`now` against the last event's `Instant`), so time a laptop spent asleep doesn't count: the
+    /// agents could not have reported then. Closing runs in the background, bounded by
+    /// [`RETAINED_CLOSE_LIMIT`], so a process that never closes can't hold up the idle sweep.
+    pub(super) async fn close_quiet_retained_sessions(&self, now: Instant) {
         let retained =
             self.inner.retained_sessions.lock().await.iter().map(|(key, (_, live))| (key.clone(), live.clone())).collect::<Vec<_>>();
         for ((thread_id, identity), live) in retained {
@@ -395,7 +311,7 @@ impl Orchestrator {
                 let active = tasks.values().filter(|task| task.status.is_active()).collect::<Vec<_>>();
                 (!active.is_empty() && active.iter().all(|task| task.kind == RuntimeTaskKind::Agent), active.len())
             };
-            if !agents_only || live.last_activity().idle_for(now, wall_now) < RETAINED_QUIET_LIMIT {
+            if !agents_only || now.saturating_duration_since(live.last_activity().monotonic) < RETAINED_QUIET_LIMIT {
                 continue;
             }
             let removed = {
@@ -413,10 +329,14 @@ impl Orchestrator {
             self.interrupt_runtime_tasks(thread_id, &live, &format!("Stopped after {minutes} minutes without progress.")).await;
             live.mark_released();
             self.revoke_native_session(&live);
-            if let Err(error) = live.session.close().await {
-                tracing::debug!(%thread_id, %error, "closing a quiet retained session failed");
-            }
-            self.emit(
+            tokio::spawn(async move {
+                match tokio::time::timeout(RETAINED_CLOSE_LIMIT, live.session.close()).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => tracing::debug!(%thread_id, %error, "closing a quiet retained session failed"),
+                    Err(_) => tracing::warn!(%thread_id, "a quiet retained session did not close in time"),
+                }
+            });
+            if let Err(error) = self.emit(
                 thread_id,
                 None,
                 EventPayload::ProviderNotice {
@@ -427,9 +347,10 @@ impl Orchestrator {
                     data: None,
                     problem: None,
                 },
-            )?;
+            ) {
+                tracing::warn!(%thread_id, %error, "could not tell the thread its quiet background agents were stopped");
+            }
         }
-        Ok(())
     }
 }
 
