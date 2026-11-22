@@ -203,7 +203,7 @@ fn signed_out_problem(kind: ProviderKind, detail: &str) -> Problem {
 }
 
 /// A usage limit is the account being refused for now, not a fault: `permission`, subject `rate_limit`.
-fn rate_limited_problem(kind: ProviderKind, detail: &str) -> Problem {
+pub(crate) fn rate_limited_problem(kind: ProviderKind, detail: &str) -> Problem {
     Problem::new(ProblemKind::Permission, detail).with_subject("rate_limit").with_copy(
         format!("{} reached its usage limit", label(kind)),
         "Wait for the limit to reset, or switch to another account or model, then send your message again.",

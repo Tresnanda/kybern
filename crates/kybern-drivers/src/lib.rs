@@ -679,7 +679,7 @@ mod lifecycle_tests {
                 model: None,
                 effort: None,
                 permission_mode: match kind {
-                    // Grok Build advertises only Auto and Full access.
+                    // Cursor runs in Auto; Grok Build works in any mode.
                     ProviderKind::Cursor | ProviderKind::GrokBuild => PermissionMode::Auto,
                     ProviderKind::Antigravity => PermissionMode::FullAccess,
                     _ => PermissionMode::Supervised,
