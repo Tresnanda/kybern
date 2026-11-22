@@ -424,6 +424,13 @@ impl Orchestrator {
         Ok(())
     }
 
+    /// The last thing a subagent of `root` said, its answer once it finished.
+    pub(super) fn subagent_result(&self, root: ThreadId, task_id: &str) -> Option<String> {
+        let router = self.inner.subagents.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let child = router.keys.get(&(root, task_id.to_string()))?;
+        router.children.get(child)?.terminal_text.clone()
+    }
+
     /// Thread that becomes the parent of a new subagent thread: the subagent
     /// that launched it, when known, else the root thread.
     fn subagent_parent(&self, router: &SubagentRouter, root: ThreadId, task: &RuntimeTask) -> ThreadId {

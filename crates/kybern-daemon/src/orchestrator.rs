@@ -1208,6 +1208,7 @@ impl Orchestrator {
         now: Instant,
         wall_now: SystemTime,
     ) -> Result<Vec<SessionRelease>> {
+        self.close_quiet_retained_sessions(now, wall_now).await?;
         let (idle_limit, cap, idle_reason) = if saving_power {
             (Some(BackgroundSettings::BATTERY_SESSION_IDLE), None, SessionReleaseReason::Power)
         } else {
@@ -2798,7 +2799,13 @@ impl Orchestrator {
     }
 
     async fn interrupt_with_grace(&self, thread_id: ThreadId, grace: Duration) -> Result<()> {
-        let live = self.inner.sessions.lock().await.get(&thread_id).cloned().ok_or_else(|| anyhow!("thread has no live session"))?;
+        let Some(live) = self.inner.sessions.lock().await.get(&thread_id).cloned() else {
+            // A turn moving to a new session (`claude_sessions.rs`) has none for a moment: it ends instead.
+            if self.stop_pending_resend(thread_id)? {
+                return Ok(());
+            }
+            return Err(anyhow!("thread has no live session"));
+        };
         let response_id = live.turn.lock().await.as_ref().map(|turn| turn.response_id);
         live.touch();
         let this = self.clone();
@@ -3091,12 +3098,19 @@ impl Orchestrator {
         answered_by: Option<&RequestAnswerer>,
     ) -> Option<ApprovalDecision> {
         let ApprovalDecision::Deny { reason: Some(reason) } = decision else { return None };
-        if answered_by.is_some() || reason.trim().is_empty() || approval.tool_name == "mcp_elicitation" {
+        let thread = self.inner.store.thread_get(approval.thread_id).ok().flatten()?;
+        if thread.provider.kind != ProviderKind::ClaudeCode {
             return None;
         }
-        let thread = self.inner.store.thread_get(approval.thread_id).ok().flatten()?;
-        (thread.provider.kind == ProviderKind::ClaudeCode)
-            .then(|| ApprovalDecision::Deny { reason: Some(kybern_drivers::claude::user_decline_feedback(reason)) })
+        // Declining a form is an explicit no whatever the reason says; MCP has no field for the reason, and
+        // Claude Code would read one as Kybern cancelling the form.
+        if approval.tool_name == "mcp_elicitation" {
+            return Some(ApprovalDecision::Deny { reason: None });
+        }
+        if answered_by.is_some() || reason.trim().is_empty() {
+            return None;
+        }
+        Some(ApprovalDecision::Deny { reason: Some(kybern_drivers::claude::user_decline_feedback(reason)) })
     }
 
     /// The harness's own response for normalized answers (`{"kybern_answers": [...]}`); any other decision unchanged.

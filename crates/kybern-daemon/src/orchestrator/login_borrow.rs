@@ -128,6 +128,11 @@ impl Orchestrator {
         let Ok(Some((message_id, mut message))) = self.inner.store.turn_started_message(thread_id, turn_id) else { return false };
         // The stored prompt holds large images as references (#298); the agent gets them inline again.
         self.resolve_attachments(&mut message);
+        // Until the new session holds the turn there is no live session: Stop records itself instead.
+        if let Err(error) = self.begin_resend(thread_id, turn_id) {
+            tracing::warn!(%thread_id, %error, "could not record the resend");
+            return false;
+        }
         {
             let mut sessions = self.inner.sessions.lock().await;
             if sessions.get(&thread_id).is_some_and(|current| Arc::ptr_eq(current, live)) {
@@ -145,13 +150,23 @@ impl Orchestrator {
             }
             let renewed = broker.renew(kind, &instance, &account).await;
             let restarted = match renewed {
-                Ok(()) => match this.inner.store.thread_get(thread_id) {
-                    Ok(Some(thread)) => {
-                        this.start_turn_erased(thread, turn_id, message_id, message).await.map_err(|error| error.to_string())
+                Ok(()) => match this.resend_still_wanted(thread_id, turn_id) {
+                    Some(thread) => {
+                        let sent = this.start_turn_erased(thread, turn_id, message_id, message).await.map_err(|error| error.to_string());
+                        this.finish_resend(thread_id, turn_id).await;
+                        sent
                     }
-                    _ => Err("The thread no longer exists.".to_string()),
+                    // Stopped, archived or gone meanwhile: the turn already ended.
+                    None => Ok(()),
                 },
-                Err(text) => Err(text),
+                // A Stop that came while the login was renewed already ended the turn.
+                Err(text) => match this.resend_still_wanted(thread_id, turn_id) {
+                    Some(_) => {
+                        this.clear_resend(thread_id, turn_id);
+                        Err(text)
+                    }
+                    None => Ok(()),
+                },
             };
             if let Err(text) = restarted {
                 // start_turn reports its own failures; a failed borrow is reported here.
