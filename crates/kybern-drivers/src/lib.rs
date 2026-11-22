@@ -649,6 +649,12 @@ pub trait AgentDriver: Send + Sync {
     fn supports_fork(&self) -> bool {
         true
     }
+    /// Whether a session can run in (or switch to) `mode` on this machine now. Every harness takes
+    /// every mode the daemon offers it, except Antigravity: only its ACP transport (agy 1.5.0 or
+    /// later) can ask before acting, so without it Antigravity takes Full access alone.
+    fn accepts_permission_mode(&self, mode: PermissionMode) -> bool {
+        self.kind() != ProviderKind::Antigravity || mode == PermissionMode::FullAccess
+    }
     /// Run a single tool-free prompt and return the model's text. Used for thread titles.
     /// `env` is the account environment of whoever the prompt is for (a named account's
     /// `CODEX_HOME` / `CLAUDE_CONFIG_DIR`); without it the CLI would use this machine's own login.

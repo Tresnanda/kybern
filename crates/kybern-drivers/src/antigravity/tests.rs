@@ -542,11 +542,19 @@ async fn spawn_refuses_what_agy_cannot_do() {
     std::fs::write(&binary, "").unwrap();
     let driver = AntigravityDriver::default();
     for mode in [PermissionMode::Supervised, PermissionMode::AcceptEdits, PermissionMode::Auto] {
+        // An agy that can't run ACP takes Full access alone, and says how to get the other modes.
         let mut refused = config(&binary, root.path());
         refused.permission_mode = mode;
         let Err(error) = driver.spawn(refused).await else { panic!("{mode:?} must be refused") };
+        assert!(error.to_string().contains(NEEDS_ACP), "{error}");
+        // Forced to `-p`, it only runs in Full access.
+        let mut forced = config(&binary, root.path());
+        forced.permission_mode = mode;
+        forced.env.insert(PRINT_MODE_ENV.into(), "1".into());
+        let Err(error) = driver.spawn(forced).await else { panic!("{mode:?} must be refused") };
         assert!(error.to_string().contains("Antigravity only runs in Full access. Choose Full access, or pick another agent."), "{error}");
     }
+    assert!(driver.accepts_permission_mode(PermissionMode::FullAccess) && !driver.accepts_permission_mode(PermissionMode::Supervised));
     let mut forked = config(&binary, root.path());
     forked.fork = true;
     assert!(driver.spawn(forked).await.is_err());

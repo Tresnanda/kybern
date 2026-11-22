@@ -389,7 +389,7 @@ fn is_not_found_error(raw: &str) -> bool {
 }
 
 /// A failed run, in Antigravity's friendly words, with the cause the raw text names.
-fn failed(raw: &str, reached_model: bool) -> DriverEvent {
+pub(crate) fn failed(raw: &str, reached_model: bool) -> DriverEvent {
     let problem = crate::failure::classify(ProviderKind::Antigravity, raw).or_else(|| {
         if is_invalid_thinking_signature(raw) {
             return Some(
