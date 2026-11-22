@@ -190,8 +190,27 @@ pub async fn install(context: &ProbeContext) -> Result<PathBuf> {
     if !output.status.success() {
         return Err(DriverError::Protocol(diagnostic(&output.stderr)));
     }
-    std::fs::rename(&staging, &destination)?;
+    promote(&staging, &destination)?;
     Ok(destination)
+}
+
+/// Whether `dir` holds the pinned SDK.
+fn holds_pinned(dir: &std::path::Path) -> bool {
+    std::fs::read(dir.join("node_modules/@cursor/sdk/package.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .is_some_and(|manifest| manifest["version"] == SDK_VERSION)
+}
+
+/// Moves the finished install into place. Another process (the CLI beside the
+/// daemon) can install the same version at the same moment, and the second
+/// rename then fails because the destination is not empty; that is a success.
+fn promote(staging: &std::path::Path, destination: &std::path::Path) -> Result<()> {
+    match std::fs::rename(staging, destination) {
+        Ok(()) => Ok(()),
+        Err(_) if holds_pinned(destination) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 pub(super) fn npm_in(context: &ProbeContext) -> std::result::Result<PathBuf, which::Error> {
@@ -257,11 +276,7 @@ pub(super) fn ensure_current(context: &ProbeContext) -> Result<()> {
 
 /// Whether the pinned SDK is in place where new sessions load it.
 pub fn installed(context: &ProbeContext) -> bool {
-    let Ok(dir) = sdk_dir(context) else { return false };
-    std::fs::read(dir.join("node_modules/@cursor/sdk/package.json"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .is_some_and(|manifest| manifest["version"] == SDK_VERSION)
+    sdk_dir(context).is_ok_and(|dir| holds_pinned(&dir))
 }
 
 /// The Node.js that will run the SDK, e.g. `v24.1.0`, or why it cannot.
@@ -515,18 +530,7 @@ out.mkdir(parents=True, exist_ok=True)
         let err = reason_of(probe(&context).await.unwrap_err());
         assert!(err.contains("SDK 1.2.0") && err.contains(SDK_VERSION) && err.contains("Update it"), "{err}");
 
-        let destination = {
-            let mut attempts = 0;
-            loop {
-                match install(&context).await {
-                    Err(DriverError::Io(error)) if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 50 => {
-                        attempts += 1;
-                        tokio::time::sleep(Duration::from_millis(20)).await;
-                    }
-                    result => break result.unwrap(),
-                }
-            }
-        };
+        let destination = install(&context).await.unwrap();
         assert_eq!(destination, home.path().join(".kybern/cache/cursor-sdk").join(SDK_VERSION));
         assert!(installed(&context));
         // The earlier 1.2.0 directory stays untouched for any running host.
@@ -549,6 +553,30 @@ out.mkdir(parents=True, exist_ok=True)
         std::fs::write(old.join("package.json"), r#"{"version":"1.2.0"}"#).unwrap();
         assert_eq!(reason_of(ensure_current(&context).unwrap_err()), outdated("1.2.0"));
         assert!(updating("1.2.0").contains("1.2.0") && updating("1.2.0").contains(SDK_VERSION));
+    }
+
+    #[test]
+    fn a_second_process_that_installed_the_same_sdk_first_is_not_an_error() {
+        let root = tempfile::tempdir().unwrap();
+        let staged = |name: &str| {
+            let dir = root.path().join(name);
+            std::fs::create_dir_all(dir.join("node_modules/@cursor/sdk")).unwrap();
+            dir
+        };
+        // The other process finished first: the destination holds the pinned SDK.
+        let destination = staged("destination");
+        std::fs::write(destination.join("node_modules/@cursor/sdk/package.json"), format!(r#"{{"version":"{SDK_VERSION}"}}"#)).unwrap();
+        let ours = staged("ours");
+        std::fs::write(ours.join("node_modules/@cursor/sdk/package.json"), format!(r#"{{"version":"{SDK_VERSION}"}}"#)).unwrap();
+        assert!(promote(&ours, &destination).is_ok());
+        assert!(holds_pinned(&destination));
+        // A destination that does not hold the pinned SDK stays an error.
+        let other = staged("other");
+        std::fs::write(other.join("node_modules/@cursor/sdk/package.json"), r#"{"version":"0.0.1"}"#).unwrap();
+        assert!(promote(&ours, &other).is_err());
+        // Nothing in the way: a plain move.
+        let free = root.path().join("free");
+        assert!(promote(&ours, &free).is_ok() && holds_pinned(&free));
     }
 
     #[test]

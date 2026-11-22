@@ -754,7 +754,16 @@ mod lifecycle_tests {
                 rewind: None,
                 binary: Some(binary.clone()),
                 env: if kind == ProviderKind::Cursor {
-                    std::collections::HashMap::from([("KYBERN_CURSOR_NODE".into(), binary.display().to_string())])
+                    // A scratch SDK folder holding the pinned version, so the test never reads
+                    // (or starts an update of) the SDK in the real home folder.
+                    let sdk = root.path().join("cursor-sdk");
+                    let package = sdk.join("node_modules/@cursor/sdk");
+                    std::fs::create_dir_all(&package).unwrap();
+                    std::fs::write(package.join("package.json"), format!(r#"{{"version":"{}"}}"#, crate::cursor::SDK_VERSION)).unwrap();
+                    std::collections::HashMap::from([
+                        ("KYBERN_CURSOR_NODE".into(), binary.display().to_string()),
+                        ("KYBERN_CURSOR_SDK_DIR".into(), sdk.display().to_string()),
+                    ])
                 } else {
                     std::collections::HashMap::new()
                 },

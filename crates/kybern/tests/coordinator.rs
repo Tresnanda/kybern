@@ -28,6 +28,8 @@ impl ScratchDaemon {
             .arg("--data-dir")
             .arg(&data)
             .args(["--port", "0", "--bind", "127.0.0.1"])
+            // These daemons run with the developer's real home folder: never let one install an SDK there.
+            .env("KYBERN_CURSOR_AUTO_UPDATE", "0")
             .env_remove("KYBERN_URL")
             .env_remove("KYBERN_TOKEN")
             .env_remove("KYBERN_ADVERTISE_URL")

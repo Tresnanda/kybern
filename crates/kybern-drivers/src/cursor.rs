@@ -561,6 +561,33 @@ mod tests {
         assert!(validate_mode(PermissionMode::Supervised).is_err());
         assert!(validate_mode(PermissionMode::AcceptEdits).is_err());
     }
+    #[tokio::test]
+    async fn starting_a_session_with_only_an_earlier_sdk_says_to_update_without_starting_node() {
+        let home = tempfile::tempdir().unwrap();
+        let old = home.path().join(".kybern/cache/cursor-sdk/1.2.0/node_modules/@cursor/sdk");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("package.json"), r#"{"version":"1.2.0"}"#).unwrap();
+        let config = SessionConfig {
+            cwd: home.path().into(),
+            model: None,
+            effort: None,
+            permission_mode: PermissionMode::Auto,
+            native_tool_bridge: None,
+            resume_session_id: None,
+            resume_lacks_instructions: false,
+            fork: false,
+            rewind: None,
+            binary: None,
+            env: std::collections::HashMap::from([
+                ("HOME".into(), home.path().display().to_string()),
+                ("USERPROFILE".into(), home.path().display().to_string()),
+            ]),
+            compaction: Default::default(),
+        };
+        let Err(error) = CursorDriver.spawn(config).await else { panic!("a session started without the pinned SDK") };
+        assert_eq!(reason(error), runtime::outdated("1.2.0"));
+    }
+
     #[test]
     fn guide_wraps_the_first_prompt_and_is_removed_from_saved_history() {
         let prompt = with_guide("GUIDE", "Fix the bug");

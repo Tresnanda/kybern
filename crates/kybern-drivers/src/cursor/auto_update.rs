@@ -26,6 +26,9 @@ use crate::ProbeContext;
 /// How long a failed update waits before the next probe may start another.
 const RETRY_AFTER: Duration = Duration::from_secs(6 * 60 * 60);
 
+/// Shown behind "Show details" when the install task ended without a result.
+const STOPPED: &str = "The automatic update stopped before it finished. Update it in Settings → Agent providers.";
+
 type Finished = Arc<dyn Fn() + Send + Sync>;
 
 static ENABLED: OnceLock<Finished> = OnceLock::new();
@@ -87,22 +90,24 @@ pub(super) fn request(context: &ProbeContext) -> Option<Update> {
     drop(updates);
     let context = context.clone();
     tokio::spawn(async move {
-        // Settles the entry even if the install task is dropped or panics.
-        struct Settle(PathBuf, Option<String>);
+        // Settles the entry and refreshes what the caller shows, even if the
+        // install task is dropped or panics.
+        struct Settle(PathBuf, Option<String>, Finished);
         impl Drop for Settle {
             fn drop(&mut self) {
-                let mut updates = UPDATES.lock().unwrap_or_else(|poison| poison.into_inner());
-                match self.1.take() {
-                    None => updates.remove(&self.0),
-                    Some(error) => updates.insert(self.0.clone(), Entry::Failed { at: Instant::now(), error }),
-                };
+                {
+                    let mut updates = UPDATES.lock().unwrap_or_else(|poison| poison.into_inner());
+                    match self.1.take() {
+                        None => updates.remove(&self.0),
+                        Some(error) => updates.insert(self.0.clone(), Entry::Failed { at: Instant::now(), error }),
+                    };
+                }
+                (self.2)();
             }
         }
-        let mut settle = Settle(dir, Some("The automatic update stopped before it finished.".into()));
+        let mut settle = Settle(dir, Some(STOPPED.into()), finished);
         let result = super::runtime::install(&context).await;
         settle.1 = result.err().map(super::reason);
-        drop(settle);
-        finished();
     });
     Some(Update::Running)
 }
@@ -140,6 +145,13 @@ mod tests {
         context: ProbeContext,
     }
 
+    impl Drop for Machine {
+        /// A test that fails before opening the gate must not leave npm polling.
+        fn drop(&mut self) {
+            let _ = std::fs::write(self.home.path().join("gate"), "");
+        }
+    }
+
     impl Machine {
         fn new(previous: Option<&str>) -> Self {
             let home = tempfile::tempdir().unwrap();
@@ -160,7 +172,10 @@ import json, os, pathlib, sys, time
 state = pathlib.Path({state:?})
 with open(state / 'npm-runs', 'a') as runs:
     runs.write('run\n')
+deadline = time.time() + 60
 while not (state / 'gate').exists():
+    if time.time() > deadline:
+        sys.exit(1)
     time.sleep(0.01)
 if (state / 'fail').exists():
     sys.stderr.write('npm ERR! network request failed\n')

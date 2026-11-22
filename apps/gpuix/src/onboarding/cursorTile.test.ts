@@ -8,6 +8,8 @@ const sdk = (over: Partial<CursorSetupStatus> = {}): CursorSetupStatus => ({ sdk
 
 test('an automatic SDK update reads as installing, and a failed one as an update to run', () => {
   expect(agentFor('cursor', [provider()], [], sdk({ installing: true }), true)).toMatchObject({ state: 'installing', reason: expect.stringContaining('Updating') })
-  expect(agentFor('cursor', [provider()], [], sdk({ error: 'npm ERR!', problem: 'Install Node.js' }), true).state).toBe('update')
-  expect(agentFor('cursor', [provider()], [], sdk(), true).state).toBe('missing')
+  expect(agentFor('cursor', [provider()], [], sdk({ error: 'npm ERR! network request failed' }), true).state).toBe('update')
+  expect(agentFor('cursor', [provider()], [], sdk({ problem: 'Install Node.js' }), true).state).toBe('update')
+  // No earlier SDK and nothing wrong: Cursor is simply not installed.
+  expect(agentFor('cursor', [provider()], [], sdk({ previous_version: null }), true).state).toBe('missing')
 })

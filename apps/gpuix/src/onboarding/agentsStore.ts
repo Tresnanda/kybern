@@ -109,7 +109,7 @@ export function agentFor(kind: ProviderKind, providers: readonly ProviderStatus[
   if (kind === 'cursor' && status) {
     // Cursor's sign-in lives in its own SDK status, not in the account list.
     if (status.available && cursor) state = cursor.account === 'signed_in' || cursor.account === 'api_key' ? 'ready' : cursor.account === 'signed_out' ? 'signin' : 'unknown'
-    else if (!status.available) state = cursor?.installing ? 'installing' : cursor?.problem ? 'update' : 'missing'
+    else if (!status.available) state = cursor?.installing ? 'installing' : cursor?.previous_version || cursor?.problem ? 'update' : 'missing'
   }
   const signed = mine.find((a) => a.status === 'signed_in')
   const reason = status?.unavailable_reason ?? (kind === 'cursor' ? (cursor?.problem ?? cursor?.error ?? null) : null)
