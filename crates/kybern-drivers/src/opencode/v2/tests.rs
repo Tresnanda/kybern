@@ -154,7 +154,8 @@ async fn interrupted_and_failed_executions_end_the_turn() {
 
 #[tokio::test]
 async fn subagent_output_reaches_its_thread_and_never_the_root() {
-    let (session, mut rx) = session("http://127.0.0.1:9");
+    let mock = Mock::start(|_, _, _| Reply::Json(200, json!({}))).await;
+    let (session, mut rx) = session(&mock.base);
     let frames = [
         event("session.tool.input.started", json!({"sessionID":"ses_root","id":"call_s","name":"subagent"})),
         event(
@@ -284,7 +285,7 @@ async fn permissions_and_forms_reply_to_their_native_endpoints() {
 
 #[tokio::test]
 async fn skills_commands_mode_and_model_use_v2_endpoints() {
-    let (base, server) = mock(4).await;
+    let (base, server) = mock(5).await;
     let (session, _rx) = session(&base);
     session.state.lock().await.commands =
         vec![ProviderCommand { name: "review".into(), description: "Review".into(), ..Default::default() }];
@@ -302,9 +303,10 @@ async fn skills_commands_mode_and_model_use_v2_endpoints() {
     assert!(requests[1].starts_with("POST /api/session/ses_root/command "));
     assert_eq!(body(&requests[1])["name"], "review");
     assert_eq!(body(&requests[1])["text"], "changed files");
-    assert!(requests[2].starts_with("PATCH /api/session/ses_root "));
-    assert_eq!(body(&requests[2])["permissions"][1], json!({"action":"shell","resource":"*","effect":"ask"}));
-    assert_eq!(body(&requests[3]), json!({"model":{"providerID":"openrouter","id":"openai/gpt-x","variant":"high"}}));
+    assert!(requests[2].starts_with("GET /api/session?parentID=ses_root"), "the subagents are listed first: {}", requests[2]);
+    assert!(requests[3].starts_with("PATCH /api/session/ses_root "));
+    assert_eq!(body(&requests[3])["permissions"][1], json!({"action":"shell","resource":"*","effect":"ask"}));
+    assert_eq!(body(&requests[4]), json!({"model":{"providerID":"openrouter","id":"openai/gpt-x","variant":"high"}}));
 }
 
 #[test]
@@ -422,7 +424,8 @@ async fn an_effort_switch_resends_the_current_model_with_the_variant() {
 
 // --- Subagent rules, resumed subagents and turn recovery --------------------------------------------------
 
-use crate::opencode::resilience_tests::{Mock, Reply, frame};
+use crate::AgentDriver;
+use crate::opencode::resilience_tests::{Mock, Reply, fake_opencode, frame, session_config};
 
 fn drain(rx: &mut mpsc::Receiver<DriverEvent>) -> Vec<DriverEvent> {
     std::iter::from_fn(|| rx.try_recv().ok()).collect()
@@ -440,13 +443,14 @@ async fn start_subagent(session: &OpencodeSession, call: &str, child: &str) {
 }
 
 #[tokio::test]
-async fn a_new_subagent_inherits_the_rules_and_a_mode_change_rewrites_the_running_ones() {
+async fn a_new_subagent_is_written_and_a_mode_change_rewrites_every_subagent_finished_ones_too() {
     let mock = Mock::start(|_, _, _| Reply::Json(200, json!({}))).await;
     let (session, _rx) = session(&mock.base);
     let scope = vec![json!({"action":"*","resource":"*","effect":"deny"}), json!({"action":"kybern_*","resource":"*","effect":"allow"})];
     session.state.lock().await.restrictions = scope.clone();
     let handle = Handle(session.clone(), std::sync::Mutex::new(None), None);
-    // OpenCode 2 copies the parent's whole ruleset into a subagent it creates: nothing to write.
+    // OpenCode 2 copies the parent's ruleset into a subagent it creates, but that
+    // may be the ruleset from before a change still on its way: it is written anyway.
     session
         .handle_event(&event("session.created", json!({"sessionID":"ses_kid","parentID":"ses_root","title":"A (@general subagent)"})))
         .await;
@@ -454,18 +458,26 @@ async fn a_new_subagent_inherits_the_rules_and_a_mode_change_rewrites_the_runnin
         .handle_event(&event("session.created", json!({"sessionID":"ses_done","parentID":"ses_root","title":"B (@general subagent)"})))
         .await;
     session.handle_event(&event("session.execution.succeeded", json!({"sessionID":"ses_done"}))).await;
-    assert!(mock.requests("PATCH", "/api/session/ses_kid").is_empty());
+    let supervised: Vec<Value> = ruleset(PermissionMode::Supervised).into_iter().chain(scope.clone()).collect();
+    for id in ["ses_kid", "ses_done"] {
+        let writes = mock.requests("PATCH", &format!("/api/session/{id}"));
+        assert_eq!(writes.len(), 1, "{id}");
+        assert_eq!(writes[0].body["permissions"], json!(supervised), "{id}");
+    }
 
     handle.set_permission_mode(PermissionMode::AcceptEdits).await.unwrap();
 
     let expected: Vec<Value> = ruleset(PermissionMode::AcceptEdits).into_iter().chain(scope).collect();
     assert_eq!(session.state.lock().await.mode, PermissionMode::AcceptEdits);
-    for id in ["ses_root", "ses_kid"] {
+    let root = mock.requests("PATCH", "/api/session/ses_root");
+    assert_eq!(root.len(), 1);
+    assert_eq!(root[0].body["permissions"], json!(expected), "the root keeps the coordinator's tool scope too");
+    for id in ["ses_kid", "ses_done"] {
         let writes = mock.requests("PATCH", &format!("/api/session/{id}"));
-        assert_eq!(writes.len(), 1, "{id}");
-        assert_eq!(writes[0].body["permissions"], json!(expected), "{id} keeps the coordinator's tool scope too");
+        assert_eq!(writes.len(), 2, "{id} is rewritten at once, finished or not");
+        assert_eq!(writes[1].body["permissions"], json!(expected), "{id}");
+        assert!(session.state.lock().await.children[id].rules_current, "{id}");
     }
-    assert!(mock.requests("PATCH", "/api/session/ses_done").is_empty(), "a finished subagent is left alone");
 }
 
 #[tokio::test]
@@ -493,15 +505,15 @@ async fn a_resumed_subagent_reports_its_new_run_and_is_given_the_current_rules()
         .await;
     session.handle_event(&event("session.execution.succeeded", json!({"sessionID":"ses_kid"}))).await;
     assert_eq!(ends(drain(&mut rx)), ["started None", "started Some(\"call_1\")", "completed Some(Completed)", "started Some(\"call_1\")"]);
-    assert!(mock.requests("PATCH", "/api/session/ses_kid").is_empty(), "it was created under the current rules");
+    assert_eq!(mock.requests("PATCH", "/api/session/ses_kid").len(), 1, "written once, when it was created");
 
     // A second call resumes the same session: it may hold an older mode's rules.
     start_subagent(&session, "call_2", "ses_kid").await;
     session.handle_event(&event("session.execution.succeeded", json!({"sessionID":"ses_kid"}))).await;
     assert_eq!(ends(drain(&mut rx)), ["started Some(\"call_2\")", "completed Some(Completed)"]);
     let writes = mock.requests("PATCH", "/api/session/ses_kid");
-    assert_eq!(writes.len(), 1);
-    assert_eq!(writes[0].body["permissions"], json!(ruleset(PermissionMode::Supervised)));
+    assert_eq!(writes.len(), 2);
+    assert_eq!(writes[1].body["permissions"], json!(ruleset(PermissionMode::Supervised)));
 
     // A session this server never created, seen for the first time, gets them as well.
     start_subagent(&session, "call_3", "ses_old").await;
@@ -658,14 +670,18 @@ async fn a_turn_still_running_or_not_yet_stored_is_left_alone_after_a_reconnect(
 // --- Mode changes, long turns, usage, late text and approvals asked in a gap --------------------------------
 
 #[tokio::test]
-async fn a_failed_mode_change_leaves_the_mode_as_it_was_and_a_stuck_subagent_is_a_warning() {
+async fn a_failed_mode_change_leaves_the_mode_as_it_was() {
     let mock = Mock::start(|_, _, _| Reply::Json(500, json!({"error": "no"}))).await;
     let (root_only, _rx) = session(&mock.base);
     let handle = Handle(root_only.clone(), std::sync::Mutex::new(None), None);
     assert!(handle.set_permission_mode(PermissionMode::FullAccess).await.is_err());
     assert_eq!(root_only.state.lock().await.mode, PermissionMode::Supervised, "the thread's own rules were not written");
+}
 
-    // The thread's rules go through; the subagent's do not.
+/// The thread's rules go through; the running subagent's do not. It must not carry on
+/// under the older mode: it is stopped, and the notice says so.
+#[tokio::test]
+async fn a_running_subagent_that_cannot_follow_a_mode_change_is_stopped() {
     let mock = Mock::start(|method, path, _| {
         if (method, path) == ("PATCH", "/api/session/ses_kid") {
             Reply::Json(500, json!({"error": "no"}))
@@ -676,19 +692,75 @@ async fn a_failed_mode_change_leaves_the_mode_as_it_was_and_a_stuck_subagent_is_
     .await;
     let (session, mut rx) = session(&mock.base);
     let handle = Handle(session.clone(), std::sync::Mutex::new(None), None);
-    session
-        .handle_event(&event("session.created", json!({"sessionID":"ses_kid","parentID":"ses_root","title":"A (@general subagent)"})))
-        .await;
-    drain(&mut rx);
+    // Registered as running, rules unwritten: every write to it fails.
+    session.state.lock().await.children.insert("ses_kid".into(), ChildRuntime { task_id: "opencode:ses_kid".into(), ..Default::default() });
     handle.set_permission_mode(PermissionMode::FullAccess).await.expect("the thread is in the new mode");
     assert_eq!(session.state.lock().await.mode, PermissionMode::FullAccess);
+    assert_eq!(mock.requests("POST", "/api/session/ses_kid/interrupt").len(), 1, "the subagent was stopped");
+    assert!(session.state.lock().await.children["ses_kid"].terminal);
     let events = drain(&mut rx);
-    assert_eq!(
-        events.iter().filter(|event| matches!(event, DriverEvent::Notice { level: NoticeLevel::Warning, .. })).count(),
-        1,
+    assert!(
+        events.iter().any(|event| matches!(event, DriverEvent::Notice { level: NoticeLevel::Warning, text, .. }
+            if text == "Stopped a subagent that couldn't switch to Full access. Ask the agent to run it again.")),
         "{events:?}"
     );
-    assert!(!session.state.lock().await.children["ses_kid"].rules_current, "it is written again at the next chance");
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, DriverEvent::RuntimeTaskCompleted(update) if update.status == Some(RuntimeTaskStatus::Stopped)))
+    );
+}
+
+/// A finished subagent that cannot be rewritten has nothing to stop. It stays marked, and
+/// when it resumes the write is tried again; if that fails too, it is stopped.
+#[tokio::test]
+async fn a_finished_subagent_whose_rewrite_fails_is_stopped_when_it_resumes() {
+    let fail = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let failing = fail.clone();
+    let mock = Mock::start(move |method, path, _| {
+        if (method, path) == ("PATCH", "/api/session/ses_done") && failing.load(std::sync::atomic::Ordering::SeqCst) {
+            Reply::Json(500, json!({"error": "no"}))
+        } else {
+            Reply::Json(200, json!({}))
+        }
+    })
+    .await;
+    let (session, mut rx) = session(&mock.base);
+    let handle = Handle(session.clone(), std::sync::Mutex::new(None), None);
+    session
+        .handle_event(&event("session.created", json!({"sessionID":"ses_done","parentID":"ses_root","title":"B (@general subagent)"})))
+        .await;
+    start_subagent(&session, "call_1", "ses_done").await;
+    session.handle_event(&event("session.execution.succeeded", json!({"sessionID":"ses_done"}))).await;
+    fail.store(true, std::sync::atomic::Ordering::SeqCst);
+    drain(&mut rx);
+    handle.set_permission_mode(PermissionMode::AcceptEdits).await.unwrap();
+    assert!(mock.requests("POST", "/api/session/ses_done/interrupt").is_empty(), "a finished subagent is not stopped");
+    assert!(!session.state.lock().await.children["ses_done"].rules_current, "it is marked to be written again");
+    assert!(drain(&mut rx).iter().all(|event| !matches!(event, DriverEvent::Notice { .. })));
+
+    // It resumes under a new call, and the write fails again.
+    start_subagent(&session, "call_2", "ses_done").await;
+    assert_eq!(mock.requests("POST", "/api/session/ses_done/interrupt").len(), 1, "stopped before it can run under the old mode");
+    let events = drain(&mut rx);
+    assert!(events.iter().any(|event| matches!(event, DriverEvent::Notice { text, .. } if text.starts_with("Stopped a subagent that couldn't switch to Accept edits"))), "{events:?}");
+}
+
+/// A subagent that cannot be stopped either is an error the person must act on.
+#[tokio::test]
+async fn a_subagent_that_can_neither_be_updated_nor_stopped_is_an_error() {
+    let mock = Mock::start(|method, _, _| if method == "GET" { Reply::Json(200, json!({})) } else { Reply::Json(500, json!({})) }).await;
+    let (session, mut rx) = session(&mock.base);
+    session.state.lock().await.children.insert("ses_kid".into(), ChildRuntime { task_id: "opencode:ses_kid".into(), ..Default::default() });
+    session.rewrite_child_rules(Vec::new()).await;
+    let events = drain(&mut rx);
+    assert!(
+        events.iter().any(
+            |event| matches!(event, DriverEvent::Notice { level: NoticeLevel::Error, text, .. } if text.contains("couldn't be stopped"))
+        ),
+        "{events:?}"
+    );
+    assert!(!session.state.lock().await.children["ses_kid"].terminal);
 }
 
 #[tokio::test]
@@ -708,18 +780,37 @@ async fn a_subagent_created_while_the_mode_is_being_switched_gets_the_new_rules(
         async move { handle.set_permission_mode(PermissionMode::AcceptEdits).await }
     });
     tokio::time::sleep(Duration::from_millis(150)).await;
-    // OpenCode made this subagent from the old rules, while the switch was in flight.
+    // OpenCode made this subagent from the old rules, while the switch was in flight,
+    // and says so only now: after the subagents were listed.
     session
         .handle_event(&event("session.created", json!({"sessionID":"ses_late","parentID":"ses_root","title":"A (@general subagent)"})))
         .await;
     switching.await.unwrap().unwrap();
     let writes = mock.requests("PATCH", "/api/session/ses_late");
-    assert_eq!(writes.len(), 1, "it is rewritten once the thread has its new rules");
-    assert_eq!(writes[0].body["permissions"], json!(ruleset(PermissionMode::AcceptEdits)));
+    assert!(!writes.is_empty(), "a child reported as created is written, not trusted");
+    assert_eq!(writes.last().unwrap().body["permissions"], json!(ruleset(PermissionMode::AcceptEdits)), "the last write is the new mode's");
+    assert!(session.state.lock().await.children["ses_late"].rules_current);
+}
+
+/// The event that announces a child arrives after the mode change finished listing: nothing
+/// else would ever write it.
+#[tokio::test]
+async fn a_child_reported_as_created_after_the_mode_change_is_still_written() {
+    let mock = Mock::start(|_, _, _| Reply::Json(200, json!({}))).await;
+    let (session, _rx) = session(&mock.base);
+    let handle = Handle(session.clone(), std::sync::Mutex::new(None), None);
+    handle.set_permission_mode(PermissionMode::FullAccess).await.unwrap();
+    assert!(mock.requests("PATCH", "/api/session/ses_late").is_empty());
+    session
+        .handle_event(&event("session.created", json!({"sessionID":"ses_late","parentID":"ses_root","title":"A (@general subagent)"})))
+        .await;
+    let writes = mock.requests("PATCH", "/api/session/ses_late");
+    assert_eq!(writes.len(), 1, "a new child is always written");
+    assert_eq!(writes[0].body["permissions"], json!(ruleset(PermissionMode::FullAccess)));
 }
 
 #[tokio::test]
-async fn a_finished_subagent_is_marked_to_be_written_again_when_the_mode_changes() {
+async fn a_finished_subagent_is_rewritten_when_the_mode_changes_not_when_it_resumes() {
     let mock = Mock::start(|_, _, _| Reply::Json(200, json!({}))).await;
     let (session, _rx) = session(&mock.base);
     let handle = Handle(session.clone(), std::sync::Mutex::new(None), None);
@@ -728,21 +819,109 @@ async fn a_finished_subagent_is_marked_to_be_written_again_when_the_mode_changes
         .await;
     session.handle_event(&event("session.execution.succeeded", json!({"sessionID":"ses_done"}))).await;
     handle.set_permission_mode(PermissionMode::AcceptEdits).await.unwrap();
-    assert!(!session.state.lock().await.children["ses_done"].rules_current);
-    // Whatever way it resumes, it is written before it is announced.
-    session.handle_event(&event("session.tool.input.started", json!({"sessionID":"ses_root","id":"call_9","name":"subagent"}))).await;
-    session
-        .handle_event(&event(
-            "session.tool.called",
-            json!({"sessionID":"ses_root","id":"call_9","input":{"agent":"general","description":"B"}}),
-        ))
-        .await;
-    session
-        .handle_event(&event("session.tool.progress", json!({"sessionID":"ses_root","id":"call_9","metadata":{"sessionID":"ses_done"}})))
-        .await;
     let writes = mock.requests("PATCH", "/api/session/ses_done");
-    assert_eq!(writes.len(), 1);
-    assert_eq!(writes[0].body["permissions"], json!(ruleset(PermissionMode::AcceptEdits)));
+    assert_eq!(writes.len(), 2, "written when it appeared, and at once for the new mode");
+    assert_eq!(writes[1].body["permissions"], json!(ruleset(PermissionMode::AcceptEdits)));
+    assert!(session.state.lock().await.children["ses_done"].rules_current);
+    // It resumes: nothing is left to write, so its first tool call does not race a write.
+    start_subagent(&session, "call_9", "ses_done").await;
+    assert_eq!(mock.requests("PATCH", "/api/session/ses_done").len(), 2, "nothing was left to write");
+}
+
+/// After a restart the driver has seen none of the subagents: the server's list is all there is.
+#[tokio::test]
+async fn subagents_the_driver_never_saw_are_found_on_the_server_and_rewritten_at_a_mode_change() {
+    let mock = Mock::start(|method, path, _| match (method, path) {
+        ("GET", "/api/session") => Reply::Json(200, json!({"data": [{"id": "ses_old"}, {"id": "ses_older"}], "cursor": {"next": null}})),
+        _ => Reply::Json(200, json!({})),
+    })
+    .await;
+    let (session, _rx) = session(&mock.base);
+    let handle = Handle(session.clone(), std::sync::Mutex::new(None), None);
+    handle.set_permission_mode(PermissionMode::AcceptEdits).await.unwrap();
+    for id in ["ses_old", "ses_older"] {
+        let writes = mock.requests("PATCH", &format!("/api/session/{id}"));
+        assert_eq!(writes.len(), 1, "{id}");
+        assert_eq!(writes[0].body["permissions"], json!(ruleset(PermissionMode::AcceptEdits)), "{id}");
+    }
+    let listing = mock.seen.lock().unwrap().iter().find(|seen| seen.method == "GET" && seen.path == "/api/session").cloned().unwrap();
+    assert!(listing.query.contains("parentID=ses_root"), "{}", listing.query);
+}
+
+#[tokio::test]
+async fn a_mode_change_that_cannot_list_the_subagents_changes_nothing() {
+    let mock = Mock::start(|method, _, _| if method == "GET" { Reply::Json(500, json!({})) } else { Reply::Json(200, json!({})) }).await;
+    let (session, _rx) = session(&mock.base);
+    let handle = Handle(session.clone(), std::sync::Mutex::new(None), None);
+    assert!(handle.set_permission_mode(PermissionMode::FullAccess).await.is_err());
+    assert_eq!(session.state.lock().await.mode, PermissionMode::Supervised);
+    assert!(mock.requests("PATCH", "/api/session/ses_root").is_empty(), "the thread was not loosened either");
+}
+
+/// When the mode will not hold still the write must not report success on a stale one.
+#[tokio::test]
+async fn a_write_that_never_settles_on_the_current_mode_is_an_error_and_stops_a_running_child() {
+    let mock = Mock::start(|_, _, _| Reply::After(Duration::from_millis(60), 200, json!({}))).await;
+    let (session, mut rx) = session(&mock.base);
+    session.state.lock().await.children.insert("ses_kid".into(), ChildRuntime { task_id: "opencode:ses_kid".into(), ..Default::default() });
+    // Flip the mode every time a write to the child lands.
+    let flipper = tokio::spawn({
+        let session = session.clone();
+        let seen = mock.seen.clone();
+        async move {
+            let mut flips = 0;
+            loop {
+                let writes =
+                    seen.lock().unwrap().iter().filter(|seen| seen.method == "PATCH" && seen.path == "/api/session/ses_kid").count();
+                if writes > flips {
+                    flips = writes;
+                    let mut state = session.state.lock().await;
+                    state.mode =
+                        if state.mode == PermissionMode::Supervised { PermissionMode::FullAccess } else { PermissionMode::Supervised };
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }
+    });
+    let result = session.write_child_rules("ses_kid").await;
+    flipper.abort();
+    assert!(result.is_err(), "the last write to land was for a mode that was already gone");
+    session.child_rules_failed("ses_kid", &result.unwrap_err()).await;
+    assert_eq!(mock.requests("POST", "/api/session/ses_kid/interrupt").len(), 1);
+    assert!(drain(&mut rx).iter().any(|event| matches!(event, DriverEvent::Notice { .. })));
+}
+
+/// Writes to one child are one at a time: the second does not start its PATCH until the first has ended.
+#[tokio::test]
+async fn writes_to_one_subagent_land_in_the_order_they_read_the_mode() {
+    let mock = Mock::start(|method, path, nth| {
+        if (method, path) == ("PATCH", "/api/session/ses_kid") && nth == 0 {
+            Reply::After(Duration::from_millis(300), 200, json!({}))
+        } else {
+            Reply::Json(200, json!({}))
+        }
+    })
+    .await;
+    let (session, _rx) = session(&mock.base);
+    session.state.lock().await.children.insert("ses_kid".into(), ChildRuntime { task_id: "opencode:ses_kid".into(), ..Default::default() });
+    session.state.lock().await.mode = PermissionMode::FullAccess;
+    let first = tokio::spawn({
+        let session = session.clone();
+        async move { session.write_child_rules("ses_kid").await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(mock.requests("PATCH", "/api/session/ses_kid").len(), 1);
+    session.state.lock().await.mode = PermissionMode::Supervised;
+    let second = tokio::spawn({
+        let session = session.clone();
+        async move { session.write_child_rules("ses_kid").await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(mock.requests("PATCH", "/api/session/ses_kid").len(), 1, "the second write waits for the first");
+    first.await.unwrap().unwrap();
+    second.await.unwrap().unwrap();
+    let writes = mock.requests("PATCH", "/api/session/ses_kid");
+    assert_eq!(writes.last().unwrap().body["permissions"], json!(ruleset(PermissionMode::Supervised)));
 }
 
 fn filler(count: usize) -> Vec<Value> {
@@ -924,4 +1103,47 @@ async fn approvals_asked_while_the_stream_was_down_are_surfaced_and_answered_one
         ))
         .await;
     assert!(drain(&mut rx).is_empty());
+}
+
+/// A thread saved under Full access must not start with Full access while it shows Supervised.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_resumed_thread_whose_rules_cannot_be_written_does_not_start() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().to_path_buf();
+    let mock = Mock::start(|method, path, _| match (method, path) {
+        ("GET", "/api/event") => Reply::Stream(vec![frame(json!({"type": "server.connected", "data": {}}))]),
+        ("PATCH", "/api/session/ses_old") => Reply::Json(500, json!({"error": "no"})),
+        _ => Reply::Json(200, json!({"data": {"id": "ses_old"}})),
+    })
+    .await;
+    let script = fake_opencode(&dir, "2.3.2", &mock.base, 0, "");
+    let mut config = session_config(script, &dir);
+    config.resume_session_id = Some("ses_old".into());
+    assert!(crate::opencode::OpencodeDriver.spawn(config).await.is_err());
+}
+
+/// After a daemon restart the driver has seen none of a resumed thread's subagents: the server
+/// lists them, and each is rewritten before the thread can run, not when it next resumes.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_resumed_threads_subagents_are_rewritten_before_it_runs() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().to_path_buf();
+    let mock = Mock::start(|method, path, _| match (method, path) {
+        ("GET", "/api/event") => Reply::Stream(vec![frame(json!({"type": "server.connected", "data": {}}))]),
+        ("GET", "/api/session") => Reply::Json(200, json!({"data": [{"id": "ses_kid"}], "cursor": {"next": null}})),
+        _ => Reply::Json(200, json!({"data": {"id": "ses_old"}})),
+    })
+    .await;
+    let script = fake_opencode(&dir, "2.3.2", &mock.base, 0, "");
+    let mut config = session_config(script, &dir);
+    config.resume_session_id = Some("ses_old".into());
+    let spawned = crate::opencode::OpencodeDriver.spawn(config).await.unwrap();
+    let listing = mock.seen.lock().unwrap().iter().find(|seen| seen.method == "GET" && seen.path == "/api/session").cloned().unwrap();
+    assert!(listing.query.contains("parentID=ses_old"), "{}", listing.query);
+    let writes = mock.requests("PATCH", "/api/session/ses_kid");
+    assert_eq!(writes.len(), 1);
+    assert_eq!(writes[0].body["permissions"], json!(ruleset(PermissionMode::Supervised)));
+    spawned.session.close().await.unwrap();
 }

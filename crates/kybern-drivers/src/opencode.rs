@@ -440,6 +440,7 @@ impl AgentDriver for OpencodeDriver {
                 current_message_id: None,
                 context_overflow: None,
                 children: HashMap::new(),
+                rule_locks: HashMap::new(),
             }),
         });
 
@@ -504,15 +505,15 @@ impl AgentDriver for OpencodeDriver {
         };
         session.state.lock().await.session_id = Some(session_id.clone());
         if config.resume_session_id.is_some() {
-            // A resumed or forked session keeps the rules it was stored with;
-            // write the ones for this thread's current mode. A server that
-            // refuses leaves the stored rules, as before.
+            // A resumed or forked session keeps the rules it was stored with.
+            // Write the ones for this thread's current mode: a session that kept
+            // an older, looser mode while the thread shows this one is worse than
+            // one that does not start. Its subagents are brought up to date too,
+            // since the server forgets nothing about them across a restart.
             let rules = json!({ "permission": ruleset(config.permission_mode) });
-            if let Err(error) =
-                session.send(reqwest::Method::PATCH, &format!("/session/{session_id}"), rules, Some(CHILD_RULES_TIMEOUT)).await
-            {
-                tracing::warn!(%error, "could not apply the permission mode to the resumed OpenCode session");
-            }
+            session.send(reqwest::Method::PATCH, &format!("/session/{session_id}"), rules, Some(CHILD_RULES_TIMEOUT)).await?;
+            let listed = session.list_children(&session_id).await?;
+            session.rewrite_child_rules(listed).await;
         }
         session.emit(DriverEvent::SessionBound { session_id, model: config.model.clone() }).await;
 
@@ -703,7 +704,17 @@ fn all_rulesets() -> Vec<Vec<Value>> {
 /// 3. else the layout is unknown, and one of each rule Kybern writes is taken
 ///    off, so a rule of the agent's that merely equals one of them (a `bash`
 ///    deny) is still kept.
+///
+/// Only the child's own `deny` rules are kept, whatever came before them.
 fn child_own_rules(child: &[Value]) -> Vec<Value> {
+    // Only a deny can restrict the thread's mode. An `allow` or `ask` of the
+    // child's own would come last, where it wins: one OpenCode adds from an
+    // agent's own defaults, or one left by a write that went wrong, must not
+    // loosen what the thread shows.
+    unlayered_child_rules(child).into_iter().filter(|rule| rule["action"] == "deny").collect()
+}
+
+fn unlayered_child_rules(child: &[Value]) -> Vec<Value> {
     let rulesets = all_rulesets();
     let longest =
         |lists: Vec<Vec<Value>>| lists.into_iter().filter(|list| !list.is_empty() && child.starts_with(list)).map(|list| list.len()).max();
@@ -982,6 +993,35 @@ fn v1_inherits(rule: &Value) -> bool {
     rule["permission"] == "external_directory" || rule["action"] == "deny"
 }
 
+/// How the mode is named to people.
+pub(super) fn mode_label(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::Supervised => "Supervised",
+        PermissionMode::AcceptEdits => "Accept edits",
+        PermissionMode::Auto => "Auto",
+        PermissionMode::FullAccess => "Full access",
+    }
+}
+
+/// The notice for a subagent whose rules could not be written: `stopped` says
+/// whether it was stopped, which is what keeps it from running under another mode.
+pub(super) fn unruled_child_notice(mode: PermissionMode, stopped: bool) -> DriverEvent {
+    let label = mode_label(mode);
+    let (level, text) = if stopped {
+        (NoticeLevel::Warning, format!("Stopped a subagent that couldn't switch to {label}. Ask the agent to run it again."))
+    } else {
+        (NoticeLevel::Error, format!("A subagent couldn't switch to {label} and couldn't be stopped. Stop it before it asks for anything."))
+    };
+    DriverEvent::Notice { level, text, data: None }
+}
+
+/// How many times a write of a subagent's rules is repeated when the mode
+/// changes underneath it.
+pub(super) const RULE_WRITE_TRIES: usize = 3;
+
+/// Most subagent sessions read below one thread when listing them.
+pub(super) const MAX_LISTED_CHILDREN: usize = 256;
+
 struct PartInfo {
     kind: String,
     message_id: String,
@@ -996,7 +1036,6 @@ struct ChildRuntime {
     /// The rules the child holds once Kybern wrote this thread's policy into it.
     /// `None` until written, or when the last write failed.
     rules: Option<Vec<Value>>,
-    rules_warned: bool,
     seen_tool_parts: HashSet<String>,
     stats: RuntimeTaskStats,
     stop_requested: bool,
@@ -1143,6 +1182,10 @@ struct State {
     /// Provider child session id -> runtime bookkeeping. Child output stays out
     /// of the parent transcript; only compact lifecycle/progress is projected.
     children: HashMap<String, ChildRuntime>,
+    /// One lock per subagent session, held from reading the mode to the end
+    /// of the write, so writes to one session land in the order they read the
+    /// mode and the last to land is the current one.
+    rule_locks: HashMap<String, Arc<Mutex<()>>>,
 }
 
 struct OpencodeSession {
@@ -1204,6 +1247,7 @@ impl OpencodeSession {
 
     /// A subagent session showed up (or showed up again). Its rules are written
     /// before it is announced, so what it does next follows this thread's mode.
+    /// One that cannot be given them is stopped, once it is announced.
     async fn observe_child(&self, child_id: String, task: DriverRuntimeTask, rules: Option<Vec<Value>>) {
         let task_id = task.id.clone();
         {
@@ -1222,30 +1266,40 @@ impl OpencodeSession {
             }
             child.task_id = task_id;
         }
-        self.install_child_rules(&child_id, rules).await;
+        let failed = self.install_child_rules(&child_id, rules).await;
         self.emit(DriverEvent::RuntimeTaskStarted(task)).await;
+        if let Some(error) = failed {
+            self.child_rules_failed(&child_id, &error).await;
+        }
     }
 
     /// Write this thread's rules into a subagent session. OpenCode 1 gives it
     /// only the parent's denies, so without this it would run on its agent's
     /// defaults and never ask. `known` is the rules the session already holds,
-    /// when the event that announced it carried them.
-    async fn install_child_rules(&self, child_id: &str, known: Option<Vec<Value>>) {
+    /// when the event that announced it carried them. The error is the write's
+    /// failure, for [`Self::child_rules_failed`].
+    async fn install_child_rules(&self, child_id: &str, known: Option<Vec<Value>>) -> Option<DriverError> {
         if self.state.lock().await.children.get(child_id).is_none_or(|child| child.rules.is_some()) {
-            return;
+            return None;
         }
-        if let Err(error) = self.refresh_child_rules(child_id, known).await {
-            self.child_rules_failed(child_id, &error).await;
-        }
+        self.refresh_child_rules(child_id, known).await.err()
+    }
+
+    /// The lock that orders writes to one subagent session.
+    async fn child_write_lock(&self, child_id: &str) -> Arc<Mutex<()>> {
+        self.state.lock().await.rule_locks.entry(child_id.to_string()).or_default().clone()
     }
 
     /// Replace a subagent's rules with this thread's current policy plus its
     /// own. `held` is the rules it has, read from the server when `None`. The
     /// mode can change while the write is on its way, so a write that lost that
-    /// race is done again.
+    /// race is done again; one that cannot settle on the current mode is an
+    /// error, never a success that leaves an older mode in place.
     async fn refresh_child_rules(&self, child_id: &str, held: Option<Vec<Value>>) -> Result<()> {
+        let lock = self.child_write_lock(child_id).await;
+        let _writing = lock.lock().await;
         let mut held = held;
-        for _ in 0..3 {
+        for _ in 0..RULE_WRITE_TRIES {
             let mode = self.state.lock().await.mode;
             let parent = rule_list(&ruleset(mode));
             let current = match held.take() {
@@ -1267,7 +1321,10 @@ impl OpencodeSession {
             }
             held = Some(rules);
         }
-        Ok(())
+        if let Some(child) = self.state.lock().await.children.get_mut(child_id) {
+            child.rules = None;
+        }
+        Err(DriverError::Protocol(format!("the approval mode kept changing while the rules of {child_id} were written")))
     }
 
     /// Replace a session's permission rules.
@@ -1277,51 +1334,71 @@ impl OpencodeSession {
             .map(|_| ())
     }
 
-    /// A subagent kept only the denies it copied (or the rules of an earlier
-    /// mode): say so once per mode change.
+    /// Every subagent session below `root`, nested ones too, as OpenCode lists
+    /// them. After a daemon restart this is the only record of them.
+    async fn list_children(&self, root: &str) -> Result<Vec<String>> {
+        let mut found: Vec<String> = Vec::new();
+        let mut queue = vec![root.to_string()];
+        while let Some(parent) = queue.pop() {
+            let list =
+                self.send(reqwest::Method::GET, &format!("/session/{parent}/children"), Value::Null, Some(CHILD_RULES_TIMEOUT)).await?;
+            for id in list.as_array().into_iter().flatten().filter_map(|info| info["id"].as_str()) {
+                if id != root && !found.iter().any(|known| known == id) && found.len() < MAX_LISTED_CHILDREN {
+                    found.push(id.to_string());
+                    queue.push(id.to_string());
+                }
+            }
+        }
+        Ok(found)
+    }
+
+    /// A subagent's rules could not be written, so it may hold the rules of an
+    /// older, looser mode. One that is running is stopped: letting it carry on
+    /// is the one outcome that contradicts the mode the thread shows. A finished
+    /// one has no rules marked, so they are written again before it resumes, and
+    /// stopped then if that fails too.
     async fn child_rules_failed(&self, child_id: &str, error: &DriverError) {
         tracing::warn!(%error, child_id, "could not write approval rules into an OpenCode subagent");
-        let first = self.state.lock().await.children.get_mut(child_id).is_some_and(|child| {
-            child.rules = None;
-            !std::mem::replace(&mut child.rules_warned, true)
-        });
-        if first {
-            self.emit(DriverEvent::Notice {
-                level: NoticeLevel::Warning,
-                text: "A subagent could not get this thread's approval rules, so it may follow an older mode or be blocked. Stop it and ask again."
-                    .into(),
-                data: None,
-            })
-            .await;
+        let (running, mode) = {
+            let mut state = self.state.lock().await;
+            let mode = state.mode;
+            let running = state.children.get_mut(child_id).is_some_and(|child| {
+                child.rules = None;
+                !child.terminal
+            });
+            (running, mode)
+        };
+        if running {
+            let stopped = self.stop_child(child_id).await.is_ok();
+            self.emit(unruled_child_notice(mode, stopped)).await;
         }
     }
 
     /// Write the thread's current rules into every subagent session, finished
     /// ones too: a finished subagent can be resumed, and what it holds then
-    /// must not be the rules of an earlier mode. A running subagent that cannot
-    /// be updated is reported; a finished one is simply marked to be read again
-    /// when it resumes.
-    async fn rewrite_child_rules(&self) {
-        let children: Vec<(String, bool, Option<Vec<Value>>)> = {
-            let mut state = self.state.lock().await;
-            state
-                .children
-                .iter_mut()
-                .map(|(id, child)| {
-                    child.rules_warned = false;
-                    (id.clone(), child.terminal, child.rules.clone())
-                })
-                .collect()
-        };
-        for (id, terminal, held) in children {
-            if let Err(error) = self.refresh_child_rules(&id, held).await {
-                if terminal {
-                    if let Some(child) = self.state.lock().await.children.get_mut(&id) {
+    /// must not be the rules of an earlier mode. `listed` is what the server
+    /// knows of them, which after a restart is more than this driver does. A
+    /// running subagent that cannot be updated is stopped; a finished one is
+    /// marked to be written again before it resumes.
+    async fn rewrite_child_rules(&self, listed: Vec<String>) {
+        let known: Vec<(String, bool, Option<Vec<Value>>)> =
+            self.state.lock().await.children.iter().map(|(id, child)| (id.clone(), child.terminal, child.rules.clone())).collect();
+        for (id, terminal, held) in &known {
+            if let Err(error) = self.refresh_child_rules(id, held.clone()).await {
+                if *terminal {
+                    if let Some(child) = self.state.lock().await.children.get_mut(id) {
                         child.rules = None;
                     }
                 } else {
-                    self.child_rules_failed(&id, &error).await;
+                    self.child_rules_failed(id, &error).await;
                 }
+            }
+        }
+        // Sessions this driver never saw, finished by definition: when they
+        // resume they are announced and written like any other.
+        for id in listed.into_iter().filter(|id| !known.iter().any(|(known, ..)| known == id)) {
+            if let Err(error) = self.refresh_child_rules(&id, None).await {
+                tracing::warn!(%error, child_id = %id, "could not write approval rules into a finished OpenCode subagent");
             }
         }
     }
@@ -2382,15 +2459,18 @@ impl AgentSession for Handle {
 
     /// The thread's rules are replaced in place, then its subagents'. The mode is
     /// recorded only once the thread's own rules were written: a failure there
-    /// leaves the mode, and the thread, as they were. A subagent that cannot be
-    /// updated does not undo that: the thread really is in the new mode, so the
-    /// call succeeds and a warning names the subagent that kept older rules.
+    /// leaves the mode, and the thread, as they were. So does a failure to list
+    /// the subagents, which is read first: a subagent nobody can find would keep
+    /// an older mode. A subagent that cannot be updated does not undo the change:
+    /// the thread really is in the new mode, so the call succeeds and the
+    /// subagent is stopped, with a notice that names it.
     async fn set_permission_mode(&self, mode: PermissionMode) -> Result<()> {
         let s = &self.0;
         let session_id = s.state.lock().await.session_id.clone().ok_or_else(|| DriverError::Protocol("no opencode session".into()))?;
+        let listed = s.list_children(&session_id).await?;
         s.write_rules(&session_id, &rule_list(&ruleset(mode))).await?;
         s.state.lock().await.mode = mode;
-        s.rewrite_child_rules().await;
+        s.rewrite_child_rules(listed).await;
         Ok(())
     }
 
@@ -2482,6 +2562,7 @@ mod tests {
                 current_message_id: None,
                 context_overflow: None,
                 children: HashMap::new(),
+                rule_locks: HashMap::new(),
             }),
         });
         let event = |ty: &str, properties: Value| json!({"type": ty, "properties": properties});
@@ -2610,6 +2691,7 @@ mod tests {
                 current_message_id: None,
                 context_overflow: None,
                 children: HashMap::new(),
+                rule_locks: HashMap::new(),
             }),
         });
 
@@ -2711,6 +2793,7 @@ mod tests {
                 current_message_id: None,
                 context_overflow: None,
                 children: HashMap::new(),
+                rule_locks: HashMap::new(),
             }),
         });
         // Parts can arrive before message metadata. Only assistant-authored images are emitted.
