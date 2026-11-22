@@ -13,7 +13,7 @@ use crate::{DriverError, DriverEvent, Result, SessionConfig};
 
 /// How long a resumed session's replay may stay quiet before the load counts as done. Grok can leave
 /// `session/load` unanswered after it has replayed the conversation (T3 Code, 52b04b947e).
-const LOAD_REPLAY_IDLE: Duration = Duration::from_secs(2);
+pub(crate) const LOAD_REPLAY_IDLE: Duration = Duration::from_secs(2);
 /// The longest Kybern waits for `session/load` (or a quiet replay) before giving up.
 pub(crate) const LOAD_TIMEOUT: Duration = Duration::from_secs(90);
 
@@ -24,7 +24,10 @@ pub(crate) const CANCEL_GRACE: Duration = Duration::from_secs(5);
 /// real agent child runs on real time.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Timings {
-    pub(crate) replay_idle: Duration,
+    /// Quiet after a replay chunk that counts as a finished load; `None` waits for the answer.
+    pub(crate) replay_idle: Option<Duration>,
+    /// The longest wait for `session/load`; `None` waits as long as the agent takes.
+    pub(crate) load_timeout: Option<Duration>,
     pub(crate) cancel_grace: Duration,
 }
 
@@ -34,13 +37,15 @@ pub(crate) const TEST_REPLAY_IDLE_MS: &str = "KYBERN_TEST_ACP_REPLAY_IDLE_MS";
 pub(crate) const TEST_CANCEL_GRACE_MS: &str = "KYBERN_TEST_ACP_CANCEL_GRACE_MS";
 
 impl Timings {
-    pub(crate) fn for_session(config: &SessionConfig) -> Self {
-        let timings = Self { replay_idle: LOAD_REPLAY_IDLE, cancel_grace: CANCEL_GRACE };
+    pub(crate) fn for_session<F: crate::acp::AcpFlavor>(config: &SessionConfig) -> Self {
+        let timings = Self { replay_idle: F::REPLAY_IDLE, load_timeout: F::LOAD_TIMEOUT, cancel_grace: CANCEL_GRACE };
         #[cfg(test)]
         let timings = {
             let ms = |key: &str| config.env.get(key).and_then(|ms| ms.parse().ok()).map(Duration::from_millis);
             Self {
-                replay_idle: ms(TEST_REPLAY_IDLE_MS).unwrap_or(timings.replay_idle),
+                // Only a flavor that has a quiet rule can shorten it.
+                replay_idle: timings.replay_idle.map(|idle| ms(TEST_REPLAY_IDLE_MS).unwrap_or(idle)),
+                load_timeout: timings.load_timeout,
                 cancel_grace: ms(TEST_CANCEL_GRACE_MS).unwrap_or(timings.cancel_grace),
             }
         };
@@ -207,22 +212,29 @@ pub(crate) enum LoadOutcome<T> {
     TimedOut,
 }
 
-/// Wait for `load`, but count it done once a replay has started and been quiet for `idle_gap`; give up after `timeout`.
+/// Wait for `load`, but count it done once a replay has started and been quiet for `idle_gap`; give up after
+/// `timeout`. `None` for either turns that rule off.
 pub(crate) async fn await_session_load<T>(
     load: impl Future<Output = T>,
     last_replay: &std::sync::Mutex<Option<tokio::time::Instant>>,
-    idle_gap: Duration,
-    timeout: Duration,
+    idle_gap: Option<Duration>,
+    timeout: Option<Duration>,
 ) -> LoadOutcome<T> {
     let mut load = std::pin::pin!(load);
-    let mut deadline = std::pin::pin!(tokio::time::sleep(timeout));
+    let mut deadline = std::pin::pin!(async {
+        match timeout {
+            Some(timeout) => tokio::time::sleep(timeout).await,
+            None => std::future::pending().await,
+        }
+    });
     let mut tick = tokio::time::interval(Duration::from_millis(50));
     loop {
         tokio::select! {
             answered = &mut load => return LoadOutcome::Answered(answered),
             _ = &mut deadline => return LoadOutcome::TimedOut,
             _ = tick.tick() => {
-                let quiet = last_replay.lock().ok().and_then(|last| *last).is_some_and(|last| last.elapsed() >= idle_gap);
+                let quiet = idle_gap
+                    .is_some_and(|gap| last_replay.lock().ok().and_then(|last| *last).is_some_and(|last| last.elapsed() >= gap));
                 if quiet {
                     return LoadOutcome::ReplayIdle;
                 }

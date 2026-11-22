@@ -224,6 +224,9 @@ impl AgentDriver for CursorAcpDriver {
 struct Cursor;
 
 impl AcpFlavor for Cursor {
+    // Cursor always answers `session/load`, however long a big chat takes to replay.
+    const REPLAY_IDLE: Option<Duration> = None;
+    const LOAD_TIMEOUT: Option<Duration> = None;
     type Completion = std::convert::Infallible;
     const KIND: ProviderKind = ProviderKind::Cursor;
     const NAME: &'static str = "Cursor";
@@ -412,5 +415,211 @@ mod orchestration_part_tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert_flattened(&text);
+    }
+}
+
+#[cfg(test)]
+mod flavor_tests {
+    use super::*;
+    use agent_client_protocol::schema::v1::{
+        Diff, PermissionOptionId, RequestPermissionOutcome, ToolCallContent, ToolCallUpdate, ToolKind,
+    };
+
+    fn option(id: &str, kind: PermissionOptionKind) -> PermissionOption {
+        PermissionOption::new(PermissionOptionId::new(id), id, kind)
+    }
+
+    fn request(options: Vec<PermissionOption>) -> RequestPermissionRequest {
+        let fields = ToolCallUpdateFields::new().title("Run ls").kind(ToolKind::Execute).raw_input(json!({ "command": "ls" }));
+        RequestPermissionRequest::new("s1", ToolCallUpdate::new("t1", fields), options)
+    }
+
+    fn chosen(response: &RequestPermissionResponse) -> Option<String> {
+        match &response.outcome {
+            RequestPermissionOutcome::Selected(selected) => Some(selected.option_id.to_string()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn permission_options_are_picked_in_cursors_order() {
+        use PermissionOptionKind::*;
+        let every_kind = vec![
+            option("first", RejectAlways),
+            option("allow-once", AllowOnce),
+            option("allow-always", AllowAlways),
+            option("reject-once", RejectOnce),
+            option("reject-always", RejectAlways),
+        ];
+        // Auto and Full access: allow-always, then allow-once, then the first option.
+        for mode in [PermissionMode::Auto, PermissionMode::FullAccess] {
+            let auto = |options: Vec<PermissionOption>| chosen(&Cursor.auto_permission(mode, &request(options), Path::new("/")).unwrap());
+            assert_eq!(auto(every_kind.clone()).as_deref(), Some("allow-always"));
+            assert_eq!(auto(every_kind[1..2].iter().chain(&every_kind[3..]).cloned().collect()).as_deref(), Some("allow-once"));
+            assert_eq!(auto(vec![option("only", RejectOnce), option("other", RejectAlways)]).as_deref(), Some("only"));
+            assert_eq!(auto(vec![]), None);
+        }
+        // Cursor's own mode decides the other modes' approvals: they reach the user.
+        for mode in [PermissionMode::Supervised, PermissionMode::AcceptEdits] {
+            assert!(Cursor.auto_permission(mode, &request(every_kind.clone()), Path::new("/")).is_none());
+        }
+
+        // Deny, Submit and no answer: reject-once, then reject-always, then cancel.
+        let answers = [Some(ApprovalDecision::Deny { reason: None }), Some(ApprovalDecision::Submit { response: json!({}) }), None];
+        for answer in &answers {
+            let pick = |options: &[PermissionOption]| chosen(&Cursor.permission_answer(options, answer.as_ref()).0);
+            assert_eq!(pick(&every_kind).as_deref(), Some("reject-once"));
+            assert_eq!(pick(&[option("a", AllowOnce), option("r", RejectAlways)]).as_deref(), Some("r"));
+            assert_eq!(pick(&[option("a", AllowOnce), option("b", AllowAlways)]), None);
+        }
+        // Allow takes the matching option first, the other allow kind second.
+        let allow =
+            |decision: ApprovalDecision, options: &[PermissionOption]| chosen(&Cursor.permission_answer(options, Some(&decision)).0);
+        assert_eq!(allow(ApprovalDecision::AllowOnce, &every_kind).as_deref(), Some("allow-once"));
+        assert_eq!(allow(ApprovalDecision::AllowAlways, &every_kind).as_deref(), Some("allow-always"));
+        assert_eq!(allow(ApprovalDecision::AllowOnce, &every_kind[2..3]).as_deref(), Some("allow-always"));
+    }
+
+    #[test]
+    fn tool_calls_and_cards_keep_cursors_event_shapes() {
+        let call = AcpToolCall::new("t1", "Edit a.rs").kind(ToolKind::Edit).raw_input(json!({ "path": "a.rs" }));
+        assert_eq!(Cursor.tool_call(&call), ("edit".to_string(), json!({ "title": "Edit a.rs", "raw": { "path": "a.rs" } })));
+
+        let diff = Diff::new("a.rs", "new").old_text("old".to_string());
+        let fields =
+            ToolCallUpdateFields::new().title("Edit a.rs").raw_output(json!({ "ok": true })).content(vec![ToolCallContent::Diff(diff)]);
+        let (output, failed) = Cursor.tool_output(Some("completed"), fields.clone());
+        assert!(!failed);
+        assert_eq!(output["diffs"], json!([{ "path": "a.rs", "old": "old", "new": "new" }]));
+        assert_eq!(output["raw"], json!({ "ok": true }));
+        assert_eq!(output["title"], "Edit a.rs");
+        assert_eq!(output["content"], serde_json::to_value(&fields.content).unwrap());
+        let mut keys: Vec<_> = output.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["content", "diffs", "raw", "title"]);
+        assert!(Cursor.tool_output(Some("failed"), ToolCallUpdateFields::new()).1);
+
+        let card = Cursor
+            .permission_card(&request(vec![option("a", PermissionOptionKind::AllowOnce), option("b", PermissionOptionKind::RejectAlways)]));
+        assert_eq!(card.tool_name, "execute");
+        assert_eq!(card.summary, "Run ls");
+        assert_eq!(
+            card.input,
+            json!({
+                "title": "Run ls",
+                "raw": { "command": "ls" },
+                "options": [
+                    { "id": "a", "name": "a", "kind": "AllowOnce" },
+                    { "id": "b", "name": "b", "kind": "RejectAlways" },
+                ],
+            })
+        );
+    }
+
+    // Cursor answers `session/load` however long a big chat takes to replay: no quiet rule, no limit.
+    #[tokio::test(start_paused = true)]
+    async fn a_cursor_load_waits_through_long_replay_pauses_and_a_late_answer() {
+        use crate::acp::{LoadOutcome, await_session_load};
+        let last = std::sync::Mutex::new(Some(tokio::time::Instant::now()));
+        let late = async {
+            tokio::time::sleep(Duration::from_secs(600)).await;
+            7
+        };
+        let outcome = await_session_load(late, &last, Cursor::REPLAY_IDLE, Cursor::LOAD_TIMEOUT).await;
+        assert_eq!(outcome, LoadOutcome::Answered(7));
+    }
+}
+
+/// Whole Cursor sessions against a fake `agent acp`, which needs a Unix script and a process.
+#[cfg(all(test, unix))]
+mod resume_tests {
+    use super::*;
+    use crate::acp::TEST_REPLAY_IDLE_MS;
+
+    // Replays a chunk, goes quiet for 0.8 s, replays more, then answers `session/load` a second after it began.
+    const FAKE_CURSOR: &str = r##"#!/usr/bin/env python3
+import json, sys, threading, time
+lock = threading.Lock()
+def send(msg):
+    msg["jsonrpc"] = "2.0"
+    with lock:
+        sys.stdout.write(json.dumps(msg) + "\n")
+        sys.stdout.flush()
+def chunk(sid, text):
+    send({"method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}}})
+for line in sys.stdin:
+    msg = json.loads(line)
+    method, mid, params = msg.get("method"), msg.get("id"), msg.get("params") or {}
+    if method == "initialize":
+        send({"id": mid, "result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": True}, "authMethods": []}})
+    elif method == "session/load":
+        def replay(sid, mid):
+            chunk(sid, "old answer")
+            time.sleep(0.8)
+            chunk(sid, "late old answer")
+            time.sleep(0.2)
+            send({"id": mid, "result": {}})
+        # Replays on its own thread: the agent keeps answering other requests meanwhile.
+        threading.Thread(target=replay, args=(params["sessionId"], mid), daemon=True).start()
+    elif method == "session/prompt":
+        chunk(params["sessionId"], "new answer")
+        time.sleep(1.2)
+        send({"id": mid, "result": {"stopReason": "end_turn"}})
+    elif mid is not None and method is not None:
+        send({"id": mid, "result": {}})
+"##;
+
+    #[tokio::test]
+    async fn a_cursor_resume_hides_a_replay_that_pauses_and_a_load_that_answers_late() {
+        let root = tempfile::tempdir().unwrap();
+        let binary = root.path().join("agent");
+        kybern_protocol::process::write_executable(&binary, FAKE_CURSOR).unwrap();
+        let config = SessionConfig {
+            cwd: root.path().into(),
+            model: None,
+            effort: None,
+            permission_mode: PermissionMode::Supervised,
+            native_tool_bridge: None,
+            resume_session_id: Some("s-old".into()),
+            resume_lacks_instructions: false,
+            fork: false,
+            rewind: None,
+            binary: Some(binary),
+            // Grok's quiet rule, shortened below the fake's pause. Cursor has none, so this must not end its wait.
+            env: [(TEST_REPLAY_IDLE_MS.to_string(), "200".to_string())].into_iter().collect(),
+            compaction: Default::default(),
+        };
+        // Another test's forked child can briefly hold the new script open (Linux ETXTBSY).
+        let mut attempts = 0;
+        let SpawnedSession { session, mut events } = loop {
+            match tokio::time::timeout(Duration::from_secs(20), CursorAcpDriver.spawn(config.clone())).await.expect("the session starts") {
+                Err(DriverError::Io(error)) if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 50 => {
+                    attempts += 1;
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                result => break result.expect("the load succeeds"),
+            }
+        };
+        session.send_message("m1", &UserMessage::text("Go")).await.unwrap();
+        let mut seen = Vec::new();
+        let turn = async {
+            while let Some(event) = events.recv().await {
+                let done = matches!(event, DriverEvent::TurnCompleted { .. } | DriverEvent::TurnFailed { .. });
+                seen.push(event);
+                if done {
+                    break;
+                }
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(20), turn).await.expect("the turn ends");
+        session.close().await.unwrap();
+
+        assert!(matches!(&seen[0], DriverEvent::SessionBound { session_id, .. } if session_id == "s-old"), "{seen:?}");
+        let text: String = seen
+            .iter()
+            .filter_map(|event| if let DriverEvent::TextDelta { delta, .. } = event { Some(delta.as_str()) } else { None })
+            .collect();
+        assert_eq!(text, "new answer");
+        assert!(matches!(seen.last(), Some(DriverEvent::TurnCompleted { .. })), "{seen:?}");
     }
 }

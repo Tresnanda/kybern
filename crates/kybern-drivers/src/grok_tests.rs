@@ -7,7 +7,7 @@ use crate::acp::{
     CANCEL_GRACE, LoadOutcome, SessionCommand, Settled, await_session_load, blocks_with_guide, remember_stderr, settle_prompt,
 };
 #[cfg(unix)]
-use crate::acp::{LOAD_TIMEOUT, TEST_CANCEL_GRACE_MS, TEST_REPLAY_IDLE_MS};
+use crate::acp::{TEST_CANCEL_GRACE_MS, TEST_REPLAY_IDLE_MS};
 use agent_client_protocol::schema::v1::{PermissionOptionId, PermissionOptionKind, RequestPermissionOutcome, ToolCallLocation};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
@@ -475,18 +475,18 @@ async fn a_load_finishes_when_answered_or_once_its_replay_goes_quiet_and_never_h
     let gap = Duration::from_secs(2);
     let timeout = Duration::from_secs(90);
     let last = std::sync::Mutex::new(None);
-    assert_eq!(await_session_load(async { 7 }, &last, gap, timeout).await, LoadOutcome::Answered(7));
+    assert_eq!(await_session_load(async { 7 }, &last, Some(gap), Some(timeout)).await, LoadOutcome::Answered(7));
 
     // Replayed, then silent: done after the quiet gap, long before the timeout.
     *last.lock().unwrap() = Some(tokio::time::Instant::now());
     let started = tokio::time::Instant::now();
-    assert_eq!(await_session_load(std::future::pending::<()>(), &last, gap, timeout).await, LoadOutcome::ReplayIdle);
+    assert_eq!(await_session_load(std::future::pending::<()>(), &last, Some(gap), Some(timeout)).await, LoadOutcome::ReplayIdle);
     assert!(started.elapsed() < Duration::from_secs(3));
 
     // Nothing replayed and no answer: give up at the timeout.
     let last = std::sync::Mutex::new(None);
     let started = tokio::time::Instant::now();
-    assert_eq!(await_session_load(std::future::pending::<()>(), &last, gap, timeout).await, LoadOutcome::TimedOut);
+    assert_eq!(await_session_load(std::future::pending::<()>(), &last, Some(gap), Some(timeout)).await, LoadOutcome::TimedOut);
     assert!(started.elapsed() >= timeout);
 }
 
@@ -760,7 +760,7 @@ async fn a_resume_grok_never_answers_opens_once_its_replay_goes_quiet() {
     let started = std::time::Instant::now();
     let env = [(TEST_REPLAY_IDLE_MS, "200")];
     let run = run_turn_with("load_hangs", PermissionMode::Supervised, Some("s-old"), ApprovalDecision::AllowOnce, &env).await;
-    assert!(started.elapsed() < LOAD_TIMEOUT, "{:?}", started.elapsed());
+    assert!(started.elapsed() < crate::acp::LOAD_TIMEOUT, "{:?}", started.elapsed());
     assert!(matches!(&run.events[0], DriverEvent::SessionBound { session_id, .. } if session_id == "s-old"));
     // The replay is history: only the new answer is output.
     assert_eq!(run.texts(), "new answer");

@@ -16,6 +16,7 @@
 //! marked "(T3 Code)" where they are used.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{
     ContentBlock, Meta, PermissionOption, RequestPermissionRequest, RequestPermissionResponse, ToolCallUpdateFields, ToolKind,
@@ -216,6 +217,9 @@ impl AgentDriver for GrokDriver {
 struct Grok;
 
 impl AcpFlavor for Grok {
+    // Grok can leave `session/load` unanswered once it has replayed the conversation.
+    const REPLAY_IDLE: Option<Duration> = Some(crate::acp::LOAD_REPLAY_IDLE);
+    const LOAD_TIMEOUT: Option<Duration> = Some(crate::acp::LOAD_TIMEOUT);
     type Completion = PromptComplete;
     const KIND: ProviderKind = ProviderKind::GrokBuild;
     const NAME: &'static str = "Grok Build";

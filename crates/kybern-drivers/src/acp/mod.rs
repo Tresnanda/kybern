@@ -53,7 +53,7 @@ use crate::{AgentSession, DriverError, DriverEvent, Result, SessionConfig, Spawn
 pub(crate) use content::{blocks_with_guide, command_update, mcp_servers, merge_text_blocks, option_list, prompt_blocks, tool_name};
 pub(crate) use permission::{Ask, auto_response, cancelled, permission_response, selected};
 pub(crate) use startup::{Startup, fail_startup, rejects_arguments, remember_stderr, stderr_text};
-pub(crate) use turn::{Completion, SessionCommand, settle_prompt};
+pub(crate) use turn::{Completion, LOAD_REPLAY_IDLE, LOAD_TIMEOUT, SessionCommand, settle_prompt};
 #[cfg(test)]
 pub(crate) use {
     content::prompt_with_guide,
@@ -62,7 +62,7 @@ pub(crate) use {
 };
 // Only the fake-agent session tests, which run on Unix, use these.
 #[cfg(all(test, unix))]
-pub(crate) use turn::{LOAD_TIMEOUT, TEST_CANCEL_GRACE_MS, TEST_REPLAY_IDLE_MS};
+pub(crate) use turn::{TEST_CANCEL_GRACE_MS, TEST_REPLAY_IDLE_MS};
 
 /// A tool call as Kybern names it: the name, and the arguments when the call is really an MCP tool's.
 pub(crate) struct ToolIdentity {
@@ -118,6 +118,11 @@ pub(crate) trait AcpFlavor: Send + Sync + Sized + 'static {
     const POLICY_FOLLOWS_MODE: bool = false;
     /// A steer the agent can't take goes back to the daemon as a follow-up (`SteerFallback`), not refused.
     const STEER_FALLBACK: bool = false;
+    /// Quiet after a `session/load` replay chunk that counts the load as done, for an agent that can leave
+    /// the load unanswered; `None` waits for the answer, however long, and hides the whole replay until then.
+    const REPLAY_IDLE: Option<Duration>;
+    /// The longest wait for `session/load`; `None` waits as long as the agent takes.
+    const LOAD_TIMEOUT: Option<Duration>;
     /// The prompt that compacts the conversation, when the agent has one.
     const COMPACT: Option<&'static str> = None;
     /// Why the permission mode can't change during a session, when [`AcpFlavor::session_mode`] has no mode for it.
@@ -404,7 +409,7 @@ impl<F: AcpFlavor> Connection<F> {
     async fn run(self, mut commands: mpsc::Receiver<SessionCommand>, bound: oneshot::Sender<Result<Bound>>) -> Result<()> {
         let Connection { flavor, bin, config, mcp_servers, shared, stderr_tail, stderr_closed: stderr_closed_tx } = self;
         let mut bound = Some(bound);
-        let timings = turn::Timings::for_session(&config);
+        let timings = turn::Timings::for_session::<F>(&config);
 
         let mut cmd = flavor.command(&bin, &config);
         cmd.current_dir(&config.cwd)
@@ -622,7 +627,7 @@ impl<F: AcpFlavor> Connection<F> {
                         loading.store(true, std::sync::atomic::Ordering::Relaxed);
                         let request = LoadSessionRequest::new(id.clone(), cwd.clone()).mcp_servers(mcp_servers.clone()).meta(session_meta);
                         let load = cx.send_request(request).block_task();
-                        match turn::await_session_load(load, &last_replay, timings.replay_idle, turn::LOAD_TIMEOUT).await {
+                        match turn::await_session_load(load, &last_replay, timings.replay_idle, timings.load_timeout).await {
                             turn::LoadOutcome::Answered(Ok(_)) => {
                                 loading.store(false, std::sync::atomic::Ordering::Relaxed);
                                 SessionId::from(id.clone())
@@ -637,7 +642,8 @@ impl<F: AcpFlavor> Connection<F> {
                                 return Err(fail_startup(&mut bound, error));
                             }
                             turn::LoadOutcome::TimedOut => {
-                                let detail = format!("session/load {id}: no answer or replay in {} seconds", turn::LOAD_TIMEOUT.as_secs());
+                                let seconds = timings.load_timeout.map_or(0, |timeout| timeout.as_secs());
+                                let detail = format!("session/load {id}: no answer or replay in {seconds} seconds");
                                 return Err(fail_startup(&mut bound, flavor.startup_error(Startup::ResumeTimedOut, &detail, "")));
                             }
                         }
