@@ -28,6 +28,7 @@ mod antigravity_rules;
 mod askpass;
 mod change_report;
 mod child_questions;
+mod claude_sessions;
 mod delegation;
 mod federated_tools;
 pub(crate) mod fork_machine;
@@ -3070,13 +3071,32 @@ impl Orchestrator {
         let mut pending = live.pending.lock().await;
         let request_id = pending.get(&approval_id).cloned().ok_or_else(|| anyhow!("approval no longer pending"))?;
         live.touch();
-        live.session.respond_permission(&request_id, &decision).await?;
+        let provider_decision = self.provider_decision(&approval, &decision, answered_by.as_ref());
+        live.session.respond_permission(&request_id, provider_decision.as_ref().unwrap_or(&decision)).await?;
         pending.remove(&approval_id);
         drop(pending);
         self.inner.store.approval_resolve(approval_id, &decision)?;
         self.emit(approval.thread_id, Some(approval.turn_id), EventPayload::ApprovalResolved { approval_id, decision, answered_by })?;
         self.restore_running_after_approval(approval.thread_id, &live).await?;
         Ok(())
+    }
+
+    /// The provider's copy of a person's answer, when it differs from what Kybern records: Claude reads the
+    /// reason a user gives for declining as a reply of theirs. An agent answering for the user, and the reasons
+    /// Kybern gives itself, go unchanged; a declined form takes no reason.
+    fn provider_decision(
+        &self,
+        approval: &ApprovalRequest,
+        decision: &ApprovalDecision,
+        answered_by: Option<&RequestAnswerer>,
+    ) -> Option<ApprovalDecision> {
+        let ApprovalDecision::Deny { reason: Some(reason) } = decision else { return None };
+        if answered_by.is_some() || reason.trim().is_empty() || approval.tool_name == "mcp_elicitation" {
+            return None;
+        }
+        let thread = self.inner.store.thread_get(approval.thread_id).ok().flatten()?;
+        (thread.provider.kind == ProviderKind::ClaudeCode)
+            .then(|| ApprovalDecision::Deny { reason: Some(kybern_drivers::claude::user_decline_feedback(reason)) })
     }
 
     /// The harness's own response for normalized answers (`{"kybern_answers": [...]}`); any other decision unchanged.
@@ -3727,6 +3747,9 @@ impl Orchestrator {
             if identity.as_deref().is_none_or(|identity| identity == expected) {
                 return Ok((live, true));
             }
+            if self.switch_live_target(thread, &live, identity.as_deref()).await? {
+                return Ok((live, true));
+            }
             self.retire_or_close_session(thread.id, live, identity.unwrap_or_default()).await?;
         }
         let retained = self.inner.retained_sessions.lock().await.remove(&(thread.id, expected.clone()));
@@ -3739,6 +3762,7 @@ impl Orchestrator {
                     (&format!("live_identity:{}", thread.id), &expected),
                     (&format!("live_owner:{}", thread.id), &serde_json::to_string(&thread.provider)?),
                 ])?;
+                self.record_live_target(thread)?;
                 return Ok((live, true));
             }
             live.mark_released();
@@ -3957,6 +3981,7 @@ impl Orchestrator {
             (&format!("live_identity:{}", thread.id), &self.session_identity(thread)?),
             (&format!("live_owner:{}", thread.id), &serde_json::to_string(&thread.provider)?),
         ])?;
+        self.record_live_target(thread)?;
         *live.brief_revision.lock().await = brief_revision;
         *live.lead_settings.lock().await = lead_settings;
         self.inner.sessions.lock().await.insert(thread.id, live.clone());
@@ -4361,9 +4386,14 @@ impl Orchestrator {
             // A handoff turn is invisible: its rotation goes on without a handoff.
             if let Some(internal) = turn.internal.as_mut() {
                 internal.finish(Err("The session exited before it wrote a handoff.".into()));
-            } else {
+            } else if !(exit_error.as_deref().is_some()
+                && self.recover_missing_conversation(thread_id, &live, turn.id, exit_error.as_deref().unwrap_or_default(), true).await)
+            {
                 self.fail_exited_turn(thread_id, &live, turn.id, exit_error.as_deref()).await;
             }
+        } else if let Some(error) = exit_error.as_deref() {
+            // No turn was waiting, but the next one would resume the same missing conversation.
+            self.forget_conversation_after_exit(thread_id, error);
         }
         if cleanup_barrier.is_some() {
             self.inner.releasing.lock().await.remove(&thread_id);
@@ -4656,6 +4686,7 @@ impl Orchestrator {
                 // Native canonical model reports belong to this live binding and must
                 // not look like a user-requested reconfiguration on the next send.
                 self.inner.store.meta_set(&format!("live_identity:{thread_id}"), &self.session_identity(&t)?)?;
+                self.record_live_target(&t)?;
                 if changed {
                     self.update_thread(t)?;
                 }
@@ -5065,6 +5096,12 @@ impl Orchestrator {
                     *turn_guard = None;
                     return Ok(());
                 }
+                // Claude Code no longer has the conversation this session resumed: continue on a fresh one.
+                if turn.internal.is_none() && !retiring && self.recover_missing_conversation(thread_id, live, turn.id, &error, false).await
+                {
+                    *turn_guard = None;
+                    return Ok(());
+                }
                 turn.completed = true;
                 let turn_id = turn.id;
                 *turn_guard = None;
@@ -5180,7 +5217,9 @@ impl Orchestrator {
                 self.emit(thread_id, turn_id, EventPayload::ProviderNotice { level, text, data, problem })?;
             }
             DriverEvent::Exited { code, error } => {
-                if let Some(error) = error.filter(|_| !live.is_released()) {
+                // A conversation Claude Code no longer has is taken over when the pump ends (a fresh session,
+                // or the turn's failure); its exit is no row of its own.
+                if let Some(error) = error.filter(|error| !live.is_released() && !self.is_missing_conversation(thread_id, error)) {
                     self.emit(
                         thread_id,
                         turn_id,
@@ -5602,6 +5641,10 @@ mod tests {
         stopped_tasks: Arc<Mutex<Vec<String>>>,
         /// What the session was told to do with each permission request.
         permission_responses: Arc<Mutex<Vec<ApprovalDecision>>>,
+        /// Live model and effort changes, in order (`model:sonnet`, `effort:low`).
+        target_changes: Arc<std::sync::Mutex<Vec<String>>>,
+        /// Refuse live model and effort changes, as an older Claude Code would.
+        reject_target: bool,
     }
 
     #[async_trait::async_trait]
@@ -5642,11 +5685,19 @@ mod tests {
             Ok(())
         }
 
-        async fn set_model(&self, _model: &str) -> kybern_drivers::Result<()> {
+        async fn set_model(&self, model: &str) -> kybern_drivers::Result<()> {
+            if self.reject_target {
+                return Err(kybern_drivers::DriverError::Protocol(format!("set_model: Model '{model}' not found")));
+            }
+            self.target_changes.lock().unwrap().push(format!("model:{model}"));
             Ok(())
         }
 
-        async fn set_effort(&self, _effort: &str) -> kybern_drivers::Result<()> {
+        async fn set_effort(&self, effort: &str) -> kybern_drivers::Result<()> {
+            if self.reject_target {
+                return Err(kybern_drivers::DriverError::Unsupported("fixture keeps its effort".into()));
+            }
+            self.target_changes.lock().unwrap().push(format!("effort:{effort}"));
             Ok(())
         }
 
@@ -9329,4 +9380,5 @@ for line in sys.stdin:
     include!("orchestrator/project_map_tests.rs");
     include!("orchestrator/rotation_tests.rs");
     include!("orchestrator/media_tests.rs");
+    include!("orchestrator/claude_session_tests.rs");
 }

@@ -198,9 +198,8 @@ impl Orchestrator {
     }
 
     pub(super) async fn retire_or_close_session(&self, thread_id: ThreadId, live: Arc<LiveSession>, identity: String) -> Result<()> {
-        let reusable = live.tasks.lock().await.values().any(|task| {
-            task.status.is_active() && task.backgrounded && matches!(task.kind, RuntimeTaskKind::Process | RuntimeTaskKind::Monitor)
-        });
+        // Background work of any kind (a dev server, a monitor, a subagent) keeps the outgoing process until it ends.
+        let reusable = live.tasks.lock().await.values().any(|task| task.status.is_active() && task.backgrounded);
         if reusable {
             let owner =
                 self.inner.store.meta_get(&format!("live_owner:{thread_id}"))?.map(|s| serde_json::from_str(&s)).transpose()?.ok_or_else(
@@ -312,10 +311,15 @@ impl Orchestrator {
     }
 
     pub(super) fn session_identity(&self, thread: &Thread) -> Result<String> {
+        self.session_identity_for(thread, thread.model.as_deref(), thread.effort.as_deref())
+    }
+
+    /// The identity `thread` would have with this model and effort.
+    pub(super) fn session_identity_for(&self, thread: &Thread, model: Option<&str>, effort: Option<&str>) -> Result<String> {
         let mut input = serde_json::to_vec(&(
             thread.provider.clone(),
-            thread.model.clone(),
-            thread.effort.clone(),
+            model.map(str::to_string),
+            effort.map(str::to_string),
             thread.permission_mode,
             self.environment_fingerprint(thread)?,
         ))?;
@@ -615,7 +619,13 @@ impl Orchestrator {
         if self.pending_permission_for(&thread, &thread.provider)? == Some(mode) {
             self.inner.store.meta_set(&format!("pending_permission:{}", thread_id), "")?;
         }
-        self.update_thread(thread)
+        let thread = self.update_thread(thread)?;
+        // Claude Code took the mode live (`set_permission_mode`, or a respawn already recorded its own
+        // identity): the next message keeps this process instead of restarting it for the old mode.
+        if thread.provider.kind == ProviderKind::ClaudeCode && self.inner.sessions.lock().await.contains_key(&thread_id) {
+            self.inner.store.meta_set(&format!("live_identity:{thread_id}"), &self.session_identity(&thread)?)?;
+        }
+        Ok(thread)
     }
 
     /// Closes a live session and resumes its native session with `desired`'s

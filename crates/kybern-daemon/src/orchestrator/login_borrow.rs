@@ -104,7 +104,7 @@ impl Orchestrator {
 
     /// `start_turn` behind a boxed future. A session's event pump reaches `recover_rejected_login`, which
     /// restarts the turn, which spawns a session with a pump: erasing the type here ends that cycle.
-    fn start_turn_erased(
+    pub(super) fn start_turn_erased(
         &self,
         thread: Thread,
         turn_id: TurnId,
