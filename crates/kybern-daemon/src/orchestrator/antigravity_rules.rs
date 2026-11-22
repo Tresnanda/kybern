@@ -2,10 +2,11 @@
 //!
 //! On `agy -p` Kybern can neither approve nor limit what Antigravity's tools do, so:
 //! - a thread on Antigravity is in Full access, and any other mode is refused
-//!   wherever a mode or a provider is set (create, update, send, fork, move,
-//!   rotation, delegation, task runs), unless this machine's `agy` runs on ACP
-//!   (1.5.0 or later), where Kybern answers its permission requests and every
-//!   mode works (the driver's `accepts_permission_mode`);
+//!   wherever a mode or a provider is chosen or changed (create, update, send,
+//!   rotation, delegation, task runs; fork, move and delegation to another
+//!   machine are checked there), unless the machine's `agy` runs on ACP (1.5.0
+//!   or later), where Kybern answers its permission requests and every mode
+//!   works (the driver's `permission_mode_refusal`);
 //! - Antigravity cannot be a project's Coordinator lead (Kybern can't make it
 //!   read-only on either transport).
 
