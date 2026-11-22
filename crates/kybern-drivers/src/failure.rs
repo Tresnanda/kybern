@@ -206,6 +206,15 @@ fn rate_limited_problem(kind: ProviderKind, detail: &str) -> Problem {
     )
 }
 
+/// The harness started but never answered, so Kybern stopped it. Nothing is wrong with the account; sending
+/// again starts a new process. Clients word it as the harness stopping before it could answer.
+pub fn stalled_start_problem(kind: ProviderKind, detail: &str) -> Problem {
+    Problem::new(ProblemKind::Internal, detail)
+        .with_subject(tool_name(kind))
+        .with_copy(format!("{} didn't start", label(kind)), "It never answered, so Kybern stopped it. Send your message again.")
+        .with_action(ProblemAction::retry("Try again"))
+}
+
 fn network_problem(kind: ProviderKind, detail: &str) -> Problem {
     Problem::new(ProblemKind::Offline, detail)
         .with_subject("network")
