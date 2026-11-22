@@ -105,6 +105,23 @@ pub fn codex_stalled_retry(info: Option<&serde_json::Value>, text: &str) -> Prob
     classify_codex(info, text).unwrap_or_else(|| network_problem(ProviderKind::Codex, text))
 }
 
+/// The problem a harness that stopped by itself is. `cause` is what it said
+/// as it went (its stderr, an exit code): read for a known problem, else the
+/// harness stopped. Either way `cause` is only the problem's details.
+pub fn exited_problem(kind: ProviderKind, cause: Option<&str>) -> Problem {
+    let cause = cause.map(str::trim).filter(|cause| !cause.is_empty());
+    cause.and_then(|cause| classify(kind, cause)).unwrap_or_else(|| {
+        let mut problem = Problem::new(ProblemKind::Internal, cause.unwrap_or_default()).with_subject(tool_name(kind)).with_copy(
+            format!("{} stopped unexpectedly", label(kind)),
+            "Send your message again. If it keeps happening, copy the details and report them.",
+        );
+        if cause.is_none() {
+            problem.detail = None;
+        }
+        problem
+    })
+}
+
 /// The problem a `DriverError` that stopped a session means, when it has one.
 pub fn classify_error(kind: ProviderKind, error: &DriverError) -> Option<Problem> {
     let detail = error.to_string();
@@ -455,6 +472,19 @@ mod tests {
         assert_eq!(classify_codex(None, "connection reset by peer").unwrap().kind, ProblemKind::Offline);
         assert!(classify_codex(None, "turn failed").is_none());
         assert_eq!(codex_stalled_retry(None, "Reconnecting... 5/5").kind, ProblemKind::Offline);
+    }
+
+    #[test]
+    fn an_exit_is_a_headline_with_the_stderr_as_details() {
+        let stderr = "Error loading config.toml: unknown variant `fast` for key model_reasoning_effort";
+        let problem = exited_problem(ProviderKind::Codex, Some(stderr));
+        assert_eq!((problem.kind, problem.subject.as_deref()), (ProblemKind::Internal, Some("codex")));
+        assert_eq!(problem.title.as_deref(), Some("Codex stopped unexpectedly"));
+        assert!(!problem.title.unwrap().contains("config.toml"));
+        assert_eq!(problem.detail.as_deref(), Some(stderr));
+        // What the stderr says comes first: a signed-out Codex says so.
+        assert_eq!(exited_problem(ProviderKind::Codex, Some("Error: not logged in")).kind, ProblemKind::SignedOut);
+        assert_eq!(exited_problem(ProviderKind::Codex, Some("  ")).detail, None);
     }
 
     #[test]

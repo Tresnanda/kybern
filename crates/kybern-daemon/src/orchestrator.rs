@@ -5083,6 +5083,19 @@ impl Orchestrator {
 
     /// The provider exited in the middle of a user's turn.
     /// What an error notice from the thread's harness means, when Kybern can name it.
+    /// What a harness that stopped by itself means for the person, with
+    /// `cause` (its stderr, an exit code) as the details only.
+    fn exited_problem(&self, thread_id: ThreadId, cause: Option<&str>) -> kybern_protocol::rpc::Problem {
+        let kind = self.inner.store.thread_get(thread_id).ok().flatten().map(|thread| thread.provider.kind);
+        match kind {
+            Some(kind) => kybern_drivers::failure::exited_problem(kind, cause),
+            None => kybern_protocol::rpc::Problem::new(kybern_protocol::rpc::ProblemKind::Internal, cause.unwrap_or_default()).with_copy(
+                "The agent stopped unexpectedly",
+                "Send your message again. If it keeps happening, copy the details and report them.",
+            ),
+        }
+    }
+
     fn notice_problem(&self, thread_id: ThreadId, level: NoticeLevel, text: &str) -> Option<kybern_protocol::rpc::Problem> {
         if level != NoticeLevel::Error {
             return None;
@@ -5097,10 +5110,9 @@ impl Orchestrator {
             Some(cause) => format!("provider exited before finishing the turn: {cause}"),
             None => "provider exited before finishing the turn".to_string(),
         };
-        let problem = cause.and_then(|cause| {
-            let kind = self.inner.store.thread_get(thread_id).ok().flatten()?.provider.kind;
-            kybern_drivers::failure::classify(kind, cause)
-        });
+        // Always a problem: without one, clients would show `text`, the
+        // harness's raw stderr, as the failure itself.
+        let problem = Some(self.exited_problem(thread_id, Some(&text)));
         let _ = self.emit(thread_id, Some(turn_id), EventPayload::TurnFailed { error: text.clone(), problem });
         if let Ok(Some(mut t)) = self.inner.store.thread_get(thread_id) {
             t.status = ThreadStatus::Failed;
@@ -5923,14 +5935,21 @@ impl Orchestrator {
                 // A conversation Claude Code no longer has is taken over when the pump ends (a fresh session,
                 // or the turn's failure); its exit is no row of its own.
                 if let Some(error) = error.filter(|error| !live.is_released() && !self.is_missing_conversation(thread_id, error)) {
+                    // The headline says what happened; the harness's own words
+                    // (a stderr tail) and the exit code are only its details.
+                    let detail = match code {
+                        Some(code) if !error.contains(&format!("code {code}")) => format!("Exit code {code}\n{error}"),
+                        _ => error,
+                    };
+                    let problem = self.exited_problem(thread_id, Some(&detail));
                     self.emit(
                         thread_id,
                         turn_id,
                         EventPayload::ProviderNotice {
                             level: NoticeLevel::Error,
-                            text: format!("provider exited{}: {error}", code.map(|c| format!(" with code {c}")).unwrap_or_default()),
+                            text: problem.title.clone().unwrap_or_else(|| "The agent stopped unexpectedly".into()),
                             data: None,
-                            problem: self.notice_problem(thread_id, NoticeLevel::Error, &error),
+                            problem: Some(problem),
                         },
                     )?;
                 }
@@ -10789,6 +10808,45 @@ mod tests {
             .filter(|event| matches!(event.payload, EventPayload::ProviderNotice { .. }))
             .count();
         assert_eq!(notices, 0);
+    }
+
+    /// An agent that exits mid-turn says so in plain words; what it wrote on
+    /// stderr is only the details, in the notice and in the failed turn.
+    #[tokio::test]
+    async fn an_exit_is_a_headline_with_the_stderr_behind_details() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Codex);
+        let (live, _) = fixture.park(&thread, Instant::now()).await;
+        fixture.orchestrator.send(thread.id, UserMessage::text("hello")).await.unwrap();
+        live.turn_ready.notified().await;
+        let stderr = "Error loading config.toml: unknown variant `fast` for key model_reasoning_effort";
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        tx.send(DriverEvent::Exited { code: Some(1), error: Some(stderr.into()) }).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), fixture.orchestrator.clone().pump(thread.id, live, rx))
+            .await
+            .expect("Exited ends the pump");
+        let events = fixture.store.events_for_thread(thread.id).unwrap();
+        let notice = events
+            .iter()
+            .find_map(|event| match &event.payload {
+                EventPayload::ProviderNotice { level: NoticeLevel::Error, text, problem, .. } => Some((text.clone(), problem.clone())),
+                _ => None,
+            })
+            .expect("the exit is told");
+        assert_eq!(notice.0, "Codex stopped unexpectedly");
+        let detail = notice.1.and_then(|problem| problem.detail).unwrap_or_default();
+        assert!(detail.contains(stderr) && detail.contains("Exit code 1"), "{detail}");
+        let failed = events
+            .iter()
+            .find_map(|event| match &event.payload {
+                EventPayload::TurnFailed { problem, .. } => Some(problem.clone()),
+                _ => None,
+            })
+            .expect("the turn fails");
+        let problem = failed.expect("the failed turn names its problem, so clients never headline the stderr");
+        assert_eq!(problem.kind, kybern_protocol::rpc::ProblemKind::Internal);
+        assert!(problem.detail.unwrap_or_default().contains(stderr));
+        drop(tx);
     }
 
     #[tokio::test]
