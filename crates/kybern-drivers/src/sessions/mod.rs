@@ -183,7 +183,7 @@ fn file_page(
 pub enum ReadFailure {
     /// Its harness is still writing it.
     InUse,
-    /// Over the 64 MB history limit.
+    /// Over its harness's history limit.
     TooLarge,
     Other,
 }
@@ -195,7 +195,7 @@ pub fn classify_read_error(error: &DriverError) -> ReadFailure {
     let text = error.to_string();
     if text.contains(STILL_WRITING) || text.contains("Session changed while reading.") {
         ReadFailure::InUse
-    } else if text.contains(TOO_LARGE) {
+    } else if text.contains(TOO_LARGE) || text.contains(claude::TOO_LARGE_TEXT) {
         ReadFailure::TooLarge
     } else {
         ReadFailure::Other
