@@ -1007,9 +1007,9 @@ async fn agy_usage_runs_once_without_a_turn_and_is_reused() {
     )
     .unwrap();
     let env = std::collections::BTreeMap::new();
-    let first = read_agy_usage(Some(&binary), &env, dir.path()).await;
+    let first = read_agy_usage(Some(&binary), &env, dir.path(), None).await;
     assert_eq!(first.len(), 5);
-    let second = read_agy_usage(Some(&binary), &env, dir.path()).await;
+    let second = read_agy_usage(Some(&binary), &env, dir.path(), None).await;
     assert_eq!(second.len(), 5);
     let log = std::fs::read_to_string(&calls).unwrap();
     assert_eq!(log.lines().collect::<Vec<_>>(), ["-p /usage --output-format json"], "one call, then the cached answer");
@@ -1022,7 +1022,7 @@ async fn a_failing_agy_usage_reads_as_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let binary = dir.path().join("agy");
     kybern_protocol::process::write_executable(&binary, "#!/bin/sh\necho 'not json'\nexit 1\n").unwrap();
-    assert!(read_agy_usage(Some(&binary), &std::collections::BTreeMap::new(), dir.path()).await.is_empty());
+    assert!(read_agy_usage(Some(&binary), &std::collections::BTreeMap::new(), dir.path(), None).await.is_empty());
 }
 
 /// What a signed-out `agy 1.5.13 -p /usage --output-format json` writes (sign-in URL cut short).
@@ -1195,4 +1195,182 @@ fn a_signed_out_agy_models_is_told_from_its_output() {
     ));
     assert!(!models_signed_out(b"Fetching available models...\ngemini-4-neon-high\tGemini 4 Neon\n", b""));
     assert!(!models_signed_out(b"", b"dial tcp: lookup failed"));
+}
+
+/// What happened to a friend on macOS: `agy` keeps a login that `agy models` accepts, but the
+/// `/usage` Kybern starts in the background can't renew it and opens Google's sign-in page each
+/// time. Kybern read the limits again every couple of minutes and left ten sign-in tabs, and said
+/// "signed out" while `agy` in a terminal was signed in.
+#[cfg(all(unix, not(target_os = "macos")))]
+#[tokio::test]
+async fn a_usage_that_asks_to_sign_in_opens_no_browser_and_is_not_repeated_for_the_same_login() {
+    use super::usage::{read_account_usage, read_agy_usage};
+    use kybern_protocol::methods::LimitsStale;
+    crate::no_browser::set_test_root();
+    let tools = tempfile::tempdir().unwrap();
+    let calls = tools.path().join("calls");
+    // The person's real browser, found through PATH the way Go's browser helpers find it.
+    let browser = tools.path().join("browser");
+    std::fs::create_dir_all(&browser).unwrap();
+    let opened = tools.path().join("opened");
+    for name in ["open", "xdg-open"] {
+        kybern_protocol::process::write_executable(&browser.join(name), format!("#!/bin/sh\necho \"$*\" >> '{}'\n", opened.display()))
+            .unwrap();
+    }
+    let binary = tools.path().join("agy");
+    kybern_protocol::process::write_executable(
+        &binary,
+        format!(
+            "#!/bin/sh\necho \"$HOME $*\" >> '{}'\n\
+             if [ \"$*\" = 'models' ]; then echo 'Fetching available models...'; printf 'gemini-4-neon-high\\tGemini 4 Neon\\n'; exit 0; fi\n\
+             [ \"$*\" = '-p /usage --output-format json' ] || exit 3\n\
+             xdg-open 'https://accounts.google.com/o/oauth2/auth' || open 'https://accounts.google.com/o/oauth2/auth'\n\
+             printf '%s' '{}' >&2; exec sleep 30\n",
+            calls.display(),
+            AGY_SIGNED_OUT_STDERR.replace('\'', "")
+        ),
+    )
+    .unwrap();
+    let home = home_with_token(-1);
+    let mut env = env_for(home.path());
+    env.insert("PATH".into(), format!("{}:/usr/bin:/bin", browser.display()));
+
+    let first = read_account_usage(home.path(), Some(&binary), &env).await.unwrap_err();
+    assert_eq!(first.reason, LimitsStale::Throttled, "`agy models` is signed in, so this is not a sign-out: {first:?}");
+    assert!(first.retry_at.is_some(), "the caption says when the next check is");
+    assert_eq!(call_count(&calls), 1);
+    assert!(!opened.exists(), "no browser opened: {:?}", std::fs::read_to_string(&opened).ok());
+
+    // The next reads, and the Gemini top-up a working token would run, don't start `/usage` again.
+    let again = read_account_usage(home.path(), Some(&binary), &env).await.unwrap_err();
+    assert_eq!(again.reason, LimitsStale::Throttled);
+    assert!(read_agy_usage(Some(&binary), &env, home.path(), None).await.is_empty());
+    let login = crate::antigravity::read_login(Some(home.path())).await.unwrap();
+    assert!(read_agy_usage(Some(&binary), &env, home.path(), Some(login.fingerprint())).await.is_empty());
+    assert_eq!(call_count(&calls), 1, "asked once for this login");
+
+    // `agy` stored a new login (signed in again, or renewed in a terminal): read at once.
+    let dir = home.path().join(".gemini/antigravity-cli");
+    std::fs::write(dir.join("oauth_creds.json"), json!({"access_token": "ya29.renewed", "expiry": "2020-01-01T00:00:00Z"}).to_string())
+        .unwrap();
+    std::fs::write(home.path().join("answer.json"), agy_usage_json().to_string()).unwrap();
+    let after = read_account_usage(home.path(), Some(&binary), &env).await.unwrap_err();
+    assert_eq!(call_count(&calls), 2, "the new login gets `/usage` back: {after:?}");
+    assert!(!opened.exists());
+}
+
+/// A stand-in for Google's quota hosts: `loadCodeAssist` and `retrieveUserQuotaSummary` for the token
+/// `accepted`, 401 for any other.
+#[cfg(all(unix, not(target_os = "macos")))]
+async fn quota_host(accepted: &'static str) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut request = Vec::new();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    let Ok(read) = socket.read(&mut chunk).await else { return };
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&chunk[..read]);
+                    let text = String::from_utf8_lossy(&request).to_lowercase();
+                    if let Some(end) = text.find("\r\n\r\n") {
+                        let length = text[..end]
+                            .lines()
+                            .find_map(|line| line.strip_prefix("content-length:").and_then(|value| value.trim().parse::<usize>().ok()))
+                            .unwrap_or(0);
+                        if request.len() >= end + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                let text = String::from_utf8_lossy(&request).to_string();
+                let (status, body) = if !text.to_lowercase().contains(&format!("authorization: bearer {accepted}")) {
+                    ("401 Unauthorized", json!({"error": {"code": 401}}))
+                } else if text.starts_with("POST /v1internal:loadCodeAssist") {
+                    ("200 OK", json!({"cloudaicompanionProject": "project-1", "paidTier": {"id": "g1-pro-tier"}}))
+                } else {
+                    (
+                        "200 OK",
+                        json!({"groups": [
+                            {"displayName": "Gemini Models", "buckets": [
+                                {"bucketId": "gemini-5h", "window": "5h", "resetTime": "2026-11-22T05:00:00Z", "remainingFraction": 0.75},
+                                {"bucketId": "gemini-weekly", "window": "weekly", "resetTime": "2026-11-28T05:00:00Z", "remainingFraction": 0.9}]},
+                            {"displayName": "Claude and GPT models", "buckets": [
+                                {"bucketId": "3p-5h", "window": "5h", "resetTime": "2026-11-22T05:00:00Z", "remainingFraction": 0.5}]}]}),
+                    )
+                };
+                let body = body.to_string();
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            });
+        }
+    });
+    format!("http://{address}")
+}
+
+/// The reliable path: an expired (or refused) login is renewed by `agy models`, which never opens a
+/// browser, and Kybern then asks Google itself. `agy -p /usage` never runs.
+#[cfg(all(unix, not(target_os = "macos")))]
+#[tokio::test]
+async fn an_expired_login_is_renewed_by_agy_models_and_read_without_usage() {
+    use super::usage::{TEST_HOST, read_account_usage};
+    *TEST_HOST.lock().unwrap() = Some(quota_host("ya29.fresh").await);
+    let tools = tempfile::tempdir().unwrap();
+    let calls = tools.path().join("calls");
+    let binary = tools.path().join("agy");
+    // Like the real `agy`: any start renews an expired saved login and saves it. `/usage` must not run.
+    kybern_protocol::process::write_executable(
+        &binary,
+        format!(
+            "#!/bin/sh\necho \"$HOME $*\" >> '{}'\n\
+             [ \"$*\" = 'models' ] || exit 3\n\
+             printf '{{\"access_token\":\"ya29.fresh\",\"expiry\":\"2099-01-01T00:00:00Z\"}}' > \"$HOME/.gemini/antigravity-cli/oauth_creds.json\"\n\
+             echo 'Fetching available models...'; printf 'gemini-4-neon-high\\tGemini 4 Neon\\n'\n",
+            calls.display()
+        ),
+    )
+    .unwrap();
+    let home = home_with_token(-1);
+    let env = env_for(home.path());
+
+    let (limits, plan) = read_account_usage(home.path(), Some(&binary), &env).await.unwrap();
+    assert_eq!(limits[0].name, "Gemini Models · 5-hour");
+    assert_eq!(limits[0].used_percent, 25.0);
+    assert_eq!(limits.len(), 3);
+    assert_eq!(plan.as_deref(), Some("Google AI Pro"), "asked of Google directly, so the plan comes too");
+    assert_eq!(models_count(&calls), 1, "one `agy models` renewed the login");
+    assert_eq!(call_count(&calls), 0, "`/usage` never ran");
+
+    // The renewed login is good for its hour: the next reads start no process for the limits.
+    read_account_usage(home.path(), Some(&binary), &env).await.unwrap();
+    assert_eq!(models_count(&calls), 1);
+
+    // A login Google refuses before it expires is renewed the same way.
+    let token = home.path().join(".gemini/antigravity-cli/oauth_creds.json");
+    std::fs::write(&token, json!({"access_token": "ya29.revoked", "expiry": "2099-01-01T00:00:00Z"}).to_string()).unwrap();
+    let (limits, _) = read_account_usage(home.path(), Some(&binary), &env).await.unwrap();
+    assert_eq!(limits.len(), 3);
+    assert_eq!(models_count(&calls), 2);
+    assert_eq!(call_count(&calls), 0);
+}
+
+#[test]
+fn a_keyring_value_is_read_in_each_of_go_keyrings_wrappers() {
+    let json = r#"{"token":{"access_token":"ya29.a","expiry":"2026-11-22T09:05:27+08:00"},"id_token_email":"a@example.com"}"#;
+    let hex: String = json.bytes().map(|byte| format!("{byte:02x}")).collect();
+    for text in [json.to_string(), format!("go-keyring-encoded:{hex}")] {
+        let login = parse_login(&text).expect("a login");
+        assert_eq!(login.email.as_deref(), Some("a@example.com"));
+    }
+    assert!(parse_login("go-keyring-encoded:zz").is_none());
+    assert!(parse_login("go-keyring-encoded:abc").is_none());
 }

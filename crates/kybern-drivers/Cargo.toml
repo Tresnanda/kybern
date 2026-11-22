@@ -30,6 +30,13 @@ which.workspace = true
 # A job object per provider tree, so a stop reaches a launcher's descendants.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
+# Antigravity's login in the Credential Manager, read-only (`antigravity/login.rs`). The version `kybern-cli` pins.
+keyring = { version = "=3.6.3", features = ["windows-native"] }
+
+# Antigravity's login in the Secret Service, read-only and never unlocking (`antigravity/login.rs`). The same
+# compiled-in libdbus as `kybern-cli`, so the static Linux builds need no system library.
+[target.'cfg(target_os = "linux")'.dependencies]
+dbus-secret-service = { version = "4.1.0", features = ["vendored", "crypto-rust"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

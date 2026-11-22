@@ -731,6 +731,7 @@ impl AccountLogins {
             if !working {
                 status = AccountStatus::NeedsSignIn;
             } else {
+                kybern_drivers::antigravity::forget_sign_in_waits();
                 self.offer_kybern_tools(state).await;
             }
         }

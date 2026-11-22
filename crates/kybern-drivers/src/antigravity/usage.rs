@@ -1,26 +1,31 @@
 //! Antigravity's account limits: the 5-hour and weekly quota windows.
 //!
-//! Two reads, tried in this order:
+//! Kybern asks Google's quota endpoints itself, with the token `agy` keeps (see `login.rs`):
 //!
-//! 1. **The token `agy` already refreshed.** Kybern reads it (see `login.rs`) and asks
-//!    Google's quota endpoints directly. This is the fast path: no process starts.
-//! 2. **`agy -p "/usage"`.** Used whenever the fast path has no usable token: it is
-//!    expired or about to be, Google refused it (401), or none can be found (on Linux and
-//!    Windows `agy` keeps it in the OS keyring, which Kybern doesn't read). `/usage`
-//!    starts no agent turn and spends no quota, and `agy` renews its own token as a side
-//!    effect, so the next read is fast again. It has no plan name, so the daemon keeps the
-//!    last known plan.
+//! 1. **The stored token is good.** One HTTPS read, no process.
+//! 2. **It has expired, or Google refused it.** `agy models` renews it: any `agy` start loads
+//!    the saved login, renews an expired one in a fraction of a second and saves it, and a
+//!    signed-out `agy models` only prints "Please sign in". It never opens a browser. Kybern
+//!    then reads the saved token again and asks Google as in 1.
+//! 3. **No token Kybern can read** (a locked keyring, a keychain that refuses), or `agy models`
+//!    left the old one in place: `agy -p "/usage"`, Google's own answer through `agy`. It has
+//!    no plan name, so the daemon keeps the last known plan.
+//!
+//! Only 3 can go wrong in a way people see: a `/usage` that can't use its login opens
+//! Google's sign-in page in the browser. So it is the last resort, it runs with do-nothing
+//! browser openers first on its `PATH` (`crate::no_browser`), and once it asked for a browser
+//! sign-in it isn't started again for that account until its stored login changes, or after a
+//! wait that doubles from 5 minutes to an hour. While `agy models` still works this reads as
+//! "couldn't read", not as signed out.
 //!
 //! Kybern never redeems the refresh token, never carries Google client credentials, and
 //! never writes to `agy`'s storage. The endpoints are undocumented and may change or be
 //! refused without notice, so every failure is quiet.
 //!
-//! A signed-out `agy` answers `/usage` by opening Google's sign-in page in the browser, so
-//! `agy models` (which only prints "Please sign in") is asked first unless `/usage` answered
-//! for the account in the last ten minutes. A signed-out account reads as
-//! [`LimitsStale::SignedOut`] and is asked again after `FAILURE_BACKOFF`, or as soon as a
-//! login can be read. Where the login can be read and none exists (macOS), `agy` is not
-//! started at all.
+//! A signed-out account ([`LimitsStale::SignedOut`], only when `agy models` says so) is asked
+//! again after `FAILURE_BACKOFF`, or as soon as the stored login changes. No login where
+//! Kybern looks doesn't mean signed out: `agy` may keep it in its own file storage, and a
+//! keyring may refuse Kybern. `agy models` decides.
 //!
 //! Google answers the quota summary per client: the plain `antigravity/<version>`
 //! User-Agent gets only the "Claude and GPT models" group, the CLI's own
@@ -40,11 +45,24 @@ use kybern_protocol::methods::LimitsStale;
 use kybern_protocol::process::NoWindow;
 use serde_json::{Value, json};
 
-use super::login::read_login;
+use super::login::{StoredLogin, read_login_state};
 use crate::claude::UsageUnread;
 
 pub const ANTIGRAVITY_USER_AGENT_PREFIX: &str = "antigravity";
 const HOSTS: [&str; 2] = ["https://daily-cloudcode-pa.googleapis.com", "https://cloudcode-pa.googleapis.com"];
+
+/// A stand-in for both hosts, for tests of the whole read.
+#[cfg(test)]
+pub(crate) static TEST_HOST: Mutex<Option<String>> = Mutex::new(None);
+
+/// The daily and the production host.
+fn hosts() -> [String; 2] {
+    #[cfg(test)]
+    if let Some(host) = TEST_HOST.lock().ok().and_then(|host| host.clone()) {
+        return [host.clone(), host];
+    }
+    HOSTS.map(str::to_string)
+}
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(10);
 const REFRESH_MARGIN_SECONDS: i64 = 60;
@@ -72,15 +90,41 @@ impl AccountKey {
     }
 }
 
-/// No requests for an account before `until`, after a failed or throttled read.
+/// Which stored login a decision was taken for: its fingerprint, `None` when Kybern can't see one.
+type LoginMark = Option<u64>;
+
+/// No requests for an account before `until`.
 #[derive(Clone, Copy)]
 struct Pause {
     until: Instant,
-    /// `agy` is signed out: the pause is lifted as soon as a login can be read.
-    signed_out: bool,
+    cause: PauseCause,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PauseCause {
+    /// A read failed or was throttled.
+    Failed,
+    /// `agy` has no working login. Lifted early when the stored login changes: a sign-in.
+    SignedOut(LoginMark),
+    /// `/usage` asked for a browser sign-in although `agy models` works. Lifted early the same way.
+    AskedToSignIn(LoginMark),
 }
 
 static PAUSED: LazyLock<Mutex<HashMap<AccountKey, Pause>>> = LazyLock::new(Default::default);
+
+/// `/usage` asked for a browser sign-in for this account and login. It isn't started again
+/// before `until` unless the login changes; each ask for the same login doubles the wait.
+#[derive(Clone, Copy)]
+struct SignInAsk {
+    login: LoginMark,
+    asks: u32,
+    until: Instant,
+}
+
+static SIGN_IN_ASKS: LazyLock<Mutex<HashMap<AccountKey, SignInAsk>>> = LazyLock::new(Default::default);
+/// The first wait after `/usage` asked for a browser sign-in; it doubles up to `ASK_BACKOFF_MAX`.
+const ASK_BACKOFF: Duration = Duration::from_secs(5 * 60);
+const ASK_BACKOFF_MAX: Duration = Duration::from_secs(60 * 60);
 /// The last `agy /usage` answer per account, and when it was read.
 static AGY_USAGE: LazyLock<Mutex<HashMap<AccountKey, UsageRead>>> = LazyLock::new(Default::default);
 type UsageRead = (Instant, Vec<QuotaBucket>);
@@ -295,12 +339,62 @@ fn pause_of(key: &AccountKey) -> Option<Pause> {
     }
 }
 
-fn pause(key: &AccountKey, wait: Duration, signed_out: bool) -> Instant {
-    let until = Instant::now() + wait.min(MAX_BACKOFF);
+fn pause(key: &AccountKey, wait: Duration, cause: PauseCause) -> Instant {
+    pause_until(key, Instant::now() + wait.min(MAX_BACKOFF), cause)
+}
+
+fn pause_until(key: &AccountKey, until: Instant, cause: PauseCause) -> Instant {
     if let Ok(mut paused) = PAUSED.lock() {
-        paused.insert(key.clone(), Pause { until, signed_out });
+        paused.insert(key.clone(), Pause { until, cause });
     }
     until
+}
+
+/// Note that `/usage` asked for a browser sign-in; returns when it may run again.
+fn note_sign_in_ask(key: &AccountKey, login: LoginMark) -> Instant {
+    let Ok(mut asks) = SIGN_IN_ASKS.lock() else { return Instant::now() + ASK_BACKOFF };
+    let count = match asks.get(key) {
+        Some(ask) if ask.login == login => ask.asks.saturating_add(1),
+        _ => 1,
+    };
+    let wait = ASK_BACKOFF.saturating_mul(1 << (count - 1).min(4)).min(ASK_BACKOFF_MAX);
+    let until = Instant::now() + wait;
+    asks.insert(key.clone(), SignInAsk { login, asks: count, until });
+    until
+}
+
+/// Whether `/usage` must not run for the account now, and until when.
+fn sign_in_ask_until(key: &AccountKey) -> Option<Instant> {
+    let asks = SIGN_IN_ASKS.lock().ok()?;
+    asks.get(key).map(|ask| ask.until).filter(|until| Instant::now() < *until)
+}
+
+/// A new login (a renewal or a sign-in) gets `/usage` back at once. A login Kybern can't see
+/// (`None`: the keychain refused this time) says nothing about a change.
+fn forget_sign_in_ask_unless(key: &AccountKey, login: LoginMark) {
+    if login.is_some()
+        && let Ok(mut asks) = SIGN_IN_ASKS.lock()
+        && asks.get(key).is_some_and(|ask| ask.login != login)
+    {
+        asks.remove(key);
+    }
+}
+
+/// Someone just signed in to `agy` through Kybern: drop every wait, so the next read runs at once
+/// even where Kybern can't see the new login (the Linux and Windows keyrings).
+pub fn forget_sign_in_waits() {
+    if let Ok(mut asks) = SIGN_IN_ASKS.lock() {
+        asks.clear();
+    }
+    if let Ok(mut paused) = PAUSED.lock() {
+        paused.retain(|_, pause| pause.cause == PauseCause::Failed);
+    }
+}
+
+fn forget_sign_in_ask(key: &AccountKey) {
+    if let Ok(mut asks) = SIGN_IN_ASKS.lock() {
+        asks.remove(key);
+    }
 }
 
 fn clear_pause(key: &AccountKey) {
@@ -356,7 +450,9 @@ pub(crate) enum AgyUsage {
 /// as soon as that line arrives rather than at exit.
 pub(crate) fn agy_signed_out(stdout: &[u8], stderr: &[u8]) -> bool {
     let text = format!("{}\n{}", String::from_utf8_lossy(stderr), String::from_utf8_lossy(stdout)).to_lowercase();
-    text.contains("authentication required") || text.contains("authentication failed or timed out")
+    text.contains("authentication required")
+        || text.contains("waiting for authentication")
+        || text.contains("authentication failed or timed out")
 }
 
 /// After `/usage` answered for an account, it is trusted to still be signed in this long
@@ -380,6 +476,7 @@ pub(crate) fn models_signed_out(stdout: &[u8], stderr: &[u8]) -> bool {
 async fn models_say_signed_out(binary: &Path, env: &BTreeMap<String, String>, home: &Path) -> bool {
     let mut command = crate::binary::command(binary).no_window();
     command.arg("models").current_dir(home).envs(env);
+    crate::no_browser::quiet(&mut command, env);
     match crate::process_tree::output_within(&mut command, MODELS_CHECK_TIMEOUT, models_signed_out).await {
         Ok(output) => models_signed_out(&output.stdout, &output.stderr),
         Err(_) => false,
@@ -387,17 +484,24 @@ async fn models_say_signed_out(binary: &Path, env: &BTreeMap<String, String>, ho
 }
 
 /// `agy -p "/usage" --output-format json`: Google's own answer for the account,
-/// with no agent turn and no quota spent. Reused for `AGY_USAGE_FRESH`.
-pub(crate) async fn run_agy_usage(binary: Option<&PathBuf>, env: &BTreeMap<String, String>, home: &Path) -> AgyUsage {
+/// with no agent turn and no quota spent. Reused for `AGY_USAGE_FRESH`. `login` is the stored
+/// login the caller saw: after `/usage` asked for a browser sign-in it isn't started again for
+/// that login until its wait is over ([`AgyUsage::SignedOut`] meanwhile).
+pub(crate) async fn run_agy_usage(binary: Option<&PathBuf>, env: &BTreeMap<String, String>, home: &Path, login: LoginMark) -> AgyUsage {
     let key = AccountKey::new(home, binary);
     if let Some((at, buckets)) = AGY_USAGE.lock().ok().and_then(|cached| cached.get(&key).cloned())
         && at.elapsed() < AGY_USAGE_FRESH
     {
         return AgyUsage::Read(buckets);
     }
+    forget_sign_in_ask_unless(&key, login);
+    if sign_in_ask_until(&key).is_some() {
+        return AgyUsage::SignedOut;
+    }
     let Ok(binary) = crate::binary::resolve(kybern_protocol::ProviderKind::Antigravity, binary) else { return AgyUsage::Failed };
     let mut command = crate::binary::command(&binary).no_window();
     command.args(["-p", "/usage", "--output-format", "json"]).current_dir(home).envs(env);
+    crate::no_browser::quiet(&mut command, env);
     let Ok(output) = crate::process_tree::output_within(&mut command, AGY_USAGE_TIMEOUT, agy_signed_out).await else {
         return AgyUsage::Failed;
     };
@@ -407,17 +511,28 @@ pub(crate) async fn run_agy_usage(binary: Option<&PathBuf>, env: &BTreeMap<Strin
         Vec::new()
     };
     if !buckets.is_empty() {
+        forget_sign_in_ask(&key);
         if let Ok(mut cached) = AGY_USAGE.lock() {
             cached.insert(key, (Instant::now(), buckets.clone()));
         }
         return AgyUsage::Read(buckets);
     }
-    if agy_signed_out(&output.stdout, &output.stderr) { AgyUsage::SignedOut } else { AgyUsage::Failed }
+    if agy_signed_out(&output.stdout, &output.stderr) {
+        note_sign_in_ask(&key, login);
+        AgyUsage::SignedOut
+    } else {
+        AgyUsage::Failed
+    }
 }
 
 /// The buckets of `agy /usage`, empty when it gave none.
-pub(crate) async fn read_agy_usage(binary: Option<&PathBuf>, env: &BTreeMap<String, String>, home: &Path) -> Vec<QuotaBucket> {
-    match run_agy_usage(binary, env, home).await {
+pub(crate) async fn read_agy_usage(
+    binary: Option<&PathBuf>,
+    env: &BTreeMap<String, String>,
+    home: &Path,
+    login: LoginMark,
+) -> Vec<QuotaBucket> {
+    match run_agy_usage(binary, env, home, login).await {
         AgyUsage::Read(buckets) => buckets,
         AgyUsage::SignedOut | AgyUsage::Failed => Vec::new(),
     }
@@ -446,10 +561,6 @@ async fn post(client: &reqwest::Client, url: String, token: &str, agent: &str, b
     response.json::<Value>().await.map_err(|_| Failure::Network("an answer that was not JSON".into()))
 }
 
-/// Whether a missing login means signed out. Where `agy` keeps its token in a store
-/// Kybern can't read (the Linux and Windows keyrings), it only means "ask `agy`".
-const LOGIN_READABLE: bool = cfg!(target_os = "macos");
-
 /// Read the account's quota windows. `Err` keeps the last values and says why. The
 /// plan comes back only from the fast path; the caller keeps the last known one.
 pub async fn read_account_usage(
@@ -460,52 +571,102 @@ pub async fn read_account_usage(
     // A key from the environment has no plan limits to read.
     let home = env.get("HOME").or_else(|| env.get("USERPROFILE")).map(PathBuf::from).unwrap_or_else(|| home.to_path_buf());
     let key = AccountKey::new(&home, binary);
-    let mut login = None;
-    let mut login_read = false;
+    if let Some(pause) = pause_of(&key)
+        && pause.cause == PauseCause::Failed
+    {
+        return Err(throttled(pause.until, "Antigravity limit reads are paused after the last one failed".into()));
+    }
+    let login = read_login_state(Some(&home)).await.into_login();
+    let mark = login.as_ref().map(StoredLogin::fingerprint);
+    forget_sign_in_ask_unless(&key, mark);
     if let Some(pause) = pause_of(&key) {
-        if !pause.signed_out {
-            return Err(throttled(pause.until, "Antigravity limit reads are paused after the last one failed".into()));
+        match pause.cause {
+            PauseCause::SignedOut(seen) if seen == mark => return Err(unread(LimitsStale::SignedOut, "Antigravity is signed out")),
+            PauseCause::AskedToSignIn(seen) if seen == mark => {
+                return Err(throttled(pause.until, "`agy /usage` asked for a browser sign-in; waiting for its login to change".into()));
+            }
+            // The stored login changed: a renewal or a new sign-in. Read again now.
+            _ => clear_pause(&key),
         }
-        // Signed out: wait for a login to show up before starting `agy` again.
-        login = read_login(Some(&home)).await;
-        login_read = true;
-        if login.is_none() {
-            return Err(unread(LimitsStale::SignedOut, "Antigravity is signed out"));
+    }
+    let margin = chrono::Duration::seconds(REFRESH_MARGIN_SECONDS);
+    let mut why = "no login Kybern can read";
+    if let Some(login) = &login {
+        if login.expires_within(margin) {
+            why = "the stored login is due for a refresh";
+        } else {
+            match read_with_login(&key, login, binary, env, &home).await {
+                TokenRead::Done(result) => return result,
+                TokenRead::Refused => why = "Google refused the stored login",
+            }
         }
-        clear_pause(&key);
     }
-    if !login_read {
-        login = read_login(Some(&home)).await;
+    // The stored login can't be used as it is. `agy models` renews it and saves the new one, and a
+    // signed-out `agy models` only says so: unlike `/usage` it never opens a browser. It is skipped
+    // only when there is no login to renew and `/usage` answered for this account a short while ago.
+    let resolved = crate::binary::resolve(kybern_protocol::ProviderKind::Antigravity, binary).ok();
+    let models_asked = resolved.is_some() && (login.is_some() || !recently_read(&key));
+    if models_asked
+        && let Some(resolved) = &resolved
+        && models_say_signed_out(resolved, env, &home).await
+    {
+        // Asked again soon: the caption clears within a couple of minutes of signing in, or at once
+        // when a login appears.
+        pause(&key, FAILURE_BACKOFF, PauseCause::SignedOut(mark));
+        return Err(unread(LimitsStale::SignedOut, "Antigravity is signed out"));
     }
-    let Some(login) = login else {
-        if LOGIN_READABLE {
-            return Err(unread(LimitsStale::SignedOut, "no Antigravity login found"));
+    let mut mark = mark;
+    if models_asked && let Some(renewed) = read_login_state(Some(&home)).await.into_login() {
+        let renewed_mark = Some(renewed.fingerprint());
+        if renewed_mark != mark && !renewed.expires_within(margin) {
+            match read_with_login(&key, &renewed, binary, env, &home).await {
+                TokenRead::Done(result) => return result,
+                TokenRead::Refused => why = "Google refused the renewed login",
+            }
         }
-        return read_with_agy(&key, binary, env, &home, "no login Kybern can read").await;
-    };
-    if login.expires_within(chrono::Duration::seconds(REFRESH_MARGIN_SECONDS)) {
-        return read_with_agy(&key, binary, env, &home, "the stored login is due for a refresh").await;
+        mark = renewed_mark;
     }
+    read_with_agy(&key, binary, env, &home, mark, why, models_asked).await
+}
+
+/// What asking Google with a stored token came to.
+enum TokenRead {
+    Done(Result<(Vec<UsageLimit>, Option<String>), UsageUnread>),
+    /// Google refused the token (401): it needs renewing.
+    Refused,
+}
+
+/// The quota windows and the plan, asked of Google with the token `agy` stored.
+async fn read_with_login(
+    key: &AccountKey,
+    login: &StoredLogin,
+    binary: Option<&PathBuf>,
+    env: &BTreeMap<String, String>,
+    home: &Path,
+) -> TokenRead {
+    let mark = Some(login.fingerprint());
     let agent = user_agent(&agy_version(binary).await);
     let result = tokio::time::timeout(TOTAL_TIMEOUT, read_with_token(login.access_token(), &agent)).await;
     let outcome = match result {
         Ok(outcome) => outcome,
         Err(_) => Err(Failure::Network("the read timed out".into())),
     };
-    match outcome {
+    TokenRead::Done(match outcome {
         Ok(mut reading) => {
-            clear_pause(&key);
-            // The summary came without the Gemini group: ask `agy` itself.
+            clear_pause(key);
+            // The summary came without the Gemini group: ask `agy` itself. A token Google accepted
+            // means `agy` is signed in, so `agy models` isn't asked first.
             if !has_gemini(&reading.buckets) {
-                let from_agy = read_agy_usage(binary, env, &home).await;
+                let from_agy = read_agy_usage(binary, env, home, mark).await;
                 reading.buckets = merge_buckets([std::mem::take(&mut reading.buckets), from_agy]);
             }
             let limits = to_limits(&reading.buckets);
             if limits.is_empty() {
-                pause(&key, FAILURE_BACKOFF, false);
-                return Err(unread(LimitsStale::Unavailable, "Antigravity reported no quota windows"));
+                pause(key, FAILURE_BACKOFF, PauseCause::Failed);
+                Err(unread(LimitsStale::Unavailable, "Antigravity reported no quota windows"))
+            } else {
+                Ok((limits, reading.plan))
             }
-            Ok((limits, reading.plan))
         }
         Err(Failure::Status(status, retry_after)) if status == reqwest::StatusCode::TOO_MANY_REQUESTS => {
             let wait = retry_after
@@ -513,58 +674,60 @@ pub async fn read_account_usage(
                 .and_then(|value| value.trim().parse::<u64>().ok())
                 .map(Duration::from_secs)
                 .unwrap_or(FAILURE_BACKOFF);
-            Err(throttled(pause(&key, wait, false), "Google throttled the Antigravity limits read".into()))
+            Err(throttled(pause(key, wait, PauseCause::Failed), "Google throttled the Antigravity limits read".into()))
         }
-        // Google refused the stored token: `agy` renews it, or says it is signed out.
-        Err(Failure::Status(status, _)) if status == reqwest::StatusCode::UNAUTHORIZED => {
-            read_with_agy(&key, binary, env, &home, "Google refused the stored login").await
-        }
+        Err(Failure::Status(status, _)) if status == reqwest::StatusCode::UNAUTHORIZED => return TokenRead::Refused,
         Err(Failure::Status(status, _)) => {
-            pause(&key, FAILURE_BACKOFF, false);
+            pause(key, FAILURE_BACKOFF, PauseCause::Failed);
             Err(unread(LimitsStale::Unavailable, format!("the Antigravity limits endpoint answered {status}")))
         }
         Err(Failure::Network(detail)) => {
-            pause(&key, FAILURE_BACKOFF, false);
+            pause(key, FAILURE_BACKOFF, PauseCause::Failed);
             Err(unread(LimitsStale::Unavailable, format!("the Antigravity limits endpoint failed: {detail}")))
         }
-    }
+    })
 }
 
-/// The whole read from `agy -p "/usage"`, for when the fast path has no usable token.
+/// The whole read from `agy -p "/usage"`, the last resort: no token Kybern can use, even after
+/// `agy models` (`models_asked`: it ran for this read and didn't say signed out).
 async fn read_with_agy(
     key: &AccountKey,
     binary: Option<&PathBuf>,
     env: &BTreeMap<String, String>,
     home: &Path,
+    login: LoginMark,
     why: &str,
+    models_asked: bool,
 ) -> Result<(Vec<UsageLimit>, Option<String>), UsageUnread> {
-    // A signed-out `/usage` opens Google's sign-in page in the browser; `agy models` only says so.
-    // Ask it first unless `/usage` answered for this account a short while ago. (The fast path's
-    // Gemini top-up skips this: a token Google accepted means `agy` is signed in.)
-    let signed_out = !recently_read(key)
-        && match crate::binary::resolve(kybern_protocol::ProviderKind::Antigravity, binary) {
-            Ok(resolved) => models_say_signed_out(&resolved, env, home).await,
-            Err(_) => false,
-        };
-    let answer = if signed_out { AgyUsage::SignedOut } else { run_agy_usage(binary, env, home).await };
-    match answer {
+    let resolved = crate::binary::resolve(kybern_protocol::ProviderKind::Antigravity, binary).ok();
+    match run_agy_usage(binary, env, home, login).await {
         AgyUsage::Read(buckets) => {
             clear_pause(key);
             let limits = to_limits(&buckets);
             if limits.is_empty() {
-                pause(key, FAILURE_BACKOFF, false);
+                pause(key, FAILURE_BACKOFF, PauseCause::Failed);
                 return Err(unread(LimitsStale::Unavailable, "Antigravity reported no quota windows"));
             }
             Ok((limits, None))
         }
         AgyUsage::SignedOut => {
-            // `agy models` tells a signed-out account without opening anything, so it is asked again soon:
-            // the caption clears within a couple of minutes of signing in.
-            pause(key, FAILURE_BACKOFF, true);
-            Err(unread(LimitsStale::SignedOut, "Antigravity is signed out"))
+            // `/usage` wanted a browser sign-in (or did a short while ago). It isn't run again for this
+            // login until its wait is over. Signed out only if `agy models` says so: a login `agy models`
+            // accepts is not one to ask the person for again.
+            let until = sign_in_ask_until(key).unwrap_or_else(|| Instant::now() + ASK_BACKOFF);
+            let signed_out = match (&resolved, models_asked) {
+                (Some(resolved), false) => models_say_signed_out(resolved, env, home).await,
+                _ => false,
+            };
+            if signed_out {
+                pause_until(key, until, PauseCause::SignedOut(login));
+                return Err(unread(LimitsStale::SignedOut, "Antigravity is signed out"));
+            }
+            pause_until(key, until, PauseCause::AskedToSignIn(login));
+            Err(throttled(until, format!("`agy /usage` asked for a browser sign-in ({why}) while `agy models` is signed in")))
         }
         AgyUsage::Failed => {
-            pause(key, FAILURE_BACKOFF, false);
+            pause(key, FAILURE_BACKOFF, PauseCause::Failed);
             Err(unread(LimitsStale::Unavailable, format!("`agy /usage` gave no limits ({why})")))
         }
     }
@@ -572,16 +735,22 @@ async fn read_with_agy(
 
 async fn read_with_token(token: &str, agent: &str) -> Result<QuotaReading, Failure> {
     let client = reqwest::Client::builder().timeout(REQUEST_TIMEOUT).build().map_err(|error| Failure::Network(error.to_string()))?;
+    let [daily_host, production_host] = hosts();
     // A generic User-Agent gets an answer with no project.
-    let loaded =
-        post(&client, format!("{}/v1internal:loadCodeAssist", HOSTS[1]), token, agent, &json!({"metadata": {"ideType": "ANTIGRAVITY"}}))
-            .await?;
+    let loaded = post(
+        &client,
+        format!("{production_host}/v1internal:loadCodeAssist"),
+        token,
+        agent,
+        &json!({"metadata": {"ideType": "ANTIGRAVITY"}}),
+    )
+    .await?;
     let (project, plan) = parse_load_code_assist(&loaded);
     let Some(project) = project else { return Err(Failure::Network("no Antigravity project for this account".into())) };
     let body = json!({"project": project});
     let (daily, production) = tokio::join!(
-        post(&client, format!("{}/v1internal:retrieveUserQuotaSummary", HOSTS[0]), token, agent, &body),
-        post(&client, format!("{}/v1internal:retrieveUserQuotaSummary", HOSTS[1]), token, agent, &body),
+        post(&client, format!("{daily_host}/v1internal:retrieveUserQuotaSummary"), token, agent, &body),
+        post(&client, format!("{production_host}/v1internal:retrieveUserQuotaSummary"), token, agent, &body),
     );
     let mut failure = None;
     let mut readings = Vec::new();

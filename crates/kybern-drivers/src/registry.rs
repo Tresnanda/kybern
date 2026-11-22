@@ -19,6 +19,7 @@ impl DriverRegistry {
     /// The default drivers, keeping harness model catalogs in `cache_dir` so a
     /// restarted daemon lists models without waiting on the harness.
     pub fn with_cache_dir(cache_dir: &Path) -> Self {
+        crate::no_browser::set_root(cache_dir);
         Self::with_claude(
             crate::claude::ClaudeDriver::with_catalog_file(cache_dir.join("claude-models.json"))
                 .with_plugin_root(cache_dir.join("claude-plugin")),
