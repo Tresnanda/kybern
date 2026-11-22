@@ -1,7 +1,8 @@
 // Dependency-free tests for the bundled extension and its fake Pi API.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -483,16 +484,59 @@ test("every selected skill reaches the model, not only the leading one", async (
   assert.match(mixed.text, /^\/skill:alpha \/skill:nope do it\n\n<skill name="beta"/);
 });
 
-test("an untrusted project is reported once, a trusted or declined one is not", async () => {
+test("an unreadable skill is reported without its path", async () => {
+  const { commands, directory } = await skillCommands({ alpha: "Alpha rules.", beta: "Beta rules." });
+  await rm(join(directory, "beta.md"));
   const notices = [];
-  const ctx = (trusted) => ({ isProjectTrusted: () => trusted, ui: { notify: (message, level) => notices.push({ message, level }) } });
-  const hook = fakePi().handlers.get("before_agent_start");
-  await hook({ systemPrompt: "native" }, ctx(true));
-  assert.deepEqual(notices, []);
-  const untrusted = fakePi().handlers.get("before_agent_start");
-  await untrusted({ systemPrompt: "native" }, ctx(false));
-  await untrusted({ systemPrompt: "native" }, ctx(false));
+  const input = fakePi("full_access", [], { commands }).handlers.get("input");
+  const ctx = { ...context(), ui: { notify: (message, level) => notices.push({ message, level }) } };
+  await input({ text: "/skill:alpha /skill:beta go", images: [] }, ctx);
   assert.equal(notices.length, 1);
-  assert.equal(notices[0].level, "warning");
-  assert.match(notices[0].message, /isn't trusted/);
+  assert.equal(notices[0].level, "error");
+  assert.match(notices[0].message, /could not read the skill beta/);
+  assert.doesNotMatch(notices[0].message, new RegExp(directory.replaceAll("\\", "\\\\")));
+  assert.doesNotMatch(notices[0].message, /\.md|\//);
+});
+
+test("an untrusted project is reported once; a trusted or declined one is not", async () => {
+  const root = await mkdtemp(join(tmpdir(), "kybern-trust-"));
+  const agentDir = join(root, "agent");
+  const declinedParent = join(root, "declined");
+  const declinedChild = join(declinedParent, "child");
+  const decided = join(root, "decided");
+  const undecided = join(root, "undecided");
+  for (const folder of [agentDir, declinedChild, decided, undecided]) await mkdir(folder, { recursive: true });
+  const real = (folder) => realpathSync(folder);
+  // A declined folder and a trusted one; a folder inside the declined one has no entry of its own.
+  await writeFile(
+    join(agentDir, "trust.json"),
+    JSON.stringify({ [real(declinedParent)]: false, [real(decided)]: true }),
+  );
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    const notices = [];
+    const ctx = (trusted, cwd) => ({ cwd, isProjectTrusted: () => trusted, ui: { notify: (message, level) => notices.push({ message, level }) } });
+    const run = async (trusted, cwd) => {
+      notices.length = 0;
+      await fakePi().handlers.get("before_agent_start")({ systemPrompt: "native" }, ctx(trusted, cwd));
+      return notices.length;
+    };
+    assert.equal(await run(true, undecided), 0, "trusted");
+    assert.equal(await run(false, declinedParent), 0, "declined folder");
+    assert.equal(await run(false, declinedChild), 0, "a folder inside a declined one");
+    assert.equal(await run(false, undecided), 1, "undecided folder");
+    assert.equal(notices[0].level, "warning");
+    assert.match(notices[0].message, /isn't trusted/);
+    assert.equal(await run(false, join(root, "does-not-exist")), 1, "an unknown folder is undecided");
+    // Once per session.
+    const hook = fakePi().handlers.get("before_agent_start");
+    notices.length = 0;
+    await hook({ systemPrompt: "native" }, ctx(false, undecided));
+    await hook({ systemPrompt: "native" }, ctx(false, undecided));
+    assert.equal(notices.length, 1);
+  } finally {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+  }
 });

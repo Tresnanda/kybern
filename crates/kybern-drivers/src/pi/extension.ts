@@ -4,8 +4,10 @@
 // directory, so package-relative imports would not resolve reliably. Node
 // built-ins are fine.
 
+import { readFileSync, realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 
 const PROTOCOL_VERSION = 1;
 const COMMAND_SENTINEL = "kybern-extension";
@@ -367,12 +369,36 @@ async function inlineExtraSkills(text, listCommands, notify) {
       blocks.push(`<skill name="${name}" location="${path}">\nReferences are relative to ${dirname(path)}.\n\n${body}\n</skill>`);
     } catch {
       unresolved.push(`/skill:${name}`);
-      notify?.(`Pi could not read the skill ${name} from ${path}. Check that the file still exists.`);
+      // No path here: the notice reaches every client of the thread.
+      notify?.(`Pi could not read the skill ${name}. Check that the skill's file still exists.`);
     }
   }
   if (blocks.length === 0 && unresolved.length === names.length - 1) return undefined;
   const message = [...unresolved, rest].join(" ").trim();
   return `/skill:${names[0]} ${[message, ...blocks].filter(Boolean).join("\n\n")}`;
+}
+
+// Whether the user already said no to this folder, or to a folder above it. Pi keeps
+// the answer in `trust.json` in its agent directory, nearest folder first, `false` for
+// "do not trust". A folder nobody has decided about is the one worth a notice.
+export function projectTrustDeclined(cwd) {
+  try {
+    const agentDir = process.env.PI_CODING_AGENT_DIR ? resolve(process.env.PI_CODING_AGENT_DIR.replace(/^~(?=$|[\\/])/, homedir())) : join(homedir(), ".pi", "agent");
+    const data = JSON.parse(readFileSync(join(agentDir, "trust.json"), "utf8").replace(/^\uFEFF/, ""));
+    if (typeof data !== "object" || data === null) return false;
+    const same = (a, b) => (process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b);
+    let directory = realpathSync(resolve(cwd));
+    for (;;) {
+      for (const [key, value] of Object.entries(data)) {
+        if ((value === true || value === false) && same(key, directory)) return value === false;
+      }
+      const parent = dirname(directory);
+      if (parent === directory) return false;
+      directory = parent;
+    }
+  } catch {
+    return false;
+  }
 }
 
 export default function kybernExtension(pi) {
@@ -415,7 +441,12 @@ export default function kybernExtension(pi) {
   pi.on("before_agent_start", async (event, ctx) => {
     if (!projectTrustChecked) {
       projectTrustChecked = true;
-      if (typeof ctx?.isProjectTrusted === "function" && !ctx.isProjectTrusted() && !process.argv.some((arg) => arg === "--no-approve" || arg === "-na")) {
+      if (
+        typeof ctx?.isProjectTrusted === "function" &&
+        !ctx.isProjectTrusted() &&
+        !process.argv.some((arg) => arg === "--no-approve" || arg === "-na") &&
+        !(typeof ctx.cwd === "string" && projectTrustDeclined(ctx.cwd))
+      ) {
         ctx.ui?.notify?.(
           "Pi skipped this folder's settings, extensions, skills and prompts because the folder isn't trusted. Run pi in the folder once and trust it, then start a new thread.",
           "warning",
