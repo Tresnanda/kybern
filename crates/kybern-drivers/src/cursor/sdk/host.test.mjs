@@ -99,7 +99,6 @@ function fixture({ duringStart, failStart, warmGate, fetch, platform, checkpoint
         if (index >= 0) waiters.splice(index, 1);
         reject(new Error(`timed out waiting for event after ${timeoutMs} ms`));
       }, timeoutMs);
-      timer.unref?.();
       waiters.push(waiter);
     });
   };

@@ -378,7 +378,6 @@ async function readRunCheckpointed(platform, turnAgent, agentId, runId, beforeAg
         Promise.resolve(chain).catch(() => {}),
         new Promise((resolve) => {
           timer = setTimeout(resolve, Math.max(settleMs * 4, 200));
-          timer.unref?.();
         }),
       ]);
     } finally {
@@ -393,7 +392,6 @@ async function readRunCheckpointed(platform, turnAgent, agentId, runId, beforeAg
   if (settleMs > 0 && hasStore) {
     await new Promise((resolve) => {
       const timer = setTimeout(resolve, settleMs);
-      timer.unref?.();
     });
     return checkRunCheckpointed(platform, agentId, runId, beforeAgent);
   }
@@ -649,7 +647,6 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
             timedOut = true;
             resolve();
           }, steerSettleTimeoutMs);
-          deadlineTimer.unref?.();
         });
         try {
           while (!timedOut && (turn.activeSteers.size > 0 || turn.pendingSteers.size > 0)) {
@@ -742,7 +739,6 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
     let timer;
     const timeout = new Promise((resolve) => {
       timer = setTimeout(() => resolve(PENDING), steerTimeoutMs);
-      timer.unref?.();
     });
     let abandoned = false;
     const forced = Promise.withResolvers();
