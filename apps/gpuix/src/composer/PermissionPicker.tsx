@@ -54,9 +54,10 @@ export function PermissionPicker({
 }) {
   const t = useTheme()
   let mode = modeProp
-  // Antigravity only runs in Full access: the menu lists that one mode, shown as chosen and not selectable, with the reason below it.
-  const fullAccessOnly = kind === 'antigravity' || (!!status && onlyFullAccess(status))
-  const note = permissionLockNote(kind as ProviderStatus['kind'] | undefined)
+  // Antigravity on `-p` only runs in Full access: the menu lists that one mode, shown as chosen and not selectable, with the
+  // reason below it. On ACP its status reports every mode and the menu is free.
+  const fullAccessOnly = status ? onlyFullAccess(status) : kind === 'antigravity'
+  const note = permissionLockNote(status ?? (kind as ProviderStatus['kind'] | undefined))
   const modes = fullAccessOnly ? MODES.filter((m) => m.mode === 'full-access') : modesFor(kind, legacyCursor)
   const supported = (m: PermissionMode) => legacyCursor || !status || status.supported_permission_modes.includes(m)
   if (fullAccessOnly) mode = 'full-access'

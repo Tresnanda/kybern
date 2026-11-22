@@ -89,7 +89,7 @@ export function ComposerControls({
   const provider = providers.find((p) => p.kind === kind);
   const model = thread ? thread.model : draft.model;
   const effort = thread ? thread.effort : draft.effort;
-  // Antigravity only runs in Full access, whatever the draft or the last agent had.
+  // Antigravity on `-p` only runs in Full access, whatever the draft or the last agent had.
   const locked = onlyFullAccess(provider ?? kind);
   const mode = locked ? "full-access" : (thread?.permission_mode ?? draft.permission);
   const selectedModel = findModel(provider?.models ?? [], model);
@@ -224,7 +224,7 @@ export function ComposerOptions({
   const provider = providers.find((p) => p.kind === kind);
   const model = thread ? thread.model : draft.model;
   const effort = thread ? thread.effort : draft.effort;
-  // Antigravity only runs in Full access, whatever the draft or the last agent had.
+  // Antigravity on `-p` only runs in Full access, whatever the draft or the last agent had.
   const locked = onlyFullAccess(provider ?? kind);
   const mode = locked ? "full-access" : (thread?.permission_mode ?? draft.permission);
   const selectedModel = findModel(provider?.models ?? [], model);
@@ -366,7 +366,7 @@ export function ComposerOptions({
             ))}
         </InsetGroup>
         <SectionFooter inset>
-          {permissionLockNote(kind) ??
+          {permissionLockNote(provider ?? kind) ??
             (thread ? "Applies from the agent's next action in this thread." : "Applies to the next chat you start.")}
         </SectionFooter>
       </Sheet>
