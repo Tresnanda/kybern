@@ -656,3 +656,31 @@ async fn antigravity_conversations_group_by_repository_and_import_with_their_car
         f.import(vec![SessionsImportRoot { root: root_of(&repo), project_id: None, providers: Some(kinds), limit: None }], None).await;
     assert_eq!((again.imported, again.already_imported), (0, 4));
 }
+
+#[tokio::test]
+async fn a_session_a_thread_moved_out_of_is_not_offered_again() {
+    let f = fixture();
+    let repo = f.dir("app", true);
+    f.pi("old", &repo, days(3));
+    f.pi("new", &repo, days(1));
+    let job = f.import(vec![SessionsImportRoot { limit: Some(1), ..import_root(&repo) }], None).await;
+    assert_eq!(job.imported, 1);
+
+    // An extension moved the thread from the session it was imported with to another one.
+    let mut thread = f.state.store.threads_list(None, true).unwrap().remove(0);
+    let imported = thread.provider_session_id.clone().unwrap();
+    assert_eq!(imported, "new");
+    thread.provider_session_id = Some("moved-to".into());
+    f.state.store.thread_upsert(&thread).unwrap();
+    f.pi("moved-to", &repo, days(0));
+    let moved_from = serde_json::json!({ kybern_drivers::pi::SESSION_SWITCH_KEY: { "from": "new", "to": "moved-to" } });
+    crate::pi_sessions::note_switch(&f.state.store, thread.id, None, Some(&moved_from)).unwrap();
+
+    // "new" is that thread's history, not a second conversation; only "old" is left to import.
+    let scan = f.scan().await;
+    assert_eq!(scan.projects[0].imported_count, 2, "the session it left counts as imported");
+    let again = f.import(vec![import_root(&repo)], None).await;
+    assert_eq!((again.imported, again.already_imported), (1, 2));
+    let sessions: Vec<_> = f.state.store.threads_list(None, true).unwrap().into_iter().filter_map(|t| t.provider_session_id).collect();
+    assert!(sessions.contains(&"old".to_string()) && sessions.iter().filter(|id| id.as_str() == "new").count() == 0, "{sessions:?}");
+}

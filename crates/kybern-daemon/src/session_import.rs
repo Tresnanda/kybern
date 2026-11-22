@@ -460,7 +460,12 @@ impl ScanRun {
             .map(|threads| {
                 threads
                     .into_iter()
-                    .filter_map(|thread| Some((thread.provider.kind, thread.provider.instance, thread.provider_session_id?)))
+                    .flat_map(|thread| {
+                        // A session an extension moved the thread out of is still the thread's history.
+                        let earlier = crate::pi_sessions::earlier_sessions(&state.store, thread.id);
+                        let current = thread.provider_session_id.clone();
+                        earlier.into_iter().chain(current).map(move |id| (thread.provider.kind, thread.provider.instance.clone(), id))
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -804,7 +809,12 @@ impl JobRunner {
             .map(|threads| {
                 threads
                     .into_iter()
-                    .filter_map(|thread| Some((thread.provider.kind, thread.provider.instance, thread.provider_session_id?)))
+                    .flat_map(|thread| {
+                        // A session an extension moved the thread out of is still the thread's history.
+                        let earlier = crate::pi_sessions::earlier_sessions(&self.state.store, thread.id);
+                        let current = thread.provider_session_id.clone();
+                        earlier.into_iter().chain(current).map(move |id| (thread.provider.kind, thread.provider.instance.clone(), id))
+                    })
                     .collect()
             })
             .unwrap_or_default();

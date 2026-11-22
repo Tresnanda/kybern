@@ -44,6 +44,11 @@ const COMPACTING_PROMPT_REJECTION: &str = "Cannot submit a prompt while compacti
 /// Largest text of a cleared message that a notice repeats, and how many messages it lists.
 const MAX_CLEARED_TEXT_CHARS: usize = 500;
 const MAX_CLEARED_MESSAGES: usize = 5;
+/// The key of a notice's `data` that says Pi moved the thread to another session
+/// (`{ "from": <session id>, "to": <session id> }`); the daemon reads it.
+pub const SESSION_SWITCH_KEY: &str = "piSessionSwitch";
+/// What a rewind to a turn of an earlier Pi session says.
+pub const REWIND_ACROSS_SESSIONS: &str = "This turn is from an earlier Pi session. Start a new thread from here instead.";
 /// Steers a turn remembers (their own text, before Pi expands anything) for the Stop notice.
 const MAX_STEER_LOG: usize = 32;
 
@@ -536,6 +541,13 @@ impl PiSession {
                 Flavor::Pi => "fork",
                 Flavor::Omp => "branch",
             };
+            // The turn may belong to a session the thread has left (an extension started a
+            // new one): its entry is not in this one, and forking would fail or cut elsewhere.
+            if let Some(entries) = session.user_entry_ids(std::time::Duration::from_secs(10)).await
+                && !entries.contains(&entry)
+            {
+                return Err(DriverError::Unsupported(REWIND_ACROSS_SESSIONS.into()));
+            }
             session.call(cmd_name, json!({ "entryId": entry })).await?;
         }
 
@@ -1382,15 +1394,24 @@ impl PiSession {
     /// resume must open that one. `state` is an answer to `get_state`.
     async fn adopt_live_session(&self, state: &Value, generation: u64) {
         let Some(session_id) = state.get("sessionId").and_then(Value::as_str).filter(|id| !id.is_empty()) else { return };
-        {
+        let previous = {
             let mut st = self.state.lock().await;
             if st.closed || st.generation != generation || st.session_id.as_deref().is_none_or(|current| current == session_id) {
                 return;
             }
-            st.session_id = Some(session_id.to_string());
+            let previous = st.session_id.replace(session_id.to_string());
             // The old session's user entries say nothing about the new one.
             st.user_entry_baseline = None;
-        }
+            previous
+        };
+        // The daemon keeps the old session out of "Import all" and refuses to rewind into it:
+        // the earlier turns' rewind points are entries of that session, not of this one.
+        self.emit(DriverEvent::Notice {
+            level: NoticeLevel::Info,
+            text: "Pi started a new session. Turns before this one can no longer be rewound.".into(),
+            data: Some(json!({ SESSION_SWITCH_KEY: { "from": previous, "to": session_id } })),
+        })
+        .await;
         self.emit(DriverEvent::SessionBound { session_id: session_id.to_string(), model: None }).await;
     }
 

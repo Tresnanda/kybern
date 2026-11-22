@@ -3767,6 +3767,8 @@ impl Orchestrator {
         })?;
         let all = self.inner.store.checkpoints_for_thread(thread_id)?;
         let idx = all.iter().position(|c| c.turn_id == turn_id).ok_or_else(|| anyhow!("no checkpoint for that turn"))?;
+        // Before anything is restored: a Pi turn from a session the thread left cannot be forked.
+        crate::pi_sessions::ensure_rewindable(&self.inner.store, thread_id, &all, idx)?;
         let c = all[idx].clone();
         if group_git::is_group(&thread) {
             self.group_restore(&thread, &c).await?;
@@ -5342,6 +5344,7 @@ impl Orchestrator {
                 self.emit(thread_id, turn_id, EventPayload::ProviderUsageUpdated { usage })?;
             }
             DriverEvent::Notice { level, text, data } => {
+                crate::pi_sessions::note_switch(&self.inner.store, thread_id, turn_id, data.as_ref())?;
                 let problem = self.notice_problem(thread_id, level, &text);
                 self.emit(thread_id, turn_id, EventPayload::ProviderNotice { level, text, data, problem })?;
             }
@@ -9532,6 +9535,7 @@ for line in sys.stdin:
     include!("orchestrator/child_questions_tests.rs");
     include!("orchestrator/idle_compaction_flow_tests.rs");
     include!("orchestrator/secret_tests.rs");
+    include!("orchestrator/pi_sessions_tests.rs");
     include!("orchestrator/request_tests.rs");
     include!("orchestrator/lead_git_tests.rs");
     include!("orchestrator/group_git_tests.rs");

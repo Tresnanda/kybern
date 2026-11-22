@@ -655,6 +655,9 @@ async fn a_session_an_extension_switched_to_becomes_the_threads_session() {
             json!({ "isStreaming": false, "isCompacting": false, "pendingMessageCount": 0, "sessionId": "switched", "sessionFile": "/sessions/switched.jsonl" }),
         )
         .await;
+    // The daemon is told which session the thread left, to keep it out of imports and rewinds.
+    let DriverEvent::Notice { data, .. } = harness.next_event().await else { panic!("the switch was not announced") };
+    assert_eq!(data.unwrap()[SESSION_SWITCH_KEY], json!({ "from": "original", "to": "switched" }));
     assert!(matches!(harness.next_event().await, DriverEvent::SessionBound { session_id, .. } if session_id == "switched"));
     assert_eq!(harness.session.state.lock().await.session_id.as_deref(), Some("switched"));
 
@@ -891,4 +894,57 @@ async fn context_usage_moves_while_pi_streams_an_answer() {
         }
     }
     assert_eq!(used, [1_000, 1_200], "an unchanged reading is not repeated");
+}
+
+#[tokio::test]
+async fn rewinding_to_a_turn_of_a_session_the_thread_left_is_refused_before_forking() {
+    let harness = Harness::new(Flavor::Pi);
+    let config = SessionConfig {
+        cwd: std::env::temp_dir(),
+        model: None,
+        effort: None,
+        permission_mode: PermissionMode::Supervised,
+        native_tool_bridge: None,
+        resume_session_id: Some("current".into()),
+        resume_lacks_instructions: false,
+        fork: true,
+        rewind: Some(RewindPoint { drop_from: TurnAnchors { turn_id: Some("entry-of-the-old-session".into()), previous_end: None }, keep_through: None }),
+        binary: None,
+        env: HashMap::new(),
+        compaction: Default::default(),
+    };
+    let session = harness.session.clone();
+    let (_ready, ready_rx) = oneshot::channel();
+    let initializing = tokio::spawn(async move { session.initialize(config, "new".into(), ready_rx).await });
+    let listing = harness.wire("get_fork_messages").await;
+    harness.reply(&listing, json!({ "messages": [{ "entryId": "u1" }, { "entryId": "u2" }] })).await;
+    let error = tokio::time::timeout(DEADLINE, initializing).await.expect("initialize hung").unwrap().unwrap_err();
+    assert_eq!(error.to_string(), REWIND_ACROSS_SESSIONS);
+    assert!(harness.session.child.lines.lock().await.try_recv().is_err(), "fork was sent for an entry the session does not have");
+}
+
+#[tokio::test]
+async fn rewinding_to_a_turn_of_this_session_still_forks() {
+    let harness = Harness::new(Flavor::Pi);
+    let config = SessionConfig {
+        cwd: std::env::temp_dir(),
+        model: None,
+        effort: None,
+        permission_mode: PermissionMode::Supervised,
+        native_tool_bridge: None,
+        resume_session_id: Some("current".into()),
+        resume_lacks_instructions: false,
+        fork: true,
+        rewind: Some(RewindPoint { drop_from: TurnAnchors { turn_id: Some("u2".into()), previous_end: None }, keep_through: None }),
+        binary: None,
+        env: HashMap::new(),
+        compaction: Default::default(),
+    };
+    let session = harness.session.clone();
+    let (_ready, ready_rx) = oneshot::channel();
+    let _initializing = tokio::spawn(async move { session.initialize(config, "new".into(), ready_rx).await });
+    let listing = harness.wire("get_fork_messages").await;
+    harness.reply(&listing, json!({ "messages": [{ "entryId": "u1" }, { "entryId": "u2" }] })).await;
+    let fork = harness.wire("fork").await;
+    assert_eq!(fork["entryId"], "u2");
 }
