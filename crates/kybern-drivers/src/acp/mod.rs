@@ -157,6 +157,9 @@ pub(crate) trait AcpFlavor: Send + Sync + Sized + 'static {
     const BACKGROUND_REPLIES: bool = false;
     /// Fail a prompt whose agent says nothing, runs no tool and asks nothing for this long.
     const INACTIVITY_LIMIT: Option<Duration> = None;
+    /// End the session as soon as the agent's process is gone (its stderr closed), so the daemon starts
+    /// a new one for the next message instead of sending it to a dead connection.
+    const ENDS_WITH_PROCESS: bool = false;
 
     /// The agent's process: binary, arguments for the permission mode, environment. The core adds the
     /// working folder, pipes, `kill_on_drop` and the process group.
@@ -889,8 +892,12 @@ impl<F: AcpFlavor> Connection<F> {
                 }
 
                 let mut session_meta = flavor.session_meta(&init, &config);
-                // The guide goes in the system prompt when this agent takes one there.
-                let guide_meta = guide.as_deref().and_then(|guide| flavor.system_prompt_meta(&init, guide));
+                // A new conversation's guide goes in the system prompt when this agent takes one there; a
+                // resumed one that lacks it gets it on its next prompt, which reaches it for certain.
+                let guide_meta = guide
+                    .as_deref()
+                    .filter(|_| config.resume_session_id.is_none())
+                    .and_then(|guide| flavor.system_prompt_meta(&init, guide));
                 let guide_in_system_prompt = guide_meta.is_some();
                 if let Some(extra) = guide_meta {
                     session_meta.get_or_insert_with(Meta::new).extend(extra);
@@ -987,7 +994,12 @@ impl<F: AcpFlavor> Connection<F> {
                     messages.lock().await.open = false;
                 };
                 let mut next_command: Option<SessionCommand> = None;
+                let mut process_gone = stderr_closed.clone();
                 loop {
+                    let gone = F::ENDS_WITH_PROCESS && *process_gone.borrow();
+                    if gone {
+                        return Err(agent_client_protocol::Error::from(anyhow::anyhow!("{} exited", F::NAME)));
+                    }
                     let cmd = match next_command.take() {
                         Some(cmd) => cmd,
                         None => tokio::select! {
@@ -995,6 +1007,8 @@ impl<F: AcpFlavor> Connection<F> {
                                 Some(cmd) => cmd,
                                 None => break,
                             },
+                            // The agent's process is gone: nothing more will come on this connection.
+                            () = async { let _ = process_gone.wait_for(|closed| *closed).await; }, if F::ENDS_WITH_PROCESS => continue,
                             // The agent started a reply by itself: settle it as a turn of its own.
                             () = shared.woke.notified(), if F::BACKGROUND_REPLIES => {
                                 if !shared.lock_activity().background {

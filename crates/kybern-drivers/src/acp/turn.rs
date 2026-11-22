@@ -516,4 +516,148 @@ mod tests {
         assert!(matches!(steer_rx.await, Ok(Err(DriverError::SteerFallback))));
         assert_eq!(steered.get(), 0);
     }
+
+    fn completed(input_tokens: u64) -> DriverEvent {
+        DriverEvent::TurnCompleted {
+            stop_reason: StopReason::Completed,
+            usage: Usage { input_tokens, ..Usage::default() },
+            cost_usd: None,
+            duration_ms: 0,
+            anchors: Default::default(),
+        }
+    }
+
+    fn silent() -> DriverEvent {
+        DriverEvent::turn_failed(kybern_protocol::ProviderKind::Antigravity, "silent")
+    }
+
+    fn watch(activity: &std::sync::Mutex<Activity>, inactivity: Option<Duration>, held: Option<DriverEvent>) -> Option<Watch<'_>> {
+        Some(Watch { activity, holds: true, inactivity, silent, held })
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_prompt_whose_command_outlives_it_ends_once_the_reply_to_it_closes() {
+        let (_completions_tx, mut completions) = mpsc::unbounded_channel::<std::convert::Infallible>();
+        let (_commands_tx, mut commands) = mpsc::channel::<SessionCommand>(4);
+        let activity = std::sync::Mutex::new(Activity::new());
+        activity.lock().unwrap().tools.insert("c1".into(), true);
+        let started = std::time::Instant::now();
+        let wait = settle_watched(
+            async { completed(7) },
+            "p",
+            started,
+            &mut completions,
+            &mut commands,
+            CANCEL_GRACE,
+            || {},
+            watch(&activity, None, None),
+        );
+        let mut wait = std::pin::pin!(wait);
+        assert!(tokio::time::timeout(Duration::from_secs(600), &mut wait).await.is_err(), "held while the command runs");
+        {
+            // The command ended and agy replied; its reply hasn't closed yet.
+            let mut state = activity.lock().unwrap();
+            state.tools.clear();
+            state.reply_open = true;
+            state.last_progress = tokio::time::Instant::now();
+        }
+        assert!(tokio::time::timeout(Duration::from_secs(60), &mut wait).await.is_err(), "held while the reply is open");
+        {
+            let mut state = activity.lock().unwrap();
+            state.reply_open = false;
+            state.last_progress = tokio::time::Instant::now();
+        }
+        let settled = wait.await;
+        assert!(
+            matches!(settled.event, DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, ref usage, .. } if usage.input_tokens == 7)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_reply_that_never_closes_still_ends_and_stop_ends_a_held_turn() {
+        let (_completions_tx, mut completions) = mpsc::unbounded_channel::<std::convert::Infallible>();
+        let (commands_tx, mut commands) = mpsc::channel::<SessionCommand>(4);
+        let activity = std::sync::Mutex::new(Activity::new());
+        activity.lock().unwrap().reply_open = true;
+        let started = std::time::Instant::now();
+        // A reply agy started by itself, which never sends its closing usage.
+        let settled = settle_watched(
+            std::future::pending(),
+            "",
+            started,
+            &mut completions,
+            &mut commands,
+            CANCEL_GRACE,
+            || {},
+            watch(&activity, None, Some(completed(0))),
+        )
+        .await;
+        assert!(matches!(settled.event, DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. }));
+
+        activity.lock().unwrap().tools.insert("c1".into(), true);
+        commands_tx.send(SessionCommand::Cancel).await.unwrap();
+        let cancels = std::cell::Cell::new(0);
+        let settled = settle_watched(
+            std::future::pending(),
+            "",
+            started,
+            &mut completions,
+            &mut commands,
+            CANCEL_GRACE,
+            || cancels.set(cancels.get() + 1),
+            watch(&activity, None, Some(completed(0))),
+        )
+        .await;
+        assert!(matches!(settled.event, DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, .. }));
+        assert_eq!(cancels.get(), 1);
+
+        // A prompt sent during a reply agy started ends that reply and goes next.
+        commands_tx.send(SessionCommand::Prompt { blocks: vec![] }).await.unwrap();
+        let settled = settle_watched(
+            std::future::pending(),
+            "",
+            started,
+            &mut completions,
+            &mut commands,
+            CANCEL_GRACE,
+            || {},
+            watch(&activity, None, Some(completed(0))),
+        )
+        .await;
+        assert!(settled.next.is_some() && matches!(settled.event, DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. }));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_silent_prompt_fails_but_waiting_on_a_tool_the_user_or_a_sleeping_host_does_not() {
+        let (_completions_tx, mut completions) = mpsc::unbounded_channel::<std::convert::Infallible>();
+        let (_commands_tx, mut commands) = mpsc::channel::<SessionCommand>(4);
+        let activity = std::sync::Mutex::new(Activity::new());
+        let limit = Duration::from_secs(60);
+        let started = std::time::Instant::now();
+        let cancels = std::cell::Cell::new(0);
+        activity.lock().unwrap().cards = 1;
+        let wait = settle_watched(
+            std::future::pending(),
+            "p",
+            started,
+            &mut completions,
+            &mut commands,
+            CANCEL_GRACE,
+            || cancels.set(cancels.get() + 1),
+            watch(&activity, Some(limit), None),
+        );
+        let mut wait = std::pin::pin!(wait);
+        assert!(tokio::time::timeout(Duration::from_secs(300), &mut wait).await.is_err(), "a card waiting for the user is not silence");
+        {
+            let mut state = activity.lock().unwrap();
+            state.cards = 0;
+            state.last_progress = tokio::time::Instant::now();
+        }
+        // The host sleeps for longer than the limit: one late tick, not silence.
+        tokio::time::advance(Duration::from_secs(600)).await;
+        assert!(tokio::time::timeout(Duration::from_secs(30), &mut wait).await.is_err(), "a host that slept is not silence");
+        let settled = wait.await;
+        assert!(matches!(&settled.event, DriverEvent::TurnFailed { error, .. } if error == "silent"));
+        assert_eq!(cancels.get(), 1);
+    }
 }
