@@ -36,7 +36,7 @@ const SCOPED_ENV: [&str; 7] = [
 ];
 
 enum Command {
-    Register(String, mpsc::Sender<DriverEvent>),
+    Register(String, mpsc::Sender<DriverEvent>, Arc<Mutex<super::DeliveryState>>),
     Catalog(Value),
     Call { session: String, operation: String, params: Value, reply: Reply },
     Drop(String),
@@ -50,6 +50,7 @@ struct Hub {
 struct Slot {
     events: mpsc::Sender<DriverEvent>,
     stream: super::stream::Stream,
+    delivery: Arc<Mutex<super::DeliveryState>>,
     open: Option<Value>,
     restoring: bool,
 }
@@ -96,6 +97,13 @@ pub(super) fn update_catalog(context: &ProbeContext, catalog: Value) {
 
 impl Connection {
     pub(crate) fn spawn(context: &ProbeContext) -> Result<(Self, mpsc::Receiver<DriverEvent>)> {
+        Self::spawn_with_delivery(context, Arc::new(Mutex::new(super::DeliveryState::default())))
+    }
+
+    pub(super) fn spawn_with_delivery(
+        context: &ProbeContext,
+        delivery: Arc<Mutex<super::DeliveryState>>,
+    ) -> Result<(Self, mpsc::Receiver<DriverEvent>)> {
         let account = account_context(context);
         let key = account_key(&account)?;
         // Registration happens under this lock, which is what lets a lingering
@@ -121,7 +129,9 @@ impl Connection {
         };
         let id = uuid::Uuid::new_v4().to_string();
         let (events, receiver) = mpsc::channel(1024);
-        hub.tx.send(Command::Register(id.clone(), events.clone())).map_err(|_| DriverError::ProcessExited("Cursor host stopped".into()))?;
+        hub.tx
+            .send(Command::Register(id.clone(), events.clone(), delivery))
+            .map_err(|_| DriverError::ProcessExited("Cursor host stopped".into()))?;
         let env = context
             .env
             .iter()
@@ -245,8 +255,12 @@ fn deliver(slot: &mut Slot, events: Vec<DriverEvent>) -> bool {
                 // retire just the stalled session with an explicit failure.
                 let sender = slot.events.clone();
                 let mut stream = std::mem::take(&mut slot.stream);
+                let exited = stream.exited();
+                if let Some(outcome) = stream.take_outcome() {
+                    slot.delivery.lock().unwrap_or_else(|poison| poison.into_inner()).apply_outcome(outcome);
+                }
                 tokio::spawn(async move {
-                    for event in std::iter::once(event).chain(events).chain(stream.exited()).chain([DriverEvent::Exited {
+                    for event in std::iter::once(event).chain(events).chain(exited).chain([DriverEvent::Exited {
                         code: None,
                         error: Some("Cursor output consumer stopped keeping up. Reopen the saved conversation to continue.".into()),
                     }]) {
@@ -299,6 +313,9 @@ async fn serve(
             }
             slots.retain(|_, slot| {
                 let events = slot.stream.exited();
+                if let Some(outcome) = slot.stream.take_outcome() {
+                    slot.delivery.lock().unwrap_or_else(|poison| poison.into_inner()).apply_outcome(outcome);
+                }
                 deliver(slot, events)
             });
             child.kill().await;
@@ -361,7 +378,10 @@ async fn serve(
             command = commands.recv() => {
                 match command {
                     None => break,
-                    Some(Command::Register(id,events)) => { idle_since = None; slots.insert(id,Slot{events,stream:Default::default(),open:None,restoring:false}); }
+                    Some(Command::Register(id, events, delivery)) => {
+                        idle_since = None;
+                        slots.insert(id, Slot { events, stream: Default::default(), delivery, open: None, restoring: false });
+                    }
                     Some(Command::Catalog(catalog)) => {
                         for slot in slots.values_mut() { if let Some(open)=&mut slot.open {open["catalog"]=catalog.clone();} }
                         if write(&child,"catalog","catalog",json!({"catalog":catalog})).await.is_err() {failed=true;}
@@ -416,6 +436,9 @@ async fn serve(
                     let id=value["session"].as_str().map(str::to_owned).or_else(||(slots.len()==1).then(||slots.keys().next().unwrap().clone()));
                     if let Some(id)=id && let Some(slot)=slots.get_mut(&id) {
                             let events=slot.stream.handle(&value);
+                            if let Some(outcome) = slot.stream.take_outcome() {
+                                slot.delivery.lock().unwrap_or_else(|poison| poison.into_inner()).apply_outcome(outcome);
+                            }
                             if !deliver(slot,events) {
                                 slots.remove(&id);
                                 if retire(&child,&mut pending,&id).await.is_err() {failed=true;}
@@ -462,6 +485,9 @@ async fn serve(
     }
     for (_, mut slot) in slots {
         let mut events = slot.stream.exited();
+        if let Some(outcome) = slot.stream.take_outcome() {
+            slot.delivery.lock().unwrap_or_else(|poison| poison.into_inner()).apply_outcome(outcome);
+        }
         events.push(DriverEvent::Exited {
             code: None,
             error: Some("Cursor host could not recover. Send again to resume the saved conversation.".into()),

@@ -7,6 +7,95 @@ use serde_json::{Value, json};
 
 use crate::{DriverEvent, DriverRuntimeTask, DriverRuntimeTaskUpdate, TurnAnchors};
 
+/// After a turn ends, a retryable stream error can make Cursor's SDK resume from
+/// an older checkpoint inside the same run. When those resumes save nothing, it
+/// ends the run with this error even though the answer was already delivered.
+const CURSOR_RESUME_NO_PROGRESS_MESSAGE: &str = "Agent turn stopped after repeated resume attempts made no progress";
+const TRANSPORT_SERVER_ERROR: &str = "Something went wrong communicating with the server. Please try again.";
+const TRANSPORT_MAX_LINE_LEN: usize = 4096;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TurnOutcome {
+    Completed,
+    Cancelled { checkpointed: bool },
+    Failed { checkpointed: bool },
+}
+
+/// Detects an assistant message whose entire text is a raw Cursor transport error dump
+/// (`RetriableError`, `ConnectError`, or server error), optionally followed by a stack trace.
+/// Prose or fenced code that mentions the same diagnostic is never misclassified.
+#[derive(Default, Clone)]
+struct TransportFailure {
+    disqualified: bool,
+    failure: Option<String>,
+    line: String,
+}
+
+impl TransportFailure {
+    fn from_text(text: &str) -> Self {
+        let mut state = Self::default();
+        state.push(text);
+        state
+    }
+
+    fn push(&mut self, text: &str) {
+        for (index, part) in text.split('\n').enumerate() {
+            if self.disqualified {
+                return;
+            }
+            if index > 0 {
+                let completed = std::mem::take(&mut self.line);
+                Self::consume_line(&mut self.disqualified, &mut self.failure, &completed);
+            }
+            if self.line.len() + part.len() > TRANSPORT_MAX_LINE_LEN {
+                self.disqualified = true;
+                self.failure = None;
+                self.line.clear();
+                return;
+            }
+            self.line.push_str(part);
+        }
+    }
+
+    fn failure(&self) -> Option<String> {
+        let mut disqualified = self.disqualified;
+        let mut failure = self.failure.clone();
+        Self::consume_line(&mut disqualified, &mut failure, &self.line);
+        failure
+    }
+
+    fn consume_line(disqualified: &mut bool, failure: &mut Option<String>, line: &str) {
+        if *disqualified {
+            return;
+        }
+        let text = line.trim_end();
+        if is_transport_error_line(text) {
+            *failure = Some(text.to_string());
+        } else if !text.trim().is_empty() && !(failure.is_some() && is_stack_frame_line(text)) {
+            *disqualified = true;
+            *failure = None;
+        }
+    }
+}
+
+fn is_transport_error_line(text: &str) -> bool {
+    if text == TRANSPORT_SERVER_ERROR {
+        return true;
+    }
+    if let Some(rest) = text.strip_prefix("Error: RetriableError: ") {
+        return !rest.is_empty() && !rest.starts_with("[internal]");
+    }
+    if let Some(rest) = text.strip_prefix("Error: ConnectError: ") {
+        return rest.starts_with("[unavailable]") || rest.starts_with("[aborted]") || rest.starts_with("[deadline_exceeded]");
+    }
+    false
+}
+
+fn is_stack_frame_line(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    trimmed.len() < text.len() && trimmed.strip_prefix("at").is_some_and(|rest| rest.starts_with(char::is_whitespace))
+}
+
 #[derive(Default)]
 struct Message {
     id: String,
@@ -27,6 +116,11 @@ pub(super) struct Stream {
     root_completed: String,
     last_root: String,
     usage: Usage,
+    /// The latest root turn ended and no new work has started since.
+    turn_ended: bool,
+    /// Classifier for the latest root assistant message.
+    assistant_reply: TransportFailure,
+    last_outcome: Option<TurnOutcome>,
 }
 
 impl Stream {
@@ -70,14 +164,36 @@ impl Stream {
     }
 
     fn update(&mut self, update: &Value, scope: &str, out: &mut Vec<DriverEvent>) {
-        match update["type"].as_str().unwrap_or("") {
+        let kind = update["type"].as_str().unwrap_or("");
+        if scope == "root" {
+            match kind {
+                "turn-ended" => self.turn_ended = true,
+                "step-started"
+                | "user-message-appended"
+                | "text-delta"
+                | "thinking-delta"
+                | "partial-tool-call"
+                | "tool-call-started"
+                | "tool-call-delta" => self.turn_ended = false,
+                _ => {}
+            }
+        }
+        match kind {
             "text-delta" | "thinking-delta" => {
                 let Some(text) = update["text"].as_str().filter(|s| !s.is_empty()) else { return };
-                let thinking = update["type"] == "thinking-delta";
+                let thinking = kind == "thinking-delta";
                 if thinking && self.messages.get(scope).is_some_and(|m| !m.text.is_empty()) {
                     self.flush(scope, out);
                 }
                 let origin = self.origin(scope);
+                if scope == "root" && !thinking {
+                    // Classify each assistant message on its own, so earlier
+                    // commentary does not hide a later standalone transport dump.
+                    if self.messages.get("root").is_none_or(|m| m.text.is_empty()) {
+                        self.assistant_reply = TransportFailure::default();
+                    }
+                    self.assistant_reply.push(text);
+                }
                 let message = self.message(scope);
                 if thinking {
                     message.thinking.push_str(text);
@@ -116,7 +232,7 @@ impl Stream {
                 let event = &update["event"];
                 // Preserve explicit identity when supplied. Never attach a
                 // parallel shell's output to whichever command started last.
-                let explicit = event["callId"].as_str().or_else(|| update["callId"].as_str());
+                let explicit = event["toolCallId"].as_str().or_else(|| event["callId"].as_str()).or_else(|| update["callId"].as_str());
                 let shells: Vec<_> = self.tools.iter().filter(|(_, kind)| *kind == "shell").map(|(id, _)| id.as_str()).collect();
                 let id = explicit.or_else(|| (shells.len() == 1).then(|| shells[0]));
                 if let Some(id) = id {
@@ -250,9 +366,13 @@ impl Stream {
             return;
         }
         let status = result["status"].as_str().unwrap_or("error");
-        if let Some(text) = result["result"].as_str().filter(|s| !s.is_empty()) {
+        let checkpointed = result["checkpointed"].as_bool().unwrap_or(false);
+        let error_message = result.pointer("/error/message").and_then(Value::as_str);
+        let resume_no_progress = self.turn_ended && status == "error" && error_message == Some(CURSOR_RESUME_NO_PROGRESS_MESSAGE);
+        if !resume_no_progress && let Some(text) = result["result"].as_str().filter(|s| !s.is_empty()) {
             let final_text = text.strip_prefix(&self.root_completed).unwrap_or(text);
             if !final_text.is_empty() && (self.messages.contains_key("root") || self.last_root != text) {
+                self.assistant_reply = TransportFailure::from_text(final_text);
                 self.message("root").text = final_text.to_string();
             }
         }
@@ -272,24 +392,46 @@ impl Stream {
                 if status == "cancelled" { RuntimeTaskStatus::Stopped } else { RuntimeTaskStatus::Failed },
             )));
         }
-        if status == "finished" || status == "cancelled" {
+        if let Some(context) = context_usage(&result["contextUsage"]) {
+            out.push(DriverEvent::UsageUpdated(ProviderUsage { context: Some(context), limits: None, prompt_cache: None }));
+        }
+        let transport_failure = (status != "cancelled").then(|| self.assistant_reply.failure()).flatten();
+        let outcome = if let Some(failure) = transport_failure {
+            out.push(DriverEvent::turn_failed(ProviderKind::Cursor, failure));
+            TurnOutcome::Failed { checkpointed }
+        } else if status == "finished" || resume_no_progress {
+            if resume_no_progress {
+                tracing::warn!(run_id = ?self.run, "Cursor run ended after repeated resume attempts made no progress after turn-ended; treating as completed");
+            }
             out.push(DriverEvent::TurnCompleted {
-                stop_reason: if status == "cancelled" { StopReason::Interrupted } else { StopReason::Completed },
+                stop_reason: StopReason::Completed,
                 usage: if result["usage"].is_object() { usage(&result["usage"]) } else { self.usage.clone() },
                 cost_usd: None, // Local billed usage IDs differ from SDK run IDs.
                 duration_ms: result["durationMs"].as_u64().unwrap_or(0),
                 anchors: TurnAnchors { turn_id: self.run.clone(), previous_end: None },
             });
+            TurnOutcome::Completed
+        } else if status == "cancelled" {
+            out.push(DriverEvent::TurnCompleted {
+                stop_reason: StopReason::Interrupted,
+                usage: if result["usage"].is_object() { usage(&result["usage"]) } else { self.usage.clone() },
+                cost_usd: None,
+                duration_ms: result["durationMs"].as_u64().unwrap_or(0),
+                anchors: TurnAnchors { turn_id: self.run.clone(), previous_end: None },
+            });
+            TurnOutcome::Cancelled { checkpointed }
         } else {
             out.push(DriverEvent::turn_failed(
                 ProviderKind::Cursor,
-                result
-                    .pointer("/error/message")
-                    .and_then(Value::as_str)
-                    .unwrap_or("Cursor SDK run failed. Send again to resume the conversation."),
+                error_message.unwrap_or("Cursor SDK run failed. Send again to resume the conversation."),
             ));
-        }
-        *self = Self::default();
+            TurnOutcome::Failed { checkpointed }
+        };
+        *self = Self { last_outcome: Some(outcome), ..Self::default() };
+    }
+
+    pub(super) fn take_outcome(&mut self) -> Option<TurnOutcome> {
+        self.last_outcome.take()
     }
 
     pub(super) fn handle(&mut self, value: &Value) -> Vec<DriverEvent> {
@@ -302,8 +444,26 @@ impl Stream {
             "update" if self.run.as_deref() == value["runId"].as_str() && self.run.is_some() => {
                 self.update(&value["update"], "root", &mut out)
             }
+            "notice" => {
+                if let Some(text) = value["text"].as_str().filter(|s| !s.is_empty()) {
+                    let level = match value["level"].as_str() {
+                        Some("error") => NoticeLevel::Error,
+                        Some("warning") => NoticeLevel::Warning,
+                        _ => NoticeLevel::Info,
+                    };
+                    out.push(DriverEvent::Notice { level, text: text.to_string(), data: None });
+                }
+            }
             "run_completed" => self.finish(&value["result"], &mut out),
-            "run_failed" => self.finish(&json!({"status":"error", "error":{"message":value["error"]}}), &mut out),
+            "run_failed" => self.finish(
+                &json!({
+                    "status": "error",
+                    "error": {"message": value["error"]},
+                    "checkpointed": value["checkpointed"],
+                    "contextUsage": value["contextUsage"],
+                }),
+                &mut out,
+            ),
             _ => {}
         }
         out
@@ -314,6 +474,12 @@ impl Stream {
         self.finish(&json!({"status":"error", "error":{"message":"Cursor SDK process exited during the run. Send again to resume the saved conversation."}}), &mut out);
         out
     }
+}
+
+fn context_usage(value: &Value) -> Option<ContextUsage> {
+    let used_tokens = value.get("usedTokens")?.as_u64()?;
+    let window_tokens = value.get("maxTokens")?.as_u64().filter(|&max| max > 0)?;
+    Some(ContextUsage { used_tokens, window_tokens })
 }
 
 fn usage(value: &Value) -> Usage {
@@ -328,9 +494,17 @@ fn usage(value: &Value) -> Usage {
 fn tool_failed(call: &Value) -> bool {
     call.pointer("/result/status").and_then(Value::as_str) == Some("error")
         || call.pointer("/result/value/isError").and_then(Value::as_bool) == Some(true)
+        || (call["type"].as_str() == Some("shell")
+            && call.pointer("/result/status").and_then(Value::as_str) == Some("success")
+            && call.pointer("/result/value/exitCode").and_then(Value::as_i64).is_some_and(|code| code != 0))
 }
 
 fn shell_text(event: &Value) -> String {
+    if matches!(event["case"].as_str(), Some("stdout" | "stderr"))
+        && let Some(data) = event.pointer("/value/data").and_then(Value::as_str)
+    {
+        return data.to_string();
+    }
     event["text"]
         .as_str()
         .or_else(|| event["output"].as_str())
@@ -464,5 +638,197 @@ mod tests {
         );
         assert!(events.iter().any(|event| matches!(event, DriverEvent::MessageCompleted { origin: EventOrigin::Agent { .. }, text, .. } if text == "Final **answer**.")));
         assert!(!events.iter().any(|event| matches!(event, DriverEvent::MessageCompleted { origin: EventOrigin::Root, .. })));
+    }
+
+    #[test]
+    fn non_zero_shell_exit_code_marks_tool_as_error() {
+        let mut stream = started();
+        let failed = update(
+            &mut stream,
+            json!({
+                "type": "tool-call-completed",
+                "callId": "s1",
+                "toolCall": {
+                    "type": "shell",
+                    "args": {"command": "exit 2"},
+                    "result": {"status": "success", "value": {"exitCode": 2, "stderr": "boom"}}
+                }
+            }),
+        );
+        assert!(failed.iter().any(|event| matches!(event, DriverEvent::ToolCompleted { is_error: true, .. })));
+
+        let ok = update(
+            &mut stream,
+            json!({
+                "type": "tool-call-completed",
+                "callId": "s2",
+                "toolCall": {
+                    "type": "shell",
+                    "args": {"command": "true"},
+                    "result": {"status": "success", "value": {"exitCode": 0, "stdout": ""}}
+                }
+            }),
+        );
+        assert!(ok.iter().any(|event| matches!(event, DriverEvent::ToolCompleted { is_error: false, .. })));
+    }
+
+    #[test]
+    fn shell_output_delta_parses_sdk_case_value_shape_and_tool_call_id() {
+        let mut stream = started();
+        update(&mut stream, json!({"type":"tool-call-started","callId":"sh1","toolCall":{"type":"shell","args":{"command":"a"}}}));
+        update(&mut stream, json!({"type":"tool-call-started","callId":"sh2","toolCall":{"type":"shell","args":{"command":"b"}}}));
+
+        let stdout = update(
+            &mut stream,
+            json!({
+                "type": "shell-output-delta",
+                "event": {"case": "stdout", "value": {"data": "hello\n"}, "toolCallId": "sh2"}
+            }),
+        );
+        assert!(matches!(
+            stdout.as_slice(),
+            [DriverEvent::ToolOutputDelta { tool_call_id, delta }] if tool_call_id == "cursor-sdk:r1:tool:sh2" && delta == "hello\n"
+        ));
+
+        let stderr = update(
+            &mut stream,
+            json!({
+                "type": "shell-output-delta",
+                "event": {"case": "stderr", "value": {"data": "warn\n"}, "toolCallId": "sh1"}
+            }),
+        );
+        assert!(matches!(
+            stderr.as_slice(),
+            [DriverEvent::ToolOutputDelta { tool_call_id, delta }] if tool_call_id == "cursor-sdk:r1:tool:sh1" && delta == "warn\n"
+        ));
+    }
+
+    #[test]
+    fn run_completed_emits_context_usage_before_turn_completed() {
+        let mut stream = started();
+        let events = stream.handle(&json!({
+            "type": "run_completed",
+            "result": {
+                "status": "finished",
+                "contextUsage": {"usedTokens": 42_000, "maxTokens": 200_000},
+                "checkpointed": true
+            }
+        }));
+        let usage_pos = events
+            .iter()
+            .position(|event| {
+                matches!(
+                    event,
+                    DriverEvent::UsageUpdated(ProviderUsage {
+                        context: Some(ContextUsage { used_tokens: 42_000, window_tokens: 200_000 }),
+                        ..
+                    })
+                )
+            })
+            .expect("context usage event");
+        let completed_pos = events
+            .iter()
+            .position(|event| matches!(event, DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. }))
+            .expect("turn completed event");
+        assert!(usage_pos < completed_pos);
+        assert_eq!(stream.take_outcome(), Some(TurnOutcome::Completed));
+    }
+
+    #[test]
+    fn notice_events_forward_to_driver_notice() {
+        let mut stream = started();
+        let events = stream.handle(&json!({
+            "type": "notice",
+            "level": "warning",
+            "text": "Cursor has no filesystem sandbox on Windows."
+        }));
+        assert!(matches!(
+            events.as_slice(),
+            [DriverEvent::Notice { level: NoticeLevel::Warning, text, data: None }]
+                if text == "Cursor has no filesystem sandbox on Windows."
+        ));
+    }
+
+    #[test]
+    fn repeated_resume_no_progress_after_turn_ended_completes_cleanly() {
+        let mut stream = started();
+        update(&mut stream, json!({"type": "text-delta", "text": "All done."}));
+        update(&mut stream, json!({"type": "turn-ended"}));
+        let events = stream.handle(&json!({
+            "type": "run_completed",
+            "result": {
+                "status": "error",
+                "error": {"message": CURSOR_RESUME_NO_PROGRESS_MESSAGE},
+                "checkpointed": true
+            }
+        }));
+        assert!(events.iter().any(|event| matches!(event, DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. })));
+        assert!(!events.iter().any(|event| matches!(event, DriverEvent::TurnFailed { .. })));
+        assert_eq!(stream.take_outcome(), Some(TurnOutcome::Completed));
+
+        // Without turn-ended (or if a new step started afterwards), the same error still fails.
+        let mut unfinished = started();
+        update(&mut unfinished, json!({"type": "text-delta", "text": "Working..."}));
+        update(&mut unfinished, json!({"type": "turn-ended"}));
+        update(&mut unfinished, json!({"type": "step-started"}));
+        let failed = unfinished.handle(&json!({
+            "type": "run_completed",
+            "result": {
+                "status": "error",
+                "error": {"message": CURSOR_RESUME_NO_PROGRESS_MESSAGE},
+                "checkpointed": false
+            }
+        }));
+        assert!(matches!(failed.last(), Some(DriverEvent::TurnFailed { .. })));
+        assert_eq!(unfinished.take_outcome(), Some(TurnOutcome::Failed { checkpointed: false }));
+    }
+
+    #[test]
+    fn transport_error_dump_replies_fail_the_turn_while_prose_completes() {
+        for dump in [
+            "Error: RetriableError: WritableIterable is closed\n    at onClose (file:///sdk/index.js:12:4)",
+            "Error: ConnectError: [unavailable] transport closed\n    at Stream.end (node:internal/streams:1:1)",
+            "Error: ConnectError: [deadline_exceeded] timed out",
+            TRANSPORT_SERVER_ERROR,
+        ] {
+            let mut stream = started();
+            update(&mut stream, json!({"type": "text-delta", "text": dump}));
+            let events = stream.handle(&json!({"type": "run_completed", "result": {"status": "finished", "checkpointed": false}}));
+            let Some(DriverEvent::TurnFailed { problem, .. }) = events.last() else {
+                panic!("expected TurnFailed for dump {dump:?}, got {events:?}");
+            };
+            assert_eq!(problem.as_ref().map(|p| p.kind), Some(kybern_protocol::rpc::ProblemKind::Offline));
+            assert_eq!(stream.take_outcome(), Some(TurnOutcome::Failed { checkpointed: false }));
+        }
+
+        // Earlier normal commentary followed by a tool call and then a standalone transport dump still fails.
+        let mut after_tool = started();
+        update(&mut after_tool, json!({"type": "text-delta", "text": "Checking files..."}));
+        update(
+            &mut after_tool,
+            json!({"type": "tool-call-started", "callId": "r1", "toolCall": {"type": "read", "args": {"path": "a.rs"}}}),
+        );
+        update(
+            &mut after_tool,
+            json!({"type": "tool-call-completed", "callId": "r1", "toolCall": {"type": "read", "args": {"path": "a.rs"}, "result": {"status": "success", "value": {}}}}),
+        );
+        update(&mut after_tool, json!({"type": "text-delta", "text": "Error: ConnectError: [aborted] stream reset"}));
+        let events = after_tool.handle(&json!({"type": "run_completed", "result": {"status": "finished", "checkpointed": true}}));
+        assert!(matches!(events.last(), Some(DriverEvent::TurnFailed { .. })));
+
+        // Normal prose quoting the error or an internal error code stays a normal completed reply.
+        for normal in [
+            "I saw this error in the logs:\nError: RetriableError: WritableIterable is closed",
+            "Error: RetriableError: [internal] something else",
+            "Error: ConnectError: [internal] not a transport disconnect",
+        ] {
+            let mut stream = started();
+            update(&mut stream, json!({"type": "text-delta", "text": normal}));
+            let events = stream.handle(&json!({"type": "run_completed", "result": {"status": "finished", "checkpointed": true}}));
+            assert!(
+                events.iter().any(|event| matches!(event, DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. })),
+                "expected completed for normal reply {normal:?}, got {events:?}"
+            );
+        }
     }
 }

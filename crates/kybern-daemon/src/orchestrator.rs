@@ -5194,7 +5194,8 @@ impl Orchestrator {
                 t.status = ThreadStatus::Idle;
                 let t = self.update_thread(t)?;
                 self.save_account_binding(&t)?;
-                if live.instructions_unconfirmed.swap(false, Ordering::SeqCst)
+                if matches!(stop_reason, StopReason::Completed | StopReason::MaxTurns)
+                    && live.instructions_unconfirmed.swap(false, Ordering::SeqCst)
                     && let Some(session_id) = &t.provider_session_id
                 {
                     self.inner.store.meta_set(&instructions_key(session_id), "1")?;

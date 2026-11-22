@@ -855,3 +855,89 @@ async fn a_cursor_conversation_gets_the_instructions_block_once_even_when_it_beg
         "sent once, then never again"
     );
 }
+
+#[tokio::test]
+async fn an_interrupted_cursor_turn_does_not_mark_instructions_delivered() {
+    let spawned = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let lacks = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut drivers = DriverRegistry::default();
+    drivers.register(Arc::new(InstructionsRecorder {
+        inner: ScriptedDriver { kind: ProviderKind::Cursor, spawned: spawned.clone() },
+        lacks: lacks.clone(),
+    }));
+    let fixture = Fixture::with_drivers_and_gateway(drivers, Some(crate::native_tools_mcp::NativeToolsGateway::default()));
+    std::fs::create_dir_all(&fixture.root).unwrap();
+    let mut thread = fixture.thread(ThreadStatus::Idle);
+    thread.provider = ProviderInstance::default_for(ProviderKind::Cursor);
+    thread.permission_mode = PermissionMode::FullAccess;
+    thread.provider_session_id = Some("cursor-sdk:first".into());
+    fixture.store.thread_upsert(&thread).unwrap();
+
+    // First turn is interrupted before completing: the daemon must NOT mark instructions delivered.
+    fixture.orchestrator.send(thread.id, UserMessage::text("first")).await.unwrap();
+    let child = eventually(|| async {
+        let children: Vec<ScriptedChild> = spawned.lock().unwrap().clone();
+        for child in children.into_iter().rev() {
+            if child.messages.lock().await.last().is_some_and(|message| message.plain_text().ends_with("first")) {
+                return Some(child);
+            }
+        }
+        None
+    })
+    .await;
+    child
+        .tx
+        .send(DriverEvent::TurnCompleted {
+            stop_reason: StopReason::Interrupted,
+            usage: Default::default(),
+            cost_usd: None,
+            duration_ms: 0,
+            anchors: Default::default(),
+        })
+        .await
+        .unwrap();
+    eventually(|| async { (fixture.store.thread_get(thread.id).unwrap().unwrap().status == ThreadStatus::Idle).then_some(()) }).await;
+    fixture.orchestrator.inner.sessions.lock().await.remove(&thread.id);
+
+    // Second turn respawns and completes: it must still be told the session lacks instructions.
+    fixture.orchestrator.send(thread.id, UserMessage::text("second")).await.unwrap();
+    let child = eventually(|| async {
+        let children: Vec<ScriptedChild> = spawned.lock().unwrap().clone();
+        for child in children.into_iter().rev() {
+            if child.messages.lock().await.last().is_some_and(|message| message.plain_text().ends_with("second")) {
+                return Some(child);
+            }
+        }
+        None
+    })
+    .await;
+    child.finish("ok").await;
+    eventually(|| async { (fixture.store.thread_get(thread.id).unwrap().unwrap().status == ThreadStatus::Idle).then_some(()) }).await;
+    fixture.orchestrator.inner.sessions.lock().await.remove(&thread.id);
+
+    // Third turn respawns after the completed turn: instructions are now confirmed delivered.
+    fixture.orchestrator.send(thread.id, UserMessage::text("third")).await.unwrap();
+    let child = eventually(|| async {
+        let children: Vec<ScriptedChild> = spawned.lock().unwrap().clone();
+        for child in children.into_iter().rev() {
+            if child.messages.lock().await.last().is_some_and(|message| message.plain_text().ends_with("third")) {
+                return Some(child);
+            }
+        }
+        None
+    })
+    .await;
+    child.finish("ok").await;
+    eventually(|| async { (fixture.store.thread_get(thread.id).unwrap().unwrap().status == ThreadStatus::Idle).then_some(()) }).await;
+
+    let recorded = lacks.lock().unwrap().clone();
+    assert_eq!(
+        recorded,
+        vec![
+            (Some("cursor-sdk:first".into()), true),
+            (Some("cursor-sdk:first".into()), true),
+            (Some("cursor-sdk:first".into()), false),
+        ],
+        "interrupted turn keeps instructions unconfirmed until a turn completes"
+    );
+}

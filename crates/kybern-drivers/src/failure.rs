@@ -188,6 +188,11 @@ fn unreachable(lower: &str) -> bool {
         "service unavailable",
         "bad gateway",
         "api error: 5",
+        "connecterror: [unavailable]",
+        "connecterror: [aborted]",
+        "connecterror: [deadline_exceeded]",
+        "retriableerror:",
+        "something went wrong communicating with the server",
     ];
     NEEDLES.iter().any(|needle| lower.contains(needle))
 }
@@ -347,6 +352,9 @@ mod tests {
         assert_eq!(kind_of(ProviderKind::ClaudeCode, "API Error: Unable to connect to API (ECONNREFUSED)"), network);
         assert_eq!(kind_of(ProviderKind::Codex, "stream disconnected before completion: error sending request for url"), network);
         assert_eq!(kind_of(ProviderKind::Cursor, "fetch failed: getaddrinfo ENOTFOUND api2.cursor.sh"), network);
+        assert_eq!(kind_of(ProviderKind::Cursor, "Error: ConnectError: [unavailable] transport closed"), network);
+        assert_eq!(kind_of(ProviderKind::Cursor, "Error: RetriableError: WritableIterable is closed"), network);
+        assert_eq!(kind_of(ProviderKind::Cursor, "Something went wrong communicating with the server. Please try again."), network);
         assert_eq!(kind_of(ProviderKind::Opencode, "Request timed out"), network);
         assert_eq!(kind_of(ProviderKind::Antigravity, "dns error: could not resolve host"), network);
         let problem = classify(ProviderKind::Codex, "connection reset by peer").unwrap();
