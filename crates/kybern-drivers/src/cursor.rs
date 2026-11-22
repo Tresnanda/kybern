@@ -17,7 +17,9 @@ pub use runtime::{
     setup_error, sign_out,
 };
 
-use std::path::PathBuf;
+use std::collections::{HashSet, VecDeque};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex as StdMutex};
 
 use async_trait::async_trait;
 use kybern_protocol::*;
@@ -141,8 +143,21 @@ impl AgentDriver for CursorDriver {
         }
         validate_mode(config.permission_mode)?;
         let tools = native_tools(config.native_tool_bridge.as_ref())?;
+        // The SDK has no system channel, so a new conversation carries the guide
+        // on its first ordinary prompt. A project Coordinator's lead instructions
+        // and a thread's project brief ride in the same block, since there is no
+        // system channel for them either. A resumed conversation that already
+        // holds it gets nothing: sending it on every respawn (each idle release)
+        // would pile up one more copy per resume, and what changed since then
+        // reaches it as provider-only updates. One that never received it (the
+        // daemon keeps track by session id) gets it once.
+        let guide = match (&config.resume_session_id, config.resume_lacks_instructions) {
+            (None, _) | (Some(_), true) => config.native_tool_bridge.as_ref().and_then(|bridge| bridge.provider_instructions()),
+            (Some(_), false) => None,
+        };
+        let delivery = Arc::new(StdMutex::new(DeliveryState::new(guide)));
         let context = ProbeContext { binary: config.binary.clone(), cwd: Some(config.cwd.clone()), env: config.env.into_iter().collect() };
-        let (connection, events) = Connection::spawn(&context)?;
+        let (connection, events) = Connection::spawn_with_delivery(&context, delivery.clone())?;
         let agent_id = config.resume_session_id.as_deref().map(sdk_id).transpose()?;
         let opened = connection
             .call(
@@ -170,27 +185,161 @@ impl AgentDriver for CursorDriver {
                 ..Default::default()
             }]))
             .await;
-        // The SDK has no system channel, so a new conversation carries the guide
-        // on its first ordinary prompt. A project Coordinator's lead instructions
-        // and a thread's project brief ride in the same block, since there is no
-        // system channel for them either. A resumed conversation that already
-        // holds it gets nothing: sending it on every respawn (each idle release)
-        // would pile up one more copy per resume, and what changed since then
-        // reaches it as provider-only updates. One that never received it (the
-        // daemon keeps track by session id) gets it once.
-        let guide = match (&config.resume_session_id, config.resume_lacks_instructions) {
-            (None, _) | (Some(_), true) => config.native_tool_bridge.as_ref().and_then(|bridge| bridge.provider_instructions()),
-            (Some(_), false) => None,
+        Ok(SpawnedSession {
+            session: Box::new(Session {
+                connection,
+                model: Mutex::new(config.model),
+                delivery,
+                pending_steers: StdMutex::new(HashSet::new()),
+            }),
+            events,
+        })
+    }
+}
+
+#[derive(Default)]
+struct DeliveryState {
+    /// Kybern's guide, until a turn that carries it checkpoints or completes.
+    guide: Option<String>,
+    /// Whether this session's guide was confirmed persisted in Cursor's conversation history.
+    guide_delivered: bool,
+    /// Raw user prompts from consecutive stopped runs that never saved a checkpoint.
+    interrupted_prompts: Vec<String>,
+    in_flight: Option<InFlightPrompt>,
+    /// Recent `steer_settled` outcomes, recorded as the host reports them so a
+    /// session torn down mid-turn can resolve steers whose events are still
+    /// buffered for the daemon. Bounded; read once by `take_settled_steer`.
+    settled_steers: VecDeque<(String, crate::SteerOutcome)>,
+}
+
+/// How many settled steer outcomes a session remembers.
+const SETTLED_STEERS_KEPT: usize = 32;
+
+struct InFlightPrompt {
+    guide: Option<String>,
+    prior_interrupted: Vec<String>,
+    /// Raw user text sent on this turn (never wrapped in `interrupted_followup`).
+    raw_prompt: String,
+}
+
+impl DeliveryState {
+    fn new(guide: Option<String>) -> Self {
+        Self { guide, guide_delivered: false, interrupted_prompts: Vec::new(), in_flight: None, settled_steers: VecDeque::new() }
+    }
+
+    fn record_settled_steers(&mut self, events: &[DriverEvent]) {
+        for event in events {
+            if let DriverEvent::SteerSettled { steer_id, outcome } = event {
+                if self.settled_steers.len() == SETTLED_STEERS_KEPT {
+                    self.settled_steers.pop_front();
+                }
+                self.settled_steers.push_back((steer_id.clone(), *outcome));
+            }
+        }
+    }
+
+    fn prepare(&mut self, text: &str) -> String {
+        // Slash commands (skills, /compress) must stay at the start of the prompt;
+        // the guide and any interrupted prompts wait for the next ordinary one.
+        if text.trim_start().starts_with('/') {
+            self.in_flight = None;
+            return text.to_owned();
+        }
+        let guide = self.guide.take();
+        let prior_interrupted = std::mem::take(&mut self.interrupted_prompts);
+        let prompt = if prior_interrupted.is_empty() { text.to_owned() } else { interrupted_followup(&prior_interrupted, text) };
+        let outbound = match &guide {
+            Some(guide) => with_guide(guide, &prompt),
+            None => prompt,
         };
-        Ok(SpawnedSession { session: Box::new(Session { connection, model: Mutex::new(config.model), guide: Mutex::new(guide) }), events })
+        self.in_flight = Some(InFlightPrompt { guide, prior_interrupted, raw_prompt: text.to_owned() });
+        outbound
+    }
+
+    fn apply_admission_failed(&mut self) {
+        let Some(flight) = self.in_flight.take() else { return };
+        if self.guide.is_none() {
+            self.guide = flight.guide;
+        }
+        if self.interrupted_prompts.is_empty() {
+            self.interrupted_prompts = flight.prior_interrupted;
+        }
+    }
+
+    fn apply_prewarm_cancelled(&mut self) {
+        let Some(flight) = self.in_flight.take() else { return };
+        if self.guide.is_none() {
+            self.guide = flight.guide;
+        }
+        if self.interrupted_prompts.is_empty() {
+            let mut carried = flight.prior_interrupted;
+            carried.push(flight.raw_prompt);
+            self.interrupted_prompts = carried;
+        }
+    }
+
+    fn apply_outcome(&mut self, outcome: stream::TurnOutcome) {
+        let Some(flight) = self.in_flight.take() else { return };
+        match outcome {
+            stream::TurnOutcome::Completed
+            | stream::TurnOutcome::Cancelled { checkpointed: stream::CheckpointState::Checkpointed }
+            | stream::TurnOutcome::Failed { checkpointed: stream::CheckpointState::Checkpointed } => {
+                if flight.guide.is_some() {
+                    self.guide_delivered = true;
+                }
+            }
+            stream::TurnOutcome::Cancelled { checkpointed: stream::CheckpointState::NotCheckpointed } => {
+                // Cursor keeps a run in conversation history only after its first
+                // checkpoint, so carry both the guide and the raw interrupted prompts forward.
+                if self.guide.is_none() {
+                    self.guide = flight.guide;
+                }
+                if self.interrupted_prompts.is_empty() {
+                    let mut carried = flight.prior_interrupted;
+                    carried.push(flight.raw_prompt);
+                    self.interrupted_prompts = carried;
+                }
+            }
+            stream::TurnOutcome::Failed { checkpointed: stream::CheckpointState::NotCheckpointed } => {
+                if self.guide.is_none() {
+                    self.guide = flight.guide;
+                }
+                if self.interrupted_prompts.is_empty() {
+                    self.interrupted_prompts = flight.prior_interrupted;
+                }
+            }
+            stream::TurnOutcome::Cancelled { checkpointed: stream::CheckpointState::Unknown }
+            | stream::TurnOutcome::Failed { checkpointed: stream::CheckpointState::Unknown } => {
+                // Checkpoint verification could not read the store: don't resend the prompt
+                // (it may already be in history), but offer the guide again and leave
+                // `guide_delivered` false so the daemon does not mark it confirmed.
+                if self.guide.is_none() {
+                    self.guide = flight.guide;
+                }
+            }
+        }
+    }
+}
+
+fn interrupted_followup(previous: &[String], next: &str) -> String {
+    match previous {
+        [single] => format!(
+            "Your previous turn was interrupted and is missing from your history. Some of its work may already be done. Its request was:\n\n{single}\n\nThe new message, which may continue or change that request:\n\n{next}"
+        ),
+        many => {
+            let list = many.iter().enumerate().map(|(i, text)| format!("{}. {text}", i + 1)).collect::<Vec<_>>().join("\n\n");
+            format!(
+                "Your previous turns were interrupted and are missing from your history. Some of their work may already be done. Their requests were:\n\n{list}\n\nThe new message, which may continue or change those requests:\n\n{next}"
+            )
+        }
     }
 }
 
 struct Session {
     connection: Connection,
     model: Mutex<Option<String>>,
-    /// Kybern's guide, until the first prompt that can carry it is sent.
-    guide: Mutex<Option<String>>,
+    delivery: Arc<StdMutex<DeliveryState>>,
+    pending_steers: StdMutex<HashSet<String>>,
 }
 
 const GUIDE_OPEN: &str = "<kybern_instructions>";
@@ -214,22 +363,57 @@ impl AgentSession for Session {
     async fn send_message(&self, message_id: &str, message: &UserMessage) -> Result<()> {
         let mut payload = sdk_message(message);
         let text = payload["text"].as_str().unwrap_or("").to_owned();
-        // Slash commands (skills, /compress) must stay at the start of the prompt;
-        // the guide waits for the next ordinary one.
-        let guide = if text.trim_start().starts_with('/') { None } else { self.guide.lock().await.take() };
-        if let Some(guide) = &guide {
-            payload["text"] = Value::String(with_guide(guide, &text));
-        }
+        let outbound = self.delivery.lock().unwrap_or_else(|poison| poison.into_inner()).prepare(&text);
+        payload["text"] = Value::String(outbound);
         match self.connection.call("send", json!({"messageId": message_id, "message": payload})).await {
-            Ok(_) => Ok(()),
-            Err(error) => {
-                // The agent never saw it; offer it again with the retry.
-                if guide.is_some() {
-                    *self.guide.lock().await = guide;
+            Ok(result) => {
+                if result["cancelled"].as_bool() == Some(true) {
+                    self.delivery.lock().unwrap_or_else(|poison| poison.into_inner()).apply_prewarm_cancelled();
                 }
+                Ok(())
+            }
+            Err(error) => {
+                // The agent never saw it; offer the guide and prior interrupted prompt again.
+                self.delivery.lock().unwrap_or_else(|poison| poison.into_inner()).apply_admission_failed();
                 Err(error)
             }
         }
+    }
+    async fn steer(&self, message_id: &str, message: &UserMessage) -> Result<()> {
+        let payload = sdk_message(message);
+        if payload["images"].as_array().is_some_and(|images| !images.is_empty()) {
+            // Cursor live steer does not accept image attachments; fall back so the
+            // daemon queues the message as a follow-up, which does carry images.
+            return Err(DriverError::SteerFallback);
+        }
+        let text = payload["text"].as_str().unwrap_or("");
+        if text.trim().is_empty() {
+            return Err(DriverError::Other(anyhow::anyhow!("Write a message before steering Cursor.")));
+        }
+        let result = self.connection.call("steer", json!({"steerId": message_id, "text": text})).await?;
+        match result["outcome"].as_str() {
+            Some("complete_delivered") => Ok(()),
+            Some("pending") => {
+                self.pending_steers.lock().unwrap_or_else(|poison| poison.into_inner()).insert(message_id.to_string());
+                Ok(())
+            }
+            Some("revert_to_followup") => Err(DriverError::SteerFallback),
+            other => {
+                tracing::warn!(outcome = ?other, "Cursor SDK returned an unrecognized steer outcome; falling back to follow-up");
+                Err(DriverError::SteerFallback)
+            }
+        }
+    }
+    fn steer_may_pend(&self) -> bool {
+        true
+    }
+    fn take_pending_steer(&self, message_id: &str) -> bool {
+        self.pending_steers.lock().unwrap_or_else(|poison| poison.into_inner()).remove(message_id)
+    }
+    fn take_settled_steer(&self, message_id: &str) -> Option<crate::SteerOutcome> {
+        let mut delivery = self.delivery.lock().unwrap_or_else(|poison| poison.into_inner());
+        let index = delivery.settled_steers.iter().position(|(id, _)| id == message_id)?;
+        delivery.settled_steers.remove(index).map(|(_, outcome)| outcome)
     }
     async fn compact(&self) -> Result<()> {
         self.send_message(&uuid::Uuid::new_v4().to_string(), &UserMessage::text("/compress")).await
@@ -260,17 +444,86 @@ impl AgentSession for Session {
     async fn close(&self) -> Result<()> {
         self.connection.close().await
     }
+    fn instructions_delivered(&self) -> Option<bool> {
+        Some(self.delivery.lock().unwrap_or_else(|poison| poison.into_inner()).guide_delivered)
+    }
+}
+
+const MAX_INLINE_SKILL_BYTES: u64 = 1_000_000;
+
+fn inline_user_only_skill(path: &str) -> Option<String> {
+    let file = Path::new(path);
+    if file.file_name().and_then(|name| name.to_str()) != Some("SKILL.md") {
+        return None;
+    }
+    if std::fs::metadata(file).ok()?.len() > MAX_INLINE_SKILL_BYTES {
+        return None;
+    }
+    let contents = std::fs::read_to_string(file).ok()?;
+    let (frontmatter, body) = split_yaml_frontmatter(&contents)?;
+    if !frontmatter_disables_model_invocation(frontmatter) {
+        return None;
+    }
+    Some(body.trim().to_string())
+}
+
+fn split_yaml_frontmatter(contents: &str) -> Option<(&str, &str)> {
+    let rest = contents.strip_prefix("---\r\n").or_else(|| contents.strip_prefix("---\n"))?;
+    let mut offset = 0;
+    for segment in rest.split_inclusive('\n') {
+        let line = segment.trim_end_matches(['\r', '\n']);
+        if line == "---" {
+            let frontmatter = rest[..offset].trim_end_matches(['\r', '\n']);
+            let body = &rest[offset + segment.len()..];
+            return Some((frontmatter, body));
+        }
+        offset += segment.len();
+    }
+    None
+}
+
+fn frontmatter_disables_model_invocation(frontmatter: &str) -> bool {
+    for raw_line in frontmatter.lines() {
+        let line = raw_line.trim_end_matches('\r');
+        // Top-level YAML keys have no leading indentation.
+        if line.starts_with([' ', '\t']) {
+            continue;
+        }
+        let Some((key, value)) = line.split_once(':') else { continue };
+        if key.trim() != "disable-model-invocation" {
+            continue;
+        }
+        let trimmed = value.trim();
+        let unquoted = if let Some(inner) = trimmed.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+            inner
+        } else if let Some(inner) = trimmed.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')) {
+            inner
+        } else {
+            trimmed.split('#').next().unwrap_or(trimmed).trim()
+        };
+        return matches!(unquoted.to_ascii_lowercase().as_str(), "true" | "yes" | "on" | "1");
+    }
+    false
 }
 
 fn sdk_message(message: &UserMessage) -> Value {
     let mut text = String::new();
     let mut images = Vec::new();
+    let mut inlined_names = HashSet::new();
+    let mut inlined_skills = Vec::new();
     for part in &message.parts {
         match part {
             ContentPart::Text { text: part } => text.push_str(part),
             ContentPart::FileMention { path } => text.push_str(&format!("@{path}")),
             ContentPart::ThreadReference { thread_id, title, .. } => text.push_str(&thread_reference_text(*thread_id, title)),
-            ContentPart::Skill { name, .. } => text.push_str(&format!("/{name}")),
+            ContentPart::Skill { name, path } => {
+                text.push_str(&format!("/{name}"));
+                if inlined_names.insert(name.clone())
+                    && let Some(body) = inline_user_only_skill(path)
+                {
+                    inlined_skills.push((name.clone(), body));
+                }
+            }
             ContentPart::Mention { name, .. } => text.push_str(&format!("@{name}")),
             ContentPart::Image { media_type, data } => images.push(json!({"data": data, "mimeType": media_type})),
             ContentPart::Attachment { name, .. } => text.push_str(&format!("[attached file: {name}]")),
@@ -280,6 +533,15 @@ fn sdk_message(message: &UserMessage) -> Value {
                     text.push_str(&flat);
                 }
             }
+        }
+    }
+    if !inlined_skills.is_empty() {
+        text.push_str("\n\nThe user invoked these skills. Follow their instructions:\n\n");
+        for (index, (name, body)) in inlined_skills.iter().enumerate() {
+            if index > 0 {
+                text.push_str("\n\n");
+            }
+            text.push_str(&format!("<skill name=\"{name}\">\n{body}\n</skill>"));
         }
     }
     json!({"text": text, "images": images})
@@ -409,6 +671,375 @@ for line in sys.stdin:
             ],
         };
         assert_eq!(sdk_message(&message), json!({"text":"/review", "images":[{"data":"base64", "mimeType":"image/png"}]}));
+    }
+
+    #[test]
+    fn user_only_skills_inline_their_body_while_normal_skills_stay_bare() {
+        let root = tempfile::tempdir().unwrap();
+        let user_only_dir = root.path().join("grill-me");
+        let normal_dir = root.path().join("review");
+        std::fs::create_dir_all(&user_only_dir).unwrap();
+        std::fs::create_dir_all(&normal_dir).unwrap();
+        let user_only = user_only_dir.join("SKILL.md");
+        let normal = normal_dir.join("SKILL.md");
+        std::fs::write(
+            &user_only,
+            "---\nname: grill-me\ndescription: Grill the plan.\ndisable-model-invocation: true\n---\n\nAsk one question at a time.\n",
+        )
+        .unwrap();
+        std::fs::write(&normal, "---\nname: review\ndescription: Review code.\n---\nCheck edge cases.\n").unwrap();
+
+        let message = UserMessage {
+            parts: vec![
+                ContentPart::Skill { name: "grill-me".into(), path: user_only.display().to_string() },
+                ContentPart::Text { text: " and ".into() },
+                ContentPart::Skill { name: "review".into(), path: normal.display().to_string() },
+                ContentPart::Text { text: " and again ".into() },
+                ContentPart::Skill { name: "grill-me".into(), path: user_only.display().to_string() },
+            ],
+        };
+        let text = sdk_message(&message)["text"].as_str().unwrap().to_owned();
+        assert!(
+            text.starts_with("/grill-me and /review and again /grill-me\n\nThe user invoked these skills. Follow their instructions:\n\n")
+        );
+        assert_eq!(text.matches("<skill name=\"grill-me\">").count(), 1);
+        assert!(text.contains("<skill name=\"grill-me\">\nAsk one question at a time.\n</skill>"));
+        assert!(!text.contains("disable-model-invocation"));
+        assert!(!text.contains("Check edge cases."));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stopped_turn_before_checkpoint_preserves_guide_and_prompt_while_checkpointed_turn_does_not() {
+        let root = tempfile::tempdir().unwrap();
+        let host = root.path().join("node-fixture");
+        let log = root.path().join("requests.jsonl");
+        kybern_protocol::process::write_executable(
+            &host,
+            r#"#!/usr/bin/env python3
+import json, sys
+for line in sys.stdin:
+    request = json.loads(line)
+    with open('requests.jsonl', 'a') as log:
+        log.write(json.dumps(request) + '\n')
+    op = request['type']
+    session = request['session']
+    if op == 'open':
+        print(json.dumps({'id': request['id'], 'result': {'agentId': 'agent-1'}}), flush=True)
+    elif op == 'send':
+        msg_id = request['messageId']
+        print(json.dumps({'id': request['id'], 'result': {'runId': msg_id}}), flush=True)
+        print(json.dumps({'session': session, 'type': 'run_started', 'runId': msg_id}), flush=True)
+        if msg_id == 'm1-uncheckpointed' or msg_id == 'm2-uncheckpointed':
+            print(json.dumps({'session': session, 'type': 'run_completed', 'runId': msg_id, 'result': {'status': 'cancelled', 'checkpointed': False}}), flush=True)
+        elif msg_id == 'm3-checkpointed':
+            print(json.dumps({'session': session, 'type': 'run_completed', 'runId': msg_id, 'result': {'status': 'cancelled', 'checkpointed': True}}), flush=True)
+        else:
+            print(json.dumps({'session': session, 'type': 'run_completed', 'runId': msg_id, 'result': {'status': 'finished', 'checkpointed': True}}), flush=True)
+    elif op == 'close':
+        print(json.dumps({'id': request['id'], 'result': {}}), flush=True)
+        break
+"#,
+        )
+        .unwrap();
+        let config = SessionConfig {
+            cwd: root.path().into(),
+            model: None,
+            effort: None,
+            permission_mode: PermissionMode::FullAccess,
+            native_tool_bridge: Some(NativeToolBridge {
+                server_name: "kybern".into(),
+                endpoint: Some("http://127.0.0.1/native-tools/mcp".into()),
+                authorization: Some("fixture-cap".into()),
+                coordinator_instructions: None,
+                guide: Some("GUIDE TEXT".into()),
+                tools: vec![],
+                restrictions: Default::default(),
+            }),
+            resume_session_id: None,
+            resume_lacks_instructions: false,
+            fork: false,
+            rewind: None,
+            binary: None,
+            env: std::collections::HashMap::from([
+                ("KYBERN_CURSOR_NODE".into(), host.display().to_string()),
+                ("KYBERN_CURSOR_SDK_DIR".into(), root.path().display().to_string()),
+            ]),
+            compaction: Default::default(),
+        };
+        let mut spawned = CursorDriver.spawn(config).await.unwrap();
+        async fn wait_turn(events: &mut tokio::sync::mpsc::Receiver<DriverEvent>) {
+            while let Some(event) = events.recv().await {
+                if matches!(event, DriverEvent::TurnCompleted { .. } | DriverEvent::TurnFailed { .. }) {
+                    return;
+                }
+            }
+            panic!("event stream closed before turn finished");
+        }
+
+        // Turn 1: cancelled before checkpoint -> neither guide nor prompt reached history.
+        assert_eq!(spawned.session.instructions_delivered(), Some(false));
+        spawned.session.send_message("m1-uncheckpointed", &UserMessage::text("First task")).await.unwrap();
+        wait_turn(&mut spawned.events).await;
+        assert_eq!(spawned.session.instructions_delivered(), Some(false));
+        // Turn 2: also cancelled before checkpoint -> carries guide + First task, then keeps both flat (never nested).
+        spawned.session.send_message("m2-uncheckpointed", &UserMessage::text("Second task")).await.unwrap();
+        wait_turn(&mut spawned.events).await;
+        assert_eq!(spawned.session.instructions_delivered(), Some(false));
+        // Turn 3: carries guide + flat list of First & Second tasks, then cancels AFTER checkpoint.
+        spawned.session.send_message("m3-checkpointed", &UserMessage::text("Refined task")).await.unwrap();
+        wait_turn(&mut spawned.events).await;
+        assert_eq!(spawned.session.instructions_delivered(), Some(true));
+        // Turn 4: since turn 3 checkpointed, neither the guide nor prior prompts should be repeated.
+        spawned.session.send_message("m4-normal", &UserMessage::text("Fourth task")).await.unwrap();
+        wait_turn(&mut spawned.events).await;
+        assert_eq!(spawned.session.instructions_delivered(), Some(true));
+        spawned.session.close().await.unwrap();
+
+        let requests: Vec<Value> = std::fs::read_to_string(log).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+        let sends: Vec<&str> =
+            requests.iter().filter(|req| req["type"] == "send").map(|req| req["message"]["text"].as_str().unwrap()).collect();
+        assert_eq!(sends.len(), 4);
+        assert_eq!(sends[0], with_guide("GUIDE TEXT", "First task"));
+        assert_eq!(sends[1], with_guide("GUIDE TEXT", &interrupted_followup(&["First task".into()], "Second task")));
+        let third_expected = with_guide("GUIDE TEXT", &interrupted_followup(&["First task".into(), "Second task".into()], "Refined task"));
+        assert_eq!(sends[2], third_expected);
+        assert_eq!(sends[2].matches("missing from your history").count(), 1, "interrupted wrappers must never nest: {}", sends[2]);
+        assert_eq!(sends[3], "Fourth task");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn steer_forwards_text_and_handles_ack_pending_fallback_and_blank_error() {
+        let root = tempfile::tempdir().unwrap();
+        let host = root.path().join("node-fixture");
+        let log = root.path().join("requests.jsonl");
+        kybern_protocol::process::write_executable(
+            &host,
+            r#"#!/usr/bin/env python3
+import json, sys
+for line in sys.stdin:
+    request = json.loads(line)
+    with open('requests.jsonl', 'a') as log:
+        log.write(json.dumps(request) + '\n')
+    op = request['type']
+    if op == 'open':
+        print(json.dumps({'id': request['id'], 'result': {'agentId': 'agent-steer'}}), flush=True)
+    elif op == 'send':
+        print(json.dumps({'id': request['id'], 'result': {'runId': 'run-1'}}), flush=True)
+        print(json.dumps({'type': 'run_started', 'runId': 'run-1', 'messageId': request['messageId']}), flush=True)
+    elif op == 'steer':
+        text = request.get('text', '')
+        steer_id = request.get('steerId', '')
+        if 'pending-delivered' in text:
+            print(json.dumps({'id': request['id'], 'result': {'outcome': 'pending', 'steerId': steer_id}}), flush=True)
+            print(json.dumps({'type': 'steer_settled', 'steerId': steer_id, 'outcome': 'complete_delivered'}), flush=True)
+        elif 'pending-revert' in text:
+            print(json.dumps({'id': request['id'], 'result': {'outcome': 'pending', 'steerId': steer_id}}), flush=True)
+            print(json.dumps({'type': 'steer_settled', 'steerId': steer_id, 'outcome': 'revert_to_followup'}), flush=True)
+            print(json.dumps({'type': 'run_completed', 'result': {'status': 'finished', 'checkpointed': True}}), flush=True)
+        elif 'decline' in text:
+            print(json.dumps({'id': request['id'], 'result': {'outcome': 'revert_to_followup'}}), flush=True)
+        elif 'interrupted' in text:
+            print(json.dumps({'id': request['id'], 'result': {'outcome': 'revert_to_followup', 'interrupted': True}}), flush=True)
+        elif 'unknown' in text:
+            print(json.dumps({'id': request['id'], 'result': {'outcome': 'future_state'}}), flush=True)
+        else:
+            print(json.dumps({'id': request['id'], 'result': {'outcome': 'complete_delivered'}}), flush=True)
+    elif op == 'close':
+        print(json.dumps({'id': request['id'], 'result': {}}), flush=True)
+        break
+"#,
+        )
+        .unwrap();
+        let config = SessionConfig {
+            cwd: root.path().into(),
+            model: None,
+            effort: None,
+            permission_mode: PermissionMode::FullAccess,
+            native_tool_bridge: None,
+            resume_session_id: None,
+            resume_lacks_instructions: false,
+            fork: false,
+            rewind: None,
+            binary: None,
+            env: std::collections::HashMap::from([
+                ("KYBERN_CURSOR_NODE".into(), host.display().to_string()),
+                ("KYBERN_CURSOR_SDK_DIR".into(), root.path().display().to_string()),
+            ]),
+            compaction: Default::default(),
+        };
+        let mut spawned = CursorDriver.spawn(config).await.unwrap();
+        assert!(spawned.session.steer_may_pend());
+        spawned.session.send_message("m1", &UserMessage::text("Work")).await.unwrap();
+        spawned.session.steer("s1", &UserMessage::text("Focus on tests")).await.unwrap();
+        assert!(!spawned.session.take_pending_steer("s1"));
+        assert!(matches!(spawned.session.steer("s2", &UserMessage::text("please decline")).await, Err(DriverError::SteerFallback)));
+        assert!(matches!(spawned.session.steer("s3", &UserMessage::text("was interrupted")).await, Err(DriverError::SteerFallback)));
+        assert!(matches!(spawned.session.steer("s3b", &UserMessage::text("unknown outcome")).await, Err(DriverError::SteerFallback)));
+        // Steer with images falls back to a follow-up instead of showing an unsupported error.
+        let with_image = UserMessage {
+            parts: vec![
+                ContentPart::Text { text: "look".into() },
+                ContentPart::Image { media_type: "image/png".into(), data: "abc".into() },
+            ],
+        };
+        assert!(matches!(spawned.session.steer("s4", &with_image).await, Err(DriverError::SteerFallback)));
+        // Blank steer returns a plain actionable sentence without a "protocol error:" prefix.
+        let blank_err = spawned.session.steer("s5", &UserMessage::text("   ")).await.unwrap_err();
+        assert_eq!(blank_err.to_string(), "Write a message before steering Cursor.");
+
+        // Pending steers return Ok(()), register as pending, and emit SteerSettled before TurnCompleted.
+        spawned.session.steer("s-deliv", &UserMessage::text("pending-delivered")).await.unwrap();
+        assert!(spawned.session.take_pending_steer("s-deliv"));
+        assert!(!spawned.session.take_pending_steer("s-deliv"), "pending flag is consumed once");
+        spawned.session.steer("s-rev", &UserMessage::text("pending-revert")).await.unwrap();
+        assert!(spawned.session.take_pending_steer("s-rev"));
+
+        let mut observed = Vec::new();
+        while let Some(event) = spawned.events.recv().await {
+            let done = matches!(event, DriverEvent::TurnCompleted { .. });
+            observed.push(event);
+            if done {
+                break;
+            }
+        }
+        let pos_deliv = observed
+            .iter()
+            .position(
+                |e| matches!(e, DriverEvent::SteerSettled { steer_id, outcome: crate::SteerOutcome::Delivered } if steer_id == "s-deliv"),
+            )
+            .expect("expected SteerSettled(Delivered)");
+        let pos_rev = observed
+            .iter()
+            .position(|e| matches!(e, DriverEvent::SteerSettled { steer_id, outcome: crate::SteerOutcome::RevertToFollowup } if steer_id == "s-rev"))
+            .expect("expected SteerSettled(RevertToFollowup)");
+        let pos_done = observed.iter().position(|e| matches!(e, DriverEvent::TurnCompleted { .. })).expect("expected TurnCompleted");
+        assert!(pos_deliv < pos_rev && pos_rev < pos_done);
+        // The session also remembers each settled outcome once, for a daemon that
+        // tears the session down before it reads the buffered events.
+        assert_eq!(spawned.session.take_settled_steer("s-deliv"), Some(crate::SteerOutcome::Delivered));
+        assert_eq!(spawned.session.take_settled_steer("s-deliv"), None, "settled outcome is consumed once");
+        assert_eq!(spawned.session.take_settled_steer("s-rev"), Some(crate::SteerOutcome::RevertToFollowup));
+        assert_eq!(spawned.session.take_settled_steer("s1"), None, "a steer that never pended has no settled outcome");
+        spawned.session.close().await.unwrap();
+
+        let requests: Vec<Value> = std::fs::read_to_string(log).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+        let steers: Vec<(&str, &str)> = requests
+            .iter()
+            .filter(|req| req["type"] == "steer")
+            .map(|req| (req["steerId"].as_str().unwrap(), req["text"].as_str().unwrap()))
+            .collect();
+        assert_eq!(
+            steers,
+            vec![
+                ("s1", "Focus on tests"),
+                ("s2", "please decline"),
+                ("s3", "was interrupted"),
+                ("s3b", "unknown outcome"),
+                ("s-deliv", "pending-delivered"),
+                ("s-rev", "pending-revert"),
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unknown_checkpoint_offers_guide_again_without_resending_prompt() {
+        let root = tempfile::tempdir().unwrap();
+        let host = root.path().join("node-fixture");
+        let log = root.path().join("requests.jsonl");
+        kybern_protocol::process::write_executable(
+            &host,
+            r#"#!/usr/bin/env python3
+import json, sys
+for line in sys.stdin:
+    request = json.loads(line)
+    with open('requests.jsonl', 'a') as log:
+        log.write(json.dumps(request) + '\n')
+    op = request['type']
+    if op == 'open':
+        print(json.dumps({'id': request['id'], 'result': {'agentId': 'agent-unknown'}}), flush=True)
+    elif op == 'send':
+        mid = request['messageId']
+        print(json.dumps({'id': request['id'], 'result': {'runId': mid}}), flush=True)
+        print(json.dumps({'type': 'run_started', 'runId': mid, 'messageId': mid}), flush=True)
+        if mid == 'm1-unknown-cancel':
+            print(json.dumps({'type': 'run_completed', 'result': {'status': 'cancelled', 'checkpointed': 'unknown'}}), flush=True)
+        elif mid == 'm2-unknown-fail':
+            print(json.dumps({'type': 'run_failed', 'runId': mid, 'error': 'boom', 'checkpointed': 'unknown'}), flush=True)
+        else:
+            print(json.dumps({'type': 'run_completed', 'result': {'status': 'finished', 'checkpointed': True}}), flush=True)
+    elif op == 'close':
+        print(json.dumps({'id': request['id'], 'result': {}}), flush=True)
+        break
+"#,
+        )
+        .unwrap();
+        let config = SessionConfig {
+            cwd: root.path().into(),
+            model: None,
+            effort: None,
+            permission_mode: PermissionMode::FullAccess,
+            native_tool_bridge: Some(NativeToolBridge {
+                server_name: "kybern".into(),
+                endpoint: Some("http://127.0.0.1/native-tools/mcp".into()),
+                authorization: Some("fixture-cap".into()),
+                coordinator_instructions: None,
+                guide: Some("GUIDE TEXT".into()),
+                tools: vec![],
+                restrictions: Default::default(),
+            }),
+            resume_session_id: None,
+            resume_lacks_instructions: false,
+            fork: false,
+            rewind: None,
+            binary: None,
+            env: std::collections::HashMap::from([
+                ("KYBERN_CURSOR_NODE".into(), host.display().to_string()),
+                ("KYBERN_CURSOR_SDK_DIR".into(), root.path().display().to_string()),
+            ]),
+            compaction: Default::default(),
+        };
+        let mut spawned = CursorDriver.spawn(config).await.unwrap();
+        async fn wait_turn(events: &mut tokio::sync::mpsc::Receiver<DriverEvent>) {
+            while let Some(event) = events.recv().await {
+                if matches!(event, DriverEvent::TurnCompleted { .. } | DriverEvent::TurnFailed { .. }) {
+                    return;
+                }
+            }
+            panic!("event stream closed before turn finished");
+        }
+
+        assert_eq!(spawned.session.instructions_delivered(), Some(false));
+        spawned.session.send_message("m1-unknown-cancel", &UserMessage::text("First task")).await.unwrap();
+        wait_turn(&mut spawned.events).await;
+        assert_eq!(spawned.session.instructions_delivered(), Some(false));
+
+        spawned.session.send_message("m2-unknown-fail", &UserMessage::text("Second task")).await.unwrap();
+        wait_turn(&mut spawned.events).await;
+        assert_eq!(spawned.session.instructions_delivered(), Some(false));
+
+        spawned.session.send_message("m3-complete", &UserMessage::text("Third task")).await.unwrap();
+        wait_turn(&mut spawned.events).await;
+        assert_eq!(spawned.session.instructions_delivered(), Some(true));
+
+        spawned.session.send_message("m4-after", &UserMessage::text("Fourth task")).await.unwrap();
+        wait_turn(&mut spawned.events).await;
+        assert_eq!(spawned.session.instructions_delivered(), Some(true));
+        spawned.session.close().await.unwrap();
+
+        let requests: Vec<Value> = std::fs::read_to_string(log).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+        let sends: Vec<&str> =
+            requests.iter().filter(|req| req["type"] == "send").map(|req| req["message"]["text"].as_str().unwrap()).collect();
+        assert_eq!(sends.len(), 4);
+        assert_eq!(sends[0], with_guide("GUIDE TEXT", "First task"));
+        // Guide is offered again on unknown checkpoint, without resending "First task".
+        assert_eq!(sends[1], with_guide("GUIDE TEXT", "Second task"));
+        assert!(!sends[1].contains("First task"));
+        assert_eq!(sends[2], with_guide("GUIDE TEXT", "Third task"));
+        assert!(!sends[2].contains("Second task"));
+        assert_eq!(sends[3], "Fourth task");
     }
 }
 

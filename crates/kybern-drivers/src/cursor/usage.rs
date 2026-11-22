@@ -147,26 +147,43 @@ pub async fn read_account_usage(environment: &BTreeMap<String, String>) -> Optio
     (!limits.is_empty()).then_some(CursorAccountUsage { limits, plan })
 }
 
-/// Map a `GetCurrentPeriodUsage` response to the two meters Cursor shows:
-/// Auto + Composer and API, both resetting at the end of the billing cycle.
-/// Older plans without the split report one included-spend meter.
+/// Map a `GetCurrentPeriodUsage` response to the meters Cursor shows:
+/// Auto + Composer, API, and Overall (`totalPercentUsed`), all resetting at the
+/// end of the billing cycle and clamped to 0..=100. Unified plans report their
+/// single allowance as both `totalPercentUsed` and `autoPercentUsed` at the same
+/// value, so keep one meter there. Older plans without percentages fall back to
+/// included spend.
 fn parse_period_usage(value: &Value) -> Vec<UsageLimit> {
     let millis = |key: &str| value.get(key).and_then(|v| v.as_str().and_then(|s| s.parse::<i64>().ok()).or_else(|| v.as_i64()));
     let (start, end) = (millis("billingCycleStart"), millis("billingCycleEnd"));
     let window_minutes = start.zip(end).and_then(|(start, end)| u64::try_from((end - start) / 60_000).ok()).filter(|&minutes| minutes > 0);
     let resets_at = end.map(|ms| ms / 1000);
     let plan = &value["planUsage"];
-    let percent = |key: &str| plan.get(key).and_then(Value::as_f64).filter(|value| value.is_finite());
-    let limit = |name: &str, used_percent: f64| UsageLimit { name: name.into(), used_percent, window_minutes, resets_at };
+    let number = |key: &str| plan.get(key).and_then(Value::as_f64).filter(|value| value.is_finite());
+    let percent = |key: &str| number(key).map(|value| value.clamp(0.0, 100.0));
+    let limit = |name: &str, used_percent: f64| UsageLimit {
+        name: name.into(),
+        used_percent: used_percent.clamp(0.0, 100.0),
+        window_minutes,
+        resets_at,
+    };
+    let auto = percent("autoPercentUsed");
+    let api = percent("apiPercentUsed");
+    let total = percent("totalPercentUsed");
     let mut limits = Vec::new();
-    if let Some(auto) = percent("autoPercentUsed") {
+    if let Some(auto) = auto {
         limits.push(limit("Auto + Composer", auto));
     }
-    if let Some(api) = percent("apiPercentUsed") {
+    if let Some(api) = api {
         limits.push(limit("API", api));
     }
+    if let Some(total) = total
+        && !(api.is_none() && auto == Some(total))
+    {
+        limits.push(limit("Overall", total));
+    }
     if limits.is_empty()
-        && let (Some(spent), Some(cap)) = (percent("totalSpend"), percent("limit"))
+        && let (Some(spent), Some(cap)) = (number("totalSpend"), number("limit"))
         && cap > 0.0
     {
         limits.push(limit("Included usage", spent / cap * 100.0));
@@ -201,5 +218,35 @@ mod tests {
         assert_eq!(limits[0].name, "Included usage");
         assert!((limits[0].used_percent - 25.0).abs() < 1e-9);
         assert!(parse_period_usage(&json!({})).is_empty());
+    }
+
+    #[test]
+    fn period_usage_supports_total_percent_dedups_unified_plans_and_clamps_bounds() {
+        // Unified plan: totalPercentUsed equals autoPercentUsed with no API pool -> one meter.
+        let unified = parse_period_usage(&json!({
+            "planUsage": { "totalPercentUsed": 1.77, "autoPercentUsed": 1.77 }
+        }));
+        assert_eq!(unified.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), vec!["Auto + Composer"]);
+        assert!((unified[0].used_percent - 1.77).abs() < 1e-9);
+
+        // Total-only plan uses totalPercentUsed rather than falling back to totalSpend/limit.
+        let total_only = parse_period_usage(&json!({
+            "planUsage": { "totalPercentUsed": 42.5, "totalSpend": 9000, "limit": 7000 }
+        }));
+        assert_eq!(total_only.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), vec!["Overall"]);
+        assert!((total_only[0].used_percent - 42.5).abs() < 1e-9);
+
+        // API + total keeps both meters, and out-of-range percentages clamp to 0..=100.
+        let clamped = parse_period_usage(&json!({
+            "planUsage": { "autoPercentUsed": -5.0, "apiPercentUsed": 140.0, "totalPercentUsed": 125.0 }
+        }));
+        assert_eq!(clamped.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), vec!["Auto + Composer", "API", "Overall"]);
+        assert_eq!(clamped[0].used_percent, 0.0);
+        assert_eq!(clamped[1].used_percent, 100.0);
+        assert_eq!(clamped[2].used_percent, 100.0);
+
+        // Legacy spend fallback also clamps above 100%.
+        let overspent = parse_period_usage(&json!({ "planUsage": { "totalSpend": 9000, "limit": 7000 } }));
+        assert_eq!(overspent[0].used_percent, 100.0);
     }
 }

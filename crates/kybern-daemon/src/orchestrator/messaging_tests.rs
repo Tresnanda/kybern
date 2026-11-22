@@ -814,13 +814,17 @@ async fn cursor_acp_edits_are_recorded_when_the_call_completes() {
     let info = fixture.store.thread_get(child.id).unwrap().unwrap().delegation.unwrap();
     assert_eq!(info.files_touched, vec!["src/lib.rs".to_string()]);
     assert_eq!(info.conflicts.len(), 1, "the sibling owns src/**");
-    // Cursor cannot take a message mid-turn, so the warning waits in its queue.
+    // Cursor takes the warning mid-turn now; a session that can't steer queues it instead.
+    let warning_in = |parts: &[ContentPart]| match parts {
+        [ContentPart::ThreadMessage { purpose: ThreadMessagePurpose::Warning, from_thread_id: None, body, .. }] => Some(body.clone()),
+        _ => None,
+    };
     let warning = eventually(|| async {
-        let queued = fixture.store.queue_list(Some(child.id)).unwrap();
-        queued.into_iter().find_map(|item| match item.message.parts.as_slice() {
-            [ContentPart::ThreadMessage { purpose: ThreadMessagePurpose::Warning, from_thread_id: None, body, .. }] => Some(body.clone()),
+        let steered = fixture.store.events_for_thread(child.id).unwrap().into_iter().find_map(|event| match event.payload {
+            EventPayload::MessageSteered { message, .. } => warning_in(&message.parts),
             _ => None,
-        })
+        });
+        steered.or_else(|| fixture.store.queue_list(Some(child.id)).unwrap().into_iter().find_map(|item| warning_in(&item.message.parts)))
     })
     .await;
     assert!(warning.contains("\"src/lib.rs\" is owned by \"Owner\""), "{warning}");

@@ -357,6 +357,7 @@ impl Orchestrator {
                 && harness_supports_steer(recipient.provider.kind)
             {
                 match self.steer_from(queued.clone(), super::SteerSource::Kybern).await {
+                    Ok(sent) if sent.queued => return Ok(ThreadMessageState::Queued),
                     Ok(sent) => {
                         if record.purpose == ThreadMessagePurpose::Question {
                             self.messaging_remember_consumed(recipient.id, sent.turn_id, record.id);
@@ -396,6 +397,24 @@ impl Orchestrator {
                 entries.remove(0);
             }
             entries.push((turn_id, question_id));
+        }
+    }
+
+    /// A steer that returned as taken (`Steered`) reverted to a follow-up. A thread
+    /// message it carried is queued again and owes no answer from the turn it was
+    /// steered into; the turn that starts with it takes the question instead.
+    pub(super) fn messaging_steer_reverted(&self, thread_id: ThreadId, turn_id: TurnId, message_id: MessageId) {
+        {
+            let mut consumed = self.inner.messaging.consumed.lock().unwrap_or_else(|error| error.into_inner());
+            if let Some(entries) = consumed.get_mut(&thread_id) {
+                entries.retain(|entry| *entry != (turn_id, message_id));
+                if entries.is_empty() {
+                    consumed.remove(&thread_id);
+                }
+            }
+        }
+        if let Err(error) = self.message_transition(message_id, &[ThreadMessageState::Steered], ThreadMessageState::Queued) {
+            tracing::warn!(%message_id, %error, "could not mark a reverted steered thread message queued");
         }
     }
 
@@ -505,14 +524,15 @@ impl Orchestrator {
             Ok(Some(record)) if record.to_thread_id == thread_id => record,
             _ => return,
         };
-        if matches!(record.state, ThreadMessageState::Queued | ThreadMessageState::Held)
-            && let Err(error) =
-                self.message_transition(record.id, &[ThreadMessageState::Queued, ThreadMessageState::Held], ThreadMessageState::Delivered)
+        // A steer that reverted to a follow-up can still read `Steered` here.
+        let waiting = [ThreadMessageState::Queued, ThreadMessageState::Held, ThreadMessageState::Steered];
+        if waiting.contains(&record.state)
+            && let Err(error) = self.message_transition(record.id, &waiting, ThreadMessageState::Delivered)
         {
             tracing::warn!(%message_id, %error, "could not mark a thread message delivered");
         }
         if record.purpose == ThreadMessagePurpose::Question
-            && matches!(record.state, ThreadMessageState::Queued | ThreadMessageState::Delivered | ThreadMessageState::Held)
+            && (waiting.contains(&record.state) || record.state == ThreadMessageState::Delivered)
         {
             self.messaging_remember_consumed(thread_id, turn_id, record.id);
         }

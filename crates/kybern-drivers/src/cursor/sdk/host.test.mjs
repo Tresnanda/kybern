@@ -1,27 +1,63 @@
 import assert from "node:assert/strict";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
-import { createHost, createAccountHost, kybernTools, toolResult, nativeCatalog, modelCatalog, modelSelection, runtimePolicy, errorText, modelError } from "./host.mjs";
+import {
+  createHost,
+  createAccountHost,
+  kybernTools,
+  toolResult,
+  nativeCatalog,
+  modelCatalog,
+  modelSelection,
+  runtimePolicy,
+  errorText,
+  modelError,
+  handleUnhandledRejection,
+  configureAgentTransport,
+  STEER_TIMEOUT_MS,
+  STEER_SETTLE_TIMEOUT_MS,
+} from "./host.mjs";
 
-function fixture({ duringStart, failStart, warmGate, fetch } = {}) {
+function fixture({ duringStart, failStart, warmGate, fetch, platform, checkpoint, runRecord, agentRecord, runSteer, steerTimeoutMs, steerSettleTimeoutMs, checkpointSettleMs, checkpointPersistChain } = {}) {
   const terminal = Promise.withResolvers();
   const started = Promise.withResolvers();
   const events = [];
   const calls = [];
   let callback;
   let sends = 0;
-  const run = { id: "r1", wait: () => terminal.promise, cancel: async () => {
-    calls.push(["cancel"]); terminal.resolve({ id: "r1", status: "cancelled" });
-  } };
-  const agent = { summarize: async () => { calls.push(["summarize"]); return run; }, agentId: "a1", close: () => calls.push(["close"]), send: async (message, options) => {
-    callback = options.onDelta;
-    calls.push(["send", message, options]);
-    sends++;
-    if (failStart && sends === 1) throw new Error("Agent already has active run");
-    callback({ update: { type: "text-delta", text: "before start" } });
-    started.resolve();
-    if (duringStart) await duringStart;
-    return run;
-  } };
+  const run = {
+    id: "r1",
+    wait: () => terminal.promise,
+    cancel: async () => {
+      calls.push(["cancel"]);
+      terminal.resolve({ id: "r1", status: "cancelled" });
+    },
+    ...(runSteer !== undefined ? { steer: runSteer } : {}),
+  };
+  const agent = {
+    summarize: async () => { calls.push(["summarize"]); return run; },
+    agentId: "a1",
+    close: () => calls.push(["close"]),
+    ...(checkpointPersistChain !== undefined ? { checkpointPersistChain } : {}),
+    send: async (message, options) => {
+      callback = options.onDelta;
+      calls.push(["send", message, options]);
+      sends++;
+      if (failStart && sends === 1) throw new Error("Agent already has active run");
+      callback({ update: { type: "text-delta", text: "before start" } });
+      started.resolve();
+      if (duringStart) await duringStart;
+      return run;
+    },
+  };
+  const storeObj = (runRecord !== undefined || agentRecord !== undefined)
+    ? {
+        ...(runRecord !== undefined ? { getRun: async (agentId, runId) => (typeof runRecord === "function" ? runRecord(agentId, runId) : runRecord) } : {}),
+        ...(agentRecord !== undefined ? { getAgent: async (agentId) => (typeof agentRecord === "function" ? agentRecord(agentId) : agentRecord) } : {}),
+      }
+    : undefined;
   const sdk = { Agent: {
     create: async (options) => { calls.push(["create", options]); return agent; },
     resume: async (id, options) => { calls.push(["resume", id, options]); return agent; },
@@ -35,16 +71,55 @@ function fixture({ duringStart, failStart, warmGate, fetch } = {}) {
     createAgent: async (options) => sdk.Agent.create(options),
     resumeAgent: async (id,options) => sdk.Agent.resume(id,options),
     prewarmLocalWorkspace: async (options) => { calls.push(["prime", options]); await warmGate; return () => {}; },
+    ...(checkpoint !== undefined ? { checkpointStore: { loadLatest: async () => (typeof checkpoint === "function" ? checkpoint() : checkpoint) } } : {}),
+    ...(storeObj ? { store: storeObj } : {}),
   }) };
-  const host = createHost(sdk, async (event) => { await Promise.resolve(); events.push(event); }, { apiKey: "secret", fetch });
-  return { host, events, calls, terminal, started, delta: (update) => callback({ update }) };
+  const waiters = [];
+  const notify = (event) => {
+    for (let i = waiters.length - 1; i >= 0; i--) {
+      if (waiters[i].pred(event)) {
+        const [{ resolve }] = waiters.splice(i, 1);
+        resolve(event);
+      }
+    }
+  };
+  const waitForEvent = (pred, timeoutMs = 2000) => {
+    const existing = events.find(pred);
+    if (existing) return Promise.resolve(existing);
+    return new Promise((resolve, reject) => {
+      const waiter = {
+        pred,
+        resolve: (event) => {
+          clearTimeout(timer);
+          resolve(event);
+        },
+      };
+      const timer = setTimeout(() => {
+        const index = waiters.indexOf(waiter);
+        if (index >= 0) waiters.splice(index, 1);
+        reject(new Error(`timed out waiting for event after ${timeoutMs} ms`));
+      }, timeoutMs);
+      waiters.push(waiter);
+    });
+  };
+  const host = createHost(sdk, async (event) => { await Promise.resolve(); events.push(event); notify(event); }, {
+    apiKey: "secret",
+    fetch,
+    ...(platform ? { platform } : {}),
+    ...(steerTimeoutMs !== undefined ? { steerTimeoutMs } : {}),
+    ...(steerSettleTimeoutMs !== undefined ? { steerSettleTimeoutMs } : {}),
+    ...(checkpointSettleMs !== undefined ? { checkpointSettleMs } : {}),
+  });
+  return { host, agent, events, calls, terminal, started, waitForEvent, delta: (update) => callback({ update }) };
 }
 const open = (host, extra = {}) => host.request({ type: "open", cwd: "/repo", mode: "auto", model: "model", ...extra });
 const tick = () => new Promise((done) => setImmediate(done));
 
 test("sandbox approval policy is explicit; model variants retain parameters", () => {
-  assert.deepEqual(runtimePolicy("auto"), { sandboxOptions: { enabled: true }, autoReview: true });
-  assert.deepEqual(runtimePolicy("full-access"), { sandboxOptions: { enabled: false }, autoReview: false });
+  assert.deepEqual(runtimePolicy("auto", "linux"), { sandboxOptions: { enabled: true }, autoReview: true });
+  assert.deepEqual(runtimePolicy("auto", "darwin"), { sandboxOptions: { enabled: true }, autoReview: true });
+  assert.deepEqual(runtimePolicy("auto", "win32"), { sandboxOptions: { enabled: false }, autoReview: true });
+  assert.deepEqual(runtimePolicy("full-access", "linux"), { sandboxOptions: { enabled: false }, autoReview: false });
   assert.throws(() => runtimePolicy("supervised"), /no interactive approvals/);
   assert.throws(() => runtimePolicy("accept-edits"));
   const models = modelCatalog([{ id: "m", variants: [{ displayName: "Thinking", params: [{ id: "thinking", value: "on" }] }] }]);
@@ -431,4 +506,388 @@ test("compress uses the SDK summarize run", async () => {
   await tick();
   assert.deepEqual(f.events.map(e=>e.type), ["run_started","run_completed"]);
   await f.host.close();
+});
+
+test("unhandled rejection filter ignores only the three known harmless SDK rejections", () => {
+  const runGuard = (reason) => {
+    const logs = [];
+    const exits = [];
+    handleUnhandledRejection(reason, { log: (m) => logs.push(m), exit: (code) => exits.push(code) });
+    return { logs, exits };
+  };
+  // 1. Minified WriteIterableClosedError.
+  class o extends Error {
+    name = "WriteIterableClosedError";
+  }
+  assert.deepEqual(runGuard(new o("WritableIterable is closed")).exits, []);
+
+  // 2. ConnectError wrapping ERR_STREAM_WRITE_AFTER_END.
+  const writeAfterEnd = Object.assign(
+    new Error("[aborted] write after end", { cause: Object.assign(new Error("write after end"), { code: "ERR_STREAM_WRITE_AFTER_END" }) }),
+    { name: "ConnectError", code: 10 },
+  );
+  assert.deepEqual(runGuard(writeAfterEnd).exits, []);
+
+  // 3. Stall-detector AbortError from onStall.
+  const stall = new DOMException("This operation was aborted", "AbortError");
+  stall.stack = "AbortError: This operation was aborted\n    at Is.onStall (689.js:1:111536)";
+  assert.deepEqual(runGuard(stall).exits, []);
+
+  // Everything else must still crash the host so pool.rs restarts it.
+  assert.deepEqual(runGuard(new Error("WritableIterable is closed")).exits, [1]);
+  const otherConnect = Object.assign(
+    new Error("[aborted] socket hang up", { cause: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }) }),
+    { name: "ConnectError", code: 10 },
+  );
+  assert.deepEqual(runGuard(otherConnect).exits, [1]);
+  const otherAbort = new DOMException("onStall was aborted", "AbortError");
+  otherAbort.stack = "AbortError: onStall was aborted\n    at somewhereElse (app.js:1:1)";
+  assert.deepEqual(runGuard(otherAbort).exits, [1]);
+  assert.deepEqual(runGuard("unexpected string rejection").exits, [1]);
+});
+
+test("Windows Auto keeps Auto-review on without sandbox and emits a one-time warning notice", async () => {
+  const f = fixture({ platform: "win32" });
+  await open(f.host, { mode: "auto" });
+  const created = f.calls.find((c) => c[0] === "create")[1];
+  assert.equal(created.local.autoReview, true);
+  assert.equal(created.local.sandboxOptions.enabled, false);
+  // No sandbox prime call on win32.
+  assert.ok(!f.calls.some((c) => c[0] === "prime" && c[1].local.settingSources.length === 0));
+  const notices = () => f.events.filter((e) => e.type === "notice");
+  assert.equal(notices().length, 1);
+  assert.equal(notices()[0].level, "warning");
+  assert.match(notices()[0].text, /Windows/);
+
+  await f.host.request({ type: "set_mode", mode: "full-access", model: "model" });
+  await f.host.request({ type: "set_mode", mode: "auto", model: "model" });
+  assert.equal(notices().length, 1, "notice is emitted at most once per session");
+  await f.host.close();
+});
+
+test("run_completed includes contextUsage from checkpointStore.loadLatest and checkpointed from store.getRun", async () => {
+  const f = fixture({
+    checkpoint: { tokenDetails: { usedTokens: 12_345, maxTokens: 200_000 } },
+    runRecord: { startCheckpointRef: { blobId: "b0" }, latestCheckpointRef: { blobId: "b1" } },
+  });
+  await open(f.host);
+  await f.host.request({ type: "send", message: { text: "hi" } });
+  f.terminal.resolve({ id: "r1", status: "finished", result: "done" });
+  await tick();
+  const completed = f.events.find((e) => e.type === "run_completed");
+  assert.deepEqual(completed.result.contextUsage, { usedTokens: 12_345, maxTokens: 200_000 });
+  assert.equal(completed.result.checkpointed, true);
+  await f.host.close();
+
+  // Zero maxTokens (unset protobuf) omits contextUsage; cancelled run without a new checkpoint sets checkpointed=false.
+  const f2 = fixture({
+    checkpoint: { tokenDetails: { usedTokens: 0, maxTokens: 0 } },
+    runRecord: { startCheckpointRef: { blobId: "b0" }, latestCheckpointRef: { blobId: "b0" } },
+    checkpointSettleMs: 0,
+  });
+  await open(f2.host);
+  await f2.host.request({ type: "send", message: { text: "hi" } });
+  await f2.host.request({ type: "cancel" });
+  await tick();
+  const cancelled = f2.events.find((e) => e.type === "run_completed");
+  assert.equal(cancelled.result.status, "cancelled");
+  assert.equal(cancelled.result.contextUsage, undefined);
+  assert.equal(cancelled.result.checkpointed, false);
+  await f2.host.close();
+
+  // Cancelled run that already saved a new checkpoint sets checkpointed=true.
+  const f3 = fixture({
+    runRecord: { startCheckpointRef: { blobId: "b0" }, latestCheckpointRef: { blobId: "b1" } },
+  });
+  await open(f3.host);
+  await f3.host.request({ type: "send", message: { text: "hi" } });
+  await f3.host.request({ type: "cancel" });
+  await tick();
+  const cancelledAfterCheckpoint = f3.events.find((e) => e.type === "run_completed");
+  assert.equal(cancelledAfterCheckpoint.result.checkpointed, true);
+  await f3.host.close();
+});
+
+test("cancel awaits in-flight checkpoint persistence, re-reads after settle, and reports unknown on read errors", async () => {
+  // 1. SDK cancel resolves wait() while agent.checkpointPersistChain is still persisting.
+  // With checkpointSettleMs: 0, only awaiting checkpointPersistChain can observe latest = "b1".
+  let latest = "b0";
+  const persist = Promise.withResolvers();
+  const f1 = fixture({
+    runRecord: () => ({ startCheckpointRef: { blobId: "b0" }, latestCheckpointRef: { blobId: latest } }),
+    checkpointPersistChain: persist.promise,
+    checkpointSettleMs: 0,
+  });
+  await open(f1.host);
+  await f1.host.request({ type: "send", message: { text: "hi" } });
+  const done1 = f1.waitForEvent((e) => e.type === "run_completed");
+  await f1.host.request({ type: "cancel" });
+  await tick();
+  assert.equal(f1.events.find((e) => e.type === "run_completed"), undefined, "run_completed must wait for checkpointPersistChain");
+  // Finish checkpoint persistence after wait() resolved.
+  latest = "b1";
+  persist.resolve();
+  const c1 = await done1;
+  assert.equal(c1.result.checkpointed, true);
+  await f1.host.close();
+
+  // 2. Without checkpointPersistChain, a short settle re-read catches a late store write.
+  let reads = 0;
+  const f2 = fixture({
+    runRecord: () => {
+      reads++;
+      return { startCheckpointRef: { blobId: "b0" }, latestCheckpointRef: { blobId: reads >= 2 ? "b1" : "b0" } };
+    },
+    checkpointSettleMs: 10,
+  });
+  await open(f2.host);
+  await f2.host.request({ type: "send", message: { text: "hi" } });
+  const done2 = f2.waitForEvent((e) => e.type === "run_completed");
+  await f2.host.request({ type: "cancel" });
+  const c2 = await done2;
+  assert.equal(c2.result.checkpointed, true);
+  assert.equal(reads, 2);
+  await f2.host.close();
+
+  // 3. Agent latestCheckpointRef advancing between before-send and cancel also counts as checkpointed.
+  let agentBlob = "a0";
+  const f3 = fixture({
+    runRecord: { startCheckpointRef: { blobId: "b0" }, latestCheckpointRef: { blobId: "b0" } },
+    agentRecord: () => ({ latestCheckpointRef: { blobId: agentBlob } }),
+    checkpointSettleMs: 0,
+  });
+  await open(f3.host);
+  await f3.host.request({ type: "send", message: { text: "hi" } });
+  agentBlob = "a1";
+  const done3 = f3.waitForEvent((e) => e.type === "run_completed");
+  await f3.host.request({ type: "cancel" });
+  const c3 = await done3;
+  assert.equal(c3.result.checkpointed, true);
+  await f3.host.close();
+
+  // 4. Store read errors report "unknown" so the prompt is never sent twice while the guide is offered again.
+  const f4 = fixture({
+    runRecord: async () => { throw new Error("disk busy"); },
+    checkpointSettleMs: 0,
+  });
+  await open(f4.host);
+  await f4.host.request({ type: "send", message: { text: "hi" } });
+  const done4 = f4.waitForEvent((e) => e.type === "run_completed");
+  await f4.host.request({ type: "cancel" });
+  const c4 = await done4;
+  assert.equal(c4.result.checkpointed, "unknown");
+  await f4.host.close();
+
+  // 5. A read error on the pre-send getAgent snapshot also reports "unknown" when getRun saw no new checkpoint.
+  const f5 = fixture({
+    runRecord: { startCheckpointRef: { blobId: "b0" }, latestCheckpointRef: { blobId: "b0" } },
+    agentRecord: async () => { throw new Error("agent read failed"); },
+    checkpointSettleMs: 0,
+  });
+  await open(f5.host);
+  await f5.host.request({ type: "send", message: { text: "hi" } });
+  const done5 = f5.waitForEvent((e) => e.type === "run_completed");
+  await f5.host.request({ type: "cancel" });
+  const c5 = await done5;
+  assert.equal(c5.result.checkpointed, "unknown");
+  await f5.host.close();
+});
+
+test("steer forwards run.steer(text), reverts during prewarm/idle, and settles timed-out steers before run_completed", async () => {
+  assert.ok(STEER_TIMEOUT_MS > 0 && STEER_TIMEOUT_MS < 60_000, "steer timeout stays well under pool.rs 60 s deadline");
+  const steered = [];
+  let outcome = "complete_delivered";
+  const f = fixture({ runSteer: async (text) => { steered.push(text); return outcome; } });
+  await open(f.host);
+  // No active turn: reverts cleanly instead of throwing an error.
+  assert.deepEqual(await f.host.request({ type: "steer", text: "too early" }), { outcome: "revert_to_followup" });
+  await f.host.request({ type: "send", message: { text: "start" } });
+  assert.deepEqual(await f.host.request({ type: "steer", text: "change direction" }), { outcome: "complete_delivered" });
+  assert.deepEqual(steered, ["change direction"]);
+  outcome = "revert_to_followup";
+  assert.deepEqual(await f.host.request({ type: "steer", text: "too late" }), { outcome: "revert_to_followup" });
+  await assert.rejects(f.host.request({ type: "steer", text: "   " }), /Write a message/);
+  const done = f.waitForEvent((e) => e.type === "run_completed");
+  f.terminal.resolve({ id: "r1", status: "finished" });
+  await done;
+  await f.host.close();
+
+  // A steer sent during workspace prewarm (while turn.run is still null) reverts to follow-up cleanly.
+  const gate = Promise.withResolvers();
+  const warming = fixture({ warmGate: gate.promise });
+  await open(warming.host);
+  const sending = warming.host.request({ type: "send", message: { text: "start" } });
+  await tick();
+  assert.deepEqual(await warming.host.request({ type: "steer", text: "during prewarm" }), { outcome: "revert_to_followup" });
+  await warming.host.request({ type: "cancel" });
+  gate.resolve();
+  await sending;
+  await warming.host.close();
+
+  // A slow steer returns {outcome: "pending", steerId}; when the SDK later resolves with
+  // complete_delivered, the host emits steer_settled before run_completed.
+  const deliveredLate = Promise.withResolvers();
+  const slowDelivered = fixture({ runSteer: () => deliveredLate.promise, steerTimeoutMs: 10 });
+  await open(slowDelivered.host);
+  await slowDelivered.host.request({ type: "send", message: { text: "long tool" } });
+  const pendingDelivered = await slowDelivered.host.request({ type: "steer", steerId: "steer-deliv-1", text: "redirect" });
+  assert.deepEqual(pendingDelivered, { outcome: "pending", steerId: "steer-deliv-1" });
+  const settledDelivered = slowDelivered.waitForEvent((e) => e.type === "steer_settled");
+  const completedDelivered = slowDelivered.waitForEvent((e) => e.type === "run_completed");
+  // Even if run.wait() settles before the pending steer resolves, run_completed waits for steer_settled.
+  slowDelivered.terminal.resolve({ id: "r1", status: "finished" });
+  await tick();
+  assert.equal(slowDelivered.events.find((e) => e.type === "run_completed"), undefined, "run_completed must wait for pending steers");
+  deliveredLate.resolve("complete_delivered");
+  assert.deepEqual(await settledDelivered, { type: "steer_settled", steerId: "steer-deliv-1", outcome: "complete_delivered" });
+  await completedDelivered;
+  const delivOrder = slowDelivered.events.map((e) => e.type);
+  assert.ok(delivOrder.indexOf("steer_settled") < delivOrder.indexOf("run_completed"), `expected steer_settled before run_completed: ${delivOrder}`);
+  await slowDelivered.host.close();
+
+  // A slow steer that later resolves as revert_to_followup emits steer_settled before run_completed.
+  const revertedExplicit = Promise.withResolvers();
+  const slowRevertExplicit = fixture({ runSteer: () => revertedExplicit.promise, steerTimeoutMs: 10 });
+  await open(slowRevertExplicit.host);
+  await slowRevertExplicit.host.request({ type: "send", message: { text: "long tool" } });
+  const pendingRevertExplicit = await slowRevertExplicit.host.request({ type: "steer", steerId: "steer-rev-1", text: "redirect" });
+  assert.deepEqual(pendingRevertExplicit, { outcome: "pending", steerId: "steer-rev-1" });
+  const settledRevExplicit = slowRevertExplicit.waitForEvent((e) => e.type === "steer_settled");
+  const completedRevExplicit = slowRevertExplicit.waitForEvent((e) => e.type === "run_completed");
+  slowRevertExplicit.terminal.resolve({ id: "r1", status: "finished" });
+  await tick();
+  assert.equal(slowRevertExplicit.events.find((e) => e.type === "run_completed"), undefined, "run_completed must wait for pending steer revert");
+  revertedExplicit.resolve("revert_to_followup");
+  assert.deepEqual(await settledRevExplicit, { type: "steer_settled", steerId: "steer-rev-1", outcome: "revert_to_followup" });
+  await completedRevExplicit;
+  const revExplicitOrder = slowRevertExplicit.events.map((e) => e.type);
+  assert.ok(revExplicitOrder.indexOf("steer_settled") < revExplicitOrder.indexOf("run_completed"));
+  await slowRevertExplicit.host.close();
+
+  // A slow steer that later rejects emits steer_settled with revert_to_followup before run_completed
+  // and never triggers unhandledRejection.
+  const revertedLate = Promise.withResolvers();
+  const slowReverted = fixture({ runSteer: () => revertedLate.promise, steerTimeoutMs: 10 });
+  await open(slowReverted.host);
+  await slowReverted.host.request({ type: "send", message: { text: "long tool" } });
+  const pendingReverted = await slowReverted.host.request({ type: "steer", text: "redirect" });
+  assert.equal(pendingReverted.outcome, "pending");
+  assert.equal(typeof pendingReverted.steerId, "string");
+  assert.ok(pendingReverted.steerId.length > 0);
+  const settledReverted = slowReverted.waitForEvent((e) => e.type === "steer_settled");
+  const completedReverted = slowReverted.waitForEvent((e) => e.type === "run_completed");
+  const unhandled = [];
+  const onUnhandled = (reason) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    slowReverted.terminal.resolve({ id: "r1", status: "finished" });
+    await tick();
+    revertedLate.reject(new Error("late stream close"));
+    assert.deepEqual(await settledReverted, { type: "steer_settled", steerId: pendingReverted.steerId, outcome: "revert_to_followup" });
+    await completedReverted;
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+  const revOrder = slowReverted.events.map((e) => e.type);
+  assert.ok(revOrder.indexOf("steer_settled") < revOrder.indexOf("run_completed"), `expected steer_settled before run_completed: ${revOrder}`);
+  await slowReverted.host.close();
+
+  // A hung steer that never settles is reverted after steerSettleTimeoutMs so
+  // run_completed is never blocked forever, and a late real settlement is a no-op.
+  assert.ok(STEER_SETTLE_TIMEOUT_MS >= 15_000 && STEER_SETTLE_TIMEOUT_MS <= 30_000, "settle deadline should be ~20 s");
+  const neverSettles = Promise.withResolvers();
+  const hungSteer = fixture({
+    runSteer: () => neverSettles.promise,
+    steerTimeoutMs: 5,
+    steerSettleTimeoutMs: 15,
+  });
+  await open(hungSteer.host);
+  await hungSteer.host.request({ type: "send", message: { text: "hung rpc" } });
+  const pendingHung = await hungSteer.host.request({ type: "steer", steerId: "steer-hung-1", text: "still there?" });
+  assert.deepEqual(pendingHung, { outcome: "pending", steerId: "steer-hung-1" });
+  const hungSettled = hungSteer.waitForEvent((e) => e.type === "steer_settled");
+  const hungCompleted = hungSteer.waitForEvent((e) => e.type === "run_completed");
+  hungSteer.terminal.resolve({ id: "r1", status: "finished" });
+  assert.deepEqual(await hungSettled, { type: "steer_settled", steerId: "steer-hung-1", outcome: "revert_to_followup" });
+  await hungCompleted;
+  const hungOrder = hungSteer.events.map((e) => e.type);
+  assert.ok(hungOrder.indexOf("steer_settled") < hungOrder.indexOf("run_completed"), `expected steer_settled before run_completed: ${hungOrder}`);
+  // Resolving the hung SDK promise later must not emit a duplicate steer_settled.
+  neverSettles.resolve("complete_delivered");
+  await tick();
+  assert.equal(hungSteer.events.filter((e) => e.type === "steer_settled").length, 1);
+  await hungSteer.host.close();
+
+  // A run without steer() falls back to revert_to_followup.
+  const plain = fixture();
+  await open(plain.host);
+  await plain.host.request({ type: "send", message: { text: "start" } });
+  assert.deepEqual(await plain.host.request({ type: "steer", text: "nudge" }), { outcome: "revert_to_followup" });
+  const plainDone = plain.waitForEvent((e) => e.type === "run_completed");
+  plain.terminal.resolve({ id: "r1", status: "finished" });
+  await plainDone;
+  await plain.host.close();
+});
+
+test("configureAgentTransport honours useHttp1ForAgent from cli-config.json", async () => {
+  const root = await mkdtemp(join(tmpdir(), "kybern-cursor-http1-"));
+  try {
+    const http1 = JSON.stringify({ network: { useHttp1ForAgent: true } });
+    const runCase = async ({ env, file, text }) => {
+      const caseDir = await mkdtemp(join(root, "case-"));
+      if (file) {
+        const target = join(caseDir, file);
+        await mkdir(join(target, ".."), { recursive: true });
+        await writeFile(target, text, "utf8");
+      }
+      const resolvedEnv = Object.fromEntries(Object.entries(env).map(([k, v]) => [k, join(caseDir, v)]));
+      const configured = [];
+      const warnings = [];
+      const applied = await configureAgentTransport(
+        { Cursor: { configure: (opts) => configured.push(opts) } },
+        { env: resolvedEnv, home: join(caseDir, "home"), warn: (m) => warnings.push(m) },
+      );
+      return { applied, configured, warnings };
+    };
+
+    // CURSOR_CONFIG_DIR takes precedence over XDG_CONFIG_HOME.
+    const fromCursorDir = await runCase({
+      env: { CURSOR_CONFIG_DIR: "cfg", XDG_CONFIG_HOME: "xdg" },
+      file: "cfg/cli-config.json",
+      text: http1,
+    });
+    assert.equal(fromCursorDir.applied, true);
+    assert.deepEqual(fromCursorDir.configured, [{ local: { useHttp1ForAgent: true } }]);
+
+    // XDG_CONFIG_HOME/cursor/cli-config.json.
+    const fromXdg = await runCase({ env: { XDG_CONFIG_HOME: "xdg" }, file: "xdg/cursor/cli-config.json", text: http1 });
+    assert.equal(fromXdg.applied, true);
+
+    // ~/.cursor/cli-config.json.
+    const fromHome = await runCase({ env: {}, file: "home/.cursor/cli-config.json", text: http1 });
+    assert.equal(fromHome.applied, true);
+
+    // Explicit false does not configure.
+    const disabled = await runCase({
+      env: {},
+      file: "home/.cursor/cli-config.json",
+      text: JSON.stringify({ network: { useHttp1ForAgent: false } }),
+    });
+    assert.equal(disabled.applied, false);
+    assert.deepEqual(disabled.configured, []);
+    assert.equal(disabled.warnings.length, 0);
+
+    // Malformed JSON warns and does not throw or configure.
+    const damaged = await runCase({ env: {}, file: "home/.cursor/cli-config.json", text: "{" });
+    assert.equal(damaged.applied, false);
+    assert.equal(damaged.warnings.length, 1);
+
+    // Missing file silently skips.
+    const missing = await runCase({ env: {} });
+    assert.equal(missing.applied, false);
+    assert.equal(missing.warnings.length, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

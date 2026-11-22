@@ -4,6 +4,7 @@
 import { createRequire } from "node:module";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { format } from "node:util";
@@ -16,10 +17,81 @@ function timing(phase, started, extra = {}) {
   process.stderr.write(`cursor_timing ${JSON.stringify({phase, ms: Math.round((performance.now() - started) * 100) / 100, ...extra})}\n`);
 }
 
-export function runtimePolicy(mode) {
+/**
+ * Known harmless unhandled rejections emitted by `@cursor/sdk` from fire-and-forget
+ * internal promises. Only these are swallowed; anything else must crash the host so
+ * the Rust supervisor restarts it.
+ */
+export function ignorableSdkRejection(reason) {
+  if (!(reason instanceof Error)) return null;
+  if (reason.name === "WriteIterableClosedError") {
+    return "Cursor SDK wrote to a closed stream. Keeping the host running.";
+  }
+  if (
+    reason.name === "ConnectError" &&
+    reason.cause instanceof Error &&
+    reason.cause.code === "ERR_STREAM_WRITE_AFTER_END"
+  ) {
+    return "Cursor SDK wrote after its request stream ended. Keeping the host running.";
+  }
+  if (
+    reason.name === "AbortError" &&
+    typeof reason.stack === "string" &&
+    /^\s+at (?:\S+\.)?onStall\b/m.test(reason.stack)
+  ) {
+    return "Cursor SDK aborted a stalled request. Keeping the host running.";
+  }
+  return null;
+}
+
+export function handleUnhandledRejection(reason, { log = (...args) => process.stderr.write(`${format(...args)}\n`), exit = process.exit } = {}) {
+  const ignored = ignorableSdkRejection(reason);
+  if (ignored) {
+    log(ignored);
+    return;
+  }
+  log(reason);
+  exit(1);
+}
+
+/** Proxies without HTTP/2 need this Cursor CLI setting, which the SDK never reads itself. */
+export async function readCliUseHttp1ForAgent({ env = process.env, home = homedir(), warn = () => {} } = {}) {
+  const configDir = env.CURSOR_CONFIG_DIR?.trim()
+    ? env.CURSOR_CONFIG_DIR.trim()
+    : env.XDG_CONFIG_HOME?.trim()
+      ? join(env.XDG_CONFIG_HOME.trim(), "cursor")
+      : join(home, ".cursor");
+  const configPath = join(configDir, "cli-config.json");
+  let raw;
+  try {
+    raw = await readFile(configPath, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    warn(`Cursor CLI config could not be read (${configPath}); using default agent transport.`);
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed?.network?.useHttp1ForAgent === true;
+  } catch {
+    warn(`Cursor CLI config could not be parsed (${configPath}); using default agent transport.`);
+    return false;
+  }
+}
+
+export async function configureAgentTransport(sdk, options) {
+  if (await readCliUseHttp1ForAgent(options)) {
+    sdk.Cursor?.configure?.({ local: { useHttp1ForAgent: true } });
+    return true;
+  }
+  return false;
+}
+
+export function runtimePolicy(mode, platform = process.platform) {
   switch (mode) {
     case "auto":
-      return { sandboxOptions: { enabled: true }, autoReview: true };
+      // The Windows SDK has no filesystem sandbox; keep Auto-review on and disable the sandbox there.
+      return { sandboxOptions: { enabled: platform !== "win32" }, autoReview: true };
     case "full-access":
       return { sandboxOptions: { enabled: false }, autoReview: false };
     default:
@@ -192,6 +264,17 @@ export function errorText(error, secrets = []) {
 // that workspace shares one. A lease outlives its last session by this long so
 // the next conversation there starts warm.
 export const WORKSPACE_LINGER_MS = 10 * 60_000;
+// Bounded well under pool.rs's 60 s call deadline so a steer waiting on a long
+// tool run returns "pending" promptly and reports its final outcome via `steer_settled`.
+export const STEER_TIMEOUT_MS = 5_000;
+// Bounds how long `run_completed` / `run_failed` waits for unsettled steers after
+// `run.wait()` ends (the SDK's `steer` awaits `submitConversationAction` before its
+// own ack timer, so a stalled RPC could otherwise hang forever). Stragglers are
+// reverted to follow-ups once this budget expires.
+export const STEER_SETTLE_TIMEOUT_MS = 20_000;
+// Brief settle re-read on cancel because the SDK's cancelled branch resolves
+// run.wait() without awaiting agent.checkpointPersistChain.
+export const CHECKPOINT_SETTLE_MS = 50;
 
 /** Kybern's per-conversation MCP tools, run in this host as SDK custom tools.
  * Agent-level MCP servers are part of the executor cache key, so a scoped
@@ -230,9 +313,95 @@ export function toolResult(result) {
   return { content, ...(result?.isError ? { isError: true } : {}), ...(result?.structuredContent ? { structuredContent: result.structuredContent } : {}) };
 }
 
+async function readContextUsage(platform, agentId) {
+  try {
+    const checkpoint = await platform?.checkpointStore?.loadLatest?.(agentId);
+    const details = checkpoint?.tokenDetails;
+    if (!details || typeof details !== "object") return undefined;
+    const usedTokens = Number(details.usedTokens);
+    const maxTokens = Number(details.maxTokens);
+    // An unset protobuf message reads as zeros.
+    if (!Number.isFinite(usedTokens) || !Number.isFinite(maxTokens) || usedTokens < 0 || maxTokens <= 0) {
+      return undefined;
+    }
+    return { usedTokens: Math.trunc(usedTokens), maxTokens: Math.trunc(maxTokens) };
+  } catch {
+    return undefined;
+  }
+}
+
+async function readAgentCheckpoint(platform, agentId) {
+  if (typeof platform?.store?.getAgent !== "function") return { available: false };
+  try {
+    const record = await platform.store.getAgent(agentId);
+    return { available: true, blobId: record?.latestCheckpointRef?.blobId ?? null };
+  } catch {
+    return { available: true, failed: true };
+  }
+}
+
+async function checkRunCheckpointed(platform, agentId, runId, beforeAgent) {
+  let observed = false;
+  let failed = Boolean(beforeAgent?.failed);
+  if (typeof platform?.store?.getRun === "function") {
+    observed = true;
+    try {
+      const run = await platform.store.getRun(agentId, runId);
+      const checkpoint = run?.latestCheckpointRef?.blobId;
+      if (checkpoint && checkpoint !== run?.startCheckpointRef?.blobId) return true;
+    } catch {
+      failed = true;
+    }
+  }
+  if (beforeAgent?.available && !beforeAgent.failed && typeof platform?.store?.getAgent === "function") {
+    observed = true;
+    try {
+      const record = await platform.store.getAgent(agentId);
+      const latest = record?.latestCheckpointRef?.blobId ?? null;
+      if (latest && latest !== beforeAgent.blobId) return true;
+    } catch {
+      failed = true;
+    }
+  }
+  if (failed || !observed) return "unknown";
+  return false;
+}
+
+async function readRunCheckpointed(platform, turnAgent, agentId, runId, beforeAgent, settleMs = CHECKPOINT_SETTLE_MS) {
+  // In @cursor/sdk 1.2.0, the cancelled path in sendImpl does not await
+  // agent.checkpointPersistChain before run.wait() settles.
+  const chain = turnAgent?.checkpointPersistChain;
+  if (chain && typeof chain.then === "function") {
+    let timer;
+    try {
+      await Promise.race([
+        Promise.resolve(chain).catch(() => {}),
+        new Promise((resolve) => {
+          timer = setTimeout(resolve, Math.max(settleMs * 4, 200));
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  const state = await checkRunCheckpointed(platform, agentId, runId, beforeAgent);
+  if (state === true) return true;
+  const hasStore =
+    typeof platform?.store?.getRun === "function" ||
+    (beforeAgent?.available && !beforeAgent.failed && typeof platform?.store?.getAgent === "function");
+  if (settleMs > 0 && hasStore) {
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, settleMs);
+    });
+    return checkRunCheckpointed(platform, agentId, runId, beforeAgent);
+  }
+  return state;
+}
+
 /** One agent per logical session. emit is ordered and applies stdout backpressure. */
-export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}, sessionId, ensureCatalog, fetch } = {}) {
+export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}, sessionId, ensureCatalog, fetch, platform: hostPlatform = process.platform, steerTimeoutMs = STEER_TIMEOUT_MS, steerSettleTimeoutMs = STEER_SETTLE_TIMEOUT_MS, checkpointSettleMs = CHECKPOINT_SETTLE_MS } = {}) {
   let agent;
+  let activePlatform;
   let options;
   let modelSelector;
   let selectedEffort;
@@ -242,6 +411,7 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
   let opened = Promise.resolve();
   let closing = false;
   let recoverAbandonedRun = false;
+  let warnedWindowsSandbox = false;
   let lease;
   const localReadOptions = (cwd) => ({ runtime: "local", cwd, ...(store ? { store } : {}) });
   secrets = [...new Set([...secrets, apiKey])];
@@ -324,9 +494,9 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
     opened = openingDone.promise;
     let next;
     try {
-      const local = { cwd: request.cwd, settingSources: SETTING_SOURCES, ...runtimePolicy(request.mode), enableAgentRetries: true, ...(store ? { store } : {}) };
+      const local = { cwd: request.cwd, settingSources: SETTING_SOURCES, ...runtimePolicy(request.mode, hostPlatform), enableAgentRetries: true, ...(store ? { store } : {}) };
       const platform = await platformFor(request.cwd);
-      if (!local.sandboxOptions.enabled) await primeSandbox(request.cwd);
+      if (!local.sandboxOptions.enabled && hostPlatform !== "win32") await primeSandbox(request.cwd);
       // Start the workspace scan before anything else: it needs neither the
       // model catalog nor the agent, so their requests overlap it.
       next = acquireWarm(platform, local);
@@ -349,6 +519,7 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
       catch (error) { throw modelError(error, nextOptions.model); }
       finally { trace("agent_creation", createStarted, {resume: !!id}); }
       options = nextOptions;
+      activePlatform = platform;
       tools = nextTools;
       modelSelector = request.model;
       selectedEffort = request.effort;
@@ -356,6 +527,14 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
       [lease, next] = [next, lease];
       recoverAbandonedRun = !!id;
       if (closing) throw new Error("Cursor session is closing.");
+      if (hostPlatform === "win32" && request.mode === "auto" && !local.sandboxOptions.enabled && !warnedWindowsSandbox) {
+        warnedWindowsSandbox = true;
+        await emit({
+          type: "notice",
+          level: "warning",
+          text: "Cursor has no filesystem sandbox on Windows. Auto-review stays on, without filesystem isolation.",
+        });
+      }
       return { agentId: agent.agentId, model: request.model || "default" };
     } finally {
       next?.release();
@@ -389,7 +568,11 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
     let firstEvent;
     let firstText = true;
     const starting = Promise.withResolvers();
-    const turn = { run: null, prewarming: true, cancelled: false, ready: false, pending: [], pendingBytes: 0, updates: Promise.resolve(), done: null, started: starting.promise };
+    const turn = {
+      run: null, prewarming: true, cancelled: false, ready: false, pending: [], pendingBytes: 0,
+      updates: Promise.resolve(), done: null, started: starting.promise,
+      activeSteers: new Set(), pendingSteers: new Set(),
+    };
     active = turn;
     const dispatch = (update) => {
       // Serializing callbacks preserves provider order even when the SDK does
@@ -428,6 +611,14 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
         if (active === turn) active = null;
         return {cancelled:true};
       }
+      const turnAgent = agent;
+      const turnAgentId = agent.agentId;
+      const turnPlatform = activePlatform;
+      const beforeAgent = await readAgentCheckpoint(turnPlatform, turnAgentId);
+      if (turn.cancelled || closing) {
+        if (active === turn) active = null;
+        return {cancelled:true};
+      }
       try { turn.run = await start(); } catch (error) {
         // T3 recovers a stale persisted run only on the first send after resume.
         // Never force every prompt: it could cancel a legitimately active run.
@@ -447,23 +638,64 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
       turn.pending.length = 0;
       turn.ready = true;
       if (turn.cancelled || closing) await cancelRun(turn);
+      const settlePendingSteers = async () => {
+        if (turn.activeSteers.size === 0 && turn.pendingSteers.size === 0) return;
+        let deadlineTimer;
+        let timedOut = false;
+        const deadline = new Promise((resolve) => {
+          deadlineTimer = setTimeout(() => {
+            timedOut = true;
+            resolve();
+          }, steerSettleTimeoutMs);
+        });
+        try {
+          while (!timedOut && (turn.activeSteers.size > 0 || turn.pendingSteers.size > 0)) {
+            const batch = [
+              ...[...turn.activeSteers].map((entry) => entry.promise),
+              ...[...turn.pendingSteers].map((entry) => entry.promise),
+            ];
+            await Promise.race([Promise.allSettled(batch), deadline]);
+          }
+        } finally {
+          clearTimeout(deadlineTimer);
+        }
+        if (turn.activeSteers.size > 0 || turn.pendingSteers.size > 0) {
+          for (const entry of [...turn.activeSteers]) entry.forceRevert();
+          const forcedEmits = [...turn.pendingSteers].map((entry) => entry.forceRevert());
+          await Promise.allSettled(forcedEmits);
+        }
+      };
       turn.done = (async () => {
         try {
           const result = await turn.run.wait();
           await turn.updates;
           if (active === turn) active = null;
+          await settlePendingSteers();
+          const finalStatus = turn.cancelled ? "cancelled" : result.status;
+          const checkpointed = finalStatus === "finished"
+            ? true
+            : await readRunCheckpointed(turnPlatform, turnAgent, turnAgentId, turn.run.id, beforeAgent, checkpointSettleMs);
+          const contextUsage = await readContextUsage(turnPlatform, turnAgentId);
           await emit({ type: "run_completed", result: {
-            id: result.id, status: turn.cancelled ? "cancelled" : result.status,
+            id: result.id, status: finalStatus,
             result: result.result, usage: result.usage, durationMs: result.durationMs,
+            checkpointed,
+            ...(contextUsage ? { contextUsage } : {}),
             ...(result.error ? { error: { message: safeError(result.error.message) } } : {}),
           } });
         } catch (error) {
           await turn.updates.catch(() => {});
           if (active === turn) active = null;
+          await settlePendingSteers();
+          const checkpointed = await readRunCheckpointed(turnPlatform, turnAgent, turnAgentId, turn.run.id, beforeAgent, checkpointSettleMs);
+          const contextUsage = await readContextUsage(turnPlatform, turnAgentId);
           if (turn.cancelled && isAbort(error)) {
-            await emit({ type: "run_completed", result: { id: turn.run.id, status: "cancelled" } });
+            await emit({ type: "run_completed", result: {
+              id: turn.run.id, status: "cancelled", checkpointed,
+              ...(contextUsage ? { contextUsage } : {}),
+            } });
           } else {
-            await emit({ type: "run_failed", error: safeError(error) });
+            await emit({ type: "run_failed", error: safeError(error), checkpointed, ...(contextUsage ? { contextUsage } : {}) });
           }
         }
       })();
@@ -474,6 +706,92 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
       throw error;
     } finally {
       starting.resolve();
+    }
+  }
+
+  async function steer(request) {
+    if (closing) throw new Error("Cursor session is closing.");
+    const text = typeof request.text === "string" ? request.text : "";
+    if (!text.trim()) {
+      throw new Error("Write a message before steering Cursor.");
+    }
+    const turn = active;
+    if (!turn || !turn.run || turn.cancelled) {
+      return { outcome: "revert_to_followup", ...(turn?.cancelled ? { interrupted: true } : {}) };
+    }
+    if (typeof turn.run.steer !== "function") {
+      return { outcome: "revert_to_followup" };
+    }
+    const steerId = typeof request.steerId === "string" && request.steerId ? request.steerId : crypto.randomUUID();
+    const PENDING = Symbol("pending");
+    const FORCED_REVERT = Symbol("forced_revert");
+    const steerPromise = Promise.resolve()
+      .then(() => turn.run.steer(text))
+      .then(
+        (value) => (value === "complete_delivered" ? "complete_delivered" : "revert_to_followup"),
+        // @cursor/sdk 1.2.0 catches its own action-submit errors and never throws
+        // an "already delivered" error. If a rejection still surfaces (e.g. a
+        // transport or wrapper failure), map it to `revert_to_followup` for
+        // at-least-once delivery—acknowledging that if the server injected the
+        // text right before failing, it could be delivered twice.
+        () => "revert_to_followup",
+      );
+    let timer;
+    const timeout = new Promise((resolve) => {
+      timer = setTimeout(() => resolve(PENDING), steerTimeoutMs);
+    });
+    let abandoned = false;
+    const forced = Promise.withResolvers();
+    const racing = Promise.race([steerPromise, timeout, forced.promise]);
+    const activeEntry = {
+      promise: racing,
+      forceRevert: () => {
+        abandoned = true;
+        forced.resolve(FORCED_REVERT);
+      },
+    };
+    turn.activeSteers.add(activeEntry);
+    let outcome;
+    try {
+      outcome = await racing;
+      if (outcome === FORCED_REVERT || abandoned) {
+        return { outcome: "revert_to_followup", ...(turn.cancelled ? { interrupted: true } : {}) };
+      }
+      if (outcome === PENDING) {
+        // The server may still inject this steer at the next step boundary, or the SDK's
+        // run `finally` will resolve it as `revert_to_followup` before `run.wait()` settles.
+        // Keep the promise and emit `steer_settled` once when it finishes (or when
+        // `settlePendingSteers` times out) so the daemon records delivery or enqueues
+        // a follow-up at most once per steer id.
+        let emitPromise;
+        const emitSettled = (finalOutcome) => {
+          if (!emitPromise) {
+            emitPromise = Promise.resolve()
+              .then(() => emit({ type: "steer_settled", steerId, outcome: finalOutcome }))
+              .catch(() => {});
+          }
+          return emitPromise;
+        };
+        let entry;
+        const settled = steerPromise
+          .then((finalOutcome) => emitSettled(finalOutcome))
+          .finally(() => {
+            turn.pendingSteers.delete(entry);
+          });
+        entry = {
+          promise: settled,
+          forceRevert: () => {
+            turn.pendingSteers.delete(entry);
+            return emitSettled("revert_to_followup");
+          },
+        };
+        turn.pendingSteers.add(entry);
+        return { outcome: "pending", steerId };
+      }
+      return { outcome, ...(turn.cancelled ? { interrupted: true } : {}) };
+    } finally {
+      clearTimeout(timer);
+      turn.activeSteers.delete(activeEntry);
     }
   }
 
@@ -507,6 +825,7 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
       switch (request.type) {
         case "open": return open(request);
         case "send": return send(request);
+        case "steer": return steer(request);
         case "cancel": if (active) await cancelRun(active); return {};
         case "set_model": idle(); if (!agent) throw new Error("Cursor session is not open."); options.model = modelSelection(request.model); modelSelector = request.model; selectedEffort = undefined; return {};
         case "set_effort": idle(); if (!agent) throw new Error("Cursor session is not open."); options.model = modelSelection(modelSelector, request.effort); selectedEffort = request.effort; return {};
@@ -660,9 +979,11 @@ async function main(mode) {
   let sanitize = (error) => errorText(error, runtimeSecrets);
   const log = (...args) => process.stderr.write(`${sanitize(format(...args))}\n`);
   console.log = console.info = console.debug = log;
+  process.on("unhandledRejection", (reason) => handleUnhandledRejection(reason, { log }));
   timing("node_start", processStarted, {uptimeMs: Math.round(process.uptime() * 1000)});
   const sdkStarted = performance.now();
   const sdk = await loadSdk();
+  await configureAgentTransport(sdk, { warn: log });
   timing("sdk_load", sdkStarted);
   const credentialStore = new sdk.FileCredentialStore(process.env.KYBERN_CURSOR_AUTH_FILE);
   if (mode === "version") { await emit({ version: SDK_VERSION }); return; }

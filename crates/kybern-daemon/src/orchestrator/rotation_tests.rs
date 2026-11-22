@@ -791,6 +791,54 @@ type SpawnRecord = Arc<std::sync::Mutex<Vec<(Option<String>, bool)>>>;
 struct InstructionsRecorder {
     inner: ScriptedDriver,
     lacks: SpawnRecord,
+    /// When `Some`, wraps spawned sessions so `AgentSession::instructions_delivered`
+    /// returns the current value (modelling Cursor's explicit delivery reporting).
+    /// When `None`, leaves the default trait impl (`None`), matching Antigravity/Grok.
+    delivered: Option<Arc<std::sync::Mutex<Option<bool>>>>,
+}
+
+struct DeliveryReportingSession {
+    inner: Box<dyn AgentSession>,
+    delivered: Arc<std::sync::Mutex<Option<bool>>>,
+}
+
+#[async_trait::async_trait]
+impl AgentSession for DeliveryReportingSession {
+    async fn send_message(&self, message_id: &str, message: &UserMessage) -> kybern_drivers::Result<()> {
+        self.inner.send_message(message_id, message).await
+    }
+
+    async fn steer(&self, message_id: &str, message: &UserMessage) -> kybern_drivers::Result<()> {
+        self.inner.steer(message_id, message).await
+    }
+
+    async fn interrupt(&self) -> kybern_drivers::Result<()> {
+        self.inner.interrupt().await
+    }
+
+    async fn set_permission_mode(&self, mode: PermissionMode) -> kybern_drivers::Result<()> {
+        self.inner.set_permission_mode(mode).await
+    }
+
+    async fn set_model(&self, model: &str) -> kybern_drivers::Result<()> {
+        self.inner.set_model(model).await
+    }
+
+    async fn set_effort(&self, effort: &str) -> kybern_drivers::Result<()> {
+        self.inner.set_effort(effort).await
+    }
+
+    async fn respond_permission(&self, request_id: &str, decision: &ApprovalDecision) -> kybern_drivers::Result<()> {
+        self.inner.respond_permission(request_id, decision).await
+    }
+
+    fn instructions_delivered(&self) -> Option<bool> {
+        *self.delivered.lock().unwrap()
+    }
+
+    async fn close(&self) -> kybern_drivers::Result<()> {
+        self.inner.close().await
+    }
 }
 
 #[async_trait::async_trait]
@@ -805,7 +853,11 @@ impl kybern_drivers::AgentDriver for InstructionsRecorder {
 
     async fn spawn(&self, config: kybern_drivers::SessionConfig) -> kybern_drivers::Result<kybern_drivers::SpawnedSession> {
         self.lacks.lock().unwrap().push((config.resume_session_id.clone(), config.resume_lacks_instructions));
-        self.inner.spawn(config).await
+        let mut spawned = self.inner.spawn(config).await?;
+        if let Some(delivered) = &self.delivered {
+            spawned.session = Box::new(DeliveryReportingSession { inner: spawned.session, delivered: delivered.clone() });
+        }
+        Ok(spawned)
     }
 }
 
@@ -817,6 +869,7 @@ async fn a_cursor_conversation_gets_the_instructions_block_once_even_when_it_beg
     drivers.register(Arc::new(InstructionsRecorder {
         inner: ScriptedDriver { kind: ProviderKind::Cursor, spawned: spawned.clone() },
         lacks: lacks.clone(),
+        delivered: None,
     }));
     let fixture = Fixture::with_drivers_and_gateway(drivers, Some(crate::native_tools_mcp::NativeToolsGateway::default()));
     std::fs::create_dir_all(&fixture.root).unwrap();
@@ -853,5 +906,143 @@ async fn a_cursor_conversation_gets_the_instructions_block_once_even_when_it_beg
         recorded,
         vec![(Some("cursor-sdk:older".into()), true), (Some("cursor-sdk:older".into()), false)],
         "sent once, then never again"
+    );
+}
+
+#[tokio::test]
+async fn cursor_instructions_delivery_follows_the_driver_report_for_checkpointed_and_uncheckpointed_interrupts() {
+    let spawned = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let lacks = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let delivered = Arc::new(std::sync::Mutex::new(Some(false)));
+    let mut drivers = DriverRegistry::default();
+    drivers.register(Arc::new(InstructionsRecorder {
+        inner: ScriptedDriver { kind: ProviderKind::Cursor, spawned: spawned.clone() },
+        lacks: lacks.clone(),
+        delivered: Some(delivered.clone()),
+    }));
+    let fixture = Fixture::with_drivers_and_gateway(drivers, Some(crate::native_tools_mcp::NativeToolsGateway::default()));
+    std::fs::create_dir_all(&fixture.root).unwrap();
+    let mut thread = fixture.thread(ThreadStatus::Idle);
+    thread.provider = ProviderInstance::default_for(ProviderKind::Cursor);
+    thread.permission_mode = PermissionMode::FullAccess;
+    thread.provider_session_id = Some("cursor-sdk:first".into());
+    fixture.store.thread_upsert(&thread).unwrap();
+
+    // 1. Uncheckpointed interrupt: driver reports `Some(false)`, so daemon keeps instructions unconfirmed.
+    *delivered.lock().unwrap() = Some(false);
+    fixture.orchestrator.send(thread.id, UserMessage::text("first")).await.unwrap();
+    let child = eventually(|| async {
+        let children: Vec<ScriptedChild> = spawned.lock().unwrap().clone();
+        for child in children.into_iter().rev() {
+            if child.messages.lock().await.last().is_some_and(|message| message.plain_text().ends_with("first")) {
+                return Some(child);
+            }
+        }
+        None
+    })
+    .await;
+    child.tx.send(completed_response(StopReason::Interrupted)).await.unwrap();
+    eventually(|| async { (fixture.store.thread_get(thread.id).unwrap().unwrap().status == ThreadStatus::Idle).then_some(()) }).await;
+    fixture.orchestrator.inner.sessions.lock().await.remove(&thread.id);
+
+    // 2. Checkpointed interrupt: driver reports `Some(true)`, so daemon agrees and marks instructions delivered.
+    *delivered.lock().unwrap() = Some(true);
+    fixture.orchestrator.send(thread.id, UserMessage::text("second")).await.unwrap();
+    let child = eventually(|| async {
+        let children: Vec<ScriptedChild> = spawned.lock().unwrap().clone();
+        for child in children.into_iter().rev() {
+            if child.messages.lock().await.last().is_some_and(|message| message.plain_text().ends_with("second")) {
+                return Some(child);
+            }
+        }
+        None
+    })
+    .await;
+    child.tx.send(completed_response(StopReason::Interrupted)).await.unwrap();
+    eventually(|| async { (fixture.store.thread_get(thread.id).unwrap().unwrap().status == ThreadStatus::Idle).then_some(()) }).await;
+    fixture.orchestrator.inner.sessions.lock().await.remove(&thread.id);
+
+    // 3. Third turn respawns after the checkpointed interrupt: instructions are already confirmed delivered.
+    fixture.orchestrator.send(thread.id, UserMessage::text("third")).await.unwrap();
+    let child = eventually(|| async {
+        let children: Vec<ScriptedChild> = spawned.lock().unwrap().clone();
+        for child in children.into_iter().rev() {
+            if child.messages.lock().await.last().is_some_and(|message| message.plain_text().ends_with("third")) {
+                return Some(child);
+            }
+        }
+        None
+    })
+    .await;
+    child.finish("ok").await;
+    eventually(|| async { (fixture.store.thread_get(thread.id).unwrap().unwrap().status == ThreadStatus::Idle).then_some(()) }).await;
+
+    let recorded = lacks.lock().unwrap().clone();
+    assert_eq!(
+        recorded,
+        vec![
+            (Some("cursor-sdk:first".into()), true),
+            (Some("cursor-sdk:first".into()), true),
+            (Some("cursor-sdk:first".into()), false),
+        ],
+        "uncheckpointed Cursor interrupt keeps instructions unconfirmed, checkpointed interrupt confirms them"
+    );
+}
+
+#[tokio::test]
+async fn an_interrupted_antigravity_turn_still_marks_instructions_delivered() {
+    let spawned = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let lacks = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut drivers = DriverRegistry::default();
+    drivers.register(Arc::new(InstructionsRecorder {
+        inner: ScriptedDriver { kind: ProviderKind::Antigravity, spawned: spawned.clone() },
+        lacks: lacks.clone(),
+        delivered: None,
+    }));
+    let fixture = Fixture::with_drivers_and_gateway(drivers, Some(crate::native_tools_mcp::NativeToolsGateway::default()));
+    std::fs::create_dir_all(&fixture.root).unwrap();
+    let mut thread = fixture.thread(ThreadStatus::Idle);
+    thread.provider = ProviderInstance::default_for(ProviderKind::Antigravity);
+    thread.permission_mode = PermissionMode::FullAccess;
+    thread.provider_session_id = Some("agy-session-1".into());
+    fixture.store.thread_upsert(&thread).unwrap();
+
+    // First turn is interrupted: Antigravity does not override `instructions_delivered` (returns `None`),
+    // so the daemon marks instructions delivered on `TurnCompleted` just as on main.
+    fixture.orchestrator.send(thread.id, UserMessage::text("first")).await.unwrap();
+    let child = eventually(|| async {
+        let children: Vec<ScriptedChild> = spawned.lock().unwrap().clone();
+        for child in children.into_iter().rev() {
+            if child.messages.lock().await.last().is_some_and(|message| message.plain_text().ends_with("first")) {
+                return Some(child);
+            }
+        }
+        None
+    })
+    .await;
+    child.tx.send(completed_response(StopReason::Interrupted)).await.unwrap();
+    eventually(|| async { (fixture.store.thread_get(thread.id).unwrap().unwrap().status == ThreadStatus::Idle).then_some(()) }).await;
+    fixture.orchestrator.inner.sessions.lock().await.remove(&thread.id);
+
+    // Second turn respawns: must NOT resend the instructions block.
+    fixture.orchestrator.send(thread.id, UserMessage::text("second")).await.unwrap();
+    let child = eventually(|| async {
+        let children: Vec<ScriptedChild> = spawned.lock().unwrap().clone();
+        for child in children.into_iter().rev() {
+            if child.messages.lock().await.last().is_some_and(|message| message.plain_text().ends_with("second")) {
+                return Some(child);
+            }
+        }
+        None
+    })
+    .await;
+    child.finish("ok").await;
+    eventually(|| async { (fixture.store.thread_get(thread.id).unwrap().unwrap().status == ThreadStatus::Idle).then_some(()) }).await;
+
+    let recorded = lacks.lock().unwrap().clone();
+    assert_eq!(
+        recorded,
+        vec![(Some("agy-session-1".into()), true), (Some("agy-session-1".into()), false)],
+        "Antigravity marks instructions delivered even after an interrupted turn"
     );
 }

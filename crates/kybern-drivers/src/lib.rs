@@ -90,6 +90,9 @@ pub enum DriverError {
     Protocol(String),
     #[error("unsupported: {0}")]
     Unsupported(String),
+    /// The running turn could not accept this steering message; deliver it as a normal follow-up instead.
+    #[error("steering was not accepted for the running turn; deliver as a follow-up instead")]
+    SteerFallback,
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -372,6 +375,13 @@ impl DriverRuntimeTaskUpdate {
     }
 }
 
+/// Final outcome of an asynchronous mid-turn steering message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SteerOutcome {
+    Delivered,
+    RevertToFollowup,
+}
+
 /// Normalized stream of what a provider is doing. Ordered per session.
 #[derive(Debug, Clone)]
 pub enum DriverEvent {
@@ -379,6 +389,12 @@ pub enum DriverEvent {
     SubagentMessageDelivered {
         task_id: String,
         message_id: String,
+    },
+    /// A steering message that returned pending has now either been injected
+    /// into the running turn or reverted to a follow-up.
+    SteerSettled {
+        steer_id: String,
+        outcome: SteerOutcome,
     },
     /// Root provider inference began, possibly after a background notification
     /// with no new user message. Repeated signals within a turn are harmless.
@@ -554,6 +570,32 @@ pub trait AgentSession: Send + Sync {
     }
     /// Graceful shutdown. The event stream ends with `Exited`.
     async fn close(&self) -> Result<()>;
+    /// Whether a driver that tracks checkpoint-level delivery (Cursor SDK) has confirmed
+    /// that Kybern's in-conversation instructions reached the provider's history.
+    /// Returns `None` when the daemon should infer delivery from turn completion.
+    fn instructions_delivered(&self) -> Option<bool> {
+        None
+    }
+    /// Whether `steer` may wait asynchronously on the provider or return a
+    /// pending steer that settles later via `DriverEvent::SteerSettled`.
+    /// Sessions returning `false` execute `steer` while the orchestrator holds
+    /// the turn lock so turn completion cannot race the write.
+    fn steer_may_pend(&self) -> bool {
+        false
+    }
+    /// Returns whether a steering call with `message_id` that just returned `Ok(())`
+    /// is still awaiting provider confirmation and will report its final outcome via
+    /// `DriverEvent::SteerSettled`. Consumes the pending marker for `message_id`.
+    fn take_pending_steer(&self, _message_id: &str) -> bool {
+        false
+    }
+    /// The outcome a pending steer settled with, once the driver has produced its
+    /// `DriverEvent::SteerSettled` (which may still be buffered for the event
+    /// consumer). Lets a session torn down mid-turn resolve its pending steers
+    /// without waiting for the event stream. Consumes the record.
+    fn take_settled_steer(&self, _message_id: &str) -> Option<SteerOutcome> {
+        None
+    }
 }
 
 pub struct SpawnedSession {
