@@ -265,8 +265,8 @@ export function errorText(error, secrets = []) {
 // the next conversation there starts warm.
 export const WORKSPACE_LINGER_MS = 10 * 60_000;
 // Bounded well under pool.rs's 60 s call deadline so a steer waiting on a long
-// tool run reverts to a follow-up instead of retiring the whole account host.
-export const STEER_TIMEOUT_MS = 20_000;
+// tool run returns "pending" promptly and reports its final outcome via `steer_settled`.
+export const STEER_TIMEOUT_MS = 5_000;
 // Brief settle re-read on cancel because the SDK's cancelled branch resolves
 // run.wait() without awaiting agent.checkpointPersistChain.
 export const CHECKPOINT_SETTLE_MS = 50;
@@ -336,8 +336,8 @@ async function readAgentCheckpoint(platform, agentId) {
 }
 
 async function checkRunCheckpointed(platform, agentId, runId, beforeAgent) {
-  if (beforeAgent?.failed) return true;
   let observed = false;
+  let failed = Boolean(beforeAgent?.failed);
   if (typeof platform?.store?.getRun === "function") {
     observed = true;
     try {
@@ -345,21 +345,21 @@ async function checkRunCheckpointed(platform, agentId, runId, beforeAgent) {
       const checkpoint = run?.latestCheckpointRef?.blobId;
       if (checkpoint && checkpoint !== run?.startCheckpointRef?.blobId) return true;
     } catch {
-      // Err toward not resending the prompt if checkpoint state cannot be read.
-      return true;
+      failed = true;
     }
   }
-  if (beforeAgent?.available && typeof platform?.store?.getAgent === "function") {
+  if (beforeAgent?.available && !beforeAgent.failed && typeof platform?.store?.getAgent === "function") {
     observed = true;
     try {
       const record = await platform.store.getAgent(agentId);
       const latest = record?.latestCheckpointRef?.blobId ?? null;
       if (latest && latest !== beforeAgent.blobId) return true;
     } catch {
-      return true;
+      failed = true;
     }
   }
-  return !observed;
+  if (failed || !observed) return "unknown";
+  return false;
 }
 
 async function readRunCheckpointed(platform, turnAgent, agentId, runId, beforeAgent, settleMs = CHECKPOINT_SETTLE_MS) {
@@ -380,15 +380,19 @@ async function readRunCheckpointed(platform, turnAgent, agentId, runId, beforeAg
       clearTimeout(timer);
     }
   }
-  if (await checkRunCheckpointed(platform, agentId, runId, beforeAgent)) return true;
-  if (settleMs > 0) {
+  const state = await checkRunCheckpointed(platform, agentId, runId, beforeAgent);
+  if (state === true) return true;
+  const hasStore =
+    typeof platform?.store?.getRun === "function" ||
+    (beforeAgent?.available && !beforeAgent.failed && typeof platform?.store?.getAgent === "function");
+  if (settleMs > 0 && hasStore) {
     await new Promise((resolve) => {
       const timer = setTimeout(resolve, settleMs);
       timer.unref?.();
     });
     return checkRunCheckpointed(platform, agentId, runId, beforeAgent);
   }
-  return false;
+  return state;
 }
 
 /** One agent per logical session. emit is ordered and applies stdout backpressure. */
@@ -561,7 +565,11 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
     let firstEvent;
     let firstText = true;
     const starting = Promise.withResolvers();
-    const turn = { run: null, prewarming: true, cancelled: false, ready: false, pending: [], pendingBytes: 0, updates: Promise.resolve(), done: null, started: starting.promise };
+    const turn = {
+      run: null, prewarming: true, cancelled: false, ready: false, pending: [], pendingBytes: 0,
+      updates: Promise.resolve(), done: null, started: starting.promise,
+      activeSteers: new Set(), pendingSteers: new Set(),
+    };
     active = turn;
     const dispatch = (update) => {
       // Serializing callbacks preserves provider order even when the SDK does
@@ -627,11 +635,17 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
       turn.pending.length = 0;
       turn.ready = true;
       if (turn.cancelled || closing) await cancelRun(turn);
+      const settlePendingSteers = async () => {
+        while (turn.activeSteers.size > 0 || turn.pendingSteers.size > 0) {
+          await Promise.allSettled([...turn.activeSteers, ...turn.pendingSteers]);
+        }
+      };
       turn.done = (async () => {
         try {
           const result = await turn.run.wait();
           await turn.updates;
           if (active === turn) active = null;
+          await settlePendingSteers();
           const finalStatus = turn.cancelled ? "cancelled" : result.status;
           const checkpointed = finalStatus === "finished"
             ? true
@@ -647,6 +661,7 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
         } catch (error) {
           await turn.updates.catch(() => {});
           if (active === turn) active = null;
+          await settlePendingSteers();
           const checkpointed = await readRunCheckpointed(turnPlatform, turnAgent, turnAgentId, turn.run.id, beforeAgent, checkpointSettleMs);
           const contextUsage = await readContextUsage(turnPlatform, turnAgentId);
           if (turn.cancelled && isAbort(error)) {
@@ -682,23 +697,44 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
     if (typeof turn.run.steer !== "function") {
       return { outcome: "revert_to_followup" };
     }
-    const steerPromise = Promise.resolve().then(() => turn.run.steer(text));
-    // Once the server confirms "queued", the SDK clears its 15 s ack timer and
-    // has no cancel-injection API. If our host timeout wins, silence any late
-    // rejection from the unawaited SDK promise so it never crashes the host.
-    steerPromise.catch(() => {});
+    const steerId = typeof request.steerId === "string" && request.steerId ? request.steerId : crypto.randomUUID();
+    const PENDING = Symbol("pending");
+    const steerPromise = Promise.resolve()
+      .then(() => turn.run.steer(text))
+      .then(
+        (value) => (value === "complete_delivered" ? "complete_delivered" : "revert_to_followup"),
+        () => "revert_to_followup",
+      );
     let timer;
     const timeout = new Promise((resolve) => {
-      timer = setTimeout(() => resolve("revert_to_followup"), steerTimeoutMs);
+      timer = setTimeout(() => resolve(PENDING), steerTimeoutMs);
       timer.unref?.();
     });
+    const racing = Promise.race([steerPromise, timeout]);
+    turn.activeSteers.add(racing);
     let outcome;
     try {
-      outcome = await Promise.race([steerPromise, timeout]);
+      outcome = await racing;
+      if (outcome === PENDING) {
+        // The server may still inject this steer at the next step boundary, or the SDK's
+        // run `finally` will resolve it as `revert_to_followup` before `run.wait()` settles.
+        // Keep the promise and emit `steer_settled` when it finishes so the daemon records
+        // delivery or enqueues a follow-up exactly once.
+        let settled;
+        settled = steerPromise
+          .then((finalOutcome) => emit({ type: "steer_settled", steerId, outcome: finalOutcome }))
+          .catch(() => {})
+          .finally(() => {
+            turn.pendingSteers.delete(settled);
+          });
+        turn.pendingSteers.add(settled);
+        return { outcome: "pending", steerId };
+      }
+      return { outcome, ...(turn.cancelled ? { interrupted: true } : {}) };
     } finally {
       clearTimeout(timer);
+      turn.activeSteers.delete(racing);
     }
-    return { outcome, ...(turn.cancelled ? { interrupted: true } : {}) };
   }
 
   async function close() {

@@ -73,14 +73,28 @@ function fixture({ duringStart, failStart, warmGate, fetch, platform, checkpoint
     ...(checkpoint !== undefined ? { checkpointStore: { loadLatest: async () => (typeof checkpoint === "function" ? checkpoint() : checkpoint) } } : {}),
     ...(storeObj ? { store: storeObj } : {}),
   }) };
-  const host = createHost(sdk, async (event) => { await Promise.resolve(); events.push(event); }, {
+  const waiters = [];
+  const notify = (event) => {
+    for (let i = waiters.length - 1; i >= 0; i--) {
+      if (waiters[i].pred(event)) {
+        const [{ resolve }] = waiters.splice(i, 1);
+        resolve(event);
+      }
+    }
+  };
+  const waitForEvent = (pred) => {
+    const existing = events.find(pred);
+    if (existing) return Promise.resolve(existing);
+    return new Promise((resolve) => waiters.push({ pred, resolve }));
+  };
+  const host = createHost(sdk, async (event) => { await Promise.resolve(); events.push(event); notify(event); }, {
     apiKey: "secret",
     fetch,
     ...(platform ? { platform } : {}),
     ...(steerTimeoutMs !== undefined ? { steerTimeoutMs } : {}),
     ...(checkpointSettleMs !== undefined ? { checkpointSettleMs } : {}),
   });
-  return { host, agent, events, calls, terminal, started, delta: (update) => callback({ update }) };
+  return { host, agent, events, calls, terminal, started, waitForEvent, delta: (update) => callback({ update }) };
 }
 const open = (host, extra = {}) => host.request({ type: "open", cwd: "/repo", mode: "auto", model: "model", ...extra });
 const tick = () => new Promise((done) => setImmediate(done));
@@ -578,24 +592,26 @@ test("run_completed includes contextUsage from checkpointStore.loadLatest and ch
   await f3.host.close();
 });
 
-test("cancel awaits in-flight checkpoint persistence, re-reads after settle, and treats read errors as checkpointed", async () => {
+test("cancel awaits in-flight checkpoint persistence, re-reads after settle, and reports unknown on read errors", async () => {
   // 1. SDK cancel resolves wait() while agent.checkpointPersistChain is still persisting.
+  // With checkpointSettleMs: 0, only awaiting checkpointPersistChain can observe latest = "b1".
   let latest = "b0";
   const persist = Promise.withResolvers();
   const f1 = fixture({
     runRecord: () => ({ startCheckpointRef: { blobId: "b0" }, latestCheckpointRef: { blobId: latest } }),
     checkpointPersistChain: persist.promise,
-    checkpointSettleMs: 10,
+    checkpointSettleMs: 0,
   });
   await open(f1.host);
   await f1.host.request({ type: "send", message: { text: "hi" } });
+  const done1 = f1.waitForEvent((e) => e.type === "run_completed");
   await f1.host.request({ type: "cancel" });
   await tick();
-  // Finish checkpoint persistence slightly after wait() resolved.
+  assert.equal(f1.events.find((e) => e.type === "run_completed"), undefined, "run_completed must wait for checkpointPersistChain");
+  // Finish checkpoint persistence after wait() resolved.
   latest = "b1";
   persist.resolve();
-  await new Promise((done) => setTimeout(done, 20));
-  const c1 = f1.events.find((e) => e.type === "run_completed");
+  const c1 = await done1;
   assert.equal(c1.result.checkpointed, true);
   await f1.host.close();
 
@@ -610,9 +626,9 @@ test("cancel awaits in-flight checkpoint persistence, re-reads after settle, and
   });
   await open(f2.host);
   await f2.host.request({ type: "send", message: { text: "hi" } });
+  const done2 = f2.waitForEvent((e) => e.type === "run_completed");
   await f2.host.request({ type: "cancel" });
-  await new Promise((done) => setTimeout(done, 30));
-  const c2 = f2.events.find((e) => e.type === "run_completed");
+  const c2 = await done2;
   assert.equal(c2.result.checkpointed, true);
   assert.equal(reads, 2);
   await f2.host.close();
@@ -627,27 +643,41 @@ test("cancel awaits in-flight checkpoint persistence, re-reads after settle, and
   await open(f3.host);
   await f3.host.request({ type: "send", message: { text: "hi" } });
   agentBlob = "a1";
+  const done3 = f3.waitForEvent((e) => e.type === "run_completed");
   await f3.host.request({ type: "cancel" });
-  await tick();
-  const c3 = f3.events.find((e) => e.type === "run_completed");
+  const c3 = await done3;
   assert.equal(c3.result.checkpointed, true);
   await f3.host.close();
 
-  // 4. Store read errors err toward checkpointed=true so the prompt is never sent twice.
+  // 4. Store read errors report "unknown" so the prompt is never sent twice while the guide is offered again.
   const f4 = fixture({
     runRecord: async () => { throw new Error("disk busy"); },
     checkpointSettleMs: 0,
   });
   await open(f4.host);
   await f4.host.request({ type: "send", message: { text: "hi" } });
+  const done4 = f4.waitForEvent((e) => e.type === "run_completed");
   await f4.host.request({ type: "cancel" });
-  await tick();
-  const c4 = f4.events.find((e) => e.type === "run_completed");
-  assert.equal(c4.result.checkpointed, true);
+  const c4 = await done4;
+  assert.equal(c4.result.checkpointed, "unknown");
   await f4.host.close();
+
+  // 5. A read error on the pre-send getAgent snapshot also reports "unknown" when getRun saw no new checkpoint.
+  const f5 = fixture({
+    runRecord: { startCheckpointRef: { blobId: "b0" }, latestCheckpointRef: { blobId: "b0" } },
+    agentRecord: async () => { throw new Error("agent read failed"); },
+    checkpointSettleMs: 0,
+  });
+  await open(f5.host);
+  await f5.host.request({ type: "send", message: { text: "hi" } });
+  const done5 = f5.waitForEvent((e) => e.type === "run_completed");
+  await f5.host.request({ type: "cancel" });
+  const c5 = await done5;
+  assert.equal(c5.result.checkpointed, "unknown");
+  await f5.host.close();
 });
 
-test("steer forwards run.steer(text), reverts during prewarm/idle, and times out before the pool deadline", async () => {
+test("steer forwards run.steer(text), reverts during prewarm/idle, and settles timed-out steers before run_completed", async () => {
   assert.ok(STEER_TIMEOUT_MS > 0 && STEER_TIMEOUT_MS < 60_000, "steer timeout stays well under pool.rs 60 s deadline");
   const steered = [];
   let outcome = "complete_delivered";
@@ -661,8 +691,9 @@ test("steer forwards run.steer(text), reverts during prewarm/idle, and times out
   outcome = "revert_to_followup";
   assert.deepEqual(await f.host.request({ type: "steer", text: "too late" }), { outcome: "revert_to_followup" });
   await assert.rejects(f.host.request({ type: "steer", text: "   " }), /Write a message/);
+  const done = f.waitForEvent((e) => e.type === "run_completed");
   f.terminal.resolve({ id: "r1", status: "finished" });
-  await tick();
+  await done;
   await f.host.close();
 
   // A steer sent during workspace prewarm (while turn.run is still null) reverts to follow-up cleanly.
@@ -677,39 +708,83 @@ test("steer forwards run.steer(text), reverts during prewarm/idle, and times out
   await sending;
   await warming.host.close();
 
-  // A slow steer (SDK cleared its 15 s timer after server queued) times out with revert_to_followup,
-  // and a late rejection from the unawaited SDK promise never triggers unhandledRejection.
-  const late = Promise.withResolvers();
-  const slow = fixture({ runSteer: () => late.promise, steerTimeoutMs: 25 });
-  await open(slow.host);
-  await slow.host.request({ type: "send", message: { text: "long tool" } });
-  const started = performance.now();
-  const timedOut = await slow.host.request({ type: "steer", text: "redirect" });
-  assert.deepEqual(timedOut, { outcome: "revert_to_followup" });
-  assert.ok(performance.now() - started < 500, "steer timeout should resolve promptly");
-  // Trigger a late rejection on the now-unawaited SDK promise and verify no unhandledRejection fires.
+  // A slow steer returns {outcome: "pending", steerId}; when the SDK later resolves with
+  // complete_delivered, the host emits steer_settled before run_completed.
+  const deliveredLate = Promise.withResolvers();
+  const slowDelivered = fixture({ runSteer: () => deliveredLate.promise, steerTimeoutMs: 10 });
+  await open(slowDelivered.host);
+  await slowDelivered.host.request({ type: "send", message: { text: "long tool" } });
+  const pendingDelivered = await slowDelivered.host.request({ type: "steer", steerId: "steer-deliv-1", text: "redirect" });
+  assert.deepEqual(pendingDelivered, { outcome: "pending", steerId: "steer-deliv-1" });
+  const settledDelivered = slowDelivered.waitForEvent((e) => e.type === "steer_settled");
+  const completedDelivered = slowDelivered.waitForEvent((e) => e.type === "run_completed");
+  // Even if run.wait() settles before the pending steer resolves, run_completed waits for steer_settled.
+  slowDelivered.terminal.resolve({ id: "r1", status: "finished" });
+  await tick();
+  assert.equal(slowDelivered.events.find((e) => e.type === "run_completed"), undefined, "run_completed must wait for pending steers");
+  deliveredLate.resolve("complete_delivered");
+  assert.deepEqual(await settledDelivered, { type: "steer_settled", steerId: "steer-deliv-1", outcome: "complete_delivered" });
+  await completedDelivered;
+  const delivOrder = slowDelivered.events.map((e) => e.type);
+  assert.ok(delivOrder.indexOf("steer_settled") < delivOrder.indexOf("run_completed"), `expected steer_settled before run_completed: ${delivOrder}`);
+  await slowDelivered.host.close();
+
+  // A slow steer that later resolves as revert_to_followup emits steer_settled before run_completed.
+  const revertedExplicit = Promise.withResolvers();
+  const slowRevertExplicit = fixture({ runSteer: () => revertedExplicit.promise, steerTimeoutMs: 10 });
+  await open(slowRevertExplicit.host);
+  await slowRevertExplicit.host.request({ type: "send", message: { text: "long tool" } });
+  const pendingRevertExplicit = await slowRevertExplicit.host.request({ type: "steer", steerId: "steer-rev-1", text: "redirect" });
+  assert.deepEqual(pendingRevertExplicit, { outcome: "pending", steerId: "steer-rev-1" });
+  const settledRevExplicit = slowRevertExplicit.waitForEvent((e) => e.type === "steer_settled");
+  const completedRevExplicit = slowRevertExplicit.waitForEvent((e) => e.type === "run_completed");
+  slowRevertExplicit.terminal.resolve({ id: "r1", status: "finished" });
+  await tick();
+  assert.equal(slowRevertExplicit.events.find((e) => e.type === "run_completed"), undefined, "run_completed must wait for pending steer revert");
+  revertedExplicit.resolve("revert_to_followup");
+  assert.deepEqual(await settledRevExplicit, { type: "steer_settled", steerId: "steer-rev-1", outcome: "revert_to_followup" });
+  await completedRevExplicit;
+  const revExplicitOrder = slowRevertExplicit.events.map((e) => e.type);
+  assert.ok(revExplicitOrder.indexOf("steer_settled") < revExplicitOrder.indexOf("run_completed"));
+  await slowRevertExplicit.host.close();
+
+  // A slow steer that later rejects emits steer_settled with revert_to_followup before run_completed
+  // and never triggers unhandledRejection.
+  const revertedLate = Promise.withResolvers();
+  const slowReverted = fixture({ runSteer: () => revertedLate.promise, steerTimeoutMs: 10 });
+  await open(slowReverted.host);
+  await slowReverted.host.request({ type: "send", message: { text: "long tool" } });
+  const pendingReverted = await slowReverted.host.request({ type: "steer", text: "redirect" });
+  assert.equal(pendingReverted.outcome, "pending");
+  assert.equal(typeof pendingReverted.steerId, "string");
+  assert.ok(pendingReverted.steerId.length > 0);
+  const settledReverted = slowReverted.waitForEvent((e) => e.type === "steer_settled");
+  const completedReverted = slowReverted.waitForEvent((e) => e.type === "run_completed");
   const unhandled = [];
   const onUnhandled = (reason) => unhandled.push(reason);
   process.on("unhandledRejection", onUnhandled);
   try {
-    late.reject(new Error("late stream close"));
+    slowReverted.terminal.resolve({ id: "r1", status: "finished" });
     await tick();
-    await new Promise((done) => setTimeout(done, 15));
+    revertedLate.reject(new Error("late stream close"));
+    assert.deepEqual(await settledReverted, { type: "steer_settled", steerId: pendingReverted.steerId, outcome: "revert_to_followup" });
+    await completedReverted;
     assert.deepEqual(unhandled, []);
   } finally {
     process.off("unhandledRejection", onUnhandled);
   }
-  slow.terminal.resolve({ id: "r1", status: "finished" });
-  await tick();
-  await slow.host.close();
+  const revOrder = slowReverted.events.map((e) => e.type);
+  assert.ok(revOrder.indexOf("steer_settled") < revOrder.indexOf("run_completed"), `expected steer_settled before run_completed: ${revOrder}`);
+  await slowReverted.host.close();
 
   // A run without steer() falls back to revert_to_followup.
   const plain = fixture();
   await open(plain.host);
   await plain.host.request({ type: "send", message: { text: "start" } });
   assert.deepEqual(await plain.host.request({ type: "steer", text: "nudge" }), { outcome: "revert_to_followup" });
+  const plainDone = plain.waitForEvent((e) => e.type === "run_completed");
   plain.terminal.resolve({ id: "r1", status: "finished" });
-  await tick();
+  await plainDone;
   await plain.host.close();
 });
 

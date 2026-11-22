@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use kybern_protocol::*;
 use serde_json::{Value, json};
 
-use crate::{DriverEvent, DriverRuntimeTask, DriverRuntimeTaskUpdate, TurnAnchors};
+use crate::{DriverEvent, DriverRuntimeTask, DriverRuntimeTaskUpdate, SteerOutcome, TurnAnchors};
 
 /// After a turn ends, a retryable stream error can make Cursor's SDK resume from
 /// an older checkpoint inside the same run. When those resumes save nothing, it
@@ -13,12 +13,45 @@ use crate::{DriverEvent, DriverRuntimeTask, DriverRuntimeTaskUpdate, TurnAnchors
 const CURSOR_RESUME_NO_PROGRESS_MESSAGE: &str = "Agent turn stopped after repeated resume attempts made no progress";
 const TRANSPORT_SERVER_ERROR: &str = "Something went wrong communicating with the server. Please try again.";
 const TRANSPORT_MAX_LINE_LEN: usize = 4096;
+/// Known transport error signatures emitted inside Cursor SDK `RetriableError` dumps.
+/// Requiring one of these prevents ordinary prose replies beginning with
+/// `Error: RetriableError: …` from being dropped as transport dumps.
+const RETRIABLE_TRANSPORT_PREFIXES: &[&str] = &[
+    "[unavailable]",
+    "[aborted]",
+    "[deadline_exceeded]",
+    "WritableIterable is closed",
+    "Connection stalled",
+    "Connection failed",
+    "Stream ended without turnEnded",
+    CURSOR_RESUME_NO_PROGRESS_MESSAGE,
+    "write after end",
+    "socket hang up",
+    "fetch failed",
+    "read ECONNRESET",
+    "connect ECONNREFUSED",
+    "connect ETIMEDOUT",
+    "getaddrinfo ENOTFOUND",
+    "getaddrinfo EAI_AGAIN",
+    "ECONNRESET",
+    "ECONNREFUSED",
+    "ETIMEDOUT",
+    "ENOTFOUND",
+    "EAI_AGAIN",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CheckpointState {
+    Checkpointed,
+    NotCheckpointed,
+    Unknown,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TurnOutcome {
     Completed,
-    Cancelled { checkpointed: bool },
-    Failed { checkpointed: bool },
+    Cancelled { checkpointed: CheckpointState },
+    Failed { checkpointed: CheckpointState },
 }
 
 /// Detects an assistant message whose entire text is a raw Cursor transport error dump
@@ -106,7 +139,7 @@ fn may_be_transport_error_line(text: &str) -> bool {
     const RETRIABLE: &str = "Error: RetriableError: ";
     if is_prefix_of_or_starts_with(text, RETRIABLE) {
         if let Some(rest) = text.strip_prefix(RETRIABLE) {
-            return !rest.starts_with("[internal]");
+            return RETRIABLE_TRANSPORT_PREFIXES.iter().any(|prefix| is_prefix_of_or_starts_with(rest, prefix));
         }
         return true;
     }
@@ -137,7 +170,7 @@ fn is_transport_error_line(text: &str) -> bool {
         return true;
     }
     if let Some(rest) = text.strip_prefix("Error: RetriableError: ") {
-        return !rest.is_empty() && !rest.starts_with("[internal]");
+        return RETRIABLE_TRANSPORT_PREFIXES.iter().any(|prefix| rest.starts_with(prefix));
     }
     if let Some(rest) = text.strip_prefix("Error: ConnectError: ") {
         return rest.starts_with("[unavailable]") || rest.starts_with("[aborted]") || rest.starts_with("[deadline_exceeded]");
@@ -154,10 +187,21 @@ fn is_stack_frame_line(text: &str) -> bool {
 struct Message {
     id: String,
     text: String,
+    /// Byte offset into `text` already emitted via `TextDelta`.
+    emitted_len: usize,
     thinking: String,
     thinking_open: bool,
-    /// Root text held back while it still matches a transport error dump prefix.
-    held: bool,
+}
+
+impl Message {
+    fn push_text(&mut self, text: &str, hold: bool, origin: EventOrigin, out: &mut Vec<DriverEvent>) {
+        self.text.push_str(text);
+        if !hold && self.emitted_len < self.text.len() {
+            let delta = self.text[self.emitted_len..].to_string();
+            self.emitted_len = self.text.len();
+            out.push(DriverEvent::TextDelta { message_id: self.id.clone(), origin, delta });
+        }
+    }
 }
 
 #[derive(Default)]
@@ -249,7 +293,7 @@ impl Stream {
                         self.assistant_reply = TransportFailure::default();
                     }
                     self.assistant_reply.push(text);
-                    self.assistant_reply.may_be_dump()
+                    self.assistant_reply.may_be_dump() && self.messages.get("root").is_none_or(|m| m.emitted_len == 0)
                 } else {
                     false
                 };
@@ -263,18 +307,7 @@ impl Stream {
                         message.thinking_open = false;
                         out.push(DriverEvent::ThinkingCompleted { message_id: message.id.clone(), origin: origin.clone() });
                     }
-                    message.text.push_str(text);
-                    if hold_root {
-                        message.held = true;
-                    } else {
-                        let delta = if message.held {
-                            message.held = false;
-                            message.text.clone()
-                        } else {
-                            text.into()
-                        };
-                        out.push(DriverEvent::TextDelta { message_id: message.id.clone(), origin, delta });
-                    }
+                    message.push_text(text, hold_root, origin, out);
                 }
             }
             "thinking-completed" => {
@@ -436,7 +469,7 @@ impl Stream {
             return;
         }
         let status = result["status"].as_str().unwrap_or("error");
-        let checkpointed = result["checkpointed"].as_bool().unwrap_or(false);
+        let checkpointed = checkpoint_state(&result["checkpointed"]);
         let error_message = result.pointer("/error/message").and_then(Value::as_str);
         let resume_no_progress = self.turn_ended && status == "error" && error_message == Some(CURSOR_RESUME_NO_PROGRESS_MESSAGE);
         if !resume_no_progress && let Some(text) = result["result"].as_str().filter(|s| !s.is_empty()) {
@@ -449,10 +482,20 @@ impl Stream {
         let transport_failure = (status != "cancelled").then(|| self.assistant_reply.failure()).flatten();
         if transport_failure.is_some()
             && let Some(message) = self.messages.remove("root")
-            && message.thinking_open
         {
-            // Drop the root transport-error dump so the transcript shows only the problem row.
-            out.push(DriverEvent::ThinkingCompleted { message_id: message.id, origin: EventOrigin::Root });
+            // Drop the root transport-error dump text so the transcript shows only the problem row,
+            // while preserving and closing any thinking that streamed before the dump.
+            if message.thinking_open {
+                out.push(DriverEvent::ThinkingCompleted { message_id: message.id.clone(), origin: EventOrigin::Root });
+            }
+            if !message.thinking.is_empty() {
+                out.push(DriverEvent::MessageCompleted {
+                    message_id: message.id,
+                    origin: EventOrigin::Root,
+                    text: String::new(),
+                    thinking: Some(message.thinking),
+                });
+            }
         }
         for scope in self.messages.keys().cloned().collect::<Vec<_>>() {
             self.flush(&scope, out);
@@ -531,6 +574,15 @@ impl Stream {
                     out.push(DriverEvent::Notice { level, text: text.to_string(), data: None });
                 }
             }
+            "steer_settled" => {
+                if let Some(steer_id) = value["steerId"].as_str().filter(|s| !s.is_empty()) {
+                    let outcome = match value["outcome"].as_str() {
+                        Some("complete_delivered") => SteerOutcome::Delivered,
+                        _ => SteerOutcome::RevertToFollowup,
+                    };
+                    out.push(DriverEvent::SteerSettled { steer_id: steer_id.to_string(), outcome });
+                }
+            }
             "run_completed" => self.finish(&value["result"], &mut out),
             "run_failed" => self.finish(
                 &json!({
@@ -550,6 +602,15 @@ impl Stream {
         let mut out = Vec::new();
         self.finish(&json!({"status":"error", "error":{"message":"Cursor SDK process exited during the run. Send again to resume the saved conversation."}}), &mut out);
         out
+    }
+}
+
+fn checkpoint_state(value: &Value) -> CheckpointState {
+    match value {
+        Value::Bool(true) => CheckpointState::Checkpointed,
+        Value::Bool(false) => CheckpointState::NotCheckpointed,
+        Value::String(s) if s == "unknown" => CheckpointState::Unknown,
+        _ => CheckpointState::Unknown,
     }
 }
 
@@ -876,13 +937,14 @@ mod tests {
             }
         }));
         assert!(matches!(failed.last(), Some(DriverEvent::TurnFailed { .. })));
-        assert_eq!(unfinished.take_outcome(), Some(TurnOutcome::Failed { checkpointed: false }));
+        assert_eq!(unfinished.take_outcome(), Some(TurnOutcome::Failed { checkpointed: CheckpointState::NotCheckpointed }));
     }
 
     #[test]
     fn transport_error_dump_replies_drop_the_root_message_and_fail_while_prose_completes() {
         for dump in [
             "Error: RetriableError: WritableIterable is closed\n    at onClose (file:///sdk/index.js:12:4)",
+            "Error: RetriableError: Connection stalled",
             "Error: ConnectError: [unavailable] transport closed\n    at Stream.end (node:internal/streams:1:1)",
             "Error: ConnectError: [deadline_exceeded] timed out",
             TRANSPORT_SERVER_ERROR,
@@ -903,7 +965,7 @@ mod tests {
                 panic!("expected TurnFailed for dump {dump:?}, got {events:?}");
             };
             assert_eq!(problem.as_ref().map(|p| p.kind), Some(kybern_protocol::rpc::ProblemKind::Offline));
-            assert_eq!(stream.take_outcome(), Some(TurnOutcome::Failed { checkpointed: false }));
+            assert_eq!(stream.take_outcome(), Some(TurnOutcome::Failed { checkpointed: CheckpointState::NotCheckpointed }));
         }
 
         // Earlier normal commentary followed by a tool call and then a standalone transport dump keeps
@@ -926,10 +988,12 @@ mod tests {
         assert!(!events.iter().any(|event| matches!(event, DriverEvent::MessageCompleted { origin: EventOrigin::Root, .. })));
         assert!(matches!(events.last(), Some(DriverEvent::TurnFailed { .. })));
 
-        // Normal prose (including messages that begin with a transport-like prefix) releases and completes cleanly.
+        // Normal prose (including one-line replies starting with `Error: RetriableError: …` that are
+        // not real transport dumps) releases and completes cleanly.
         for normal in [
             "I saw this error in the logs:\nError: RetriableError: WritableIterable is closed",
             "Error: RetriableError: [internal] something else",
+            "Error: RetriableError: this error means your retry middleware gave up after three attempts.",
             "Error: ConnectError: [internal] not a transport disconnect",
             "Error: ConnectError: [aborted] stream reset\nHere is what caused that error.",
             "Something else went right.",
@@ -958,5 +1022,96 @@ mod tests {
                 "expected completed for normal reply {normal:?}, got {events:?}"
             );
         }
+    }
+
+    #[test]
+    fn dropped_transport_dump_keeps_and_closes_preceding_thinking() {
+        // Case 1: thinking streamed, closed by dump text-delta, then dump dropped at finish.
+        let mut stream = started();
+        let thinking = update(&mut stream, json!({"type": "thinking-delta", "text": "Checking the repo."}));
+        let message_id = match &thinking[0] {
+            DriverEvent::ThinkingDelta { message_id, .. } => message_id.clone(),
+            other => panic!("expected ThinkingDelta, got {other:?}"),
+        };
+        let dump_events = update(&mut stream, json!({"type": "text-delta", "text": "Error: ConnectError: [aborted] stream reset"}));
+        assert!(
+            dump_events.iter().any(|event| matches!(event, DriverEvent::ThinkingCompleted { message_id: id, .. } if id == &message_id))
+        );
+        assert!(!dump_events.iter().any(|event| matches!(event, DriverEvent::TextDelta { .. })));
+        let events = stream.handle(&json!({"type": "run_completed", "result": {"status": "finished", "checkpointed": true}}));
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                DriverEvent::MessageCompleted { message_id: id, origin: EventOrigin::Root, text, thinking: Some(thought) }
+                    if id == &message_id && text.is_empty() && thought == "Checking the repo."
+            )),
+            "dropped dump must still close and preserve thinking via MessageCompleted: {events:?}"
+        );
+        assert!(matches!(events.last(), Some(DriverEvent::TurnFailed { .. })));
+
+        // Case 2: thinking stayed open and dump arrived only in run_completed.result.
+        let mut open_thinking = started();
+        let thinking = update(&mut open_thinking, json!({"type": "thinking-delta", "text": "Still reasoning."}));
+        let message_id = match &thinking[0] {
+            DriverEvent::ThinkingDelta { message_id, .. } => message_id.clone(),
+            other => panic!("expected ThinkingDelta, got {other:?}"),
+        };
+        let events = open_thinking.handle(&json!({
+            "type": "run_completed",
+            "result": {"status": "finished", "result": TRANSPORT_SERVER_ERROR, "checkpointed": false}
+        }));
+        let tc_pos = events
+            .iter()
+            .position(|event| matches!(event, DriverEvent::ThinkingCompleted { message_id: id, .. } if id == &message_id))
+            .expect("ThinkingCompleted must close open thinking");
+        let mc_pos = events
+            .iter()
+            .position(|event| {
+                matches!(
+                    event,
+                    DriverEvent::MessageCompleted { message_id: id, origin: EventOrigin::Root, text, thinking: Some(thought) }
+                        if id == &message_id && text.is_empty() && thought == "Still reasoning."
+                )
+            })
+            .expect("MessageCompleted must preserve thinking");
+        assert!(tc_pos < mc_pos);
+        assert!(matches!(events.last(), Some(DriverEvent::TurnFailed { .. })));
+    }
+
+    #[test]
+    fn held_released_and_held_again_emits_each_text_byte_once() {
+        let mut message = Message { id: "m1".into(), ..Message::default() };
+        let mut out = Vec::new();
+        message.push_text("first ", true, EventOrigin::Root, &mut out);
+        assert!(out.is_empty());
+        message.push_text("part", false, EventOrigin::Root, &mut out);
+        message.push_text(" second ", true, EventOrigin::Root, &mut out);
+        message.push_text("part", false, EventOrigin::Root, &mut out);
+        let deltas: Vec<&str> = out
+            .iter()
+            .filter_map(|event| match event {
+                DriverEvent::TextDelta { delta, .. } => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(deltas, vec!["first part", " second part"]);
+        assert_eq!(deltas.concat(), "first part second part");
+    }
+
+    #[test]
+    fn steer_settled_and_unknown_checkpoint_state_parse_cleanly() {
+        let mut stream = started();
+        let delivered = stream.handle(&json!({"type": "steer_settled", "steerId": "s1", "outcome": "complete_delivered"}));
+        assert!(matches!(
+            delivered.as_slice(),
+            [DriverEvent::SteerSettled { steer_id, outcome: SteerOutcome::Delivered }] if steer_id == "s1"
+        ));
+        let reverted = stream.handle(&json!({"type": "steer_settled", "steerId": "s2", "outcome": "revert_to_followup"}));
+        assert!(matches!(
+            reverted.as_slice(),
+            [DriverEvent::SteerSettled { steer_id, outcome: SteerOutcome::RevertToFollowup }] if steer_id == "s2"
+        ));
+        let _ = stream.handle(&json!({"type": "run_completed", "result": {"status": "cancelled", "checkpointed": "unknown"}}));
+        assert_eq!(stream.take_outcome(), Some(TurnOutcome::Cancelled { checkpointed: CheckpointState::Unknown }));
     }
 }

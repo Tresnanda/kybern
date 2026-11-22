@@ -364,6 +364,13 @@ impl DriverRuntimeTaskUpdate {
     }
 }
 
+/// Final outcome of an asynchronous mid-turn steering message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SteerOutcome {
+    Delivered,
+    RevertToFollowup,
+}
+
 /// Normalized stream of what a provider is doing. Ordered per session.
 #[derive(Debug, Clone)]
 pub enum DriverEvent {
@@ -371,6 +378,12 @@ pub enum DriverEvent {
     SubagentMessageDelivered {
         task_id: String,
         message_id: String,
+    },
+    /// A steering message that returned pending has now either been injected
+    /// into the running turn or reverted to a follow-up.
+    SteerSettled {
+        steer_id: String,
+        outcome: SteerOutcome,
     },
     /// Root provider inference began, possibly after a background notification
     /// with no new user message. Repeated signals within a turn are harmless.
@@ -551,6 +564,12 @@ pub trait AgentSession: Send + Sync {
     /// Returns `None` when the daemon should infer delivery from turn completion.
     fn instructions_delivered(&self) -> Option<bool> {
         None
+    }
+    /// Returns whether a steering call with `message_id` that just returned `Ok(())`
+    /// is still awaiting provider confirmation and will report its final outcome via
+    /// `DriverEvent::SteerSettled`. Consumes the pending marker for `message_id`.
+    fn take_pending_steer(&self, _message_id: &str) -> bool {
+        false
     }
 }
 
