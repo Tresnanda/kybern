@@ -1691,11 +1691,13 @@ impl Orchestrator {
             params.project_id.map(|id| self.inner.store.project_get(id)?.ok_or_else(|| anyhow!("Project not found"))).transpose()?;
         let raw_provider = settings.providers.get(&params.provider).cloned().unwrap_or_default();
         let instance = crate::provider_accounts::resolve(&raw_provider, source_project.as_ref().map(|project| project.path.as_str()), None);
-        let existing = self.inner.store.threads_list(None, true)?.into_iter().find(|thread| {
-            thread.provider.kind == params.provider
-                && thread.provider.instance == instance
-                && thread.provider_session_id.as_deref() == Some(params.session_id.as_str())
-        });
+        let threads = self.inner.store.threads_list(None, true)?;
+        let owner = crate::pi_sessions::session_owners(&self.inner.store, &threads).remove(&(
+            params.provider,
+            instance.clone(),
+            params.session_id.clone(),
+        ));
+        let existing = owner.and_then(|id| threads.into_iter().find(|thread| thread.id == id));
         if let Some(mut thread) = existing {
             if thread.status == ThreadStatus::Archived {
                 thread.status = ThreadStatus::Idle;

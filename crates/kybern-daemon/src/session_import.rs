@@ -457,17 +457,7 @@ impl ScanRun {
         let imported = state
             .store
             .threads_list(None, true)
-            .map(|threads| {
-                threads
-                    .into_iter()
-                    .flat_map(|thread| {
-                        // A session an extension moved the thread out of is still the thread's history.
-                        let earlier = crate::pi_sessions::earlier_sessions(&state.store, thread.id);
-                        let current = thread.provider_session_id.clone();
-                        earlier.into_iter().chain(current).map(move |id| (thread.provider.kind, thread.provider.instance.clone(), id))
-                    })
-                    .collect()
-            })
+            .map(|threads| crate::pi_sessions::session_owners(&state.store, &threads).into_keys().collect())
             .unwrap_or_default();
         let project_ids = state
             .store
@@ -806,17 +796,7 @@ impl JobRunner {
             .state
             .store
             .threads_list(None, true)
-            .map(|threads| {
-                threads
-                    .into_iter()
-                    .flat_map(|thread| {
-                        // A session an extension moved the thread out of is still the thread's history.
-                        let earlier = crate::pi_sessions::earlier_sessions(&self.state.store, thread.id);
-                        let current = thread.provider_session_id.clone();
-                        earlier.into_iter().chain(current).map(move |id| (thread.provider.kind, thread.provider.instance.clone(), id))
-                    })
-                    .collect()
-            })
+            .map(|threads| crate::pi_sessions::session_owners(&self.state.store, &threads).into_keys().collect())
             .unwrap_or_default();
         let targets: HashMap<(ProviderKind, String), Target> = targets(&self.state, None)
             .into_iter()

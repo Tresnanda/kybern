@@ -114,17 +114,7 @@ async fn dispatch_part_1(state: &AppState, ctx: &ConnectionCtx, method: &str, sl
             let driver = state.drivers.get(p.provider).ok_or_else(|| RpcError::not_found("harness"))?;
             let mut result =
                 driver.list_sessions(&context, p.cursor.as_deref(), p.query.as_deref().unwrap_or("")).await.map_err(|e| bad(e.into()))?;
-            let threads = state.store.threads_list(None, true).map_err(internal)?;
-            for session in &mut result.sessions {
-                session.thread_id = threads
-                    .iter()
-                    .find(|thread| {
-                        thread.provider.kind == session.provider
-                            && thread.provider.instance == instance
-                            && thread.provider_session_id.as_deref() == Some(&session.id)
-                    })
-                    .map(|thread| thread.id);
-            }
+            crate::pi_sessions::mark_imported(&state.store, &instance, &mut result.sessions).map_err(internal)?;
             ok(result)
         }
         SessionsResume::NAME => {
