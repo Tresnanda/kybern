@@ -1,6 +1,6 @@
 # Cursor local SDK driver
 
-New Cursor sessions use official `@cursor/sdk` **1.2.0**, exact-pinned with an
+New Cursor sessions use official `@cursor/sdk` **1.4.2**, exact-pinned with an
 npm lockfile. Rust embeds `sdk/host.mjs` and owns one Node process per Cursor
 account/environment, shared by its agents and native-history readers.
 The SDK itself stays on disk so its lazy chunks, sandbox helper, ripgrep, and
@@ -10,7 +10,7 @@ path. Resolving the JavaScript package alone is insufficient.
 
 The implementation follows [T3's model selector](https://github.com/pingdotgg/t3code/blob/main/packages/provider-cursor/src/server/sdkModel.ts)
 and [SDK lifecycle runner](https://github.com/pingdotgg/t3code/blob/main/packages/provider-cursor/src/server/CursorAgentSdk.ts).
-Kybern uses 1.2.0 with zod 4.6.7, checked against the installed public types and
+Kybern uses 1.4.2 with zod 4.6.7, checked against the installed public types and
 [Cursor's official SDK documentation](https://cursor.com/docs/sdk/typescript).
 The official SDK Bridge was evaluated, but this small isolated host retains the
 SDK’s native browser authentication and model catalog APIs directly.
@@ -165,7 +165,7 @@ The SDK polls Cursor until the browser finishes, so this works for remote
 daemons. Both refresh the provider catalog when they finish.
 
 Node 22.13+ and npm are runtime prerequisites. The default SDK cache is
-`~/.kybern/cache/cursor-sdk/1.2.0`. Debug builds can reuse `sdk/node_modules`.
+`~/.kybern/cache/cursor-sdk/1.4.2`. Debug builds can reuse `sdk/node_modules`.
 `KYBERN_CURSOR_SDK_DIR`, `KYBERN_CURSOR_NODE`, `KYBERN_CURSOR_AUTH_FILE`, and
 `KYBERN_CURSOR_STATE_DIR` support isolated setup/testing; `CURSOR_API_KEY` takes
 precedence over the saved SDK login. The provider binary setting is reserved

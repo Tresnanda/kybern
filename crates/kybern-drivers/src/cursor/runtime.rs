@@ -15,7 +15,7 @@ use super::Connection;
 use crate::DriverEvent;
 use crate::{DriverError, ProbeContext, Result};
 
-pub const SDK_VERSION: &str = "1.2.0";
+pub const SDK_VERSION: &str = "1.4.2";
 const NODE_MINIMUM: &str = "22.13";
 const SETUP_HINT: &str = "Install it in Settings → Agent providers, or run `kybern cursor install`.";
 const HOST: &str = include_str!("sdk/host.mjs");
@@ -152,7 +152,7 @@ pub async fn install(context: &ProbeContext) -> Result<PathBuf> {
     let _cleanup = Staging(staging.clone());
     std::fs::write(staging.join("package.json"), PACKAGE)?;
     std::fs::write(staging.join("package-lock.json"), LOCK)?;
-    let npm = npm().map_err(|_| {
+    let npm = npm_in(context).map_err(|_| {
         DriverError::BinaryNotFound("Cursor’s SDK installs with npm, which comes with Node.js. Install Node.js, then try again.".into())
     })?;
     let mut cmd = Command::new(npm).no_window();
@@ -165,6 +165,14 @@ pub async fn install(context: &ProbeContext) -> Result<PathBuf> {
     }
     std::fs::rename(&staging, &destination)?;
     Ok(destination)
+}
+
+fn npm_in(context: &ProbeContext) -> std::result::Result<PathBuf, which::Error> {
+    which::which_in(
+        if cfg!(windows) { "npm.cmd" } else { "npm" },
+        env(context, "PATH"),
+        context.cwd.clone().unwrap_or_else(|| PathBuf::from(".")),
+    )
 }
 
 fn npm() -> std::result::Result<PathBuf, which::Error> {
@@ -382,6 +390,16 @@ for line in sys.stdin:
         assert!(installed(&context));
     }
 
+    #[test]
+    fn sdk_version_pin_matches_embedded_host_and_npm_manifests() {
+        assert!(HOST.contains(&format!(r#"export const SDK_VERSION = "{SDK_VERSION}";"#)));
+        let manifest: Value = serde_json::from_str(PACKAGE).unwrap();
+        assert_eq!(manifest["dependencies"]["@cursor/sdk"].as_str(), Some(SDK_VERSION));
+        let lock: Value = serde_json::from_str(LOCK).unwrap();
+        assert_eq!(lock["packages"][""]["dependencies"]["@cursor/sdk"].as_str(), Some(SDK_VERSION));
+        assert_eq!(lock["packages"]["node_modules/@cursor/sdk"]["version"].as_str(), Some(SDK_VERSION));
+    }
+
     #[tokio::test]
     async fn an_earlier_releases_sdk_makes_setup_an_update() {
         let home = tempfile::tempdir().unwrap();
@@ -395,14 +413,14 @@ for line in sys.stdin:
             std::fs::write(package.join("package.json"), format!(r#"{{"version":"{version}"}}"#)).unwrap();
         };
         assert_eq!(previous_version(&context), None);
-        sdk("1.0.9");
         sdk("1.0.35");
+        sdk("1.2.0");
         // A staging folder from an interrupted install is not a release's SDK.
         std::fs::create_dir_all(home.path().join(".kybern/cache/cursor-sdk/.cursor-install-x/node_modules/@cursor/sdk")).unwrap();
-        assert_eq!(previous_version(&context).as_deref(), Some("1.0.35"));
+        assert_eq!(previous_version(&context).as_deref(), Some("1.2.0"));
         // Model discovery says what happened instead of "isn't installed", without starting Node.
         let error = reason_of(probe(&context).await.unwrap_err());
-        assert!(error.contains("SDK 1.0.35") && error.contains(SDK_VERSION) && error.contains("Update it"), "{error}");
+        assert!(error.contains("SDK 1.2.0") && error.contains(SDK_VERSION) && error.contains("Update it"), "{error}");
         // An explicit directory is the only SDK Kybern looks at.
         let explicit = ProbeContext {
             env: std::collections::BTreeMap::from([
@@ -412,6 +430,66 @@ for line in sys.stdin:
             ..Default::default()
         };
         assert_eq!(previous_version(&explicit), None);
+    }
+
+    #[tokio::test]
+    async fn upgrade_from_1_2_0_reports_update_and_installs_pinned_sdk_alongside_old_version() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let old_pkg = home.path().join(".kybern/cache/cursor-sdk/1.2.0/node_modules/@cursor/sdk");
+        std::fs::create_dir_all(&old_pkg).unwrap();
+        std::fs::write(old_pkg.join("package.json"), r#"{"version":"1.2.0"}"#).unwrap();
+
+        let fake_node = bin.join("node");
+        kybern_protocol::process::write_executable(&fake_node, "#!/usr/bin/env sh\necho v24.0.0\n").unwrap();
+        let fake_npm = bin.join("npm");
+        kybern_protocol::process::write_executable(
+            &fake_npm,
+            r#"#!/usr/bin/env python3
+import json, os, pathlib, sys
+assert sys.argv[1:] == ['ci', '--ignore-scripts', '--no-audit', '--no-fund'], sys.argv
+pkg = json.loads(pathlib.Path('package.json').read_text())
+lock = json.loads(pathlib.Path('package-lock.json').read_text())
+version = pkg['dependencies']['@cursor/sdk']
+assert lock['packages']['node_modules/@cursor/sdk']['version'] == version
+out = pathlib.Path('node_modules/@cursor/sdk')
+out.mkdir(parents=True, exist_ok=True)
+(out / 'package.json').write_text(json.dumps({'version': version}))
+"#,
+        )
+        .unwrap();
+
+        let context = ProbeContext {
+            env: std::collections::BTreeMap::from([
+                ("HOME".into(), home.path().display().to_string()),
+                ("PATH".into(), format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default())),
+            ]),
+            ..Default::default()
+        };
+        assert!(!installed(&context));
+        assert_eq!(previous_version(&context).as_deref(), Some("1.2.0"));
+        let err = reason_of(probe(&context).await.unwrap_err());
+        assert!(err.contains("SDK 1.2.0") && err.contains(SDK_VERSION) && err.contains("Update it"), "{err}");
+
+        let destination = {
+            let mut attempts = 0;
+            loop {
+                match install(&context).await {
+                    Err(DriverError::Io(error)) if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 50 => {
+                        attempts += 1;
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                    result => break result.unwrap(),
+                }
+            }
+        };
+        assert_eq!(destination, home.path().join(".kybern/cache/cursor-sdk").join(SDK_VERSION));
+        assert!(installed(&context));
+        // The earlier 1.2.0 directory stays untouched for any running host.
+        assert!(old_pkg.join("package.json").is_file());
+        // Re-running install is a fast idempotent no-op.
+        assert_eq!(install(&context).await.unwrap(), destination);
     }
 
     fn reason_of(error: DriverError) -> String {

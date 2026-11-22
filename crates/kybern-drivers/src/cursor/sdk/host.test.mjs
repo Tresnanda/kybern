@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
+  SDK_VERSION,
   createHost,
   createAccountHost,
   kybernTools,
@@ -20,7 +21,7 @@ import {
   STEER_SETTLE_TIMEOUT_MS,
 } from "./host.mjs";
 
-function fixture({ duringStart, failStart, warmGate, fetch, platform, checkpoint, runRecord, agentRecord, runSteer, steerTimeoutMs, steerSettleTimeoutMs, checkpointSettleMs, checkpointPersistChain } = {}) {
+function fixture({ duringStart, failStart, warmGate, fetch, platform, checkpoint, runRecord, agentRecord, runSteer, runUsage, cancelWithAbort, steerTimeoutMs, steerSettleTimeoutMs, checkpointSettleMs, checkpointPersistChain } = {}) {
   const terminal = Promise.withResolvers();
   const started = Promise.withResolvers();
   const events = [];
@@ -32,9 +33,14 @@ function fixture({ duringStart, failStart, warmGate, fetch, platform, checkpoint
     wait: () => terminal.promise,
     cancel: async () => {
       calls.push(["cancel"]);
-      terminal.resolve({ id: "r1", status: "cancelled" });
+      if (cancelWithAbort) {
+        terminal.reject(new DOMException("aborted", "AbortError"));
+      } else {
+        terminal.resolve({ id: "r1", status: "cancelled" });
+      }
     },
     ...(runSteer !== undefined ? { steer: runSteer } : {}),
+    ...(runUsage !== undefined ? { usage: runUsage } : {}),
   };
   const agent = {
     summarize: async () => { calls.push(["summarize"]); return run; },
@@ -528,7 +534,20 @@ test("unhandled rejection filter ignores only the three known harmless SDK rejec
   );
   assert.deepEqual(runGuard(writeAfterEnd).exits, []);
 
-  // 3. Stall-detector AbortError from onStall.
+  // 3. Stall-detector AbortError: 1.4.2 creates DOMException in reportStall with non-enumerable cursorStallCut=true
+  // (no `onStall` stack frame), and 1.2.0 created it inside `onStall`.
+  const stall142 = new DOMException("the stall detector cut the stream: no activity for 30000 ms", "AbortError");
+  Object.defineProperty(stall142, "cursorStallCut", { value: true });
+  stall142.stack = "AbortError: the stall detector cut the stream: no activity for 30000 ms\n    at Jt.reportStall (977.js:1:48814)\n    at Jt.onStallDetected (977.js:1:46700)";
+  assert.deepEqual(runGuard(stall142).exits, []);
+
+  // 1.4.2 stall-detector marker alone matches even if stack frames are mangled or stripped.
+  const stallTagged = new DOMException("the stall detector cut the stream: heartbeats alone for 90000 ms", "AbortError");
+  Object.defineProperty(stallTagged, "cursorStallCut", { value: true });
+  stallTagged.stack = "AbortError: the stall detector cut the stream\n    at anonymous (977.js:1:1)";
+  assert.deepEqual(runGuard(stallTagged).exits, []);
+
+  // Legacy 1.2.0 stall-detector stack frame (`at Is.onStall`).
   const stall = new DOMException("This operation was aborted", "AbortError");
   stall.stack = "AbortError: This operation was aborted\n    at Is.onStall (689.js:1:111536)";
   assert.deepEqual(runGuard(stall).exits, []);
@@ -543,7 +562,28 @@ test("unhandled rejection filter ignores only the three known harmless SDK rejec
   const otherAbort = new DOMException("onStall was aborted", "AbortError");
   otherAbort.stack = "AbortError: onStall was aborted\n    at somewhereElse (app.js:1:1)";
   assert.deepEqual(runGuard(otherAbort).exits, [1]);
+  const falseTagAbort = new DOMException("aborted", "AbortError");
+  Object.defineProperty(falseTagAbort, "cursorStallCut", { value: false });
+  falseTagAbort.stack = "AbortError: aborted\n    at somewhereElse (app.js:1:1)";
+  assert.deepEqual(runGuard(falseTagAbort).exits, [1]);
   assert.deepEqual(runGuard("unexpected string rejection").exits, [1]);
+});
+
+test("abort-cancelled run forwards partial run.usage and SDK_VERSION matches package.json", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const manifest = JSON.parse(await readFile(new URL("./package.json", import.meta.url), "utf8"));
+  assert.equal(SDK_VERSION, manifest.dependencies["@cursor/sdk"]);
+
+  const usage = { inputTokens: 120, outputTokens: 30, cacheReadTokens: 10, cacheWriteTokens: 0 };
+  const f = fixture({ runUsage: usage, cancelWithAbort: true, checkpointSettleMs: 0 });
+  await open(f.host);
+  await f.host.request({ type: "send", message: { text: "partial" } });
+  const done = f.waitForEvent((e) => e.type === "run_completed");
+  await f.host.request({ type: "cancel" });
+  const completed = await done;
+  assert.equal(completed.result.status, "cancelled");
+  assert.deepEqual(completed.result.usage, usage);
+  await f.host.close();
 });
 
 test("Windows Auto keeps Auto-review on without sandbox and emits a one-time warning notice", async () => {

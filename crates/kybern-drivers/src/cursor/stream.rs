@@ -216,6 +216,11 @@ pub(super) struct Stream {
     root_completed: String,
     last_root: String,
     usage: Usage,
+    /// Usage from completed model calls in the current (not yet ended) turn.
+    /// Mirrors `@cursor/sdk` 1.4.2's `RunInteractionAccumulator`: folded into `usage`
+    /// if `turn-ended` has no usage, replaced when `turn-ended` carries the turn total,
+    /// and included on early cancel/failure when `result.usage` is absent.
+    open_turn_usage: Usage,
     /// The latest root turn ended and no new work has started since.
     turn_ended: bool,
     /// Classifier for the latest root assistant message.
@@ -332,7 +337,7 @@ impl Stream {
             }
             "shell-output-delta" => {
                 let event = &update["event"];
-                // In @cursor/sdk 1.2.0, shell-output-delta carries only {case, value} without a toolCallId.
+                // In @cursor/sdk 1.4.2, shell-output-delta still carries only {case, value} without a toolCallId.
                 // Honor an explicit id if a newer SDK adds one; otherwise attribute only when a single shell
                 // is running, and drop output when multiple shells run concurrently to avoid misattribution.
                 let explicit = event["toolCallId"].as_str().or_else(|| event["callId"].as_str()).or_else(|| update["callId"].as_str());
@@ -345,9 +350,19 @@ impl Stream {
                     }
                 }
             }
-            "turn-ended" => {
+            "model-call-completed" => {
                 if scope == "root" && update["usage"].is_object() {
-                    self.usage.add(&usage(&update["usage"]));
+                    self.open_turn_usage.add(&usage(&update["usage"]));
+                }
+            }
+            "turn-ended" => {
+                if scope == "root" {
+                    if update["usage"].is_object() {
+                        self.usage.add(&usage(&update["usage"]));
+                    } else {
+                        self.usage.add(&self.open_turn_usage);
+                    }
+                    self.open_turn_usage = Usage::default();
                 }
                 // Keep the final message ID alive until RunResult arrives, so
                 // its authoritative text can catch up a missing tail in place.
@@ -516,6 +531,11 @@ impl Stream {
         if let Some(context) = context_usage(&result["contextUsage"]) {
             out.push(DriverEvent::UsageUpdated(ProviderUsage { context: Some(context), limits: None, prompt_cache: None }));
         }
+        let fallback_usage = || {
+            let mut total = self.usage.clone();
+            total.add(&self.open_turn_usage);
+            total
+        };
         let outcome = if let Some(failure) = transport_failure {
             out.push(DriverEvent::turn_failed(ProviderKind::Cursor, failure));
             TurnOutcome::Failed { checkpointed }
@@ -525,7 +545,7 @@ impl Stream {
             }
             out.push(DriverEvent::TurnCompleted {
                 stop_reason: StopReason::Completed,
-                usage: if result["usage"].is_object() { usage(&result["usage"]) } else { self.usage.clone() },
+                usage: if result["usage"].is_object() { usage(&result["usage"]) } else { fallback_usage() },
                 cost_usd: None, // Local billed usage IDs differ from SDK run IDs.
                 duration_ms: result["durationMs"].as_u64().unwrap_or(0),
                 anchors: TurnAnchors { turn_id: self.run.clone(), previous_end: None },
@@ -534,7 +554,7 @@ impl Stream {
         } else if status == "cancelled" {
             out.push(DriverEvent::TurnCompleted {
                 stop_reason: StopReason::Interrupted,
-                usage: if result["usage"].is_object() { usage(&result["usage"]) } else { self.usage.clone() },
+                usage: if result["usage"].is_object() { usage(&result["usage"]) } else { fallback_usage() },
                 cost_usd: None,
                 duration_ms: result["durationMs"].as_u64().unwrap_or(0),
                 anchors: TurnAnchors { turn_id: self.run.clone(), previous_end: None },
@@ -813,7 +833,7 @@ mod tests {
     #[test]
     fn shell_output_delta_attributes_real_sdk_shape_only_when_one_shell_is_running() {
         let mut stream = started();
-        // In @cursor/sdk 1.2.0, `shell-output-delta` carries only `{case, value}` with no toolCallId.
+        // In @cursor/sdk 1.4.2, `shell-output-delta` carries only `{case, value}` with no toolCallId.
         // Without a running shell, output is dropped.
         assert!(
             update(&mut stream, json!({"type": "shell-output-delta", "event": {"case": "stdout", "value": {"data": "orphan\n"}}}))
@@ -1113,5 +1133,33 @@ mod tests {
         ));
         let _ = stream.handle(&json!({"type": "run_completed", "result": {"status": "cancelled", "checkpointed": "unknown"}}));
         assert_eq!(stream.take_outcome(), Some(TurnOutcome::Cancelled { checkpointed: CheckpointState::Unknown }));
+    }
+
+    #[test]
+    fn model_call_completed_usage_survives_cancelled_turn_without_double_counting_ended_turns() {
+        // Turn 1 ends with authoritative turn-ended usage; turn 2 completes one model call then cancels
+        // without turn-ended or result.usage. Total should be turn 1 + turn 2's completed model call.
+        let mut stream = started();
+        update(
+            &mut stream,
+            json!({"type": "model-call-completed", "modelCallId": "mc1", "usage": {"inputTokens": 100, "outputTokens": 20, "cacheReadTokens": 0, "cacheWriteTokens": 0}}),
+        );
+        update(
+            &mut stream,
+            json!({"type": "turn-ended", "usage": {"inputTokens": 100, "outputTokens": 20, "cacheReadTokens": 0, "cacheWriteTokens": 0}}),
+        );
+        update(
+            &mut stream,
+            json!({"type": "model-call-completed", "modelCallId": "mc2", "usage": {"inputTokens": 250, "outputTokens": 40, "cacheReadTokens": 50, "cacheWriteTokens": 10}}),
+        );
+        let events = stream.handle(&json!({"type": "run_completed", "result": {"status": "cancelled", "checkpointed": true}}));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            DriverEvent::TurnCompleted {
+                stop_reason: StopReason::Interrupted,
+                usage: Usage { input_tokens: 350, output_tokens: 60, cache_read_tokens: 50, cache_write_tokens: 10 },
+                ..
+            }
+        )));
     }
 }

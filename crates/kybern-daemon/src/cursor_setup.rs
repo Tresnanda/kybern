@@ -1,7 +1,7 @@
 //! Cursor SDK setup for clients: the install and browser sign-in behind
 //! `kybern cursor install` / `login`, run by the daemon so nobody needs a
 //! terminal. Both run in the background; clients poll `cursor.status`.
-//! The shared driver installer embeds @cursor/sdk 1.2.0 and its exact-pinned
+//! The shared driver installer embeds @cursor/sdk 1.4.2 and its exact-pinned
 //! zod peer dependency, keeping setup and agent hosts on the same lockfile.
 //!
 //! Sign-in is a device-style flow: the SDK polls Cursor until the browser
