@@ -406,7 +406,8 @@ impl ClaudeDriver {
             supported_permission_modes: PermissionMode::ALL.to_vec(),
             supports_fork: true,
             supports_model_switch: true,
-            supports_effort_switch: false,
+            // Live through `apply_flag_settings`; the daemon restarts the session when Claude Code refuses.
+            supports_effort_switch: true,
             supported_efforts: vec!["low".into(), "medium".into(), "high".into(), "xhigh".into(), "max".into()],
             models: vec![
                 ProviderModel {
@@ -2434,8 +2435,14 @@ impl AgentSession for SessionHandle {
         self.0.send_control("set_model", json!({ "model": model })).await.map(|_| ())
     }
 
-    async fn set_effort(&self, _effort: &str) -> Result<()> {
-        Err(DriverError::Unsupported("Claude Code effort is fixed when the session starts; start a new thread to change it".into()))
+    async fn set_effort(&self, effort: &str) -> Result<()> {
+        self.0.send_control("apply_flag_settings", json!({ "settings": { "effortLevel": effort } })).await?;
+        // Claude Code answers success even for a level it ignores; what it applied says whether the change took.
+        let settings = self.0.send_control("get_settings", json!({})).await?;
+        match settings.pointer("/applied/effort").and_then(Value::as_str) {
+            Some(applied) if applied == effort => Ok(()),
+            applied => Err(DriverError::Unsupported(format!("Claude Code kept effort {} instead of {effort}", applied.unwrap_or("unset")))),
+        }
     }
 
     async fn respond_permission(&self, request_id: &str, decision: &ApprovalDecision) -> Result<()> {
@@ -4057,5 +4064,60 @@ mod harness_gap_tests {
             spawned.session.close().await.unwrap();
             assert_eq!(seen[MCP_NONBLOCKING_ENV], expected, "resume {resume:?}, account {account:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod live_target_tests {
+    use super::*;
+
+    /// Answer each control request the session writes as Claude Code 2.1.327 does: `get_settings` reports
+    /// the effort `applied` holds, `apply_flag_settings` changes it unless it is `ignored`.
+    async fn answer_like_claude(session: Arc<ClaudeSession>, child: Arc<NdjsonChild>, ignored: &'static str) {
+        let mut applied = "high".to_string();
+        loop {
+            let frame = { child.lines.lock().await.recv().await };
+            let Some(frame) = frame else { return };
+            let (id, request) = (frame["request_id"].as_str().unwrap_or_default().to_string(), &frame["request"]);
+            let response = match request["subtype"].as_str() {
+                Some("apply_flag_settings") => {
+                    let level = request.pointer("/settings/effortLevel").and_then(Value::as_str).unwrap_or_default();
+                    if level != ignored {
+                        applied = level.to_string();
+                    }
+                    json!({})
+                }
+                Some("get_settings") => json!({ "effective": {}, "applied": { "model": "claude-opus-5-5", "effort": applied } }),
+                Some("set_model") => json!({ "model": "claude-sonnet-5-5" }),
+                _ => continue,
+            };
+            session
+                .handle_frame(json!({"type":"control_response","response":{"subtype":"success","request_id":id,"response":response}}))
+                .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn effort_changes_live_and_a_level_claude_ignores_is_an_error() {
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
+        let (events, _rx) = mpsc::channel(8);
+        let session = Arc::new(ClaudeSession {
+            child: child.clone(),
+            events,
+            pending_control: Mutex::new(HashMap::new()),
+            pending_permissions: Mutex::new(HashMap::new()),
+            state: Mutex::new(TurnState::default()),
+            child_inbox: Mutex::new(ChildInbox::default()),
+            session_id: Mutex::new("test".into()),
+            catalog: None,
+            decline_resume_prompt: false,
+            _native_mcp_config: None,
+        });
+        tokio::spawn(answer_like_claude(session.clone(), child.clone(), "ultra"));
+        let handle = SessionHandle(session, crate::ndjson::SessionLifetime::new(child.clone()));
+        handle.set_effort("low").await.expect("Claude Code applied it");
+        handle.set_model("sonnet").await.unwrap();
+        let refused = handle.set_effort("ultra").await.expect_err("Claude Code kept low");
+        assert!(matches!(refused, DriverError::Unsupported(_)), "{refused}");
     }
 }
