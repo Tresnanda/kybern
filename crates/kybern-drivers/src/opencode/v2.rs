@@ -32,6 +32,10 @@ use crate::{
     SpawnedSession,
 };
 
+/// Sessions asked for per page when listing a thread's subagents, and the most pages read.
+const LIST_PAGE: usize = 100;
+const LIST_PAGES: usize = 8;
+
 /// Instruction entry that carries the Kybern guide and coordinator role.
 const INSTRUCTIONS_KEY: &str = "kybern";
 /// Skills load after the server starts; built-ins always exist once they have.
@@ -1309,20 +1313,22 @@ impl OpencodeSession {
         let mut queue = vec![root.to_string()];
         while let Some(parent) = queue.pop() {
             let mut cursor: Option<String> = None;
-            loop {
-                let mut path = format!("/api/session?parentID={parent}&limit=100");
+            // `cursor.next` is set even on a last page, so a page that is not full ends it.
+            for _ in 0..LIST_PAGES {
+                let mut path = format!("/api/session?parentID={parent}&limit={LIST_PAGE}");
                 if let Some(cursor) = &cursor {
                     path.push_str(&format!("&cursor={cursor}"));
                 }
                 let page = self.server_call(Method::GET, &path, None, CHILD_RULES_TIMEOUT).await?;
-                for id in page["data"].as_array().into_iter().flatten().filter_map(|info| info["id"].as_str()) {
+                let items = page["data"].as_array().map(Vec::as_slice).unwrap_or_default();
+                for id in items.iter().filter_map(|info| info["id"].as_str()) {
                     if id != root && !found.iter().any(|known| known == id) && found.len() < MAX_LISTED_CHILDREN {
                         found.push(id.to_string());
                         queue.push(id.to_string());
                     }
                 }
                 cursor = page.pointer("/cursor/next").and_then(Value::as_str).map(str::to_string);
-                if cursor.is_none() || found.len() >= MAX_LISTED_CHILDREN {
+                if items.len() < LIST_PAGE || cursor.is_none() || found.len() >= MAX_LISTED_CHILDREN {
                     break;
                 }
             }

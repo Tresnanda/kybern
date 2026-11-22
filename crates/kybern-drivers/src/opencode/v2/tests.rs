@@ -425,7 +425,7 @@ async fn an_effort_switch_resends_the_current_model_with_the_variant() {
 // --- Subagent rules, resumed subagents and turn recovery --------------------------------------------------
 
 use crate::AgentDriver;
-use crate::opencode::resilience_tests::{Mock, Reply, fake_opencode, frame, session_config};
+use crate::opencode::resilience_tests::{Mock, Reply, Seen, fake_opencode, frame, session_config};
 
 fn drain(rx: &mut mpsc::Receiver<DriverEvent>) -> Vec<DriverEvent> {
     std::iter::from_fn(|| rx.try_recv().ok()).collect()
@@ -1146,4 +1146,26 @@ async fn a_resumed_threads_subagents_are_rewritten_before_it_runs() {
     assert_eq!(writes.len(), 1);
     assert_eq!(writes[0].body["permissions"], json!(ruleset(PermissionMode::Supervised)));
     spawned.session.close().await.unwrap();
+}
+
+/// OpenCode sets `cursor.next` even on the last page: a short page ends the listing, and a full one
+/// is followed.
+#[tokio::test]
+async fn the_subagent_listing_follows_full_pages_only() {
+    let full: Vec<Value> = (0..LIST_PAGE).map(|i| json!({"id": format!("ses_{i}")})).collect();
+    let mock = Mock::start(move |method, path, nth| match (method, path, nth) {
+        ("GET", "/api/session", 0) => Reply::Json(200, json!({"data": full, "cursor": {"next": "c2"}})),
+        ("GET", "/api/session", 1) => Reply::Json(200, json!({"data": [{"id": "ses_last"}], "cursor": {"next": "c3"}})),
+        _ => Reply::Json(200, json!({"data": [], "cursor": {"next": "c4"}})),
+    })
+    .await;
+    let (session, _rx) = session(&mock.base);
+    let found = session.list_children("ses_root").await.unwrap();
+    assert_eq!(found.len(), LIST_PAGE + 1);
+    assert!(found.contains(&"ses_last".to_string()));
+    let pages: Vec<Seen> = mock.requests("GET", "/api/session");
+    // Two pages for the root, then one for each of its subagents (which have none).
+    assert!(pages[0].query.contains("parentID=ses_root") && !pages[0].query.contains("cursor"));
+    assert!(pages[1].query.contains("cursor=c2"), "{}", pages[1].query);
+    assert_eq!(pages.iter().filter(|page| page.query.contains("parentID=ses_root")).count(), 2, "the short page ended it");
 }
