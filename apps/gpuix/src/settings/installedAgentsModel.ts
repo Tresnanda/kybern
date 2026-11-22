@@ -30,6 +30,11 @@ export function updateLine(record: HarnessUpdate | undefined, now = Date.now()):
   }
 }
 
+/** What a working agent still has to say about itself (Pi left a project's models out, or could not list its models), or null. */
+export function discoveryNote(provider: ProviderStatus): string | null {
+  return provider.available && provider.unavailable_reason ? plainSentence(provider.unavailable_reason.replace(/\s+/g, ' ')) : null
+}
+
 /** The technical text of a failed update, for Show details; null when the last update did not fail. */
 export function failureDetail(record: HarnessUpdate | undefined): string | null {
   return record?.status === 'failed' && !(record.update_available && record.latest_version) && record.message ? record.message : null

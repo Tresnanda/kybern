@@ -10,7 +10,7 @@ import { problemLine } from '../problems/describe.ts'
 import { plainSentence } from '../../../../packages/kybern-client/src/problems.ts'
 import { AGENT_NAMES } from '../onboarding/model.ts'
 import { loadProviders } from '../nav/live.ts'
-import { canCheckForUpdates, canUpdateNow, cursorSdkLine, failureDetail, updateLine } from './installedAgentsModel.ts'
+import { canCheckForUpdates, canUpdateNow, cursorSdkLine, discoveryNote, failureDetail, updateLine } from './installedAgentsModel.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { FONT_MONO } from '../theme.ts'
 import { Button } from '../kit/Button.tsx'
@@ -73,6 +73,7 @@ function AgentRow({ provider, record, cursor, failure, checkable, updatable, sta
   const state = provider.available
     ? provider.binary_path ? <Label color={t.textSecondary} size={12} lineHeight={18} font={FONT_MONO} truncate style={{ maxWidth: 451 }}>{startTruncate(provider.binary_path)}</Label> : null
     : <Label color={t.textSecondary} size={14} lineHeight={21.7} style={{ maxWidth: 451 }}>{sdkLine ?? (provider.unavailable_reason && plainSentence(provider.unavailable_reason)) ?? 'Not found on this machine.'}</Label>
+  const note = discoveryNote(provider)
   const update = failure ? { text: failure, tone: 'warning' as const } : provider.available && (!isCursor || record?.update_available) ? updateLine(record) : null
   const running = record?.status === 'waiting' || record?.status === 'updating'
   const detail = failure ? null : failureDetail(record)
@@ -83,6 +84,7 @@ function AgentRow({ provider, record, cursor, failure, checkable, updatable, sta
     <Row title={provider.display_name} description={
       <div testId={`agent-row-${provider.kind}`} style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
         {state}
+        {note && <Label color={t.textSecondary} size={13} lineHeight={19.5} style={{ maxWidth: 451 }}>{note}</Label>}
         {update && <Label color={update.tone === 'warning' ? t.warning : t.textSecondary} size={13} lineHeight={19.5} style={{ maxWidth: 451 }}>{update.text}</Label>}
         {detail && (details
           ? <div testId={`agent-failure-detail-${provider.kind}`}><Label color={t.textSecondary} size={12} lineHeight={18} font={FONT_MONO} style={{ maxWidth: 451, userSelect: 'text' }}>{detail}</Label></div>

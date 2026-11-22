@@ -1,7 +1,7 @@
 // Installed agents: each line says only what Kybern has read, and the update button appears only where an updater can run.
 import { describe, expect, test } from 'bun:test'
 import type { CursorSetupStatus, HarnessUpdate, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
-import { canCheckForUpdates, canUpdateNow, checkedPhrase, cursorSdkLine, failureDetail, updateLine } from './installedAgentsModel.ts'
+import { canCheckForUpdates, canUpdateNow, checkedPhrase, cursorSdkLine, discoveryNote, failureDetail, updateLine } from './installedAgentsModel.ts'
 
 const now = Date.parse('2026-11-02T12:00:00Z')
 const record = (status: HarnessUpdate['status'], message = '', checked_at: string | null = '2026-11-02T09:00:00Z'): HarnessUpdate =>
@@ -70,5 +70,21 @@ describe('Cursor SDK line', () => {
   test('nothing to add once the SDK is installed', () => {
     expect(cursorSdkLine({ status: sdk({ installed: true }), error: '' })).toBeNull()
     expect(cursorSdkLine({ status: null, error: '' })).toBeNull()
+  })
+})
+
+describe('discovery note', () => {
+  const left = 'Models from this project were left out: Pi asked "Approve project server?" while starting, and only a thread can answer. Start a thread to approve and use them.'
+  test('a working agent shows what Kybern could not read', () => {
+    expect(discoveryNote(provider({ unavailable_reason: left }))).toBe(left)
+    const listing = "Pi's models could not be listed. Start a thread to use its configured model, or refresh models."
+    expect(discoveryNote(provider({ unavailable_reason: listing }))).toBe(listing)
+  })
+  test('an agent that cannot run says why in its first line instead', () => {
+    expect(discoveryNote(provider({ available: false, unavailable_reason: 'Pi is older than the required 1.6.0.' }))).toBeNull()
+  })
+  test('nothing to say, nothing shown; technical text never is', () => {
+    expect(discoveryNote(provider())).toBeNull()
+    expect(discoveryNote(provider({ unavailable_reason: 'Model discovery failed: spawn /home/me/bin/pi ENOENT' }))).toBeNull()
   })
 })
