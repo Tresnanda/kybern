@@ -166,6 +166,7 @@ function ThreadComposer({ thread, placeholderEnter }: { thread: StateThread; pla
   const waitingChat = useNewChat(threadId)?.state === 'waiting'
   const catalog = useComposer((d) => d.catalog)
   const catalogLoading = useComposer((d) => d.catalogLoading)
+  const catalogEpoch = useComposer((d) => d.catalogEpoch)
   const approval = useApp((s) => (s.open.thread?.id === threadId ? s.open.pendingApprovals[0] : null))
   const projectName = useApp(s => s.projects.find(p => p.id === thread.coordinator_project_id)?.name)
 
@@ -178,7 +179,7 @@ function ThreadComposer({ thread, placeholderEnter }: { thread: StateThread; pla
   useEffect(() => {
     if (!pane.frozen) void loadCatalog(threadId, provider, ownProjectId(thread), false, thread.machineId).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [catalogKey, thread.project_id, pane.frozen])
+  }, [catalogKey, thread.project_id, pane.frozen, catalogEpoch])
   const composerProviders = useMemo(
     () => providers.map((status) => (status.kind === provider.kind && catalog?.key === catalogKey ? catalog.status : status)),
     [providers, provider.kind, catalog, catalogKey],
