@@ -650,13 +650,10 @@ struct Inner {
     lead_git: crate::lead_git::LeadGitConfig,
     /// Coordinator context rotations in progress, and the handoff deadline.
     rotation: rotation::RotationState,
-    /// In-flight Antigravity thinking-signature recoveries, so Stop cancels them cleanly
-    /// instead of failing with "no live session" or letting the retry start after Stop.
-    antigravity_recoveries: std::sync::Mutex<HashMap<ThreadId, antigravity_rules::RecoveryEntry>>,
     /// Compactions planned for idle threads ("Compact idle threads: Before the cache expires").
     idle_compactions: idle_compaction::IdleCompactions,
     older_sweeps: older::OlderSweeps,
-    /// Turns moving to a new session (a lost conversation, a rejected login), so Stop ends them (`resend.rs`).
+    /// Turns moving to a new session (a lost conversation, a rejected login, a poisoned Antigravity signature), so Stop ends them (`resend.rs`).
     resends: resend::Resends,
 }
 
@@ -1107,7 +1104,6 @@ impl Orchestrator {
                 messaging: Default::default(),
                 lead_git: Default::default(),
                 rotation: Default::default(),
-                antigravity_recoveries: std::sync::Mutex::new(HashMap::new()),
                 idle_compactions: Default::default(),
                 older_sweeps: Default::default(),
                 resends: Default::default(),
@@ -4346,7 +4342,8 @@ impl Orchestrator {
         let anchors = |c: &Checkpoint| TurnAnchors { turn_id: c.provider_turn_id.clone(), previous_end: c.provider_turn_end.clone() };
         let conversation_rewound = if idx == 0 {
             t.provider_session_id = None;
-            let _ = self.inner.store.meta_set(&format!("handoff:{thread_id}"), "");
+            self.save_account_binding(&t)?;
+            self.set_rewind_handoff(thread_id, turn_id)?;
             true
         } else if t.provider_session_id.is_none() {
             self.set_rewind_handoff(thread_id, turn_id)?;
@@ -5793,10 +5790,17 @@ impl Orchestrator {
                 // conversation this session resumed: continue on a fresh one. The resend is registered while
                 // `live.turn` is held, so a Stop waiting for it finds the resend, and carried out after it is
                 // released: it takes `sessions`, which `force_interrupt` takes first.
-                let resend = (turn.internal.is_none() && !retiring)
+                let resend = turn
+                    .internal
+                    .is_none()
                     .then(|| {
-                        self.plan_login_recovery(thread_id, live, turn.id, &error)
-                            .or_else(|| self.plan_missing_conversation(thread_id, live, turn.id, &error, false))
+                        (!retiring)
+                            .then(|| {
+                                self.plan_login_recovery(thread_id, live, turn.id, &error)
+                                    .or_else(|| self.plan_missing_conversation(thread_id, live, turn.id, &error, false))
+                            })
+                            .flatten()
+                            .or_else(|| self.plan_antigravity_signature(thread_id, live, turn.id, retiring, &error, problem.as_ref()))
                     })
                     .flatten();
                 if let Some(plan) = resend {
@@ -5805,23 +5809,10 @@ impl Orchestrator {
                     self.run_resend(thread_id, live, plan).await;
                     return Ok(());
                 }
-                let agy_sig = turn.internal.is_none()
-                    && turn.provider == ProviderKind::Antigravity
-                    && antigravity_rules::is_signature_failure(&error, problem.as_ref());
-                let turn_id = turn.id;
-                // Register recovery cancellation before dropping `turn_guard` so Stop cannot slip
-                // through between clearing `live.turn` and starting recovery, and release `turn_guard`
-                // before `recover_antigravity_thinking_signature` takes `self.inner.sessions`
-                // (avoiding lock-order inversion with `force_interrupt`).
-                let recovery_guard = agy_sig.then(|| self.begin_antigravity_recovery(thread_id, turn_id));
                 turn.completed = true;
+                let turn_id = turn.id;
                 *turn_guard = None;
                 drop(turn_guard);
-                if let Some(guard) = recovery_guard
-                    && self.recover_antigravity_thinking_signature(thread_id, live, turn_id, retiring, guard).await
-                {
-                    return Ok(());
-                }
                 self.resolve_finished_requests(thread_id, turn_id, live).await?;
                 let mut t = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?;
                 let has_active_tasks =
