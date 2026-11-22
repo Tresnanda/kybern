@@ -1,6 +1,7 @@
 //! Newline-delimited JSON over a child process's stdio.
 
 use std::process::Stdio;
+use std::sync::Arc;
 
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -21,6 +22,19 @@ pub struct NdjsonChild {
     stop_requested: std::sync::atomic::AtomicBool,
     /// Lines the process wrote on stdout or stderr, JSON or not: a sign of life while it starts.
     output_lines: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// The last stderr lines, whoever reads `stderr`, for saying why the
+    /// process exited.
+    stderr_tail: Arc<StderrTail>,
+}
+
+/// How many stderr lines [`NdjsonChild::stderr_tail`] keeps, and how long each may be.
+const STDERR_TAIL_LINES: usize = 8;
+const STDERR_LINE_CHARS: usize = 500;
+
+#[derive(Default)]
+struct StderrTail {
+    lines: std::sync::Mutex<std::collections::VecDeque<String>>,
+    closed: std::sync::atomic::AtomicBool,
 }
 
 /// How a provider process ended.
@@ -104,13 +118,23 @@ impl NdjsonChild {
 
         let (err_tx, err_rx) = mpsc::channel::<String>(256);
         let stderr_lines = output_lines.clone();
+        let stderr_tail = Arc::new(StderrTail::default());
+        let tail = stderr_tail.clone();
         tokio::spawn(async move {
             let mut reader = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = reader.next_line().await {
                 stderr_lines.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 tracing::debug!(target: "provider.stderr", "{line}");
+                if !line.trim().is_empty() {
+                    let mut lines = tail.lines.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                    if lines.len() == STDERR_TAIL_LINES {
+                        lines.pop_front();
+                    }
+                    lines.push_back(line.chars().take(STDERR_LINE_CHARS).collect());
+                }
                 let _ = err_tx.try_send(line);
             }
+            tail.closed.store(true, std::sync::atomic::Ordering::Release);
         });
 
         Ok(Self {
@@ -121,12 +145,29 @@ impl NdjsonChild {
             stderr: Mutex::new(err_rx),
             stop_requested: std::sync::atomic::AtomicBool::new(false),
             output_lines,
+            stderr_tail,
         })
     }
 
     /// How many lines the process has written on stdout and stderr together. It only grows.
     pub fn output_lines(&self) -> u64 {
         self.output_lines.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// The process id, until the process has been reaped.
+    pub fn pid(&self) -> Option<u32> {
+        self.tree.lock().unwrap().as_ref().map(|tree| tree.pid())
+    }
+
+    /// The last few stderr lines, joined. Waits briefly for stderr to close,
+    /// since its last lines can arrive after stdout has.
+    pub async fn stderr_tail(&self) -> String {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(250);
+        while !self.stderr_tail.closed.load(std::sync::atomic::Ordering::Acquire) && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let lines = self.stderr_tail.lines.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        lines.iter().map(String::as_str).collect::<Vec<_>>().join("\n")
     }
 
     pub async fn write(&self, value: &Value) -> Result<()> {
@@ -287,6 +328,19 @@ mod lifecycle_tests {
         ready(&child).await;
         child.kill().await;
         assert!(matches!(child.wait_end().await, ProcessEnd::Signal { requested: true, .. }));
+    }
+
+    #[tokio::test]
+    async fn stderr_tail_keeps_the_last_lines_whoever_reads_stderr() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "i=0; while [ $i -lt 20 ]; do echo \"line $i\" >&2; i=$((i+1)); done; printf '' >&2; exit 3"]);
+        let child = NdjsonChild::spawn(cmd).unwrap();
+        assert_eq!(tokio::time::timeout(Duration::from_secs(2), child.wait()).await.unwrap(), Some(3));
+        let tail = child.stderr_tail().await;
+        let lines = tail.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), STDERR_TAIL_LINES);
+        assert_eq!(lines.last(), Some(&"line 19"));
+        assert_eq!(lines[0], "line 12");
     }
 
     #[tokio::test]

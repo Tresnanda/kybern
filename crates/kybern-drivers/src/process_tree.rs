@@ -293,6 +293,31 @@ pub(crate) async fn output(command: &mut tokio::process::Command) -> std::io::Re
     result
 }
 
+/// Like [`output`], with `input` written to the command's stdin, then closed.
+/// For prompts, which on the command line show in every process listing and
+/// can exceed its length limit.
+pub(crate) async fn output_with_input(command: &mut tokio::process::Command, input: &[u8]) -> std::io::Result<std::process::Output> {
+    use tokio::io::AsyncWriteExt;
+    command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(false);
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command.spawn().map_err(|error| crate::binary::explain_spawn_error(error, command.as_std().get_program()))?;
+    let tree = ProcessTree::new(child.id().expect("spawned provider command"));
+    let stdin = child.stdin.take();
+    let input = input.to_vec();
+    // Written beside the wait: a command that answers before reading all of
+    // its input must not block the write, nor the write block reading it.
+    let writer = tokio::spawn(async move {
+        if let Some(mut stdin) = stdin {
+            let _ = stdin.write_all(&input).await;
+        }
+    });
+    let result = child.wait_with_output().await;
+    writer.abort();
+    drop(tree);
+    result
+}
+
 /// What a command wrote until it ended, or until it was stopped.
 pub(crate) struct Partial {
     /// `None` when the command was stopped before it exited.

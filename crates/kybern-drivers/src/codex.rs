@@ -29,9 +29,15 @@ const MIN_VERSION: (u64, u64, u64) = (0, 140, 0);
 #[derive(Default)]
 pub struct CodexDriver;
 
+/// How long a discovery call may take. A cold or loaded Codex can take well
+/// over 3 seconds to initialize (plugins, MCP, marketplaces) and still be fine.
+fn catalog_timeout(method: &str) -> std::time::Duration {
+    std::time::Duration::from_secs(if method == "initialize" { 30 } else { 15 })
+}
+
 async fn catalog_call(child: &NdjsonChild, id: i64, method: &str, params: Value) -> Option<Value> {
     child.write(&json!({ "id": id, "method": method, "params": params })).await.ok()?;
-    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+    tokio::time::timeout(catalog_timeout(method), async {
         loop {
             let frame = {
                 let mut lines = child.lines.lock().await;
@@ -114,11 +120,11 @@ async fn codex_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<Prov
     .await
     .is_some();
     if !initialized {
-        child.kill().await;
+        stop_after_startup_work(child);
         return Vec::new();
     }
     if child.write(&json!({ "method": "initialized" })).await.is_err() {
-        child.kill().await;
+        stop_after_startup_work(child);
         return Vec::new();
     }
 
@@ -138,7 +144,7 @@ async fn codex_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<Prov
             break;
         }
     }
-    child.kill().await;
+    stop_after_startup_work(child);
     models
 }
 
@@ -149,6 +155,100 @@ fn config_overrides(compaction: &crate::CompactionLaunch) -> Vec<String> {
         .auto_compact_tokens
         .map(|tokens| vec!["-c".to_string(), format!("model_auto_compact_token_limit={tokens}")])
         .unwrap_or_default()
+}
+
+/// Features a title or summary must not start: they would act on its prompt.
+const ONE_SHOT_FEATURES_OFF: [&str; 5] =
+    ["features.apps=false", "features.connectors=false", "features.plugins=false", "features.hooks=false", "features.codex_hooks=false"];
+
+/// Arguments for a one-shot `codex exec` (a title or summary). Nothing is saved
+/// to the user's session list (`--ephemeral`), none of their MCP servers,
+/// apps, plugins or hooks run, and the prompt is read from stdin (`-`).
+fn one_shot_args(last_message: &std::path::Path, mcp_servers: &[String]) -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = Vec::new();
+    // `mcp_servers={}` merges with config.toml instead of replacing it, so each
+    // enabled server is turned off by name. A JSON string is a TOML key too.
+    if !mcp_servers.is_empty() {
+        let table = mcp_servers
+            .iter()
+            .map(|name| format!("{}={{enabled=false}}", serde_json::to_string(name).unwrap_or_default()))
+            .collect::<Vec<_>>()
+            .join(",");
+        args.extend(["-c".into(), format!("mcp_servers={{{table}}}").into()]);
+    }
+    for feature in ONE_SHOT_FEATURES_OFF {
+        args.extend(["-c".into(), feature.into()]);
+    }
+    args.extend(["exec", "--ephemeral", "-s", "read-only", "--skip-git-repo-check", "--output-last-message"].map(Into::into));
+    args.push(last_message.into());
+    args.push("-".into());
+    args
+}
+
+/// The MCP servers the user's config enables here, to turn off for a one-shot.
+/// Empty when `codex mcp list` fails: the one-shot then keeps them.
+async fn enabled_mcp_servers(
+    bin: &std::path::Path,
+    cwd: &std::path::Path,
+    env: &std::collections::BTreeMap<String, String>,
+) -> Vec<String> {
+    let mut cmd = crate::binary::command(bin).no_window();
+    cmd.current_dir(cwd).envs(env);
+    for feature in &ONE_SHOT_FEATURES_OFF[..3] {
+        cmd.args(["-c", feature]);
+    }
+    cmd.args(["mcp", "list", "--json"]);
+    let output = match tokio::time::timeout(std::time::Duration::from_secs(10), crate::process_tree::output(&mut cmd)).await {
+        Ok(Ok(output)) if output.status.success() => output,
+        _ => {
+            tracing::warn!("codex mcp list failed; this one-shot keeps the user's MCP servers");
+            return Vec::new();
+        }
+    };
+    serde_json::from_slice::<Vec<Value>>(&output.stdout)
+        .unwrap_or_default()
+        .iter()
+        .filter(|server| server.get("enabled").and_then(Value::as_bool).unwrap_or(true))
+        .filter_map(|server| server.get("name").and_then(Value::as_str).map(str::to_string))
+        .collect()
+}
+
+/// Stop a discovery app-server without cutting off its startup work. Codex
+/// runs git (ssh for ssh remotes) to refresh plugin marketplaces at launch and
+/// does not wait for it; stopping the process group mid-fetch kills ssh in the
+/// middle of an SSH-agent request. Input closes now, so Codex itself exits;
+/// the group is stopped once only Codex is left in it, or after a minute.
+fn stop_after_startup_work(child: NdjsonChild) {
+    tokio::spawn(async move {
+        let _ = child.close_stdin().await;
+        if let Some(pid) = child.pid() {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+            while tokio::time::Instant::now() < deadline && process_group_busy(pid).await {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+        }
+        stop_after_startup_work(child);
+    });
+}
+
+/// Whether the process group led by `pid` has members besides its leader.
+#[cfg(unix)]
+async fn process_group_busy(pid: u32) -> bool {
+    let mut pgrep = tokio::process::Command::new("pgrep");
+    pgrep.args(["-g", &pid.to_string()]).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    match tokio::time::timeout(std::time::Duration::from_secs(5), pgrep.output()).await {
+        Ok(Ok(output)) => {
+            String::from_utf8_lossy(&output.stdout).lines().filter_map(|line| line.trim().parse::<u32>().ok()).any(|member| member != pid)
+        }
+        // No pgrep: stop now, as before.
+        _ => false,
+    }
+}
+
+/// Windows stops the job object's processes together; there is no group to watch.
+#[cfg(not(unix))]
+async fn process_group_busy(_pid: u32) -> bool {
+    false
 }
 
 /// Read the account's current rate limits straight from the Codex app-server,
@@ -175,12 +275,12 @@ pub async fn read_account_limits(
     .await
     .is_some();
     if !initialized || child.write(&json!({ "method": "initialized" })).await.is_err() {
-        child.kill().await;
+        stop_after_startup_work(child);
         return None;
     }
     let result = catalog_call(&child, 2, "account/rateLimits/read", json!({})).await;
-    child.kill().await;
-    parse_rate_limits(&result?["rateLimits"])
+    stop_after_startup_work(child);
+    account_limits(&result?)
 }
 
 /// Ask Codex's own app-server for its effective skill catalog. This preserves
@@ -207,7 +307,7 @@ pub async fn discover_skills(
     .await
     .is_some();
     if !initialized || child.write(&json!({ "method": "initialized" })).await.is_err() {
-        child.kill().await;
+        stop_after_startup_work(child);
         return None;
     }
 
@@ -224,7 +324,7 @@ pub async fn discover_skills(
             break;
         }
     }
-    child.kill().await;
+    stop_after_startup_work(child);
     let result = result?;
     let entries = result.get("data")?.as_array()?;
     let entry =
@@ -426,27 +526,22 @@ impl AgentDriver for CodexDriver {
         let bin = resolve(ProviderKind::Codex, binary)?;
         let dir = tempfile_dir()?;
         let last = dir.join("last.txt");
+        let mcp_servers = enabled_mcp_servers(&bin, cwd, env).await;
         let out = tokio::time::timeout(
             std::time::Duration::from_secs(90),
-            crate::process_tree::output(
-                crate::binary::command(&bin)
-                    .no_window()
-                    .current_dir(cwd)
-                    .args(["exec", "-s", "read-only", "--skip-git-repo-check", "--output-last-message"])
-                    .arg(&last)
-                    .arg(prompt)
-                    .envs(env)
-                    .kill_on_drop(true)
-                    .stdin(std::process::Stdio::null()),
+            crate::process_tree::output_with_input(
+                crate::binary::command(&bin).no_window().current_dir(cwd).args(one_shot_args(&last, &mcp_servers)).envs(env),
+                prompt.as_bytes(),
             ),
         )
-        .await
-        .map_err(|_| DriverError::Protocol("codex one-shot timed out".into()))??;
+        .await;
+        let text = tokio::fs::read_to_string(&last).await;
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        let out = out.map_err(|_| DriverError::Protocol("codex one-shot timed out".into()))??;
         if !out.status.success() {
             return Err(DriverError::Protocol(format!("codex exited with {}", out.status)));
         }
-        let text = tokio::fs::read_to_string(&last).await.unwrap_or_else(|_| String::from_utf8_lossy(&out.stdout).to_string());
-        let _ = tokio::fs::remove_dir_all(&dir).await;
+        let text = text.unwrap_or_else(|_| String::from_utf8_lossy(&out.stdout).to_string());
         Ok(text.trim().to_string())
     }
 
@@ -482,34 +577,10 @@ impl AgentDriver for CodexDriver {
 
         let mut lifetime = crate::ndjson::SessionLifetime::new(child.clone());
         let (tx, rx) = mpsc::channel(1024);
-        let session = Arc::new(CodexSession {
-            child,
-            events: tx,
-            next_id: AtomicI64::new(1),
-            pending: Mutex::new(HashMap::new()),
-            pending_approvals: Mutex::new(HashMap::new()),
-            pending_app_tools: Mutex::new(HashMap::new()),
-            notification_gate: Mutex::new(()),
-            state: Mutex::new(State {
-                manual_compaction: false,
-                deferred_notifications: Vec::new(),
-                thread_id: None,
-                turn_id: None,
-                mode: config.permission_mode,
-                model: config.model.clone(),
-                effort: config.effort.clone(),
-                cwd: config.cwd.clone(),
-                last_total_tokens: None,
-                message_ids: HashMap::new(),
-                file_changes: HashMap::new(),
-                subagents: HashMap::new(),
-                background_processes: HashMap::new(),
-                stopping_processes: HashSet::new(),
-            }),
-            turn_usage: Mutex::new(None),
-            bridge: config.native_tool_bridge.clone(),
-            closed: AtomicBool::new(false),
-        });
+        let mut state = State::new(config.permission_mode);
+        state.model = config.model.clone();
+        state.effort = config.effort.clone();
+        let session = CodexSession::new(child, tx, state, config.native_tool_bridge.clone());
         let reader = session.clone();
         lifetime.track(tokio::spawn(async move { reader.read_loop().await }));
 
@@ -548,8 +619,14 @@ impl AgentDriver for CodexDriver {
             }
         }
 
-        let (approval, sandbox) = policy_for(config.permission_mode);
-        let mut params = json!({ "cwd": config.cwd, "approvalPolicy": approval, "sandbox": sandbox });
+        let policy = policy_for(config.permission_mode);
+        let mut params = json!({
+            "cwd": config.cwd,
+            "approvalPolicy": policy.approval,
+            "approvalsReviewer": policy.reviewer,
+            "sandbox": policy.sandbox,
+            "config": thread_config(),
+        });
         if let Some(bridge) = config.native_tool_bridge.as_ref() {
             params["dynamicTools"] = Value::Array(
                 bridge
@@ -600,7 +677,7 @@ impl AgentDriver for CodexDriver {
         let usage_session = session.clone();
         lifetime.track(tokio::spawn(async move {
             if let Ok(value) = usage_session.call("account/rateLimits/read", json!({})).await
-                && let Some(limits) = parse_rate_limits(&value["rateLimits"])
+                && let Some(limits) = account_limits(&value)
             {
                 usage_session
                     .emit(DriverEvent::UsageUpdated(kybern_protocol::ProviderUsage {
@@ -613,6 +690,9 @@ impl AgentDriver for CodexDriver {
         }));
         let monitor = session.clone();
         lifetime.track(tokio::spawn(async move { monitor.poll_background_terminals().await }));
+        let watchdog = session.clone();
+        lifetime
+            .track(tokio::spawn(async move { watchdog.watch_retry_stalls(RETRY_STALL_TIMEOUT, std::time::Duration::from_secs(5)).await }));
 
         Ok(SpawnedSession { session: Box::new(Handle(session, lifetime)), events: rx })
     }
@@ -631,36 +711,137 @@ fn validate_codex_bridge(bridge: &NativeToolBridge) -> Result<()> {
     Ok(())
 }
 
-/// (approvalPolicy, sandbox mode) for a kybern permission mode.
-fn policy_for(mode: PermissionMode) -> (&'static str, &'static str) {
+/// What Codex is told for a Kybern permission mode. Codex 0.140 accepts all of
+/// these: the granular approval policy, the `auto_review` reviewer and
+/// `item/permissions/requestApproval`.
+struct Policy {
+    approval: Value,
+    reviewer: &'static str,
+    /// The `sandbox` mode of `thread/start`, `thread/resume` and `thread/fork`.
+    sandbox: &'static str,
+}
+
+fn policy_for(mode: PermissionMode) -> Policy {
+    let (approval, reviewer, sandbox) = match mode {
+        PermissionMode::Supervised => (json!("untrusted"), "user", "workspace-write"),
+        PermissionMode::AcceptEdits => (json!("on-request"), "user", "workspace-write"),
+        // Codex's own reviewer answers sandbox escapes (network, git metadata), so
+        // they are no longer refused outright.
+        PermissionMode::Auto => (json!("on-request"), "auto_review", "workspace-write"),
+        // `never` also refuses MCP and app prompts (browser, Computer Use)
+        // before Kybern sees them. Everything else stays unasked.
+        PermissionMode::FullAccess => (
+            json!({ "granular": {
+                "mcp_elicitations": true,
+                "request_permissions": false,
+                "rules": false,
+                "sandbox_approval": false,
+                "skill_approval": false,
+            } }),
+            "user",
+            "danger-full-access",
+        ),
+    };
+    Policy { approval, reviewer, sandbox }
+}
+
+/// The `turn/start` sandbox for a mode, sent only when the mode's sandbox
+/// changes. The thread starts with the plain `sandbox` mode, which keeps the
+/// user's `config.toml` (writable roots, network access); a turn that names a
+/// policy replaces it. A bare `workspaceWrite` still writes in the workspace,
+/// `/tmp` and `$TMPDIR`.
+fn sandbox_policy_for(mode: PermissionMode) -> Value {
     match mode {
-        PermissionMode::Supervised => ("untrusted", "workspace-write"),
-        PermissionMode::AcceptEdits => ("on-request", "workspace-write"),
-        PermissionMode::Auto => ("never", "workspace-write"),
-        PermissionMode::FullAccess => ("never", "danger-full-access"),
+        PermissionMode::FullAccess => json!({ "type": "dangerFullAccess" }),
+        _ => json!({ "type": "workspaceWrite" }),
     }
 }
 
-fn sandbox_policy_for(mode: PermissionMode, cwd: &std::path::Path) -> Value {
-    match mode {
-        PermissionMode::FullAccess => json!({ "type": "dangerFullAccess" }),
-        _ => {
-            json!({ "type": "workspaceWrite", "writableRoots": [cwd], "networkAccess": false, "excludeTmpdirEnvVar": false, "excludeSlashTmp": false })
+/// Per-thread config for this process: Codex 0.152 made the plan tool opt-in.
+/// Older versions ignore the key and keep the tool on.
+fn thread_config() -> Value {
+    json!({ "tools.update_plan.enabled": true })
+}
+
+/// A Codex approval that "Allow for this session" covers for the rest of the
+/// session in the same permission mode. Codex's own `acceptForSession` skips
+/// only the exact command it answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Allowance {
+    Command,
+    FileChange,
+}
+
+/// The Codex thread an approval request belongs to (the root or a subagent).
+fn codex_thread_of(params: &Value) -> String {
+    params.get("threadId").and_then(Value::as_str).unwrap_or_default().to_string()
+}
+
+/// What an `item/permissions/requestApproval` asks for, as the request's
+/// summary: "Allow network access and writes to /repo/.git".
+fn permissions_summary(permissions: &Value) -> String {
+    let paths = |access: &str| -> Vec<String> {
+        let fs = &permissions["fileSystem"];
+        let mut out: Vec<String> = fs[access].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+        for entry in fs["entries"].as_array().into_iter().flatten().filter(|entry| entry["access"] == access) {
+            let path = &entry["path"];
+            let label = path["path"]
+                .as_str()
+                .or_else(|| path["pattern"].as_str())
+                .or_else(|| path["value"]["path"].as_str())
+                .or_else(|| path["value"]["kind"].as_str());
+            if let Some(label) = label.filter(|label| !out.iter().any(|seen| seen == label)) {
+                out.push(label.to_string());
+            }
+        }
+        out
+    };
+    let mut asks = Vec::new();
+    if permissions.pointer("/network/enabled").and_then(Value::as_bool) == Some(true) {
+        asks.push("network access".to_string());
+    }
+    for (access, noun) in [("write", "writes to"), ("read", "reads of")] {
+        let paths = paths(access);
+        if !paths.is_empty() {
+            asks.push(format!("{noun} {}", paths.join(", ")));
         }
     }
+    if asks.is_empty() { "Grant additional permissions".into() } else { format!("Allow {}", asks.join(" and ")) }
+}
+
+/// How long a turn may sit after Codex said it will retry, without any
+/// progress, before Kybern ends it. Retries that recover resume within about
+/// 75 seconds.
+const RETRY_STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+struct RetryStall {
+    since: tokio::time::Instant,
+    turn_id: Option<String>,
+    message: String,
+    info: Option<Value>,
 }
 
 struct State {
-    manual_compaction: bool,
     deferred_notifications: Vec<(String, Value)>,
     thread_id: Option<String>,
     turn_id: Option<String>,
     mode: PermissionMode,
     model: Option<String>,
     effort: Option<String>,
-    cwd: PathBuf,
-    /// Cumulative thread total at the end of the previous turn, to compute per-turn usage.
+    /// The sandbox mode the Codex thread runs with now (`Policy::sandbox`).
+    sandbox: &'static str,
+    /// Approvals "Allow for this session" covers, by Codex thread id. A
+    /// permission mode change ends them.
+    allowances: HashMap<String, HashSet<Allowance>>,
+    /// The thread total at the previous `thread/tokenUsage/updated`, to turn
+    /// totals into per-turn usage. `None` until the first update after a
+    /// spawn, resume or fork.
     last_total_tokens: Option<Usage>,
+    /// Codex said it will retry and nothing has happened since.
+    retrying: Option<RetryStall>,
+    /// Turns Kybern already ended (a stalled retry); their late
+    /// `turn/completed` is not reported twice.
+    abandoned_turns: HashSet<String>,
     /// Agent message item ids seen this turn (for completion bookkeeping).
     message_ids: HashMap<String, ()>,
     /// fileChange item id -> changes[], so the approval card can show the diff.
@@ -670,6 +851,29 @@ struct State {
     /// Process ids returned by the experimental background terminal API.
     background_processes: HashMap<String, RuntimeTaskStats>,
     stopping_processes: HashSet<String>,
+}
+
+impl State {
+    fn new(mode: PermissionMode) -> Self {
+        Self {
+            deferred_notifications: Vec::new(),
+            thread_id: None,
+            turn_id: None,
+            mode,
+            model: None,
+            effort: None,
+            sandbox: policy_for(mode).sandbox,
+            allowances: HashMap::new(),
+            last_total_tokens: None,
+            retrying: None,
+            abandoned_turns: HashSet::new(),
+            message_ids: HashMap::new(),
+            file_changes: HashMap::new(),
+            subagents: HashMap::new(),
+            background_processes: HashMap::new(),
+            stopping_processes: HashSet::new(),
+        }
+    }
 }
 
 struct CodexSession {
@@ -699,9 +903,42 @@ fn lent_logins() -> &'static std::sync::Mutex<HashMap<usize, Arc<dyn crate::logi
 }
 
 impl CodexSession {
+    fn new(child: Arc<NdjsonChild>, events: mpsc::Sender<DriverEvent>, state: State, bridge: Option<NativeToolBridge>) -> Arc<Self> {
+        Arc::new(Self {
+            child,
+            events,
+            next_id: AtomicI64::new(1),
+            pending: Mutex::new(HashMap::new()),
+            pending_approvals: Mutex::new(HashMap::new()),
+            pending_app_tools: Mutex::new(HashMap::new()),
+            notification_gate: Mutex::new(()),
+            state: Mutex::new(state),
+            turn_usage: Mutex::new(None),
+            bridge,
+            closed: AtomicBool::new(false),
+        })
+    }
+
     fn lent_key(&self) -> usize {
         Arc::as_ptr(&self.child) as usize
     }
+
+    async fn allowed(&self, thread: &str, kind: Allowance) -> bool {
+        self.state.lock().await.allowances.get(thread).is_some_and(|kinds| kinds.contains(&kind))
+    }
+}
+
+#[cfg(test)]
+fn test_session(
+    child: Arc<NdjsonChild>,
+    events: mpsc::Sender<DriverEvent>,
+    thread_id: Option<&str>,
+    turn_id: Option<&str>,
+) -> Arc<CodexSession> {
+    let mut state = State::new(PermissionMode::Supervised);
+    state.thread_id = thread_id.map(str::to_string);
+    state.turn_id = turn_id.map(str::to_string);
+    CodexSession::new(child, events, state, None)
 }
 
 struct PendingAppTool {
@@ -709,10 +946,15 @@ struct PendingAppTool {
     turn_id: Option<String>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum ApprovalKind {
-    Command,
-    FileChange,
+    /// A command or network approval; `Some` when "Allow for this session"
+    /// should cover more of the same kind on this Codex thread.
+    Command(Option<(String, Allowance)>),
+    FileChange(Option<String>),
+    /// `item/permissions/requestApproval`, with the permissions it asked for:
+    /// an approval grants exactly those.
+    Permissions(Value),
     UserInput,
     Elicitation,
 }
@@ -866,6 +1108,55 @@ impl CodexSession {
         }
     }
 
+    /// End turns Codex said it would retry and then never resumed: without
+    /// this the thread would show as working forever.
+    async fn watch_retry_stalls(self: Arc<Self>, stall: std::time::Duration, tick: std::time::Duration) {
+        loop {
+            tokio::time::sleep(tick).await;
+            if self.closed.load(Ordering::Relaxed) {
+                return;
+            }
+            self.fail_stalled_retry(stall).await;
+        }
+    }
+
+    /// Fail the turn when its retry has waited `stall` with no progress, then
+    /// ask Codex to stop it. `true` when it did.
+    async fn fail_stalled_retry(&self, stall: std::time::Duration) -> bool {
+        let (thread_id, turn_id, message, info) = {
+            // Serialized with notifications, so progress cannot slip in between.
+            let _gate = self.notification_gate.lock().await;
+            let mut st = self.state.lock().await;
+            if st.retrying.as_ref().is_none_or(|retry| retry.since.elapsed() < stall) {
+                return false;
+            }
+            let Some(retry) = st.retrying.take() else { return false };
+            let turn_id = retry.turn_id.or_else(|| st.turn_id.clone());
+            if let Some(turn_id) = &turn_id {
+                st.abandoned_turns.insert(turn_id.clone());
+            }
+            st.turn_id = None;
+            st.message_ids.clear();
+            st.file_changes.clear();
+            (st.thread_id.clone(), turn_id, retry.message, retry.info)
+        };
+        self.pending_approvals.lock().await.clear();
+        *self.turn_usage.lock().await = None;
+        let problem = crate::failure::codex_stalled_retry(info.as_ref(), &message);
+        self.emit(DriverEvent::TurnFailed {
+            error: format!("Codex stopped responding while it retried: {message}"),
+            problem: Some(problem),
+        })
+        .await;
+        if let (Some(thread_id), Some(turn_id)) = (thread_id, turn_id) {
+            let interrupt = self.call("turn/interrupt", json!({ "threadId": thread_id, "turnId": turn_id }));
+            if let Ok(Err(error)) = tokio::time::timeout(std::time::Duration::from_secs(10), interrupt).await {
+                tracing::warn!(%error, "could not stop a Codex turn stuck in a retry");
+            }
+        }
+        true
+    }
+
     async fn respond(&self, id: &Value, result: std::result::Result<Value, String>) -> Result<()> {
         let frame = match result {
             Ok(r) => json!({ "id": id, "result": r }),
@@ -886,12 +1177,21 @@ impl CodexSession {
         let code = self.child.wait().await;
         self.closed.store(true, Ordering::Relaxed);
         lent_logins().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&self.lent_key());
+        // Codex says why it stopped on stderr (a bad config.toml, a crash).
+        let stderr = self.child.stderr_tail().await;
+        let reason = match (code, stderr.is_empty()) {
+            (Some(c), false) => format!("Codex exited with code {c}: {stderr}"),
+            (Some(c), true) => format!("Codex exited with code {c}"),
+            (None, false) => format!("Codex exited: {stderr}"),
+            (None, true) => "Codex exited".to_string(),
+        };
         for (_, tx) in self.pending.lock().await.drain() {
-            let _ = tx.send(Err("process exited".into()));
+            let _ = tx.send(Err(reason.clone()));
         }
         let error = match code {
             Some(0) | None => None,
-            Some(c) => Some(format!("exit code {c}")),
+            Some(c) if stderr.is_empty() => Some(format!("exit code {c}")),
+            Some(_) => Some(stderr),
         };
         self.emit(DriverEvent::Exited { code, error }).await;
     }
@@ -961,8 +1261,16 @@ impl CodexSession {
             }
             "item/commandExecution/requestApproval" => {
                 let command = params.get("command").and_then(|c| c.as_str()).unwrap_or("").to_string();
+                // A network approval names a host, not a command; Codex remembers that host itself.
+                let allowance = (!command.is_empty()).then(|| (codex_thread_of(params), Allowance::Command));
+                if let Some((thread, kind)) = &allowance
+                    && self.allowed(thread, *kind).await
+                {
+                    let _ = self.respond(&id, Ok(json!({ "decision": "acceptForSession" }))).await;
+                    return;
+                }
                 let key = format!("cmd:{}", serde_json::to_string(&id).unwrap_or_default());
-                self.pending_approvals.lock().await.insert(key.clone(), (id, ApprovalKind::Command));
+                self.pending_approvals.lock().await.insert(key.clone(), (id, ApprovalKind::Command(allowance)));
                 let input = json!({
                     "command": command,
                     "cwd": params.get("cwd"),
@@ -993,8 +1301,15 @@ impl CodexSession {
                     let _ = self.respond(&id, Ok(json!({ "decision": "accept" }))).await;
                     return;
                 }
+                let thread = codex_thread_of(params);
+                // Writing outside the workspace (`grantRoot`) always asks.
+                let grants_root = params.get("grantRoot").is_some_and(|root| !root.is_null());
+                if !grants_root && self.allowed(&thread, Allowance::FileChange).await {
+                    let _ = self.respond(&id, Ok(json!({ "decision": "accept" }))).await;
+                    return;
+                }
                 let key = format!("patch:{}", serde_json::to_string(&id).unwrap_or_default());
-                self.pending_approvals.lock().await.insert(key.clone(), (id, ApprovalKind::FileChange));
+                self.pending_approvals.lock().await.insert(key.clone(), (id, ApprovalKind::FileChange(Some(thread))));
                 let changes = match &item_id {
                     Some(i) => self.state.lock().await.file_changes.get(i).cloned().unwrap_or(Value::Null),
                     None => Value::Null,
@@ -1010,6 +1325,21 @@ impl CodexSession {
                     tool_call_id: item_id,
                     tool_name: "apply_patch".into(),
                     input,
+                    summary,
+                    suggestions: vec![],
+                })
+                .await;
+            }
+            "item/permissions/requestApproval" => {
+                let permissions = params.get("permissions").cloned().unwrap_or_else(|| json!({}));
+                let key = format!("perm:{}", serde_json::to_string(&id).unwrap_or_default());
+                self.pending_approvals.lock().await.insert(key.clone(), (id, ApprovalKind::Permissions(permissions.clone())));
+                let summary = permissions_summary(&permissions);
+                self.emit(DriverEvent::PermissionRequest {
+                    request_id: key,
+                    tool_call_id: item_id,
+                    tool_name: "request_permissions".into(),
+                    input: json!({ "permissions": permissions, "reason": params.get("reason"), "cwd": params.get("cwd") }),
                     summary,
                     suggestions: vec![],
                 })
@@ -1309,6 +1639,10 @@ impl CodexSession {
                 ChildNotificationRoute::Root => {}
             }
         }
+        // Progress on the root turn means a retry recovered.
+        if method.starts_with("item/") || matches!(method, "turn/started" | "turn/plan/updated") {
+            self.state.lock().await.retrying = None;
+        }
         match method {
             "account/rateLimits/updated" => {
                 if let Some(limits) = parse_rate_limits(&p["rateLimits"]) {
@@ -1350,13 +1684,12 @@ impl CodexSession {
                 }
             }
             "turn/plan/updated" => {
-                let steps = p.get("plan").and_then(|s| s.as_array()).map(|a| a.len()).unwrap_or(0);
-                self.emit(DriverEvent::Notice {
-                    level: NoticeLevel::Info,
-                    text: format!("plan updated ({steps} steps)"),
-                    data: Some(p.clone()),
-                })
-                .await;
+                // Each update is the whole plan, shown like any harness's plan tool.
+                let id = format!("plan:{}", uuid::Uuid::new_v4().simple());
+                let plan = p.get("plan").cloned().unwrap_or_else(|| json!([]));
+                let input = json!({ "explanation": p.get("explanation"), "plan": plan });
+                self.emit(DriverEvent::ToolStarted(ToolCall { id: id.clone(), name: "update_plan".into(), input, parent_id: None })).await;
+                self.emit(DriverEvent::ToolCompleted { tool_call_id: id, output: json!({ "plan": plan }), is_error: false }).await;
             }
             "thread/tokenUsage/updated" => {
                 if let (Some(used_tokens), Some(window_tokens)) = (
@@ -1372,23 +1705,29 @@ impl CodexSession {
                 }
 
                 let total = p.pointer("/tokenUsage/total").map(parse_usage).unwrap_or_default();
+                let last = p.pointer("/tokenUsage/last").map(parse_usage).unwrap_or_default();
                 let mut st = self.state.lock().await;
-                let per_turn = match &st.last_total_tokens {
-                    Some(prev) => Usage {
-                        input_tokens: total.input_tokens.saturating_sub(prev.input_tokens),
-                        output_tokens: total.output_tokens.saturating_sub(prev.output_tokens),
-                        cache_read_tokens: total.cache_read_tokens.saturating_sub(prev.cache_read_tokens),
-                        cache_write_tokens: total.cache_write_tokens.saturating_sub(prev.cache_write_tokens),
-                    },
-                    None if st.manual_compaction => Usage::default(),
-                    None => total.clone(),
-                };
+                let delta = usage_delta(st.last_total_tokens.as_ref(), &total, &last);
                 st.last_total_tokens = Some(total);
+                // A late update for a turn that already ended moves the baseline only.
+                let late = p.get("turnId").and_then(Value::as_str).is_some_and(|turn| st.turn_id.as_deref() != Some(turn));
                 drop(st);
-                *self.turn_usage.lock().await = Some(per_turn);
+                if !late {
+                    self.turn_usage.lock().await.get_or_insert_with(Usage::default).add(&delta);
+                }
             }
             "turn/completed" => {
                 let turn = &p["turn"];
+                {
+                    let mut st = self.state.lock().await;
+                    st.retrying = None;
+                    if let Some(id) = turn.get("id").and_then(Value::as_str)
+                        && st.abandoned_turns.remove(id)
+                    {
+                        // Kybern already ended this turn (a stalled retry).
+                        return;
+                    }
+                }
                 let status = turn.get("status").and_then(|s| s.as_str()).unwrap_or("completed");
                 let duration_ms = turn.get("durationMs").and_then(|d| d.as_u64()).unwrap_or(0);
                 let usage = self.turn_usage.lock().await.take().unwrap_or_default();
@@ -1397,7 +1736,6 @@ impl CodexSession {
                 {
                     let mut st = self.state.lock().await;
                     st.turn_id = None;
-                    st.manual_compaction = false;
                     st.message_ids.clear();
                     st.file_changes.clear();
                 }
@@ -1409,16 +1747,27 @@ impl CodexSession {
                     "interrupted" => {
                         DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, usage, cost_usd: None, duration_ms, anchors }
                     }
-                    _ => DriverEvent::turn_failed(
-                        ProviderKind::Codex,
-                        turn.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("turn failed"),
-                    ),
+                    _ => {
+                        let error = turn.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("turn failed").to_string();
+                        let problem = crate::failure::classify_codex(turn.pointer("/error/codexErrorInfo"), &error);
+                        DriverEvent::TurnFailed { error, problem }
+                    }
                 };
                 self.emit(ev).await;
             }
             "error" => {
                 let msg = p.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("error").to_string();
                 let retry = p.get("willRetry").and_then(|r| r.as_bool()).unwrap_or(false);
+                {
+                    let mut st = self.state.lock().await;
+                    // Each retry notice restarts the wait: Codex is still trying.
+                    st.retrying = retry.then(|| RetryStall {
+                        since: tokio::time::Instant::now(),
+                        turn_id: p.get("turnId").and_then(Value::as_str).map(str::to_string).or_else(|| st.turn_id.clone()),
+                        message: msg.clone(),
+                        info: p.pointer("/error/codexErrorInfo").cloned(),
+                    });
+                }
                 self.emit(DriverEvent::Notice {
                     level: if retry { NoticeLevel::Warning } else { NoticeLevel::Error },
                     text: if retry { format!("{msg} (retrying)") } else { msg },
@@ -1873,6 +2222,29 @@ fn tempfile_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// The tokens one `thread/tokenUsage/updated` adds. `total` is thread-wide and
+/// `last` covers the newest model response. The first update after a spawn,
+/// resume or fork has no baseline, and its total includes every earlier turn;
+/// a total that went backwards (a rollback) can't be subtracted. Both count
+/// `last`.
+fn usage_delta(previous: Option<&Usage>, total: &Usage, last: &Usage) -> Usage {
+    match previous {
+        Some(prev)
+            if total.input_tokens >= prev.input_tokens
+                && total.output_tokens >= prev.output_tokens
+                && total.cache_read_tokens >= prev.cache_read_tokens =>
+        {
+            Usage {
+                input_tokens: total.input_tokens - prev.input_tokens,
+                output_tokens: total.output_tokens - prev.output_tokens,
+                cache_read_tokens: total.cache_read_tokens - prev.cache_read_tokens,
+                cache_write_tokens: total.cache_write_tokens.saturating_sub(prev.cache_write_tokens),
+            }
+        }
+        _ => last.clone(),
+    }
+}
+
 fn parse_usage(u: &Value) -> Usage {
     let g = |k: &str| u.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
     Usage {
@@ -1927,25 +2299,20 @@ fn input_items(message: &UserMessage) -> Vec<Value> {
 impl AgentSession for Handle {
     async fn compact(&self) -> Result<()> {
         let thread_id = self.0.state.lock().await.thread_id.clone().ok_or_else(|| DriverError::Protocol("no Codex thread".into()))?;
-        self.0.state.lock().await.manual_compaction = true;
         *self.0.turn_usage.lock().await = None;
-        let result = self.0.call("thread/compact/start", json!({ "threadId": thread_id })).await;
-        if result.is_err() {
-            self.0.state.lock().await.manual_compaction = false;
-        }
-        result.map(|_| ())
+        self.0.call("thread/compact/start", json!({ "threadId": thread_id })).await.map(|_| ())
     }
 
     async fn send_message(&self, message_id: &str, message: &UserMessage) -> Result<()> {
         let s = &self.0;
-        let (thread_id, mode, model, effort, cwd) = {
+        let (thread_id, mode, model, effort, sandbox) = {
             let st = s.state.lock().await;
             (
                 st.thread_id.clone().ok_or_else(|| DriverError::Protocol("no codex thread".into()))?,
                 st.mode,
                 st.model.clone(),
                 st.effort.clone(),
-                st.cwd.clone(),
+                st.sandbox,
             )
         };
         let text = message
@@ -2002,14 +2369,20 @@ impl AgentSession for Handle {
             .await;
             return Ok(());
         }
-        let (approval, _) = policy_for(mode);
+        let policy = policy_for(mode);
         let mut params = json!({
             "threadId": thread_id,
             "clientUserMessageId": message_id,
             "input": input_items(message),
-            "approvalPolicy": approval,
-            "sandboxPolicy": sandbox_policy_for(mode, &cwd),
+            "approvalPolicy": policy.approval,
+            "approvalsReviewer": policy.reviewer,
         });
+        // Only a mode change names a sandbox: otherwise the thread keeps the one
+        // it started with, built from the user's config.toml.
+        let sandbox_changed = policy.sandbox != sandbox;
+        if sandbox_changed {
+            params["sandboxPolicy"] = sandbox_policy_for(mode);
+        }
         if let Some(m) = model {
             params["model"] = Value::String(m);
         }
@@ -2020,8 +2393,12 @@ impl AgentSession for Handle {
             params["input"] = json!([{"type":"text", "text":"Inspect this repository and write or update AGENTS.md with concise, accurate instructions for coding agents: architecture, setup, build and test commands, conventions, and important pitfalls. Preserve existing project guidance. Verify commands against the repository.", "text_elements":[]}]);
         }
         let resp = s.call("turn/start", params).await?;
+        let mut st = s.state.lock().await;
+        if sandbox_changed {
+            st.sandbox = policy.sandbox;
+        }
         if let Some(id) = resp.pointer("/turn/id").and_then(|i| i.as_str()) {
-            s.state.lock().await.turn_id = Some(id.to_string());
+            st.turn_id = Some(id.to_string());
         }
         Ok(())
     }
@@ -2058,7 +2435,12 @@ impl AgentSession for Handle {
     }
 
     async fn set_permission_mode(&self, mode: PermissionMode) -> Result<()> {
-        self.0.state.lock().await.mode = mode;
+        let mut state = self.0.state.lock().await;
+        if state.mode != mode {
+            // "Allow for this session" holds within one permission mode.
+            state.allowances.clear();
+        }
+        state.mode = mode;
         Ok(())
     }
 
@@ -2087,14 +2469,30 @@ impl AgentSession for Handle {
             self.0.pending_approvals.lock().await.remove(request_id);
             return Ok(());
         }
-        let d = match decision {
-            ApprovalDecision::Submit { .. } => return Err(DriverError::Protocol("expected permission decision".into())),
-            ApprovalDecision::AllowOnce => "accept",
-            ApprovalDecision::AllowAlways => "acceptForSession",
-            ApprovalDecision::Deny { .. } => "decline",
+        if matches!(decision, ApprovalDecision::Submit { .. }) {
+            return Err(DriverError::Protocol("expected permission decision".into()));
+        }
+        let always = matches!(decision, ApprovalDecision::AllowAlways);
+        let response = match (&kind, decision) {
+            // Granted exactly as asked; "for this session" lets Codex keep the grant.
+            (ApprovalKind::Permissions(asked), ApprovalDecision::AllowOnce | ApprovalDecision::AllowAlways) => {
+                json!({ "permissions": asked, "scope": if always { "session" } else { "turn" } })
+            }
+            (ApprovalKind::Permissions(_), _) => json!({ "permissions": {}, "scope": "turn" }),
+            (_, ApprovalDecision::AllowOnce) => json!({ "decision": "accept" }),
+            (_, ApprovalDecision::AllowAlways) => json!({ "decision": "acceptForSession" }),
+            (_, _) => json!({ "decision": "decline" }),
         };
-        self.0.respond(&id, Ok(json!({ "decision": d }))).await?;
+        self.0.respond(&id, Ok(response)).await?;
         self.0.pending_approvals.lock().await.remove(request_id);
+        let allowance = match kind {
+            ApprovalKind::Command(Some((thread, kind))) => Some((thread, kind)),
+            ApprovalKind::FileChange(Some(thread)) => Some((thread, Allowance::FileChange)),
+            _ => None,
+        };
+        if always && let Some((thread, kind)) = allowance {
+            self.0.state.lock().await.allowances.entry(thread).or_default().insert(kind);
+        }
         Ok(())
     }
 
@@ -2170,8 +2568,20 @@ impl AgentSession for Handle {
     }
 }
 
+/// The main Codex allowance in an `account/rateLimits/read` answer. The
+/// legacy `rateLimits` snapshot can name another limit (Spark).
+fn account_limits(result: &Value) -> Option<Vec<kybern_protocol::UsageLimit>> {
+    result.pointer("/rateLimitsByLimitId/codex").and_then(parse_rate_limits).or_else(|| parse_rate_limits(&result["rateLimits"]))
+}
+
+/// The windows of one rate-limit snapshot. A snapshot for a model-specific
+/// limit (Spark) is ignored so it never replaces the main allowance; older
+/// versions omit `limitId`.
 fn parse_rate_limits(value: &Value) -> Option<Vec<kybern_protocol::UsageLimit>> {
     if !value.is_object() {
+        return None;
+    }
+    if value.get("limitId").and_then(Value::as_str).is_some_and(|id| id != "codex") {
         return None;
     }
     let limits = [("primary", "Primary"), ("secondary", "Secondary")]
@@ -2314,32 +2724,14 @@ fi
 
         let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
         let (events, mut rx) = mpsc::channel(8);
-        let session = Arc::new(CodexSession {
-            child: child.clone(),
+        let mut state = State::new(PermissionMode::Supervised);
+        state.thread_id = Some("root".into());
+        state.turn_id = Some("turn-1".into());
+        let session = CodexSession::new(
+            child.clone(),
             events,
-            next_id: AtomicI64::new(1),
-            pending: Mutex::new(HashMap::new()),
-            pending_approvals: Mutex::new(HashMap::new()),
-            pending_app_tools: Mutex::new(HashMap::new()),
-            notification_gate: Mutex::new(()),
-            state: Mutex::new(State {
-                manual_compaction: false,
-                deferred_notifications: Vec::new(),
-                thread_id: Some("root".into()),
-                turn_id: Some("turn-1".into()),
-                mode: PermissionMode::Supervised,
-                model: None,
-                effort: None,
-                cwd: PathBuf::from("/tmp"),
-                last_total_tokens: None,
-                message_ids: HashMap::new(),
-                file_changes: HashMap::new(),
-                subagents: HashMap::new(),
-                background_processes: HashMap::new(),
-                stopping_processes: HashSet::new(),
-            }),
-            turn_usage: Mutex::new(None),
-            bridge: Some(NativeToolBridge {
+            state,
+            Some(NativeToolBridge {
                 server_name: "kybern".into(),
                 endpoint: None,
                 authorization: None,
@@ -2352,8 +2744,7 @@ fi
                 }],
                 restrictions: NativeToolRestrictions::default(),
             }),
-            closed: AtomicBool::new(false),
-        });
+        );
 
         session
             .handle_server_request(
@@ -2380,34 +2771,7 @@ fi
 
         let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
         let (events, mut rx) = mpsc::channel(8);
-        let session = Arc::new(CodexSession {
-            child: child.clone(),
-            events,
-            next_id: AtomicI64::new(1),
-            pending: Mutex::new(HashMap::new()),
-            pending_approvals: Mutex::new(HashMap::new()),
-            pending_app_tools: Mutex::new(HashMap::new()),
-            notification_gate: Mutex::new(()),
-            state: Mutex::new(State {
-                manual_compaction: false,
-                deferred_notifications: Vec::new(),
-                thread_id: Some("test".into()),
-                turn_id: None,
-                mode: PermissionMode::Supervised,
-                model: None,
-                effort: None,
-                cwd: PathBuf::from("/tmp"),
-                last_total_tokens: None,
-                message_ids: HashMap::new(),
-                file_changes: HashMap::new(),
-                subagents: HashMap::new(),
-                background_processes: HashMap::new(),
-                stopping_processes: HashSet::new(),
-            }),
-            turn_usage: Mutex::new(None),
-            bridge: None,
-            closed: AtomicBool::new(false),
-        });
+        let session = test_session(child.clone(), events, Some("test"), None);
         session
             .handle_server_request(json!(42), "item/tool/requestUserInput", &json!({"questions":[{"id":"choice", "question":"Which?"}]}))
             .await;
@@ -2702,34 +3066,7 @@ wait
     async fn parent_context_and_account_limits_ignore_child_token_usage() {
         let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
         let (events, mut rx) = mpsc::channel(8);
-        let session = Arc::new(CodexSession {
-            child: child.clone(),
-            events,
-            next_id: AtomicI64::new(1),
-            pending: Mutex::new(HashMap::new()),
-            pending_approvals: Mutex::new(HashMap::new()),
-            pending_app_tools: Mutex::new(HashMap::new()),
-            notification_gate: Mutex::new(()),
-            state: Mutex::new(State {
-                manual_compaction: false,
-                deferred_notifications: Vec::new(),
-                thread_id: Some("test".into()),
-                turn_id: None,
-                mode: PermissionMode::Supervised,
-                model: None,
-                effort: None,
-                cwd: PathBuf::from("/tmp"),
-                last_total_tokens: None,
-                message_ids: HashMap::new(),
-                file_changes: HashMap::new(),
-                subagents: HashMap::new(),
-                background_processes: HashMap::new(),
-                stopping_processes: HashSet::new(),
-            }),
-            turn_usage: Mutex::new(None),
-            bridge: None,
-            closed: AtomicBool::new(false),
-        });
+        let session = test_session(child.clone(), events, Some("test"), None);
         let tokens = json!({"threadId":"test","tokenUsage":{"last":{"totalTokens":1234},"modelContextWindow":200000}});
         session.handle_notification("thread/tokenUsage/updated", &tokens).await;
         let Some(DriverEvent::UsageUpdated(usage)) = rx.recv().await else { panic!("missing parent usage") };
@@ -2758,34 +3095,7 @@ wait
     async fn early_resume_notifications_never_register_the_root_as_a_subagent() {
         let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
         let (events, mut rx) = mpsc::channel(64);
-        let session = Arc::new(CodexSession {
-            child: child.clone(),
-            events,
-            next_id: AtomicI64::new(1),
-            pending: Mutex::new(HashMap::new()),
-            pending_approvals: Mutex::new(HashMap::new()),
-            pending_app_tools: Mutex::new(HashMap::new()),
-            notification_gate: Mutex::new(()),
-            state: Mutex::new(State {
-                manual_compaction: false,
-                deferred_notifications: Vec::new(),
-                thread_id: None,
-                turn_id: None,
-                mode: PermissionMode::Supervised,
-                model: None,
-                effort: None,
-                cwd: PathBuf::from("/tmp"),
-                last_total_tokens: None,
-                message_ids: HashMap::new(),
-                file_changes: HashMap::new(),
-                subagents: HashMap::new(),
-                background_processes: HashMap::new(),
-                stopping_processes: HashSet::new(),
-            }),
-            turn_usage: Mutex::new(None),
-            bridge: None,
-            closed: AtomicBool::new(false),
-        });
+        let session = test_session(child.clone(), events, None, None);
 
         // Codex may notify before returning thread/resume (also start/fork).
         session.handle_notification("turn/started", &json!({"threadId":"root", "turn":{"id":"root-turn"}})).await;
@@ -2828,34 +3138,7 @@ wait
     async fn subagent_items_and_deltas_are_forwarded_to_the_subagent_only() {
         let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
         let (events, mut rx) = mpsc::channel(64);
-        let session = Arc::new(CodexSession {
-            child: child.clone(),
-            events,
-            next_id: AtomicI64::new(1),
-            pending: Mutex::new(HashMap::new()),
-            pending_approvals: Mutex::new(HashMap::new()),
-            pending_app_tools: Mutex::new(HashMap::new()),
-            notification_gate: Mutex::new(()),
-            state: Mutex::new(State {
-                manual_compaction: false,
-                deferred_notifications: Vec::new(),
-                thread_id: Some("root".into()),
-                turn_id: None,
-                mode: PermissionMode::Supervised,
-                model: None,
-                effort: None,
-                cwd: PathBuf::from("/tmp"),
-                last_total_tokens: None,
-                message_ids: HashMap::new(),
-                file_changes: HashMap::new(),
-                subagents: HashMap::new(),
-                background_processes: HashMap::new(),
-                stopping_processes: HashSet::new(),
-            }),
-            turn_usage: Mutex::new(None),
-            bridge: None,
-            closed: AtomicBool::new(false),
-        });
+        let session = test_session(child.clone(), events, Some("root"), None);
         session
             .handle_notification(
                 "thread/started",
@@ -2942,34 +3225,7 @@ wait
         ] {
             let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
             let (events, mut rx) = mpsc::channel(8);
-            let session = Arc::new(CodexSession {
-                child: child.clone(),
-                events,
-                next_id: AtomicI64::new(1),
-                pending: Mutex::new(HashMap::new()),
-                pending_approvals: Mutex::new(HashMap::new()),
-                pending_app_tools: Mutex::new(HashMap::new()),
-                notification_gate: Mutex::new(()),
-                state: Mutex::new(State {
-                    manual_compaction: false,
-                    deferred_notifications: Vec::new(),
-                    thread_id: Some("test".into()),
-                    turn_id: None,
-                    mode: PermissionMode::Supervised,
-                    model: None,
-                    effort: None,
-                    cwd: PathBuf::from("/tmp"),
-                    last_total_tokens: None,
-                    message_ids: HashMap::new(),
-                    file_changes: HashMap::new(),
-                    subagents: HashMap::new(),
-                    background_processes: HashMap::new(),
-                    stopping_processes: HashSet::new(),
-                }),
-                turn_usage: Mutex::new(None),
-                bridge: None,
-                closed: AtomicBool::new(false),
-            });
+            let session = test_session(child.clone(), events, Some("test"), None);
 
             let handle = Handle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
             let sending = tokio::spawn(async move {
@@ -3002,34 +3258,7 @@ wait
     async fn manual_compaction_uses_native_rpc_and_waits_for_turn_completion() {
         let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
         let (events, mut rx) = mpsc::channel(8);
-        let session = Arc::new(CodexSession {
-            child: child.clone(),
-            events,
-            next_id: AtomicI64::new(1),
-            pending: Mutex::new(HashMap::new()),
-            pending_approvals: Mutex::new(HashMap::new()),
-            pending_app_tools: Mutex::new(HashMap::new()),
-            notification_gate: Mutex::new(()),
-            state: Mutex::new(State {
-                manual_compaction: false,
-                deferred_notifications: Vec::new(),
-                thread_id: Some("test".into()),
-                turn_id: None,
-                mode: PermissionMode::Supervised,
-                model: None,
-                effort: None,
-                cwd: PathBuf::from("/tmp"),
-                last_total_tokens: None,
-                message_ids: HashMap::new(),
-                file_changes: HashMap::new(),
-                subagents: HashMap::new(),
-                background_processes: HashMap::new(),
-                stopping_processes: HashSet::new(),
-            }),
-            turn_usage: Mutex::new(None),
-            bridge: None,
-            closed: AtomicBool::new(false),
-        });
+        let session = test_session(child.clone(), events, Some("test"), None);
 
         let handle = Handle(session.clone(), crate::ndjson::SessionLifetime::new(child.clone()));
         let task = tokio::spawn(async move {
@@ -3063,7 +3292,6 @@ wait
             .unwrap();
         let (handle, result) = task.await.unwrap();
         assert!(result.is_err());
-        assert!(!session.state.lock().await.manual_compaction);
         handle.close().await.unwrap();
     }
 
@@ -3071,34 +3299,7 @@ wait
     async fn async_questions_keep_native_fields_and_answers_steer_the_current_turn() {
         let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
         let (events, mut rx) = mpsc::channel(8);
-        let session = Arc::new(CodexSession {
-            child: child.clone(),
-            events,
-            next_id: AtomicI64::new(1),
-            pending: Mutex::new(HashMap::new()),
-            pending_approvals: Mutex::new(HashMap::new()),
-            pending_app_tools: Mutex::new(HashMap::new()),
-            notification_gate: Mutex::new(()),
-            state: Mutex::new(State {
-                manual_compaction: false,
-                deferred_notifications: Vec::new(),
-                thread_id: Some("test".into()),
-                turn_id: None,
-                mode: PermissionMode::Supervised,
-                model: None,
-                effort: None,
-                cwd: PathBuf::from("/tmp"),
-                last_total_tokens: None,
-                message_ids: HashMap::new(),
-                file_changes: HashMap::new(),
-                subagents: HashMap::new(),
-                background_processes: HashMap::new(),
-                stopping_processes: HashSet::new(),
-            }),
-            turn_usage: Mutex::new(None),
-            bridge: None,
-            closed: AtomicBool::new(false),
-        });
+        let session = test_session(child.clone(), events, Some("test"), None);
         session.state.lock().await.turn_id = Some("active-turn".into());
         let item = json!({"type":"agentMessage", "id":"call-question", "text":"Choose a window", "delivery":"async",
             "questions":[{"title":"Allow a QA window?", "options":["Allow", "Keep current window"]}, {"title":"Any constraints?", "options":null}]});
@@ -3177,5 +3378,455 @@ mod compaction_tests {
         let launch = |tokens| crate::CompactionLaunch { auto_compact_tokens: tokens, decline_resume_prompt: false };
         assert!(super::config_overrides(&launch(None)).is_empty(), "no threshold keeps the user's config.toml");
         assert_eq!(super::config_overrides(&launch(Some(400_000))), ["-c", "model_auto_compact_token_limit=400000"]);
+    }
+}
+
+/// The gaps an audit against T3Code found: approval policy, sandbox, session
+/// allowances, usage, limits, discovery, one-shots, plans and robustness.
+#[cfg(all(test, unix))]
+mod gap_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn echo_session(mode: PermissionMode) -> (Arc<CodexSession>, mpsc::Receiver<DriverEvent>) {
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
+        let (events, rx) = mpsc::channel(64);
+        let mut state = State::new(mode);
+        state.thread_id = Some("root".into());
+        state.turn_id = Some("turn-1".into());
+        (CodexSession::new(child, events, state, None), rx)
+    }
+
+    fn handle(session: &Arc<CodexSession>) -> Handle {
+        Handle(session.clone(), crate::ndjson::SessionLifetime::new(session.child.clone()))
+    }
+
+    /// The next frame Kybern wrote to the provider (the echo child sends it back).
+    async fn next_wire(session: &CodexSession) -> Value {
+        tokio::time::timeout(Duration::from_secs(2), async { session.child.lines.lock().await.recv().await.unwrap() }).await.unwrap()
+    }
+
+    async fn answer(session: &CodexSession, request: &Value, result: Value) {
+        session.pending.lock().await.remove(&request["id"].as_i64().unwrap()).unwrap().send(Ok(result)).unwrap();
+    }
+
+    /// Send one message and return the `turn/start` params it produced.
+    async fn turn_start(session: &Arc<CodexSession>, handle: Handle) -> (Handle, Value) {
+        let task = tokio::spawn(async move {
+            let result = handle.send_message("message", &UserMessage::text("hello")).await;
+            (handle, result)
+        });
+        let request = next_wire(session).await;
+        assert_eq!(request["method"], "turn/start");
+        answer(session, &request, json!({ "turn": { "id": "turn-1" } })).await;
+        let (handle, result) = task.await.unwrap();
+        result.unwrap();
+        (handle, request["params"].clone())
+    }
+
+    fn drain(rx: &mut mpsc::Receiver<DriverEvent>) -> Vec<DriverEvent> {
+        std::iter::from_fn(|| rx.try_recv().ok()).collect()
+    }
+
+    fn fixture_config(root: &std::path::Path, binary: PathBuf, mode: PermissionMode, env: HashMap<String, String>) -> SessionConfig {
+        SessionConfig {
+            cwd: root.into(),
+            model: None,
+            effort: None,
+            permission_mode: mode,
+            native_tool_bridge: None,
+            resume_session_id: None,
+            resume_lacks_instructions: false,
+            fork: false,
+            rewind: None,
+            binary: Some(binary),
+            env,
+            compaction: Default::default(),
+        }
+    }
+
+    async fn spawn_fixture(config: SessionConfig) -> Result<SpawnedSession> {
+        for _ in 0..50 {
+            match CodexDriver.spawn(config.clone()).await {
+                Err(DriverError::Io(error)) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    tokio::time::sleep(Duration::from_millis(20)).await
+                }
+                result => return result,
+            }
+        }
+        CodexDriver.spawn(config).await
+    }
+
+    /// Item 1 and 4: Full access no longer refuses MCP and app prompts, and
+    /// Auto routes sandbox escapes to Codex's reviewer instead of refusing them.
+    #[tokio::test]
+    async fn full_access_asks_for_app_prompts_and_auto_escalates_to_the_reviewer() {
+        let full = policy_for(PermissionMode::FullAccess);
+        assert_eq!(full.approval["granular"]["mcp_elicitations"], true);
+        for refused in ["request_permissions", "rules", "sandbox_approval", "skill_approval"] {
+            assert_eq!(full.approval["granular"][refused], false, "{refused}");
+        }
+        assert_eq!((full.reviewer, full.sandbox), ("user", "danger-full-access"));
+        let auto = policy_for(PermissionMode::Auto);
+        assert_eq!((auto.approval.clone(), auto.reviewer), (json!("on-request"), "auto_review"));
+
+        // The thread starts with them, and every turn repeats them.
+        let root = tempfile::tempdir().unwrap();
+        let binary = root.path().join("codex-fixture");
+        let requests = root.path().join("requests");
+        kybern_protocol::process::write_executable(
+            &binary,
+            r#"#!/bin/sh
+IFS= read -r line
+printf '{"id":1,"result":{}}\n'
+IFS= read -r line
+IFS= read -r line
+printf '%s\n' "$line" >> "$REQUESTS"
+printf '{"id":2,"result":{"thread":{"id":"root"},"model":"fixture"}}\n'
+IFS= read -r line
+printf '{"id":3,"result":{"rateLimits":{}}}\n'
+wait
+"#,
+        )
+        .unwrap();
+        let env = HashMap::from([("REQUESTS".into(), requests.to_string_lossy().into_owned())]);
+        let spawned = spawn_fixture(fixture_config(root.path(), binary, PermissionMode::FullAccess, env)).await.unwrap();
+        let start: Value = serde_json::from_str(std::fs::read_to_string(&requests).unwrap().trim()).unwrap();
+        assert_eq!(start["method"], "thread/start");
+        assert_eq!(start["params"]["approvalPolicy"]["granular"]["mcp_elicitations"], true);
+        assert_eq!(start["params"]["approvalsReviewer"], "user");
+        assert_eq!(start["params"]["sandbox"], "danger-full-access");
+        spawned.session.close().await.unwrap();
+
+        let (session, _rx) = echo_session(PermissionMode::Auto);
+        let (handle, params) = turn_start(&session, handle(&session)).await;
+        assert_eq!((params["approvalPolicy"].clone(), params["approvalsReviewer"].clone()), (json!("on-request"), json!("auto_review")));
+        handle.close().await.unwrap();
+    }
+
+    /// Item 2: a permission request is an approval, and approving grants what it asked for.
+    #[tokio::test]
+    async fn permission_requests_are_approvals_that_grant_what_was_asked() {
+        let (session, mut rx) = echo_session(PermissionMode::Supervised);
+        let handle = handle(&session);
+        let asked = json!({ "network": { "enabled": true }, "fileSystem": { "entries": [
+            { "access": "write", "path": { "type": "path", "path": "/repo/.git" } },
+            { "access": "write", "path": { "type": "glob_pattern", "pattern": "/repo/**/*.lock" } }
+        ] } });
+        let params =
+            json!({ "threadId": "root", "turnId": "turn-1", "itemId": "item-1", "cwd": "/repo", "reason": "commit", "permissions": asked });
+        for (id, decision, expected) in [
+            (7, ApprovalDecision::AllowOnce, json!({ "permissions": asked, "scope": "turn" })),
+            (8, ApprovalDecision::AllowAlways, json!({ "permissions": asked, "scope": "session" })),
+            (9, ApprovalDecision::Deny { reason: None }, json!({ "permissions": {}, "scope": "turn" })),
+        ] {
+            session.handle_server_request(json!(id), "item/permissions/requestApproval", &params).await;
+            let Some(DriverEvent::PermissionRequest { request_id, tool_name, summary, input, .. }) = rx.recv().await else {
+                panic!("the permission request must reach the user");
+            };
+            assert_eq!(tool_name, "request_permissions");
+            assert_eq!(summary, "Allow network access and writes to /repo/.git, /repo/**/*.lock");
+            assert_eq!(input["reason"], "commit");
+            handle.respond_permission(&request_id, &decision).await.unwrap();
+            let wire = next_wire(&session).await;
+            assert_eq!((wire["id"].clone(), wire["result"].clone()), (json!(id), expected));
+        }
+        handle.close().await.unwrap();
+    }
+
+    /// Item 3: turns keep the sandbox the thread started with (the user's
+    /// config.toml) and name one only when the mode changes it.
+    #[tokio::test]
+    async fn turns_keep_the_configured_sandbox_until_the_mode_changes_it() {
+        let (session, _rx) = echo_session(PermissionMode::Supervised);
+        let (handle, params) = turn_start(&session, handle(&session)).await;
+        assert!(params.get("sandboxPolicy").is_none(), "{params}");
+        handle.set_permission_mode(PermissionMode::FullAccess).await.unwrap();
+        let (handle, params) = turn_start(&session, handle).await;
+        assert_eq!(params["sandboxPolicy"], json!({ "type": "dangerFullAccess" }));
+        let (handle, params) = turn_start(&session, handle).await;
+        assert!(params.get("sandboxPolicy").is_none(), "{params}");
+        handle.set_permission_mode(PermissionMode::AcceptEdits).await.unwrap();
+        let (handle, params) = turn_start(&session, handle).await;
+        assert_eq!(params["sandboxPolicy"], json!({ "type": "workspaceWrite" }));
+        handle.close().await.unwrap();
+    }
+
+    /// Item 5: "Allow for this session" covers later commands and edits on the
+    /// same thread in the same mode, not only the exact command.
+    #[tokio::test]
+    async fn allow_for_this_session_covers_later_commands_in_the_same_mode() {
+        let (session, mut rx) = echo_session(PermissionMode::Supervised);
+        let handle = handle(&session);
+        let command = |command: &str| json!({ "threadId": "root", "turnId": "turn-1", "itemId": "c", "command": command, "cwd": "/repo" });
+        session.handle_server_request(json!(1), "item/commandExecution/requestApproval", &command("git commit")).await;
+        let Some(DriverEvent::PermissionRequest { request_id, .. }) = rx.recv().await else { panic!("first command asks") };
+        handle.respond_permission(&request_id, &ApprovalDecision::AllowAlways).await.unwrap();
+        assert_eq!(next_wire(&session).await["result"], json!({ "decision": "acceptForSession" }));
+
+        session.handle_server_request(json!(2), "item/commandExecution/requestApproval", &command("cargo test")).await;
+        let wire = next_wire(&session).await;
+        assert_eq!((wire["id"].clone(), wire["result"].clone()), (json!(2), json!({ "decision": "acceptForSession" })));
+        assert!(drain(&mut rx).is_empty(), "an allowed command must not ask again");
+
+        // A subagent's thread, a network grant and a write outside the workspace still ask.
+        let child_command = json!({ "threadId": "child", "itemId": "c", "command": "ls" });
+        session.handle_server_request(json!(3), "item/commandExecution/requestApproval", &child_command).await;
+        let network = json!({ "threadId": "root", "itemId": "n", "networkApprovalContext": { "host": "example.com" } });
+        session.handle_server_request(json!(4), "item/commandExecution/requestApproval", &network).await;
+        assert_eq!(drain(&mut rx).iter().filter(|event| matches!(event, DriverEvent::PermissionRequest { .. })).count(), 2);
+
+        let edit = |grant_root: Value| json!({ "threadId": "root", "itemId": "e", "grantRoot": grant_root });
+        session.handle_server_request(json!(5), "item/fileChange/requestApproval", &edit(Value::Null)).await;
+        let Some(DriverEvent::PermissionRequest { request_id, .. }) = rx.recv().await else { panic!("first edit asks") };
+        handle.respond_permission(&request_id, &ApprovalDecision::AllowAlways).await.unwrap();
+        let _ = next_wire(&session).await;
+        session.handle_server_request(json!(6), "item/fileChange/requestApproval", &edit(Value::Null)).await;
+        assert_eq!(next_wire(&session).await["result"], json!({ "decision": "accept" }));
+        session.handle_server_request(json!(7), "item/fileChange/requestApproval", &edit(json!("/etc"))).await;
+        assert!(matches!(rx.recv().await, Some(DriverEvent::PermissionRequest { .. })));
+
+        // Another mode ends the allowance.
+        handle.set_permission_mode(PermissionMode::AcceptEdits).await.unwrap();
+        session.handle_server_request(json!(8), "item/commandExecution/requestApproval", &command("cargo build")).await;
+        assert!(matches!(rx.recv().await, Some(DriverEvent::PermissionRequest { .. })));
+        handle.close().await.unwrap();
+    }
+
+    /// Item 6: after a resume or fork the first total covers every earlier
+    /// turn, and a rollback moves it backwards; both count the newest response.
+    #[tokio::test]
+    async fn turn_usage_after_a_resume_counts_only_this_turn() {
+        let (session, mut rx) = echo_session(PermissionMode::Supervised);
+        let usage = |total: u64, last: u64| {
+            json!({ "threadId": "root", "turnId": "turn-1", "tokenUsage": {
+                "total": { "inputTokens": total, "outputTokens": total / 10, "cachedInputTokens": 0 },
+                "last": { "inputTokens": last, "outputTokens": last / 10, "cachedInputTokens": 0 },
+                "modelContextWindow": 200000 } })
+        };
+        // A resumed thread: 900k tokens of history, 1k in this turn's first response.
+        session.handle_notification("thread/tokenUsage/updated", &usage(900_000, 1_000)).await;
+        session.handle_notification("thread/tokenUsage/updated", &usage(902_000, 2_000)).await;
+        // Rolled back to an earlier snapshot.
+        session.handle_notification("thread/tokenUsage/updated", &usage(500_000, 3_000)).await;
+        session
+            .handle_notification("turn/completed", &json!({ "threadId": "root", "turn": { "id": "turn-1", "status": "completed" } }))
+            .await;
+        let completed = drain(&mut rx).into_iter().find_map(|event| match event {
+            DriverEvent::TurnCompleted { usage, .. } => Some(usage),
+            _ => None,
+        });
+        let usage = completed.expect("turn completed");
+        assert_eq!((usage.input_tokens, usage.output_tokens), (6_000, 600));
+        // Late usage for the finished turn is not billed to the next one.
+        session.handle_notification("thread/tokenUsage/updated", &usage_late()).await;
+        assert!(session.turn_usage.lock().await.is_none());
+        session.child.kill().await;
+
+        fn usage_late() -> Value {
+            json!({ "threadId": "root", "turnId": "turn-1", "tokenUsage": {
+                "total": { "inputTokens": 510_000, "outputTokens": 1, "cachedInputTokens": 0 },
+                "last": { "inputTokens": 10_000, "outputTokens": 1, "cachedInputTokens": 0 } } })
+        }
+    }
+
+    /// Item 7: a model-specific (Spark) snapshot never replaces the main allowance.
+    #[tokio::test]
+    async fn spark_limits_never_replace_the_main_allowance() {
+        let spark = json!({ "limitId": "codex_bengalfox", "primary": { "usedPercent": 90, "windowDurationMins": 300 } });
+        let main = json!({ "limitId": "codex", "primary": { "usedPercent": 12, "windowDurationMins": 300 } });
+        assert!(parse_rate_limits(&spark).is_none());
+        let read = json!({ "rateLimits": spark, "rateLimitsByLimitId": { "codex": main, "codex_bengalfox": spark } });
+        assert_eq!(account_limits(&read).unwrap()[0].used_percent, 12.0);
+        // Older versions send no limit id: the snapshot is the main allowance.
+        assert_eq!(account_limits(&json!({ "rateLimits": { "primary": { "usedPercent": 5 } } })).unwrap()[0].used_percent, 5.0);
+
+        let (session, mut rx) = echo_session(PermissionMode::Supervised);
+        session.handle_notification("account/rateLimits/updated", &json!({ "rateLimits": spark })).await;
+        assert!(drain(&mut rx).is_empty());
+        session.child.kill().await;
+    }
+
+    /// Item 8: a Codex that takes more than 3 seconds to initialize still lists its models.
+    #[tokio::test]
+    async fn a_slow_initialize_still_lists_models() {
+        let fixture = tempfile::tempdir().unwrap();
+        let binary = fixture.path().join("codex-fixture");
+        kybern_protocol::process::write_executable(
+            &binary,
+            r##"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf 'codex-cli 0.154.0\n'
+  exit 0
+fi
+IFS= read -r initialize
+sleep 3.5
+printf '{"id":1,"result":{}}\n'
+IFS= read -r initialized
+IFS= read -r models
+printf '{"id":2,"result":{"data":[{"model":"slow-but-fine","displayName":"Slow"}]}}\n'
+"##,
+        )
+        .unwrap();
+        let status = CodexDriver.probe_with_context(&ProbeContext { binary: Some(binary), ..ProbeContext::default() }).await;
+        assert!(status.available);
+        assert_eq!(status.models.iter().map(|model| model.id.as_str()).collect::<Vec<_>>(), ["slow-but-fine"]);
+    }
+
+    /// Item 9: a title is generated without saving a session, without the
+    /// user's MCP servers, apps, plugins or hooks, and with the prompt on stdin.
+    #[tokio::test]
+    async fn one_shots_run_ephemeral_without_mcp_plugins_or_hooks() {
+        let root = tempfile::tempdir().unwrap();
+        let binary = root.path().join("codex-fixture");
+        kybern_protocol::process::write_executable(
+            &binary,
+            r##"#!/bin/sh
+for arg in "$@"; do
+  if [ "$arg" = "mcp" ]; then
+    printf '[{"name":"github","enabled":true},{"name":"dotted.name","enabled":true},{"name":"off","enabled":false}]\n'
+    exit 0
+  fi
+done
+printf '%s\n' "$@" > args
+cat > prompt
+last=""
+take=0
+for arg in "$@"; do
+  if [ "$take" = 1 ]; then last="$arg"; take=0; fi
+  [ "$arg" = "--output-last-message" ] && take=1
+done
+printf 'A short title\n' > "$last"
+"##,
+        )
+        .unwrap();
+        let prompt = "Name this conversation: --not-a-flag";
+        let title = CodexDriver.one_shot(root.path(), prompt, Some(&binary), &Default::default()).await.unwrap();
+        assert_eq!(title, "A short title");
+        let args = std::fs::read_to_string(root.path().join("args")).unwrap();
+        let args = args.lines().collect::<Vec<_>>();
+        assert!(args.contains(&"--ephemeral"), "{args:?}");
+        assert!(args.contains(&r#"mcp_servers={"github"={enabled=false},"dotted.name"={enabled=false}}"#), "{args:?}");
+        for feature in ["features.plugins=false", "features.apps=false", "features.hooks=false", "features.codex_hooks=false"] {
+            assert!(args.contains(&feature), "{feature} in {args:?}");
+        }
+        assert_eq!(args.last(), Some(&"-"));
+        assert!(!args.contains(&prompt));
+        assert_eq!(std::fs::read_to_string(root.path().join("prompt")).unwrap(), prompt);
+    }
+
+    /// Item 10: the plan tool is on, and a plan update is a plan tool call.
+    #[tokio::test]
+    async fn plan_updates_are_plan_tool_calls() {
+        assert_eq!(thread_config()["tools.update_plan.enabled"], true);
+        let (session, mut rx) = echo_session(PermissionMode::Supervised);
+        let plan = json!([{ "step": "Read the driver", "status": "completed" }, { "step": "Fix it", "status": "inProgress" }]);
+        session
+            .handle_notification(
+                "turn/plan/updated",
+                &json!({ "threadId": "root", "turnId": "turn-1", "explanation": "Two steps", "plan": plan }),
+            )
+            .await;
+        let events = drain(&mut rx);
+        let [DriverEvent::ToolStarted(call), DriverEvent::ToolCompleted { tool_call_id, is_error: false, .. }] = &events[..] else {
+            panic!("expected one plan tool call, got {events:?}");
+        };
+        assert_eq!((call.name.as_str(), tool_call_id), ("update_plan", &call.id));
+        assert_eq!((call.input["plan"].clone(), call.input["explanation"].clone()), (plan, json!("Two steps")));
+        session.child.kill().await;
+    }
+
+    /// Item 11: a turn whose retry never resumes fails once, says why, and is stopped.
+    #[tokio::test]
+    async fn a_retry_that_never_resumes_fails_the_turn_once() {
+        let (session, mut rx) = echo_session(PermissionMode::Supervised);
+        let retry = json!({ "threadId": "root", "turnId": "turn-1", "willRetry": true,
+            "error": { "message": "Reconnecting... 2/5", "codexErrorInfo": { "responseStreamDisconnected": { "httpStatusCode": 429 } } } });
+        session.handle_notification("error", &retry).await;
+        // Progress means the retry recovered.
+        session.handle_notification("item/started", &json!({ "threadId": "root", "item": { "type": "reasoning", "id": "r" } })).await;
+        assert!(!session.fail_stalled_retry(Duration::ZERO).await);
+        session.handle_notification("error", &retry).await;
+        assert!(!session.fail_stalled_retry(Duration::from_secs(600)).await, "the wait has not run out");
+        drain(&mut rx);
+
+        let stalled = session.clone();
+        let failing = tokio::spawn(async move { stalled.fail_stalled_retry(Duration::ZERO).await });
+        let interrupt = next_wire(&session).await;
+        assert_eq!(
+            (interrupt["method"].clone(), interrupt["params"].clone()),
+            (json!("turn/interrupt"), json!({ "threadId": "root", "turnId": "turn-1" }))
+        );
+        answer(&session, &interrupt, json!({})).await;
+        assert!(failing.await.unwrap());
+        let Some(DriverEvent::TurnFailed { problem: Some(problem), .. }) = rx.recv().await else { panic!("the stalled turn fails") };
+        // A retry that ends on 429 is the usage limit.
+        assert_eq!(problem.subject.as_deref(), Some("rate_limit"));
+        assert!(session.state.lock().await.turn_id.is_none());
+        session
+            .handle_notification("turn/completed", &json!({ "threadId": "root", "turn": { "id": "turn-1", "status": "interrupted" } }))
+            .await;
+        assert!(drain(&mut rx).is_empty(), "the stopped turn ends once");
+        session.child.kill().await;
+    }
+
+    /// Item 11: a failed turn is classified by `codexErrorInfo` before its text.
+    #[tokio::test]
+    async fn failed_turns_are_classified_by_codex_error_info() {
+        let (session, mut rx) = echo_session(PermissionMode::Supervised);
+        let failed = |info: Value, message: &str| json!({ "threadId": "root", "turn": { "id": "turn-1", "status": "failed", "error": { "message": message, "codexErrorInfo": info } } });
+        // The text alone reads as a usage limit; Codex says the context is too long.
+        session.handle_notification("turn/completed", &failed(json!("contextWindowExceeded"), "Token limit reached for this model")).await;
+        let Some(DriverEvent::TurnFailed { problem, .. }) = rx.recv().await else { panic!("turn failed") };
+        assert!(problem.is_none(), "{problem:?}");
+        session.handle_notification("turn/completed", &failed(json!("usageLimitExceeded"), "Request failed")).await;
+        let Some(DriverEvent::TurnFailed { problem: Some(problem), .. }) = rx.recv().await else { panic!("turn failed") };
+        assert_eq!(problem.subject.as_deref(), Some("rate_limit"));
+        session.child.kill().await;
+    }
+
+    /// Item 11: when Codex exits, the error says why, from its stderr.
+    #[tokio::test]
+    async fn an_exit_says_why_from_codex_stderr() {
+        let root = tempfile::tempdir().unwrap();
+        let binary = root.path().join("codex-fixture");
+        kybern_protocol::process::write_executable(
+            &binary,
+            "#!/bin/sh\nIFS= read -r initialize\nprintf 'Error loading config.toml: unknown variant `fast` for key model_reasoning_effort\\n' >&2\nexit 1\n",
+        )
+        .unwrap();
+        let error = match spawn_fixture(fixture_config(root.path(), binary, PermissionMode::Supervised, HashMap::new())).await {
+            Ok(_) => panic!("a Codex that exits cannot start"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("unknown variant `fast`"), "{error}");
+        assert!(error.contains("code 1"), "{error}");
+    }
+
+    /// Item 11: stopping a probe waits for Codex's startup git/ssh to finish.
+    #[tokio::test]
+    async fn probes_let_codex_startup_work_finish() {
+        let root = tempfile::tempdir().unwrap();
+        let binary = root.path().join("codex-fixture");
+        kybern_protocol::process::write_executable(
+            &binary,
+            r##"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf 'codex-cli 0.154.0\n'
+  exit 0
+fi
+(sleep 0.6; touch fetched) >/dev/null 2>&1 &
+IFS= read -r initialize
+printf '{"id":1,"result":{}}\n'
+IFS= read -r initialized
+IFS= read -r models
+printf '{"id":2,"result":{"data":[]}}\n'
+"##,
+        )
+        .unwrap();
+        let context = ProbeContext { binary: Some(binary), cwd: Some(root.path().into()), ..ProbeContext::default() };
+        assert!(CodexDriver.probe_with_context(&context).await.available);
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        assert!(root.path().join("fetched").exists(), "the probe stopped Codex's startup work");
     }
 }

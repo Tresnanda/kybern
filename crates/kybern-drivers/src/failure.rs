@@ -62,6 +62,49 @@ pub fn classify(kind: ProviderKind, text: &str) -> Option<Problem> {
     None
 }
 
+/// What Codex's `codexErrorInfo` says about a failure, before its message text:
+/// `Some(problem)` when it names one, `Some(None)` when it names a failure that
+/// is none of these (a too-long context, a refused request), so its wording
+/// must not be read as one, and `None` when it says nothing (`other`, absent).
+fn codex_info_problem(info: &serde_json::Value, text: &str) -> Option<Option<Problem>> {
+    let code = match info {
+        serde_json::Value::String(code) => code.as_str(),
+        serde_json::Value::Object(map) => map.keys().next()?.as_str(),
+        _ => return None,
+    };
+    let status = info.get(code).and_then(|detail| detail.get("httpStatusCode")).and_then(serde_json::Value::as_u64);
+    let kind = ProviderKind::Codex;
+    Some(match (code, status) {
+        ("other", _) => return None,
+        ("unauthorized", _) | (_, Some(401)) => Some(signed_out_problem(kind, text)),
+        ("usageLimitExceeded" | "rateLimitExceeded", _) | (_, Some(429)) => Some(rate_limited_problem(kind, text)),
+        (
+            "httpConnectionFailed"
+            | "responseStreamConnectionFailed"
+            | "responseStreamDisconnected"
+            | "responseTooManyFailedAttempts"
+            | "serverOverloaded"
+            | "internalServerError",
+            _,
+        ) => Some(network_problem(kind, text)),
+        _ => None,
+    })
+}
+
+/// The problem a failed Codex turn is: its `codexErrorInfo` first, then its text.
+pub fn classify_codex(info: Option<&serde_json::Value>, text: &str) -> Option<Problem> {
+    match info.and_then(|info| codex_info_problem(info, text)) {
+        Some(named) => named,
+        None => classify(ProviderKind::Codex, text),
+    }
+}
+
+/// A Codex turn that said it would retry and then never resumed. A retry is
+/// for a connection or service failure, so without a better reading it is one.
+pub fn codex_stalled_retry(info: Option<&serde_json::Value>, text: &str) -> Problem {
+    classify_codex(info, text).unwrap_or_else(|| network_problem(ProviderKind::Codex, text))
+}
+
 /// The problem a `DriverError` that stopped a session means, when it has one.
 pub fn classify_error(kind: ProviderKind, error: &DriverError) -> Option<Problem> {
     let detail = error.to_string();
@@ -390,6 +433,28 @@ mod tests {
         assert!(classify(ProviderKind::ClaudeCode, "Error: RetriableError: WritableIterable is closed").is_none());
         assert!(classify(ProviderKind::Codex, "Error: ConnectError: [unavailable] transport closed").is_none());
         assert!(classify(ProviderKind::Opencode, "Something went wrong communicating with the server. Please try again.").is_none());
+    }
+
+    #[test]
+    fn codex_error_info_comes_before_the_message_text() {
+        let codex = |info: serde_json::Value, text: &str| {
+            classify_codex(Some(&info), text).map(|problem| (problem.kind, problem.subject.unwrap_or_default()))
+        };
+        let limit = Some((ProblemKind::Permission, "rate_limit".to_string()));
+        let offline = Some((ProblemKind::Offline, "network".to_string()));
+        assert_eq!(codex(json!("unauthorized"), "Request failed"), Some((ProblemKind::SignedOut, "codex".to_string())));
+        assert_eq!(codex(json!("usageLimitExceeded"), "Request failed"), limit);
+        assert_eq!(codex(json!({ "responseTooManyFailedAttempts": { "httpStatusCode": 429 } }), "exceeded retry limit"), limit);
+        assert_eq!(codex(json!({ "responseStreamConnectionFailed": { "httpStatusCode": 401 } }), "x").unwrap().0, ProblemKind::SignedOut);
+        assert_eq!(codex(json!({ "httpConnectionFailed": { "httpStatusCode": null } }), "Request failed"), offline);
+        // Codex names the failure, so wording that reads as a limit is not one.
+        assert_eq!(codex(json!("contextWindowExceeded"), "Token limit reached"), None);
+        assert_eq!(codex(json!("badRequest"), "quota field is invalid"), None);
+        // `other` or no info: the text decides.
+        assert_eq!(codex(json!("other"), "You've hit your usage limit."), limit);
+        assert_eq!(classify_codex(None, "connection reset by peer").unwrap().kind, ProblemKind::Offline);
+        assert!(classify_codex(None, "turn failed").is_none());
+        assert_eq!(codex_stalled_retry(None, "Reconnecting... 5/5").kind, ProblemKind::Offline);
     }
 
     #[test]
