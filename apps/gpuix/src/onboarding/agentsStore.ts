@@ -52,7 +52,12 @@ const timers = new Set<ReturnType<typeof setTimeout>>()
 const later = (ms: number, fn: () => void) => { const id = setTimeout(() => { timers.delete(id); fn() }, ms); timers.add(id) }
 
 async function readCursor() {
-  try { agents.set({ cursor: await getClient()!.call('cursor.status', {}) }) } catch { /* a daemon without Cursor setup: the tile reads from providers */ }
+  try {
+    const cursor = await getClient()!.call('cursor.status', {})
+    agents.set({ cursor })
+    // The daemon updates an earlier SDK by itself: follow it until Cursor is ready.
+    if (cursor.installing) followCursor()
+  } catch { /* a daemon without Cursor setup: the tile reads from providers */ }
 }
 
 /** Probe every agent once per run (the scene may be left and revisited). The tiles settle 190 ms apart once the answers are in. */
@@ -104,7 +109,7 @@ export function agentFor(kind: ProviderKind, providers: readonly ProviderStatus[
   if (kind === 'cursor' && status) {
     // Cursor's sign-in lives in its own SDK status, not in the account list.
     if (status.available && cursor) state = cursor.account === 'signed_in' || cursor.account === 'api_key' ? 'ready' : cursor.account === 'signed_out' ? 'signin' : 'unknown'
-    else if (!status.available) state = cursor?.problem ? 'update' : 'missing'
+    else if (!status.available) state = cursor?.installing ? 'installing' : cursor?.problem ? 'update' : 'missing'
   }
   const signed = mine.find((a) => a.status === 'signed_in')
   const reason = status?.unavailable_reason ?? (kind === 'cursor' ? (cursor?.problem ?? cursor?.error ?? null) : null)

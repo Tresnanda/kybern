@@ -1,5 +1,7 @@
 use kybern_protocol::process::NoWindow;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -22,11 +24,11 @@ const HOST: &str = include_str!("sdk/host.mjs");
 const PACKAGE: &str = include_str!("sdk/package.json");
 const LOCK: &str = include_str!("sdk/package-lock.json");
 
-fn env(context: &ProbeContext, name: &str) -> Option<String> {
+pub(super) fn env(context: &ProbeContext, name: &str) -> Option<String> {
     context.env.get(name).cloned().or_else(|| std::env::var(name).ok()).filter(|s| !s.is_empty())
 }
 
-fn installed_dir(context: &ProbeContext) -> Result<PathBuf> {
+pub(super) fn installed_dir(context: &ProbeContext) -> Result<PathBuf> {
     if let Some(path) = env(context, "KYBERN_CURSOR_SDK_DIR") {
         return Ok(path.into());
     }
@@ -86,11 +88,7 @@ pub(super) fn command(context: &ProbeContext, mode: &str) -> Result<Command> {
 }
 
 pub(super) async fn probe(context: &ProbeContext) -> Result<(PathBuf, Value)> {
-    if !installed(context)
-        && let Some(previous) = previous_version(context)
-    {
-        return Err(DriverError::Protocol(outdated(&previous)));
-    }
+    ensure_current(context)?;
     let binary = node(context)?;
     let mut cmd = command(context, "probe")?;
     let output = tokio::time::timeout(Duration::from_secs(25), crate::process_tree::output(&mut cmd)).await.map_err(|_| {
@@ -117,13 +115,41 @@ pub(super) fn diagnostic(bytes: &[u8]) -> String {
     }
 }
 
-/// Explicit setup only; provider discovery never downloads or installs code.
+fn install_lock(destination: &std::path::Path) -> Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: Mutex<BTreeMap<PathBuf, Arc<tokio::sync::Mutex<()>>>> = Mutex::new(BTreeMap::new());
+    LOCKS.lock().unwrap_or_else(|poison| poison.into_inner()).entry(destination.to_path_buf()).or_default().clone()
+}
+
+/// Staging folders left by an install that a crash or a daemon exit cut short.
+/// Only ones older than an hour go, so another process's running install stays.
+fn remove_abandoned_staging(cache: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(cache) else { return };
+    for entry in entries.flatten() {
+        let abandoned = entry.file_name().to_string_lossy().starts_with(".cursor-install-")
+            && entry
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|at| at.elapsed().ok())
+                .is_some_and(|age| age > Duration::from_secs(3600));
+        if abandoned {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+/// Explicit setup only (the Update button, `kybern cursor install`, or the
+/// automatic update of an SDK this machine already has); a fresh machine never
+/// downloads or installs code on its own.
 /// Install into a staging directory and rename after npm succeeds, so existing
 /// sessions never see a partly-installed SDK. Package versions/integrities are
 /// committed in the lockfile and lifecycle scripts are disabled.
 pub async fn install(context: &ProbeContext) -> Result<PathBuf> {
     let _ = node(context)?;
     let destination = installed_dir(context)?;
+    // One install per directory at a time: the Update button and the automatic
+    // update can both ask, and the second finds the first's result in place.
+    let _install = install_lock(&destination).lock_owned().await;
     let manifest = destination.join("node_modules/@cursor/sdk/package.json");
     if manifest.is_file() {
         let value: Value = serde_json::from_slice(&std::fs::read(manifest)?).map_err(|e| DriverError::Protocol(e.to_string()))?;
@@ -141,6 +167,7 @@ pub async fn install(context: &ProbeContext) -> Result<PathBuf> {
     }
     let parent = destination.parent().ok_or_else(|| DriverError::Protocol("Cursor SDK directory has no parent".into()))?;
     std::fs::create_dir_all(parent)?;
+    remove_abandoned_staging(parent);
     let staging = parent.join(format!(".cursor-install-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&staging)?;
     struct Staging(PathBuf);
@@ -167,7 +194,7 @@ pub async fn install(context: &ProbeContext) -> Result<PathBuf> {
     Ok(destination)
 }
 
-fn npm_in(context: &ProbeContext) -> std::result::Result<PathBuf, which::Error> {
+pub(super) fn npm_in(context: &ProbeContext) -> std::result::Result<PathBuf, which::Error> {
     which::which_in(
         if cfg!(windows) { "npm.cmd" } else { "npm" },
         env(context, "PATH"),
@@ -175,13 +202,10 @@ fn npm_in(context: &ProbeContext) -> std::result::Result<PathBuf, which::Error> 
     )
 }
 
-fn npm() -> std::result::Result<PathBuf, which::Error> {
-    which::which(if cfg!(windows) { "npm.cmd" } else { "npm" })
-}
-
-/// npm installs the SDK; it ships with Node.js but can be missing.
-pub fn npm_available() -> bool {
-    npm().is_ok()
+/// npm installs the SDK; it ships with Node.js but can be missing. Looked up
+/// on the same PATH the install runs with.
+pub fn npm_available(context: &ProbeContext) -> bool {
+    npm_in(context).is_ok()
 }
 
 /// The newest SDK an earlier Kybern release installed beside the pinned one
@@ -210,6 +234,25 @@ pub fn outdated(previous: &str) -> String {
     format!(
         "This machine has Cursor’s SDK {previous}, and this Kybern release uses {SDK_VERSION}. Update it in Settings → Agent providers, or run `kybern cursor install`."
     )
+}
+
+/// Why Cursor can't run yet while Kybern moves an earlier SDK to the pinned one.
+pub fn updating(previous: &str) -> String {
+    format!("Updating Cursor’s SDK from {previous} to {SDK_VERSION}. Cursor will be ready in a minute.")
+}
+
+/// Fails with what is wrong when only an earlier release's SDK is installed:
+/// that it is being updated now, or how to update it. Asking also starts the
+/// automatic update (see `auto_update`), so no probe or session start waits on it.
+pub(super) fn ensure_current(context: &ProbeContext) -> Result<()> {
+    if installed(context) {
+        return Ok(());
+    }
+    let Some(previous) = previous_version(context) else { return Ok(()) };
+    Err(DriverError::Protocol(match super::auto_update::request(context) {
+        Some(super::auto_update::Update::Running) => updating(&previous),
+        _ => outdated(&previous),
+    }))
 }
 
 /// Whether the pinned SDK is in place where new sessions load it.
@@ -490,6 +533,38 @@ out.mkdir(parents=True, exist_ok=True)
         assert!(old_pkg.join("package.json").is_file());
         // Re-running install is a fast idempotent no-op.
         assert_eq!(install(&context).await.unwrap(), destination);
+    }
+
+    #[test]
+    fn new_sessions_are_told_to_update_or_wait_instead_of_that_the_sdk_is_missing() {
+        let home = tempfile::tempdir().unwrap();
+        let context = ProbeContext {
+            env: std::collections::BTreeMap::from([("HOME".into(), home.path().display().to_string())]),
+            ..Default::default()
+        };
+        // A fresh machine is left to the usual "isn't installed" path.
+        assert!(ensure_current(&context).is_ok());
+        let old = home.path().join(".kybern/cache/cursor-sdk/1.2.0/node_modules/@cursor/sdk");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("package.json"), r#"{"version":"1.2.0"}"#).unwrap();
+        assert_eq!(reason_of(ensure_current(&context).unwrap_err()), outdated("1.2.0"));
+        assert!(updating("1.2.0").contains("1.2.0") && updating("1.2.0").contains(SDK_VERSION));
+    }
+
+    #[test]
+    fn install_removes_only_abandoned_staging_folders() {
+        let cache = tempfile::tempdir().unwrap();
+        let stale = cache.path().join(".cursor-install-stale");
+        let running = cache.path().join(".cursor-install-running");
+        let release = cache.path().join("1.2.0");
+        for dir in [&stale, &running, &release] {
+            std::fs::create_dir(dir).unwrap();
+        }
+        let long_ago = std::time::SystemTime::now() - Duration::from_secs(2 * 3600);
+        std::fs::File::open(&stale).unwrap().set_modified(long_ago).unwrap();
+        std::fs::File::open(&release).unwrap().set_modified(long_ago).unwrap();
+        remove_abandoned_staging(cache.path());
+        assert!(!stale.exists() && running.exists() && release.exists());
     }
 
     fn reason_of(error: DriverError) -> String {

@@ -4,6 +4,7 @@
 //! with the CLI that created them. We never reinterpret a CLI conversation as
 //! an SDK agent or silently replace a missing conversation with an empty one.
 mod acp;
+mod auto_update;
 mod models;
 mod pool;
 mod runtime;
@@ -11,10 +12,11 @@ pub use models::legacy_model_selection;
 mod stream;
 pub mod usage;
 
+pub use auto_update::{Update, auto_update, auto_update_state, enable_auto_update};
 pub(crate) use pool::Connection;
 pub use runtime::{
     SDK_VERSION, auth_status, install, installed, login_command, node_version, npm_available, outdated, previous_version, setup_command,
-    setup_error, sign_out,
+    setup_error, sign_out, updating,
 };
 
 use std::collections::{HashSet, VecDeque};
@@ -157,6 +159,8 @@ impl AgentDriver for CursorDriver {
         };
         let delivery = Arc::new(StdMutex::new(DeliveryState::new(guide)));
         let context = ProbeContext { binary: config.binary.clone(), cwd: Some(config.cwd.clone()), env: config.env.into_iter().collect() };
+        // Say "updating" or how to update, not "isn't installed", while only an earlier release's SDK is there.
+        runtime::ensure_current(&context)?;
         let (connection, events) = Connection::spawn_with_delivery(&context, delivery.clone())?;
         let agent_id = config.resume_session_id.as_deref().map(sdk_id).transpose()?;
         let opened = connection
