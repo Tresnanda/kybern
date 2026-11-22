@@ -1,6 +1,6 @@
 # Antigravity: what the `-p` driver and the daemon provide today
 
-Written before the `agy acp` path was added, as the bar it must meet: every row
+Written before the `agy acp` path (`acp.rs`) was added, as the bar it must meet: every row
 keeps working on the `-p` path (which stays as the fallback), and every row
 that applies to a long-lived session must also hold on ACP. Each row names the
 test that covers it today (`drivers` = `crates/kybern-drivers/src`, `daemon` =
@@ -92,3 +92,49 @@ the same code.
 | 37 | **Session import** from `conversation_summaries.db` and `transcript.jsonl` (turns, tool cards, notices, truncated content, subagents skipped, read-only) | Shared (ACP conversations land in the same store) | `sessions/antigravity_tests.rs::a_transcript_becomes_turns_tool_cards_and_notices`, `truncated_content_is_read_from_the_full_transcript`, `the_list_skips_subagents_and_finds_each_conversations_folder`, `reading_never_touches_the_antigravity_folder`, `no_store_is_an_empty_list_and_an_unfinished_last_line_means_in_use`, `file_uris_become_paths`; daemon `session_import/tests.rs::antigravity_conversations_group_by_repository_and_import_with_their_cards` |
 | 38 | **Images:** image attachments reach the agent (`-p`: saved in the session's scratch folder and named by path; ACP: image blocks, which `agy acp` advertises) | Both | `a_prompt_flattens_parts_and_saves_images_in_the_scratch_folder` |
 | 39 | The session's scratch folder (log file, images) is removed with the session | `-p` | `Scratch`'s `Drop` (no direct test) |
+
+## Status on both paths
+
+Checked after the ACP path landed. "Pass" names the test that shows it; `acp_tests` is
+`antigravity/acp_tests.rs` (a scripted `agy acp`), "live" is `tests/live_drivers.rs` against
+the real `agy` 1.5.14 (`gemini-3.8-flash`, low effort), each scenario run on both transports,
+and "daemon" is a scratch `kybernd` driven with the CLI.
+
+| # | `-p` | ACP |
+|---|------|-----|
+| 1 | Pass (unchanged tests; live) | Pass: `agy_1_5_runs_on_acp_and_takes_every_mode`; live |
+| 2 | Pass (unchanged) | Pass: `agys_tool_names_and_prompt_usage_survive_acps_types` (recorded agy 1.5.14 usage: `inputTokens` without cache reads, `outputTokens` with thinking), `supervised_asks_and_shows_the_call_as_print_names_it`; live usage within a few tokens of `-p` for the same turn |
+| 3 | Pass (unchanged) | Not applicable: ACP streams the whole text and has no separate final answer |
+| 4 | Pass (unchanged; live) | Pass: `stop_cancels_the_prompt_and_its_command`; live (child killed); daemon (0.15 s) |
+| 5 | Pass (unchanged; live resume in a new session) | Pass: `the_guide_goes_in_the_system_prompt_once_…` (`session/load`, replay hidden), `a_crash_mid_turn_fails_it_plainly_and_ends_the_session_for_a_respawn`; live; daemon release + resume. `agy acp` resumes `-p` conversations and back (probed) |
+| 6 | Pass (unchanged: refused) | Steers: `a_steer_carries_the_turn_on_and_both_prompts_count` |
+| 7 | Pass (unchanged) | Pass: `a_tier_slug_runs_as_its_family_at_the_tier_the_effort_picks`, `the_model_and_effort_go_through_config_options_and_switches_wait_for_the_next_prompt` |
+| 8 | Pass (unchanged) | agy sends its own, longer list (`available_commands_update`) |
+| 9 | Pass (unchanged daemon tests) | Pass: `agys_recorded_errors_fail_the_turn_as_print_words_them` (the error step's text reaches the same classifier, so the daemon's guard sees it); the retry is a fresh `session/new` seeded by the daemon's handoff, as on `-p` |
+| 10–11 | Pass (daemon, unchanged) | Same daemon code |
+| 12 | Pass (daemon, unchanged) | Same daemon code: the cleared session id makes the next spawn a `session/new` seeded with the handoff |
+| 13 | Pass (unchanged) | Same check, before either transport starts |
+| 14 | Pass (unchanged) | Same classifier (`stream::failed`) for prompt errors and error steps |
+| 15 | Pass (unchanged) | Pass: `agys_recorded_errors_fail_the_turn_as_print_words_them` (`choose_model` before the model answered, Try again after), `steps_after_the_mark_tell_an_error_and_whether_the_model_answered` |
+| 16 | Pass (unchanged) | Same classifier; an ACP `refusal` (agy's exhausted quota) is a usage-limit problem |
+| 17 | Pass (unchanged) | Not applicable: no repeated `result.error` on ACP |
+| 18 | Pass (unchanged) | Core: a prompt that never reached agy re-offers the guide (`restore_guide`) |
+| 19 | Pass (unchanged) | Pass: `a_crash_mid_turn_fails_it_plainly_and_ends_the_session_for_a_respawn`; startup failures worded in `startup_problem` |
+| 20 | Pass (unchanged) | Pass: agy's own tool name kept through `_meta`, same `tools::normalize`; live (`Bash` with `command`) |
+| 21 | Pass (unchanged) | Pass: `mcp_calls_read_as_their_tool_and_schema_reads_stay_hidden` |
+| 22 | Pass (unchanged) | Pass: same test, and `agys_tool_names_and_prompt_usage_survive_acps_types` |
+| 23 | Pass (unchanged) | ACP's `rawInput` is complete in every recorded call, so the transcript fallback is not used there |
+| 24 | Pass (unchanged) | Pass: `tool_results_read_as_print_reads_them` |
+| 25 | Pass (unchanged) | Pass: `the_guide_goes_in_the_system_prompt_once_and_the_bridge_only_in_the_environment` (no `mcpServers`, credentials only in agy's environment) |
+| 26 | Pass (unchanged) | Pass: same test (system prompt when advertised, else first prompt once; a resume that lacks it gets it on the next prompt) |
+| 27 | Pass (daemon, unchanged) | Same daemon code |
+| 28 | Pass (unchanged) | Same refusal before either transport |
+| 29 | Pass (unchanged; `-p` and forced `-p` still Full access only) | Every mode: `supervised_asks_…`, `full_access_and_accept_edits_answer_without_a_card_where_they_should`, `auto_runs_agys_own_review_only_when_the_session_offers_it`, `agys_own_question_is_a_question_card`; daemon `antigravity_on_acp_takes_every_mode_wherever_one_is_set`; live and daemon Supervised approval |
+| 30 | Pass (unchanged) | Same |
+| 31 | Pass (unchanged; live) | Not applicable: title one-shots always run on `-p` |
+| 32–34 | Pass (unchanged) | Same code; the probe also reports every mode when ACP is usable |
+| 35 | Pass (unchanged) | `agy acp` starts through the same `binary::command` (`.cmd` shims) |
+| 36 | Pass (unchanged) | Same `resolve` and `env_home` |
+| 37 | Pass (unchanged) | ACP conversations are agy's own, in the same store |
+| 38 | Pass (unchanged) | Image blocks (`agy acp` advertises `promptCapabilities.image`) |
+| 39 | Pass (unchanged) | The flavor owns the log file's scratch folder and removes it with the session |

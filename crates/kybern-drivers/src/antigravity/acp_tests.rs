@@ -623,7 +623,7 @@ mod session {
         assert_eq!(new["_meta"]["antigravity"]["systemPrompt"]["append"], "GUIDE TEXT");
         assert_eq!(new["mcpServers"], json!([]), "Kybern's tools come through the global bridge entry");
         assert_eq!(fake.sent("session/prompt")[0]["prompt"][0]["text"], "hello", "never on a prompt as well");
-        let session_call = fake.calls().into_iter().filter(|call| call["argv"][0] == "acp").last().unwrap();
+        let session_call = fake.calls().into_iter().rfind(|call| call["argv"][0] == "acp").unwrap();
         assert_eq!(session_call["mcp_url"], "http://127.0.0.1:4199/native-tools/mcp");
         assert_eq!(session_call["mcp_auth"], "secret-capability");
         assert!(!session_call["argv"].to_string().contains("secret-capability"));
