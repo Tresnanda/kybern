@@ -112,6 +112,7 @@ fn from_driver(error: &DriverError, detail: &str) -> Option<Problem> {
                 .with_copy("Update this agent", "Its installed version is older than Kybern needs. Update it, then try again."),
         ),
         DriverError::Io(io) => from_io(io, detail),
+        DriverError::Problem { problem, .. } => Some((**problem).clone()),
         _ => None,
     }
 }

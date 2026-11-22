@@ -94,6 +94,17 @@ pub enum DriverError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+    /// A failure the driver has already put into words: `problem` is what clients show, `detail` the
+    /// technical text behind Show details.
+    #[error("{detail}")]
+    Problem { detail: String, problem: Box<kybern_protocol::rpc::Problem> },
+}
+
+impl DriverError {
+    /// A failure with its own `problem`; the error's text is the problem's detail.
+    pub fn problem(problem: kybern_protocol::rpc::Problem) -> Self {
+        Self::Problem { detail: problem.detail.clone().unwrap_or_default(), problem: Box::new(problem) }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, DriverError>;

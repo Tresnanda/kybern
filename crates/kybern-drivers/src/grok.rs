@@ -32,6 +32,7 @@ use agent_client_protocol::{
 };
 use async_trait::async_trait;
 use kybern_protocol::process::NoWindow;
+use kybern_protocol::rpc::{Problem, ProblemAction, ProblemKind};
 use kybern_protocol::*;
 use serde_json::{Map, Value, json};
 use tokio::process::Command;
@@ -238,6 +239,7 @@ impl AgentDriver for GrokDriver {
         };
 
         let stderr_tail = Arc::new(std::sync::Mutex::new(String::new()));
+        let (stderr_closed_tx, mut stderr_closed) = tokio::sync::watch::channel(false);
         let shared = Arc::new(Shared {
             events: events_tx.clone(),
             pending: Mutex::new(HashMap::new()),
@@ -248,7 +250,7 @@ impl AgentDriver for GrokDriver {
         let worker_stderr = stderr_tail.clone();
         let cfg = config.clone();
         let worker = crate::process_tree::SessionTask(tokio::spawn(async move {
-            let outcome = run_connection(bin, cfg, worker_shared, cmd_rx, bound_tx, worker_stderr).await;
+            let outcome = run_connection(bin, cfg, worker_shared, cmd_rx, bound_tx, worker_stderr, stderr_closed_tx).await;
             let error = outcome.err().map(|e| e.to_string());
             let _ = events_tx.send(DriverEvent::Exited { code: None, error }).await;
         }));
@@ -256,7 +258,10 @@ impl AgentDriver for GrokDriver {
         match bound_rx.await {
             Ok(Ok(_)) => {}
             Ok(Err(e)) => return Err(e),
-            Err(_) => return Err(DriverError::ProcessExited(startup_exit_message(&stderr_tail))),
+            Err(_) => {
+                stderr_settled(&mut stderr_closed).await;
+                return Err(startup_exit_error(&stderr_tail));
+            }
         }
         Ok(SpawnedSession {
             session: Box::new(Handle { commands: cmd_tx, _worker: worker, guide: Mutex::new(guide), shared }),
@@ -350,58 +355,217 @@ fn auto_decision(mode: PermissionMode, fields: &ToolCallUpdateFields, cwd: &Path
     }
 }
 
-/// An edit, delete or move whose every named path lies inside `cwd`. A request that names no path,
-/// or one outside the workspace, still asks.
+/// An edit, delete or move whose every named path lies inside `cwd`: each of its `locations` and each
+/// path its `raw_input` names. A move counts only when its destination was found and checked, since its
+/// `locations` name the source alone. A request that names no path, or one outside the workspace, still asks.
 fn is_workspace_edit(fields: &ToolCallUpdateFields, cwd: &Path) -> bool {
-    matches!(fields.kind, Some(ToolKind::Edit | ToolKind::Delete | ToolKind::Move))
-        && fields
-            .locations
-            .as_ref()
-            .is_some_and(|locations| !locations.is_empty() && locations.iter().all(|location| inside_workspace(&location.path, cwd)))
+    let Some(kind) = fields.kind.filter(|kind| matches!(kind, ToolKind::Edit | ToolKind::Delete | ToolKind::Move)) else {
+        return false;
+    };
+    let mut paths: Vec<PathBuf> = fields.locations.iter().flatten().map(|location| location.path.clone()).collect();
+    let named = fields.raw_input.as_ref().map(input_paths).unwrap_or_default();
+    if kind == ToolKind::Move && !named.iter().any(|(key, _)| is_destination_key(key)) {
+        return false;
+    }
+    paths.extend(named.into_iter().map(|(_, path)| path));
+    !paths.is_empty() && paths.iter().all(|path| inside_workspace(path, cwd))
 }
 
+/// Keys of a tool's input whose string (or list of strings) is a path it reads or writes.
+const PATH_KEYS: &[&str] = &[
+    "path",
+    "paths",
+    "file",
+    "files",
+    "filepath",
+    "filepaths",
+    "filename",
+    "source",
+    "sourcepath",
+    "src",
+    "from",
+    "frompath",
+    "oldpath",
+    "destination",
+    "destinationpath",
+    "dest",
+    "destpath",
+    "to",
+    "topath",
+    "target",
+    "targetpath",
+    "targetfile",
+    "newpath",
+    "newfile",
+    "newfilepath",
+    "newname",
+    "output",
+    "outputpath",
+];
+
+/// Keys that name where a move puts the file.
+const DESTINATION_KEYS: &[&str] = &[
+    "destination",
+    "destinationpath",
+    "dest",
+    "destpath",
+    "to",
+    "topath",
+    "target",
+    "targetpath",
+    "targetfile",
+    "newpath",
+    "newfilepath",
+    "newname",
+];
+
+/// `file_path`, `filePath` and `FilePath` alike.
+fn normalized_key(key: &str) -> String {
+    key.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_lowercase()).collect()
+}
+
+fn is_destination_key(key: &str) -> bool {
+    DESTINATION_KEYS.contains(&key)
+}
+
+/// Every path a tool's input names, at any depth, with its normalized key.
+fn input_paths(input: &Value) -> Vec<(String, PathBuf)> {
+    fn walk(value: &Value, key: Option<&str>, out: &mut Vec<(String, PathBuf)>) {
+        match value {
+            Value::Object(map) => {
+                for (key, value) in map {
+                    let key = normalized_key(key);
+                    walk(value, PATH_KEYS.contains(&key.as_str()).then_some(key.as_str()), out);
+                }
+            }
+            Value::Array(items) => items.iter().for_each(|item| walk(item, key, out)),
+            Value::String(text) => {
+                if let Some(key) = key.filter(|_| !text.trim().is_empty()) {
+                    out.push((key.to_owned(), PathBuf::from(text.trim())));
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(input, None, &mut out);
+    out
+}
+
+/// Whether `path` (relative to `cwd`, or absolute) is inside `cwd` once every symlink on the way is followed.
+///
+/// This checks the file system as it is now. A symlink created between this check and Grok's write
+/// can't be prevented here; Accept edits trusts the workspace's own contents that far.
 fn inside_workspace(path: &Path, cwd: &Path) -> bool {
     let path = if path.is_absolute() { path.to_path_buf() } else { cwd.join(path) };
     if path.components().any(|component| matches!(component, Component::ParentDir)) {
         return false;
     }
-    // Symlinks count where they point: compare the canonical forms, a new file through its nearest existing folder.
-    match (canonical_existing(&path), cwd.canonicalize()) {
+    match (canonical_existing(&path, 0), cwd.canonicalize()) {
         (Some(path), Ok(root)) => path.starts_with(root),
         _ => false,
     }
 }
 
-fn canonical_existing(path: &Path) -> Option<PathBuf> {
+/// How many symlinks `canonical_existing` follows before it gives up (the usual `MAXSYMLINKS`).
+const MAX_SYMLINKS: usize = 40;
+
+/// `path` with every symlink resolved: its nearest existing ancestor made canonical, with the names that
+/// don't exist yet appended. A dangling symlink counts where it points, so a write through it is checked
+/// against its target. `None` when that can't be worked out safely (a link loop, an unreadable folder).
+fn canonical_existing(path: &Path, links: usize) -> Option<PathBuf> {
     let mut missing = Vec::new();
-    let mut current = path;
+    let mut current = path.to_path_buf();
     loop {
         if let Ok(found) = current.canonicalize() {
             return Some(missing.iter().rev().fold(found, |path: PathBuf, part| path.join(part)));
         }
-        missing.push(current.file_name()?.to_owned());
-        current = current.parent()?;
+        match std::fs::symlink_metadata(&current) {
+            // A dangling link: follow it, from the folder it sits in, and resolve the rest from there.
+            Ok(meta) if meta.file_type().is_symlink() => {
+                if links >= MAX_SYMLINKS {
+                    return None;
+                }
+                let target = std::fs::read_link(&current).ok()?;
+                let target = if target.is_absolute() { target } else { current.parent()?.join(target) };
+                let target = missing.iter().rev().fold(target, |path: PathBuf, part| path.join(part));
+                return canonical_existing(&target, links + 1);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            // It exists but can't be resolved (permissions, a file used as a folder): don't guess.
+            _ => return None,
+        }
+        let name = match current.components().next_back()? {
+            Component::Normal(name) => name.to_owned(),
+            // A `..` from a link's target: step back lexically, which the canonical parent then resolves.
+            Component::ParentDir => return canonical_parent_dir(&current, &missing, links),
+            _ => return None,
+        };
+        missing.push(name);
+        current = current.parent()?.to_path_buf();
     }
 }
 
-/// Grok's option for a Kybern decision. Allow for this thread takes `allow-edits-session` only; Grok's
-/// other allow-always options would save a project grant that outlives the thread. Deny rejects;
-/// no answer (the turn ended) cancels.
-fn permission_response(options: &[PermissionOption], decision: Option<&ApprovalDecision>) -> RequestPermissionResponse {
+/// `current` ends in `..` and doesn't exist: resolve what's before it, step up, and add the missing names.
+fn canonical_parent_dir(current: &Path, missing: &[std::ffi::OsString], links: usize) -> Option<PathBuf> {
+    let before = current.parent()?;
+    let resolved = canonical_existing(before, links)?;
+    let up = resolved.parent()?.to_path_buf();
+    Some(missing.iter().rev().fold(up, |path, part| path.join(part)))
+}
+
+/// Grok's option for a Kybern decision, or `None` when it offers none that grants exactly that. Allow
+/// for this thread takes `allow-edits-session` only (else allows once); Grok's other allow-always
+/// options would save a project grant that outlives the thread. Allow once never widens to a session
+/// grant. Deny rejects.
+fn permission_option<'a>(options: &'a [PermissionOption], decision: &ApprovalDecision) -> Option<&'a PermissionOption> {
     let of_kind = |kind: PermissionOptionKind| options.iter().find(|option| option.kind == kind);
     let edits_session = || options.iter().find(|option| option.option_id.0.trim() == ALLOW_EDITS_SESSION);
-    let chosen = match decision {
-        Some(ApprovalDecision::AllowOnce) => of_kind(PermissionOptionKind::AllowOnce).or_else(edits_session),
-        Some(ApprovalDecision::AllowAlways) => edits_session().or_else(|| of_kind(PermissionOptionKind::AllowOnce)),
-        Some(ApprovalDecision::Deny { .. } | ApprovalDecision::Submit { .. }) => {
+    match decision {
+        ApprovalDecision::AllowOnce => of_kind(PermissionOptionKind::AllowOnce),
+        ApprovalDecision::AllowAlways => edits_session().or_else(|| of_kind(PermissionOptionKind::AllowOnce)),
+        ApprovalDecision::Deny { .. } | ApprovalDecision::Submit { .. } => {
             of_kind(PermissionOptionKind::RejectOnce).or_else(|| of_kind(PermissionOptionKind::RejectAlways))
         }
-        None => None,
+    }
+}
+
+/// What Kybern tells Grok for a decision, and the notice to show when Grok offered nothing that matches
+/// it. A decision Grok can't take is declined (rejected once, else cancelled), never widened; no answer
+/// (the turn ended) cancels.
+fn permission_response(options: &[PermissionOption], decision: Option<&ApprovalDecision>) -> (RequestPermissionResponse, Option<String>) {
+    let selected = |option: &PermissionOption| {
+        RequestPermissionResponse::new(RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option.option_id.clone())))
     };
-    RequestPermissionResponse::new(match chosen {
-        Some(option) => RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option.option_id.clone())),
-        None => RequestPermissionOutcome::Cancelled,
-    })
+    let cancelled = || RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled);
+    let Some(decision) = decision else { return (cancelled(), None) };
+    if let Some(option) = permission_option(options, decision) {
+        return (selected(option), None);
+    }
+    match decision {
+        ApprovalDecision::AllowOnce => {
+            let decline = permission_option(options, &ApprovalDecision::Deny { reason: None });
+            let notice = "Grok Build couldn't allow this just once, so Kybern declined it. To let it run, choose Allow for this thread when it asks again.";
+            (decline.map_or_else(cancelled, selected), Some(notice.into()))
+        }
+        _ => (cancelled(), None),
+    }
+}
+
+/// The answer Kybern sends without showing a card, if any. Full access takes Grok's narrowest allow
+/// option; Accept edits allows a workspace edit once, and asks when Grok can't allow it just once.
+fn auto_response(
+    mode: PermissionMode,
+    fields: &ToolCallUpdateFields,
+    cwd: &Path,
+    options: &[PermissionOption],
+) -> Option<RequestPermissionResponse> {
+    let decision = auto_decision(mode, fields, cwd)?;
+    let option = permission_option(options, &decision).or_else(|| match mode {
+        PermissionMode::FullAccess => permission_option(options, &ApprovalDecision::AllowAlways),
+        _ => None,
+    })?;
+    Some(RequestPermissionResponse::new(RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option.option_id.clone()))))
 }
 
 /// Grok's extension requests Kybern answers (T3 Code, `XAiAskUserQuestionRequest`,
@@ -594,19 +758,45 @@ fn stop_reason(acp: AcpStop) -> StopReason {
     }
 }
 
+/// Grok's `agentResult` as the words for a failed turn, and all of it for details. A result that isn't
+/// text is JSON: its `message` (or `error`) string is the words when it has one.
+fn agent_result_text(result: Option<&Value>) -> (Option<String>, Option<String>) {
+    let plain = |text: &str| Some(text.trim().to_owned()).filter(|text| !text.is_empty());
+    match result {
+        None => (None, None),
+        Some(Value::String(text)) => (plain(text), plain(text)),
+        Some(other) => {
+            let message = ["/message", "/error", "/error/message", "/detail"]
+                .iter()
+                .find_map(|pointer| other.pointer(pointer).and_then(Value::as_str))
+                .and_then(plain);
+            (message, Some(other.to_string()))
+        }
+    }
+}
+
 /// The turn's end from Grok's own completion notice.
 fn completion_event(complete: &PromptComplete, duration_ms: u64) -> DriverEvent {
-    let agent_text = complete.agent_result.as_ref().and_then(|result| match result {
-        Value::String(text) => Some(text.trim().to_owned()).filter(|text| !text.is_empty()),
-        other => Some(other.to_string()),
-    });
+    let (words, detail) = agent_result_text(complete.agent_result.as_ref());
     let stop = match complete.stop_reason.as_deref() {
-        Some("rate_limit") => return usage_limit_failure(agent_text.unwrap_or_else(|| "Grok usage limit reached.".into())),
+        Some("rate_limit") => {
+            let error = words.unwrap_or_else(|| "Grok Build reached its usage limit.".into());
+            let problem = crate::failure::rate_limited_problem(ProviderKind::GrokBuild, detail.as_deref().unwrap_or(&error));
+            return DriverEvent::TurnFailed { error, problem: Some(problem) };
+        }
         Some("error") => {
-            return DriverEvent::turn_failed(
-                ProviderKind::GrokBuild,
-                agent_text.unwrap_or_else(|| "Grok Build ended the turn with an error.".into()),
-            );
+            let error = words.unwrap_or_else(|| "Grok Build ended the turn with an error.".into());
+            let detail = detail.unwrap_or_else(|| "x.ai/session/prompt_complete: stopReason \"error\" without an agentResult".into());
+            let problem = crate::failure::classify(ProviderKind::GrokBuild, &detail).unwrap_or_else(|| {
+                Problem::new(ProblemKind::Internal, detail)
+                    .with_subject("grok")
+                    .with_copy(
+                        "Grok Build ended the turn with an error",
+                        "Send your message again. If it keeps happening, copy the details and report them.",
+                    )
+                    .with_action(ProblemAction::retry("Try again"))
+            });
+            return DriverEvent::TurnFailed { error, problem: Some(problem) };
         }
         Some("cancelled") => StopReason::Interrupted,
         Some("max_tokens" | "max_turn_requests") => StopReason::MaxTurns,
@@ -628,11 +818,11 @@ fn prompt_failure(error: &agent_client_protocol::Error) -> DriverEvent {
     DriverEvent::turn_failed(ProviderKind::GrokBuild, error.to_string())
 }
 
-/// Appended to anything that goes wrong before the session is bound.
-const SIGN_IN_HINT: &str = "If you are signed out, run `grok login` or set XAI_API_KEY.";
-
 /// How much of the end of `grok`'s stderr is kept to explain a startup failure.
 const STDERR_TAIL_BYTES: usize = 600;
+
+/// How long a failed start waits for `grok`'s stderr to close, so a `grok` that quit has said why.
+const STDERR_SETTLE: Duration = Duration::from_secs(1);
 
 fn remember_stderr(tail: &std::sync::Mutex<String>, line: &str) {
     let Ok(mut tail) = tail.lock() else { return };
@@ -649,21 +839,79 @@ fn remember_stderr(tail: &std::sync::Mutex<String>, line: &str) {
     }
 }
 
-fn startup_exit_message(tail: &std::sync::Mutex<String>) -> String {
-    let detail = tail.lock().map(|t| t.trim().to_string()).unwrap_or_default();
-    if detail.is_empty() {
-        format!("grok agent exited during startup. {SIGN_IN_HINT}")
-    } else {
-        format!("grok agent exited during startup: {detail}. {SIGN_IN_HINT}")
-    }
+fn stderr_text(tail: &std::sync::Mutex<String>) -> String {
+    tail.lock().map(|t| t.trim().to_string()).unwrap_or_default()
 }
 
-/// Fail the session start: the caller of `spawn` gets `message`, not just "exited during startup".
-fn fail_startup(bound: &mut Option<oneshot::Sender<Result<String>>>, message: String) -> agent_client_protocol::Error {
-    if let Some(b) = bound.take() {
-        let _ = b.send(Err(DriverError::Protocol(message.clone())));
+/// Wait (briefly) until `grok`'s stderr has closed, which it does once `grok` has quit.
+async fn stderr_settled(closed: &mut tokio::sync::watch::Receiver<bool>) {
+    let _ = tokio::time::timeout(STDERR_SETTLE, closed.wait_for(|closed| *closed)).await;
+}
+
+/// The step of a session start that failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Startup {
+    /// `grok` quit before it answered anything.
+    Launch,
+    Initialize,
+    NewSession,
+    Resume,
+    /// `session/load` got no answer and no replay in time.
+    ResumeTimedOut,
+}
+
+/// `clap`'s words for an option it doesn't know: this `grok` predates a flag Kybern passes
+/// (`--permission-mode`, `--no-auto-update`).
+fn rejects_arguments(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    ["unexpected argument", "unrecognized option", "unrecognized argument", "unknown argument", "unknown option"]
+        .iter()
+        .any(|needle| lower.contains(needle))
+        || lower.contains("found argument") && lower.contains("wasn't expected")
+}
+
+/// What a failed start means: an outdated `grok`, a cause `failure::classify` names (signed out, offline,
+/// a usage limit), or else the step that failed. `detail` is the technical text, kept for Show details.
+fn startup_problem(step: Startup, detail: &str) -> Problem {
+    let kind = ProviderKind::GrokBuild;
+    if rejects_arguments(detail) {
+        return crate::failure::update_needed_problem(kind, detail);
     }
-    agent_client_protocol::Error::from(anyhow::anyhow!(message))
+    if let Some(problem) = crate::failure::classify(kind, detail) {
+        return problem;
+    }
+    const CHECK: &str = "Check that Grok Build is signed in (run `grok login`), then try again.";
+    let (title, hint) = match step {
+        Startup::Launch => ("Grok Build quit while starting", CHECK),
+        Startup::Initialize => ("Grok Build didn't start", CHECK),
+        Startup::NewSession => ("Grok Build couldn't start a conversation", CHECK),
+        Startup::Resume => ("Grok Build couldn't reopen this conversation", "Try again, or start a new thread if it keeps happening."),
+        Startup::ResumeTimedOut => (
+            "Grok Build didn't reopen this conversation",
+            "It didn't answer in time. Try again, or start a new thread if it keeps happening.",
+        ),
+    };
+    Problem::new(ProblemKind::Internal, detail).with_subject("grok").with_copy(title, hint).with_action(ProblemAction::retry("Try again"))
+}
+
+/// `grok` quit before the session was bound; its stderr says why.
+fn startup_exit_error(tail: &std::sync::Mutex<String>) -> DriverError {
+    let stderr = stderr_text(tail);
+    let detail = if stderr.is_empty() {
+        "grok agent exited during startup".to_string()
+    } else {
+        format!("grok agent exited during startup: {stderr}")
+    };
+    DriverError::problem(startup_problem(Startup::Launch, &detail))
+}
+
+/// Fail the session start: the caller of `spawn` gets `problem`, not just "exited during startup".
+fn fail_startup(bound: &mut Option<oneshot::Sender<Result<String>>>, problem: Problem) -> agent_client_protocol::Error {
+    let detail = problem.detail.clone().unwrap_or_default();
+    if let Some(b) = bound.take() {
+        let _ = b.send(Err(DriverError::problem(problem)));
+    }
+    agent_client_protocol::Error::from(anyhow::anyhow!(detail))
 }
 
 /// Attach Kybern MCP tools the same way Cursor does. Refuse if enforcement is required.
@@ -844,6 +1092,48 @@ async fn await_session_load<T>(
     }
 }
 
+/// How a prompt's wait ended.
+struct Settled {
+    event: DriverEvent,
+    /// Kybern closed the session (or dropped its handle) meanwhile: stop once this turn has ended.
+    close: bool,
+}
+
+/// Wait for one prompt to end. `answer` is its `session/prompt` response, already as the turn's end.
+/// Grok's own completion notice settles it only when it names this `prompt_id`: a notice without one, a
+/// late one for an earlier prompt or a background task's wake would end this turn early and leave its
+/// real output with no turn open. Cancel cancels; Close, or a closed command channel, cancels once and
+/// is not polled again.
+async fn settle_prompt(
+    answer: impl std::future::Future<Output = DriverEvent>,
+    prompt_id: &str,
+    started: std::time::Instant,
+    completions: &mut mpsc::UnboundedReceiver<PromptComplete>,
+    commands: &mut mpsc::Receiver<SessionCommand>,
+    mut cancel: impl FnMut(),
+) -> Settled {
+    let mut answer = std::pin::pin!(answer);
+    let mut close = false;
+    loop {
+        tokio::select! {
+            event = &mut answer => return Settled { event, close },
+            Some(complete) = completions.recv() => {
+                if complete.prompt_id.as_deref() == Some(prompt_id) {
+                    return Settled { event: completion_event(&complete, started.elapsed().as_millis() as u64), close };
+                }
+            }
+            command = commands.recv(), if !close => match command {
+                Some(SessionCommand::Cancel) => cancel(),
+                Some(SessionCommand::Close) | None => {
+                    cancel();
+                    close = true;
+                }
+                Some(SessionCommand::Prompt { .. }) => {}
+            },
+        }
+    }
+}
+
 async fn run_connection(
     bin: PathBuf,
     config: SessionConfig,
@@ -851,6 +1141,7 @@ async fn run_connection(
     mut commands: mpsc::Receiver<SessionCommand>,
     bound: oneshot::Sender<Result<String>>,
     stderr_tail: Arc<std::sync::Mutex<String>>,
+    stderr_closed_tx: tokio::sync::watch::Sender<bool>,
 ) -> Result<()> {
     let mut bound = Some(bound);
     // Checked before `grok` starts, so a refused bridge costs no process.
@@ -882,18 +1173,31 @@ async fn run_connection(
     #[cfg(unix)]
     cmd.process_group(0);
 
-    let mut child = cmd.spawn()?;
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            // The caller gets the reason itself (a missing or busy binary), not "exited during startup".
+            let message = error.to_string();
+            if let Some(b) = bound.take() {
+                let _ = b.send(Err(DriverError::Io(error)));
+            }
+            return Err(DriverError::Protocol(message));
+        }
+    };
     let _tree = crate::process_tree::ProcessTree::new(child.id().expect("spawned grok"));
     let stdin = child.stdin.take().ok_or_else(|| DriverError::Protocol("no stdin".into()))?;
     let stdout = child.stdout.take().ok_or_else(|| DriverError::Protocol("no stdout".into()))?;
+    let mut stderr_closed = stderr_closed_tx.subscribe();
     if let Some(stderr) = child.stderr.take() {
+        let tail = stderr_tail.clone();
         tokio::spawn(async move {
             use tokio::io::AsyncBufReadExt;
             let mut lines = tokio::io::BufReader::new(stderr).lines();
             while let Ok(Some(l)) = lines.next_line().await {
                 tracing::debug!(target: "provider.stderr", "{l}");
-                remember_stderr(&stderr_tail, &l);
+                remember_stderr(&tail, &l);
             }
+            let _ = stderr_closed_tx.send(true);
         });
     }
     let agent = ByteStreams::new(stdin.compat_write(), stdout.compat());
@@ -924,7 +1228,10 @@ async fn run_connection(
                     if let Ok(mut last) = last_replay_notif.lock() {
                         *last = Some(tokio::time::Instant::now());
                     }
-                    return Ok(());
+                    // Commands and context usage are the session's state, not its history.
+                    if !matches!(n.update, SessionUpdate::AvailableCommandsUpdate(_) | SessionUpdate::UsageUpdate(_)) {
+                        return Ok(());
+                    }
                 }
                 let ev = &events;
                 match n.update {
@@ -997,8 +1304,8 @@ async fn run_connection(
         .on_receive_request(
             async move |req: RequestPermissionRequest, responder, cx: ConnectionTo<Agent>| {
                 let shared = shared_perm.clone();
-                if let Some(decision) = auto_decision(shared.mode, &req.tool_call.fields, &shared.cwd) {
-                    return responder.respond(permission_response(&req.options, Some(&decision)));
+                if let Some(response) = auto_response(shared.mode, &req.tool_call.fields, &shared.cwd, &req.options) {
+                    return responder.respond(response);
                 }
                 let fields = &req.tool_call.fields;
                 let title = fields.title.clone().unwrap_or_default();
@@ -1025,9 +1332,14 @@ async fn run_connection(
                     .await;
                 // Wait off the dispatch loop: Grok's updates and the prompt's answer keep flowing meanwhile.
                 let options = req.options;
+                let events = shared.events.clone();
                 cx.spawn(async move {
                     let decision = rx.await.ok();
-                    let _ = responder.respond(permission_response(&options, decision.as_ref()));
+                    let (response, notice) = permission_response(&options, decision.as_ref());
+                    if let Some(text) = notice {
+                        let _ = events.send(DriverEvent::Notice { level: NoticeLevel::Warning, text, data: None }).await;
+                    }
+                    let _ = responder.respond(response);
                     Ok(())
                 })
             },
@@ -1064,7 +1376,11 @@ async fn run_connection(
                 .block_task()
                 .await;
             if let Err(e) = init {
-                return Err(fail_startup(&mut bound, format!("Grok Build failed to initialize: {e}. {SIGN_IN_HINT}")));
+                // A `grok` that quit (an option it doesn't know, a crash) has said why on stderr.
+                stderr_settled(&mut stderr_closed).await;
+                let stderr = stderr_text(&stderr_tail);
+                let detail = if stderr.is_empty() { format!("initialize: {e}") } else { format!("initialize: {e}\n{stderr}") };
+                return Err(fail_startup(&mut bound, startup_problem(Startup::Initialize, &detail)));
             }
 
             // Assume already authenticated (grok login or XAI_API_KEY). Explicit auth can be added later.
@@ -1073,22 +1389,22 @@ async fn run_connection(
                     loading.store(true, std::sync::atomic::Ordering::Relaxed);
                     let request = LoadSessionRequest::new(id.clone(), cwd.clone()).mcp_servers(native_mcp_servers.clone());
                     let loaded = await_session_load(cx.send_request(request).block_task(), &last_replay, LOAD_REPLAY_IDLE, LOAD_TIMEOUT).await;
-                    loading.store(false, std::sync::atomic::Ordering::Relaxed);
                     match loaded {
-                        LoadOutcome::Answered(Ok(_)) | LoadOutcome::ReplayIdle => agent_client_protocol::schema::v1::SessionId::from(id.clone()),
+                        LoadOutcome::Answered(Ok(_)) => {
+                            loading.store(false, std::sync::atomic::Ordering::Relaxed);
+                            agent_client_protocol::schema::v1::SessionId::from(id.clone())
+                        }
+                        // A quiet replay only ends the wait: Grok may still be replaying, so its updates stay
+                        // history until the first prompt is sent.
+                        LoadOutcome::ReplayIdle => agent_client_protocol::schema::v1::SessionId::from(id.clone()),
                         // A fresh session here would silently drop the conversation, so the
                         // thread is told it could not be resumed (as Cursor's is).
                         LoadOutcome::Answered(Err(e)) => {
-                            return Err(fail_startup(&mut bound, format!("Grok Build could not resume session {id}: {e}. {SIGN_IN_HINT}")));
+                            return Err(fail_startup(&mut bound, startup_problem(Startup::Resume, &format!("session/load {id}: {e}"))));
                         }
                         LoadOutcome::TimedOut => {
-                            return Err(fail_startup(
-                                &mut bound,
-                                format!(
-                                    "Grok Build didn't reopen this conversation within {} seconds. Try again, or start a new thread if it keeps happening.",
-                                    LOAD_TIMEOUT.as_secs()
-                                ),
-                            ));
+                            let detail = format!("session/load {id}: no answer or replay in {} seconds", LOAD_TIMEOUT.as_secs());
+                            return Err(fail_startup(&mut bound, startup_problem(Startup::ResumeTimedOut, &detail)));
                         }
                     }
                 }
@@ -1097,7 +1413,7 @@ async fn run_connection(
                     match cx.send_request(request).block_task().await {
                         Ok(created) => created.session_id,
                         Err(e) => {
-                            return Err(fail_startup(&mut bound, format!("Grok Build could not start a session: {e}. {SIGN_IN_HINT}")));
+                            return Err(fail_startup(&mut bound, startup_problem(Startup::NewSession, &format!("session/new: {e}"))));
                         }
                     }
                 }
@@ -1126,44 +1442,35 @@ async fn run_connection(
             while let Some(cmd) = commands.recv().await {
                 match cmd {
                     SessionCommand::Prompt { blocks } => {
+                        // Whatever a resume still replays after this is this prompt's output.
+                        loading.store(false, std::sync::atomic::Ordering::Relaxed);
                         let started = std::time::Instant::now();
                         msg_state.lock().await.1 = false;
-                        // A notice left over from an earlier prompt never ends this one.
-                        while completions.try_recv().is_ok() {}
                         // Grok echoes this id in `prompt_complete` (T3 Code sends it the same way).
                         let prompt_id = format!("kybern-{}", uuid::Uuid::new_v4().simple());
                         let mut meta = Meta::new();
                         meta.insert("promptId".into(), json!(prompt_id));
                         meta.insert("requestId".into(), json!(prompt_id));
                         let prompt = cx.send_request(PromptRequest::new(session_id.clone(), blocks).meta(meta));
-                        let mut fut = std::pin::pin!(prompt.block_task());
-                        let ev = loop {
-                            tokio::select! {
-                                r = &mut fut => {
+                        let answer = async {
+                            match prompt.block_task().await {
+                                Ok(r) => {
+                                    let (usage, cost_usd) = turn_usage(r.meta.as_ref());
                                     let duration_ms = started.elapsed().as_millis() as u64;
-                                    break match r {
-                                        Ok(r) => {
-                                            let (usage, cost_usd) = turn_usage(r.meta.as_ref());
-                                            DriverEvent::TurnCompleted { stop_reason: stop_reason(r.stop_reason), usage, cost_usd, duration_ms, anchors: Default::default() }
-                                        }
-                                        Err(e) => prompt_failure(&e),
-                                    };
+                                    DriverEvent::TurnCompleted { stop_reason: stop_reason(r.stop_reason), usage, cost_usd, duration_ms, anchors: Default::default() }
                                 }
-                                Some(complete) = completions.recv() => {
-                                    if complete.prompt_id.as_deref().is_none_or(|id| id == prompt_id) {
-                                        break completion_event(&complete, started.elapsed().as_millis() as u64);
-                                    }
-                                }
-                                c = commands.recv() => match c {
-                                    Some(SessionCommand::Cancel) | Some(SessionCommand::Close) | None => {
-                                        let _ = cx.send_notification(CancelNotification::new(session_id.clone()));
-                                    }
-                                    Some(SessionCommand::Prompt { .. }) => {}
-                                },
+                                Err(e) => prompt_failure(&e),
                             }
                         };
+                        let cancel = || {
+                            let _ = cx.send_notification(CancelNotification::new(session_id.clone()));
+                        };
+                        let settled = settle_prompt(answer, &prompt_id, started, &mut completions, &mut commands, cancel).await;
                         shared.withdraw_all().await;
-                        let _ = shared.events.send(ev).await;
+                        let _ = shared.events.send(settled.event).await;
+                        if settled.close {
+                            break;
+                        }
                     }
                     SessionCommand::Cancel => {
                         let _ = cx.send_notification(CancelNotification::new(session_id.clone()));
@@ -1343,17 +1650,19 @@ mod grok_meta_tests {
     fn a_failed_start_reaches_the_caller_and_stderr_explains_an_early_exit() {
         let (tx, mut rx) = oneshot::channel::<Result<String>>();
         let mut bound = Some(tx);
-        let _ = fail_startup(&mut bound, "Grok Build could not start a session: auth required. run grok login".into());
+        let _ = fail_startup(&mut bound, startup_problem(Startup::NewSession, "session/new: Internal error: boom"));
         assert!(bound.is_none());
-        let Ok(Err(DriverError::Protocol(message))) = rx.try_recv() else { panic!("expected the startup error") };
-        assert!(message.contains("auth required"), "{message}");
+        let Ok(Err(error)) = rx.try_recv() else { panic!("expected the startup error") };
+        assert_eq!(error.to_string(), "session/new: Internal error: boom", "the error's text is the technical detail");
+        let problem = crate::failure::classify_error(ProviderKind::GrokBuild, &error).expect("a worded problem");
+        assert_eq!(problem.title.as_deref(), Some("Grok Build couldn't start a conversation"));
 
         let tail = std::sync::Mutex::new(String::new());
-        assert!(startup_exit_message(&tail).contains("grok login"));
+        assert_eq!(startup_exit_error(&tail).to_string(), "grok agent exited during startup");
         for line in 0..100 {
             remember_stderr(&tail, &format!("error line {line}"));
         }
-        let message = startup_exit_message(&tail);
+        let message = startup_exit_error(&tail).to_string();
         assert!(message.contains("error line 99") && !message.contains("error line 0\n"), "{message}");
         assert!(tail.lock().unwrap().len() <= STDERR_TAIL_BYTES);
     }

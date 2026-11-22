@@ -19,7 +19,7 @@ fn edit_options() -> Vec<PermissionOption> {
     ]
 }
 
-fn selected(response: &RequestPermissionResponse) -> Option<String> {
+fn selected((response, _notice): &(RequestPermissionResponse, Option<String>)) -> Option<String> {
     match &response.outcome {
         RequestPermissionOutcome::Selected(selected) => Some(selected.option_id.to_string()),
         _ => None,
@@ -53,6 +53,37 @@ fn decisions_pick_grok_options_and_allow_always_never_saves_a_project_grant() {
 }
 
 #[test]
+fn allow_once_never_widens_to_a_session_grant() {
+    // Grok offers a session grant and a rejection, but no way to allow just once.
+    let no_once =
+        vec![option(ALLOW_EDITS_SESSION, PermissionOptionKind::AllowAlways), option("reject-once", PermissionOptionKind::RejectOnce)];
+    let answer = permission_response(&no_once, Some(&ApprovalDecision::AllowOnce));
+    assert_eq!(selected(&answer).as_deref(), Some("reject-once"), "declined, not allowed for the whole session");
+    let notice = answer.1.expect("the user is told why");
+    assert!(notice.starts_with("Grok Build couldn't allow this just once"), "{notice}");
+    // Nothing to reject with either: cancel, and still say why.
+    let only_session = vec![option(ALLOW_EDITS_SESSION, PermissionOptionKind::AllowAlways)];
+    let answer = permission_response(&only_session, Some(&ApprovalDecision::AllowOnce));
+    assert_eq!((selected(&answer), answer.1.is_some()), (None, true));
+    // Allow for this thread still takes the session grant, without a notice.
+    assert_eq!(
+        permission_response(&no_once, Some(&ApprovalDecision::AllowAlways)),
+        (permission_response(&edit_options(), Some(&ApprovalDecision::AllowAlways)).0, None)
+    );
+
+    // Accept edits allows a workspace edit once or asks; Full access takes Grok's narrowest allow.
+    let root = tempfile::tempdir().unwrap();
+    let edit = ToolCallUpdateFields::new().kind(ToolKind::Edit).locations(vec![ToolCallLocation::new(root.path().join("a.rs"))]);
+    assert!(auto_response(PermissionMode::AcceptEdits, &edit, root.path(), &no_once).is_none());
+    assert!(
+        auto_response(PermissionMode::AcceptEdits, &edit, root.path(), &edit_options())
+            .is_some_and(|r| selected(&(r, None)).as_deref() == Some("allow-once"))
+    );
+    let full = auto_response(PermissionMode::FullAccess, &edit, root.path(), &no_once).unwrap();
+    assert_eq!(selected(&(full, None)).as_deref(), Some(ALLOW_EDITS_SESSION));
+}
+
+#[test]
 fn accept_edits_answers_workspace_edits_and_asks_for_everything_else() {
     let root = tempfile::tempdir().unwrap();
     let cwd = root.path().join("repo");
@@ -80,6 +111,105 @@ fn accept_edits_answers_workspace_edits_and_asks_for_everything_else() {
         std::os::unix::fs::symlink(root.path(), cwd.join("escape")).unwrap();
         assert_eq!(auto_decision(PermissionMode::AcceptEdits, &edit(ToolKind::Edit, &[cwd.join("escape/x.rs")]), &cwd), None);
     }
+}
+
+/// An edit at `paths` with `raw_input`, as Grok sends it in `session/request_permission`.
+fn edit_with(kind: ToolKind, paths: &[PathBuf], raw_input: Option<Value>) -> ToolCallUpdateFields {
+    let fields =
+        ToolCallUpdateFields::new().kind(kind).locations(paths.iter().map(|path| ToolCallLocation::new(path.clone())).collect::<Vec<_>>());
+    match raw_input {
+        Some(raw) => fields.raw_input(raw),
+        None => fields,
+    }
+}
+
+fn accepts(fields: &ToolCallUpdateFields, cwd: &Path) -> bool {
+    auto_decision(PermissionMode::AcceptEdits, fields, cwd).is_some()
+}
+
+#[test]
+fn paths_outside_the_workspace_ask_on_every_platform() {
+    let root = tempfile::tempdir().unwrap();
+    let cwd = root.path().join("repo");
+    std::fs::create_dir_all(&cwd).unwrap();
+    // A new file in folders that don't exist yet, outside; a relative climb out; and inside, to compare.
+    assert!(!accepts(&edit_with(ToolKind::Edit, &[root.path().join("elsewhere/deep/new.rs")], None), &cwd));
+    assert!(!accepts(&edit_with(ToolKind::Edit, &[PathBuf::from("../outside.rs")], None), &cwd));
+    assert!(!accepts(&edit_with(ToolKind::Edit, &[PathBuf::from("src/../../outside.rs")], None), &cwd));
+    assert!(accepts(&edit_with(ToolKind::Edit, &[PathBuf::from("src/deep/new.rs")], None), &cwd));
+}
+
+#[test]
+fn every_path_in_the_raw_input_must_be_inside_and_a_move_needs_its_destination() {
+    let root = tempfile::tempdir().unwrap();
+    let cwd = root.path().join("repo");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let inside = cwd.join("a.rs");
+    let outside = root.path().join("cron.d/a");
+    let text = |path: &Path| json!(path.to_string_lossy());
+
+    // `mv ws/a /etc/cron.d/a`: the locations name only the source.
+    let escape =
+        edit_with(ToolKind::Move, std::slice::from_ref(&inside), Some(json!({ "source": text(&inside), "destination": text(&outside) })));
+    assert!(!accepts(&escape, &cwd));
+    // A move Kybern can't see the destination of asks.
+    assert!(!accepts(&edit_with(ToolKind::Move, std::slice::from_ref(&inside), None), &cwd));
+    assert!(!accepts(&edit_with(ToolKind::Move, std::slice::from_ref(&inside), Some(json!({ "path": text(&inside) }))), &cwd));
+    // A move inside the workspace, whatever the keys are called.
+    for raw in
+        [json!({ "from": "a.rs", "to": "b.rs" }), json!({ "old_path": "a.rs", "newPath": "src/b.rs" }), json!({ "target_path": "b.rs" })]
+    {
+        assert!(accepts(&edit_with(ToolKind::Move, std::slice::from_ref(&inside), Some(raw.clone())), &cwd), "{raw}");
+    }
+    assert!(!accepts(&edit_with(ToolKind::Move, std::slice::from_ref(&inside), Some(json!({ "to": text(&outside) }))), &cwd));
+
+    // An edit whose input names another file than its locations: both are checked.
+    assert!(!accepts(&edit_with(ToolKind::Edit, std::slice::from_ref(&inside), Some(json!({ "file_path": text(&outside) }))), &cwd));
+    assert!(accepts(
+        &edit_with(ToolKind::Edit, std::slice::from_ref(&inside), Some(json!({ "filePath": "src/x.rs", "old_string": "/etc/passwd" }))),
+        &cwd
+    ));
+    // Nested and listed paths count too; an input path alone (no locations) is enough when it's inside.
+    let nested = json!({ "edits": [{ "path": "a.rs" }, { "path": text(&outside) }] });
+    assert!(!accepts(&edit_with(ToolKind::Edit, &[], Some(nested)), &cwd));
+    assert!(!accepts(&edit_with(ToolKind::Delete, &[], Some(json!({ "paths": ["a.rs", text(&outside)] }))), &cwd));
+    assert!(accepts(&edit_with(ToolKind::Delete, &[], Some(json!({ "paths": ["a.rs", "b.rs"] }))), &cwd));
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinks_count_where_they_point_even_when_dangling() {
+    use std::os::unix::fs::symlink;
+    let root = tempfile::tempdir().unwrap();
+    let cwd = root.path().join("repo");
+    std::fs::create_dir_all(cwd.join("sub")).unwrap();
+    std::fs::create_dir_all(root.path().join("home/.ssh")).unwrap();
+
+    // `ws/link -> ~/.ssh/authorized_keys2`, which doesn't exist yet: a write through it lands outside.
+    symlink(root.path().join("home/.ssh/authorized_keys2"), cwd.join("link")).unwrap();
+    assert!(!accepts(&edit_with(ToolKind::Edit, &[cwd.join("link")], None), &cwd));
+    // A dangling link to a folder that doesn't exist, with a file under it.
+    symlink(root.path().join("gone"), cwd.join("gone_dir")).unwrap();
+    assert!(!accepts(&edit_with(ToolKind::Edit, &[cwd.join("gone_dir/x.rs")], None), &cwd));
+    // A dangling link to a new file inside the workspace is fine.
+    symlink(cwd.join("sub/new.rs"), cwd.join("inside_link")).unwrap();
+    assert!(accepts(&edit_with(ToolKind::Edit, &[cwd.join("inside_link")], None), &cwd));
+
+    // Relative targets resolve from the link's own folder, `..` included.
+    symlink("../..", cwd.join("sub/up")).unwrap();
+    assert!(!accepts(&edit_with(ToolKind::Edit, &[cwd.join("sub/up/x.rs")], None), &cwd));
+    symlink("../../gone/f.rs", cwd.join("sub/dangling_up")).unwrap();
+    assert!(!accepts(&edit_with(ToolKind::Edit, &[cwd.join("sub/dangling_up")], None), &cwd));
+    symlink("../other/new.rs", cwd.join("sub/sibling")).unwrap();
+    assert!(accepts(&edit_with(ToolKind::Edit, &[cwd.join("sub/sibling")], None), &cwd));
+
+    // A loop can't be resolved: ask.
+    symlink("loop_b", cwd.join("loop_a")).unwrap();
+    symlink("loop_a", cwd.join("loop_b")).unwrap();
+    assert!(!accepts(&edit_with(ToolKind::Edit, &[cwd.join("loop_a")], None), &cwd));
+    // A move's destination through a dangling link is checked the same way.
+    let through = edit_with(ToolKind::Move, &[cwd.join("sub/a.rs")], Some(json!({ "destination": cwd.join("link").to_string_lossy() })));
+    assert!(!accepts(&through, &cwd));
 }
 
 #[test]
@@ -155,6 +285,160 @@ fn grok_completion_notices_settle_only_named_foreground_prompts() {
     assert_eq!(prompt_complete("_x.ai/session_notification", &update(Value::Null)), None);
     assert_eq!(prompt_complete("_x.ai/session_notification", &json!({ "update": { "sessionUpdate": "task_started" } })), None);
     assert_eq!(prompt_complete("_x.ai/mcp/servers_updated", &json!({ "mcpServers": [] })), None);
+}
+
+#[test]
+fn grok_errors_that_are_json_or_startup_failures_get_plain_headlines() {
+    let failed = |result: Value| {
+        let DriverEvent::TurnFailed { error, problem } =
+            completion_event(&PromptComplete { prompt_id: None, stop_reason: Some("error".into()), agent_result: Some(result) }, 1)
+        else {
+            panic!("a failed turn")
+        };
+        (error, problem.expect("a problem"))
+    };
+    // A JSON result: its message is the words, the JSON stays in details.
+    let (error, problem) = failed(json!({ "code": 500, "message": "Upstream failed" }));
+    assert_eq!(error, "Upstream failed");
+    assert_eq!(problem.title.as_deref(), Some("Grok Build ended the turn with an error"));
+    assert!(problem.detail.as_deref().is_some_and(|detail| detail.contains("\"code\":500")));
+    // No message at all: a plain sentence, never the raw JSON.
+    let (error, problem) = failed(json!({ "code": 7, "data": [1, 2] }));
+    assert_eq!(error, "Grok Build ended the turn with an error.");
+    assert!(problem.detail.as_deref().is_some_and(|detail| detail.contains("\"data\"")));
+
+    // Startup failures: the step in the headline; Grok's text and the session id only in details.
+    let headline = |step: Startup, detail: &str| startup_problem(step, detail).title.unwrap_or_default();
+    assert_eq!(headline(Startup::Initialize, "initialize: connection closed"), "Grok Build didn't start");
+    assert_eq!(headline(Startup::NewSession, "session/new: Internal error"), "Grok Build couldn't start a conversation");
+    let resume = startup_problem(Startup::Resume, "session/load s-old: Internal error: no such session");
+    assert_eq!(resume.title.as_deref(), Some("Grok Build couldn't reopen this conversation"));
+    assert!(!resume.hint.as_deref().unwrap_or_default().contains("s-old"));
+    assert_eq!(resume.detail.as_deref(), Some("session/load s-old: Internal error: no such session"));
+    assert_eq!(headline(Startup::ResumeTimedOut, "session/load s-old: no answer"), "Grok Build didn't reopen this conversation");
+    assert_eq!(headline(Startup::Launch, "grok agent exited during startup"), "Grok Build quit while starting");
+    // A signed-out Grok says so instead.
+    assert_eq!(startup_problem(Startup::NewSession, "session/new: Authentication required").kind, ProblemKind::SignedOut);
+    // Kybern's own hint no longer makes every failure look signed out.
+    assert_eq!(startup_problem(Startup::Initialize, "initialize: connection closed").kind, ProblemKind::Internal);
+}
+
+#[test]
+fn a_grok_that_rejects_an_option_needs_an_update() {
+    for stderr in [
+        "error: unexpected argument '--permission-mode' found\n\nUsage: grok [OPTIONS] [COMMAND]",
+        "error: Found argument '--no-auto-update' which wasn't expected, or isn't valid in this context",
+        "error: unrecognized option '--permission-mode'",
+    ] {
+        let tail = std::sync::Mutex::new(String::new());
+        remember_stderr(&tail, stderr);
+        let error = startup_exit_error(&tail);
+        let problem = crate::failure::classify_error(ProviderKind::GrokBuild, &error).unwrap();
+        assert_eq!((problem.kind, problem.title.as_deref()), (ProblemKind::UpdateNeeded, Some("Update Grok Build")), "{stderr}");
+        let action = problem.action.unwrap();
+        assert_eq!((action.id.as_str(), action.params), ("update_agent", Some(json!({ "provider": "grok" }))));
+        assert!(error.to_string().contains(stderr.lines().next().unwrap()), "the stderr stays in details");
+    }
+    assert!(!rejects_arguments("Authentication required"));
+}
+
+/// The prompt's own answer; `duration_ms` marks which answer ended the wait.
+fn turn_end(duration_ms: u64) -> DriverEvent {
+    DriverEvent::TurnCompleted {
+        stop_reason: StopReason::Completed,
+        usage: Usage::default(),
+        cost_usd: None,
+        duration_ms,
+        anchors: Default::default(),
+    }
+}
+
+fn notice(prompt_id: Option<&str>, stop: &str) -> PromptComplete {
+    PromptComplete { prompt_id: prompt_id.map(str::to_owned), stop_reason: Some(stop.into()), agent_result: Some(json!("from a notice")) }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_prompt_settles_only_on_its_own_completion_notice() {
+    let (completions_tx, mut completions) = mpsc::unbounded_channel();
+    let (_commands_tx, mut commands) = mpsc::channel::<SessionCommand>(4);
+    // A notice without a prompt id, a late one for the previous prompt, and background tasks' wakes.
+    for stray in [notice(None, "error"), notice(Some("kybern-previous"), "error"), notice(Some("task-completed-1"), "error")] {
+        completions_tx.send(stray).unwrap();
+    }
+    let started = std::time::Instant::now();
+    let waiting = settle_prompt(std::future::pending(), "kybern-now", started, &mut completions, &mut commands, || panic!("no cancel"));
+    assert!(tokio::time::timeout(Duration::from_secs(60), waiting).await.is_err(), "no stray notice ends the turn");
+    assert!(completions.is_empty(), "every stray notice was read");
+
+    // Its own notice does.
+    completions_tx.send(notice(Some("kybern-now"), "end_turn")).unwrap();
+    let settled =
+        settle_prompt(std::future::pending(), "kybern-now", started, &mut completions, &mut commands, || panic!("no cancel")).await;
+    assert!(matches!(settled.event, DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. }) && !settled.close);
+
+    // So does the prompt's own answer.
+    completions_tx.send(notice(None, "error")).unwrap();
+    let settled =
+        settle_prompt(async { turn_end(6) }, "kybern-now", started, &mut completions, &mut commands, || panic!("no cancel")).await;
+    assert!(matches!(settled.event, DriverEvent::TurnCompleted { duration_ms: 6, .. }), "{:?}", settled.event);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_closed_session_cancels_its_prompt_once_and_stops_after_it() {
+    let (_completions_tx, mut completions) = mpsc::unbounded_channel();
+    let started = std::time::Instant::now();
+
+    // The handle is gone: one cancel, then the command channel is left alone (it used to spin here).
+    let (commands_tx, mut commands) = mpsc::channel::<SessionCommand>(4);
+    drop(commands_tx);
+    let mut cancels = 0;
+    let waiting = settle_prompt(std::future::pending(), "kybern-now", started, &mut completions, &mut commands, || {
+        cancels += 1;
+        assert_eq!(cancels, 1, "cancel is sent once");
+    });
+    assert!(tokio::time::timeout(Duration::from_secs(60), waiting).await.is_err());
+    assert_eq!(cancels, 1);
+
+    // Close: cancel once, wait for Grok's answer, then report that the session should stop.
+    let (commands_tx, mut commands) = mpsc::channel::<SessionCommand>(4);
+    let (answer_tx, answer_rx) = oneshot::channel::<()>();
+    commands_tx.send(SessionCommand::Close).await.unwrap();
+    let cancels = std::cell::Cell::new(0);
+    let settled = {
+        let answer = async move {
+            answer_rx.await.unwrap();
+            turn_end(0)
+        };
+        let wait = settle_prompt(answer, "kybern-now", started, &mut completions, &mut commands, || cancels.set(cancels.get() + 1));
+        let mut wait = std::pin::pin!(wait);
+        assert!(tokio::time::timeout(Duration::from_secs(60), &mut wait).await.is_err(), "the turn waits for Grok's answer");
+        commands_tx.send(SessionCommand::Cancel).await.unwrap();
+        answer_tx.send(()).unwrap();
+        wait.await
+    };
+    assert!(settled.close);
+    assert_eq!(cancels.get(), 1);
+    assert!(matches!(commands.try_recv(), Ok(SessionCommand::Cancel)), "nothing after Close was read");
+
+    // An ordinary Cancel cancels each time and keeps the session.
+    let (commands_tx, mut commands) = mpsc::channel::<SessionCommand>(4);
+    commands_tx.send(SessionCommand::Cancel).await.unwrap();
+    commands_tx.send(SessionCommand::Cancel).await.unwrap();
+    let (answer_tx, answer_rx) = oneshot::channel::<()>();
+    let cancels = std::cell::Cell::new(0);
+    let settled = {
+        let answer = async move {
+            answer_rx.await.unwrap();
+            turn_end(0)
+        };
+        let wait = settle_prompt(answer, "kybern-now", started, &mut completions, &mut commands, || cancels.set(cancels.get() + 1));
+        let mut wait = std::pin::pin!(wait);
+        assert!(tokio::time::timeout(Duration::from_secs(60), &mut wait).await.is_err());
+        answer_tx.send(()).unwrap();
+        wait.await
+    };
+    assert!(!settled.close);
+    assert_eq!(cancels.get(), 2);
 }
 
 #[test]
@@ -270,6 +554,10 @@ import json, os, sys
 scenario = os.environ.get("FAKE_GROK", "")
 with open("argv.json", "w") as f:
     json.dump({"argv": sys.argv[1:], "autoupdater": os.environ.get("GROK_DISABLE_AUTOUPDATER"), "grok_home": os.environ.get("GROK_HOME")}, f)
+if scenario == "bad_args":
+    # What clap prints for an option an older grok doesn't know.
+    sys.stderr.write("error: unexpected argument '--permission-mode' found\n\nUsage: grok [OPTIONS] [COMMAND]\n")
+    sys.exit(2)
 log = open("received.jsonl", "a")
 def send(msg):
     msg["jsonrpc"] = "2.0"
@@ -304,16 +592,30 @@ while True:
         sid = params["sessionId"]
         update(sid, {"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "old question"}})
         update(sid, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "old answer"}})
-        if scenario != "load_hangs":
+        if scenario not in ("load_hangs", "load_slow"):
             send({"id": mid, "result": {}})
+    elif method == "session/set_config_option":
+        if scenario == "load_slow":
+            # Still replaying after the quiet gap that ended Kybern's wait.
+            update(params["sessionId"], {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "late old answer"}})
+        send({"id": mid, "result": {"configOptions": []}})
     elif method == "session/prompt":
         sid = params["sessionId"]
         prompt_id = (params.get("_meta") or {}).get("promptId")
-        if scenario == "permission":
-            ask("session/request_permission", {"sessionId": sid, "toolCall": {"toolCallId": "t1", "title": "Edit src/a.rs", "kind": "edit", "locations": [{"path": "/somewhere/else/a.rs"}]}, "options": [
+        if scenario == "stray_completions":
+            # None of these is this prompt's end: no prompt id, the previous prompt's, background tasks' wakes.
+            send({"method": "_x.ai/session/prompt_complete", "params": {"sessionId": sid, "stopReason": "error", "agentResult": "stray"}})
+            send({"method": "_x.ai/session/prompt_complete", "params": {"sessionId": sid, "promptId": "kybern-previous", "stopReason": "error"}})
+            send({"method": "_x.ai/session/prompt_complete", "params": {"sessionId": sid, "promptId": "task-completed-3", "stopReason": "end_turn"}})
+            send({"method": "_x.ai/session_notification", "params": {"sessionId": sid, "update": {"sessionUpdate": "turn_completed", "prompt_id": "task-completed-3"}}})
+        if scenario in ("permission", "stray_completions", "permission_no_once"):
+            options = [
                 {"optionId": "allow-once", "name": "Yes", "kind": "allow_once"},
                 {"optionId": "allow-edits-session", "name": "Yes, and allow all edits this session", "kind": "allow_always"},
-                {"optionId": "reject-once", "name": "No", "kind": "reject_once"}]})
+                {"optionId": "reject-once", "name": "No", "kind": "reject_once"}]
+            if scenario == "permission_no_once":
+                options = options[1:]
+            ask("session/request_permission", {"sessionId": sid, "toolCall": {"toolCallId": "t1", "title": "Edit src/a.rs", "kind": "edit", "locations": [{"path": "/somewhere/else/a.rs"}]}, "options": options})
         elif scenario == "question":
             ask("_x.ai/ask_user_question", {"sessionId": sid, "toolCallId": "q1", "mode": "default", "questions": [{"question": "Which layout?", "options": [{"label": "Grid"}, {"label": "List"}]}]})
         elif scenario == "plan":
@@ -364,35 +666,56 @@ async fn run_turn(scenario: &str, mode: PermissionMode, resume: Option<&str>, an
 
 #[cfg(unix)]
 async fn run_turn_with(scenario: &str, mode: PermissionMode, resume: Option<&str>, answer: ApprovalDecision, env: &[(&str, &str)]) -> Run {
-    let root = tempfile::tempdir().unwrap();
-    let binary = root.path().join("grok");
+    run_fake(Fake { scenario, mode, resume, env, model: None }, answer).await
+}
+
+/// How the fake `grok` is started.
+#[cfg(unix)]
+struct Fake<'a> {
+    scenario: &'a str,
+    mode: PermissionMode,
+    resume: Option<&'a str>,
+    env: &'a [(&'a str, &'a str)],
+    model: Option<&'a str>,
+}
+
+/// Start the fake `grok` in `root`.
+#[cfg(unix)]
+async fn spawn_fake(root: &Path, fake: &Fake<'_>) -> Result<SpawnedSession> {
+    let binary = root.join("grok");
     kybern_protocol::process::write_executable(&binary, FAKE_GROK).unwrap();
     let config = SessionConfig {
-        cwd: root.path().into(),
-        model: None,
+        cwd: root.into(),
+        model: fake.model.map(str::to_owned),
         effort: None,
-        permission_mode: mode,
+        permission_mode: fake.mode,
         native_tool_bridge: None,
-        resume_session_id: resume.map(str::to_owned),
+        resume_session_id: fake.resume.map(str::to_owned),
         resume_lacks_instructions: false,
         fork: false,
         rewind: None,
         binary: Some(binary),
-        env: [("FAKE_GROK", scenario)].iter().chain(env).map(|(key, value)| (key.to_string(), value.to_string())).collect(),
+        env: [("FAKE_GROK", fake.scenario)].iter().chain(fake.env).map(|(key, value)| (key.to_string(), value.to_string())).collect(),
         compaction: Default::default(),
     };
     // Another test's forked child can briefly hold the new script open (Linux ETXTBSY).
     let mut attempts = 0;
-    let spawned = loop {
+    loop {
         match tokio::time::timeout(Duration::from_secs(20), GrokDriver.spawn(config.clone())).await.expect("the session starts") {
             Err(DriverError::Io(error)) if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 50 => {
                 attempts += 1;
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
-            result => break result.unwrap(),
+            result => return result,
         }
-    };
-    let SpawnedSession { session, mut events } = spawned;
+    }
+}
+
+/// One turn against the fake `grok`; every card is answered with `answer`.
+#[cfg(unix)]
+async fn run_fake(fake: Fake<'_>, answer: ApprovalDecision) -> Run {
+    let root = tempfile::tempdir().unwrap();
+    let SpawnedSession { session, mut events } = spawn_fake(root.path(), &fake).await.unwrap();
     session.send_message("m1", &UserMessage::text("Go")).await.unwrap();
     let mut seen = Vec::new();
     let turn = async {
@@ -496,4 +819,47 @@ async fn grok_gets_its_home_with_the_tilde_expanded() {
     assert_eq!(run.argv["grok_home"], json!(format!("{home}/xai-grok")));
     let run = run_turn_with("", PermissionMode::Supervised, None, ApprovalDecision::AllowOnce, &[("GROK_HOME", "/opt/grok")]).await;
     assert_eq!(run.argv["grok_home"], "/opt/grok");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn stray_completion_notices_leave_the_turn_open_for_its_real_output() {
+    let run = run_turn("stray_completions", PermissionMode::Supervised, None, ApprovalDecision::AllowOnce).await;
+    // The card after the stray notices was still this turn's, and its answer reached Grok.
+    assert_eq!(run.reply()["outcome"]["optionId"], "allow-once");
+    assert!(matches!(run.end(), DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. }), "{:?}", run.end());
+    assert_eq!(run.texts(), "new answer");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn allow_once_without_an_allow_once_option_is_declined_and_explained() {
+    let run = run_turn("permission_no_once", PermissionMode::Supervised, None, ApprovalDecision::AllowOnce).await;
+    assert_eq!(run.reply(), &json!({ "outcome": { "outcome": "selected", "optionId": "reject-once" } }));
+    assert!(run.events.iter().any(|event| matches!(event, DriverEvent::Notice { level: NoticeLevel::Warning, text, .. }
+        if text.starts_with("Grok Build couldn't allow this just once"))));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_replay_that_outlasts_the_quiet_gap_stays_history() {
+    let fake = Fake { scenario: "load_slow", mode: PermissionMode::Supervised, resume: Some("s-old"), env: &[], model: Some("grok-4") };
+    let run = run_fake(fake, ApprovalDecision::AllowOnce).await;
+    assert!(
+        matches!(&run.events[0], DriverEvent::SessionBound { session_id, model } if session_id == "s-old" && model.as_deref() == Some("grok-4"))
+    );
+    // "late old answer" came after the wait ended, still before the first prompt.
+    assert_eq!(run.texts(), "new answer");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_grok_too_old_for_its_options_asks_for_an_update() {
+    let root = tempfile::tempdir().unwrap();
+    let fake = Fake { scenario: "bad_args", mode: PermissionMode::Supervised, resume: None, env: &[], model: None };
+    let Err(error) = spawn_fake(root.path(), &fake).await else { panic!("the start fails") };
+    let problem = crate::failure::classify_error(ProviderKind::GrokBuild, &error).expect("a problem");
+    assert_eq!((problem.kind, problem.title.as_deref()), (ProblemKind::UpdateNeeded, Some("Update Grok Build")), "{error}");
+    assert_eq!(problem.action.map(|action| action.id).as_deref(), Some("update_agent"));
+    assert!(error.to_string().contains("unexpected argument '--permission-mode'"), "{error}");
 }
