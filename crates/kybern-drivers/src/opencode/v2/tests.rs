@@ -419,3 +419,238 @@ async fn an_effort_switch_resends_the_current_model_with_the_variant() {
     assert_eq!(body(&requests[0])["model"], json!({"providerID": "p", "id": "m", "variant": "xhigh"}));
     assert_eq!(body(&requests[1])["model"], json!({"providerID": "p", "id": "m", "variant": "high"}));
 }
+
+// --- Subagent rules, resumed subagents and turn recovery --------------------------------------------------
+
+use crate::opencode::resilience_tests::{Mock, Reply, frame};
+
+fn drain(rx: &mut mpsc::Receiver<DriverEvent>) -> Vec<DriverEvent> {
+    std::iter::from_fn(|| rx.try_recv().ok()).collect()
+}
+
+/// A subagent call by the root thread, its session, and the progress event that ties them together.
+async fn start_subagent(session: &OpencodeSession, call: &str, child: &str) {
+    for frame in [
+        event("session.tool.input.started", json!({"sessionID":"ses_root","id":call,"name":"subagent"})),
+        event("session.tool.called", json!({"sessionID":"ses_root","id":call,"input":{"agent":"general","description":"Look around"}})),
+        event("session.tool.progress", json!({"sessionID":"ses_root","id":call,"metadata":{"sessionID":child,"status":"running"}})),
+    ] {
+        session.handle_event(&frame).await;
+    }
+}
+
+#[tokio::test]
+async fn a_new_subagent_inherits_the_rules_and_a_mode_change_rewrites_the_running_ones() {
+    let mock = Mock::start(|_, _, _| Reply::Json(200, json!({}))).await;
+    let (session, _rx) = session(&mock.base);
+    let scope = vec![json!({"action":"*","resource":"*","effect":"deny"}), json!({"action":"kybern_*","resource":"*","effect":"allow"})];
+    session.state.lock().await.restrictions = scope.clone();
+    let handle = Handle(session.clone(), std::sync::Mutex::new(None), None);
+    // OpenCode 2 copies the parent's whole ruleset into a subagent it creates: nothing to write.
+    session
+        .handle_event(&event("session.created", json!({"sessionID":"ses_kid","parentID":"ses_root","title":"A (@general subagent)"})))
+        .await;
+    session
+        .handle_event(&event("session.created", json!({"sessionID":"ses_done","parentID":"ses_root","title":"B (@general subagent)"})))
+        .await;
+    session.handle_event(&event("session.execution.succeeded", json!({"sessionID":"ses_done"}))).await;
+    assert!(mock.requests("PATCH", "/api/session/ses_kid").is_empty());
+
+    handle.set_permission_mode(PermissionMode::AcceptEdits).await.unwrap();
+
+    let expected: Vec<Value> = ruleset(PermissionMode::AcceptEdits).into_iter().chain(scope).collect();
+    assert_eq!(session.state.lock().await.mode, PermissionMode::AcceptEdits);
+    for id in ["ses_root", "ses_kid"] {
+        let writes = mock.requests("PATCH", &format!("/api/session/{id}"));
+        assert_eq!(writes.len(), 1, "{id}");
+        assert_eq!(writes[0].body["permissions"], json!(expected), "{id} keeps the coordinator's tool scope too");
+    }
+    assert!(mock.requests("PATCH", "/api/session/ses_done").is_empty(), "a finished subagent is left alone");
+}
+
+#[tokio::test]
+async fn a_resumed_subagent_reports_its_new_run_and_is_given_the_current_rules() {
+    let mock = Mock::start(|_, _, _| Reply::Json(200, json!({}))).await;
+    let (session, mut rx) = session(&mock.base);
+    let ends = |events: Vec<DriverEvent>| -> Vec<String> {
+        events
+            .into_iter()
+            .filter_map(|event| match event {
+                DriverEvent::RuntimeTaskStarted(task) => Some(format!("started {:?}", task.tool_call_id)),
+                DriverEvent::RuntimeTaskCompleted(update) => Some(format!("completed {:?}", update.status)),
+                _ => None,
+            })
+            .collect()
+    };
+    session
+        .handle_event(&event("session.created", json!({"sessionID":"ses_kid","parentID":"ses_root","title":"A (@general subagent)"})))
+        .await;
+    start_subagent(&session, "call_1", "ses_kid").await;
+    session.handle_event(&event("session.execution.succeeded", json!({"sessionID":"ses_kid"}))).await;
+    // The same call reporting again is not a new run.
+    session
+        .handle_event(&event("session.tool.progress", json!({"sessionID":"ses_root","id":"call_1","metadata":{"sessionID":"ses_kid"}})))
+        .await;
+    session.handle_event(&event("session.execution.succeeded", json!({"sessionID":"ses_kid"}))).await;
+    assert_eq!(ends(drain(&mut rx)), ["started None", "started Some(\"call_1\")", "completed Some(Completed)", "started Some(\"call_1\")"]);
+    assert!(mock.requests("PATCH", "/api/session/ses_kid").is_empty(), "it was created under the current rules");
+
+    // A second call resumes the same session: it may hold an older mode's rules.
+    start_subagent(&session, "call_2", "ses_kid").await;
+    session.handle_event(&event("session.execution.succeeded", json!({"sessionID":"ses_kid"}))).await;
+    assert_eq!(ends(drain(&mut rx)), ["started Some(\"call_2\")", "completed Some(Completed)"]);
+    let writes = mock.requests("PATCH", "/api/session/ses_kid");
+    assert_eq!(writes.len(), 1);
+    assert_eq!(writes[0].body["permissions"], json!(ruleset(PermissionMode::Supervised)));
+
+    // A session this server never created, seen for the first time, gets them as well.
+    start_subagent(&session, "call_3", "ses_old").await;
+    assert_eq!(mock.requests("PATCH", "/api/session/ses_old").len(), 1);
+}
+
+#[tokio::test]
+async fn a_model_switch_leaves_off_an_effort_the_new_model_does_not_list() {
+    let mock = Mock::start(|_, _, _| Reply::Json(200, json!({}))).await;
+    let (session, _rx) = session(&mock.base);
+    {
+        let mut state = session.state.lock().await;
+        state.model = Some("p/m".into());
+        state.effort = Some("xhigh".into());
+        state.model_variants = HashMap::from([
+            ("q/plain".to_string(), HashSet::new()),
+            ("q/low-only".to_string(), HashSet::from(["low".to_string()])),
+            ("q/full".to_string(), HashSet::from(["low".to_string(), "xhigh".to_string()])),
+        ]);
+    }
+    let handle = Handle(session.clone(), std::sync::Mutex::new(None), None);
+    for model in ["q/plain", "q/low-only", "q/full", "q/never-listed"] {
+        handle.set_model(model).await.unwrap();
+    }
+    let models: Vec<Value> =
+        mock.requests("POST", "/api/session/ses_root/model").into_iter().map(|seen| seen.body["model"].clone()).collect();
+    assert_eq!(
+        models,
+        [
+            json!({"providerID": "q", "id": "plain"}),
+            json!({"providerID": "q", "id": "low-only"}),
+            json!({"providerID": "q", "id": "full", "variant": "xhigh"}),
+            json!({"providerID": "q", "id": "never-listed", "variant": "xhigh"}),
+        ],
+        "an unknown model keeps the choice, as before"
+    );
+    assert_eq!(session.state.lock().await.effort.as_deref(), Some("xhigh"), "the choice stays for a model that lists it");
+}
+
+#[tokio::test]
+async fn the_model_catalog_gives_windows_by_input_limit_and_the_variants_each_model_lists() {
+    let mock = Mock::start(|_, path, _| match path {
+        "/api/model" => Reply::Json(
+            200,
+            json!({"data": [
+                {"id": "wide", "providerID": "p", "limit": {"context": 1_000_000, "input": 900_000}, "variants": [{"id": "low"}, {"id": "high"}]},
+                {"id": "plain", "providerID": "p", "limit": {"context": 200_000}, "variants": []},
+            ]}),
+        ),
+        _ => Reply::Json(200, json!({"data": []})),
+    })
+    .await;
+    let (session, _rx) = session(&mock.base);
+    session.discover_metadata().await;
+    let state = session.state.lock().await;
+    assert_eq!((state.context_windows["p/wide"], state.context_windows["p/plain"]), (900_000, 200_000));
+    assert_eq!(state.model_variants["p/wide"], HashSet::from(["low".to_string(), "high".to_string()]));
+    assert!(state.model_variants["p/plain"].is_empty());
+}
+
+#[tokio::test]
+async fn text_split_in_the_middle_of_a_character_arrives_whole() {
+    let delta = "caf\u{e9} \u{1f980} \u{4e2d}";
+    let bytes = frame(event("session.text.delta", json!({"sessionID":"ses_root","assistantMessageID":"msg_a","ordinal":0,"delta":delta})));
+    // Cut inside the crab's four bytes.
+    let cut = bytes.windows(4).position(|window| window == "\u{1f980}".as_bytes()).unwrap() + 2;
+    let mock = Mock::start(move |_, _, _| Reply::Stream(vec![bytes[..cut].to_vec(), bytes[cut..].to_vec()])).await;
+    let (session, mut rx) = session(&mock.base);
+    let looping = tokio::spawn(session.clone().event_loop_with(None, Duration::from_secs(5)));
+    let Some(DriverEvent::TextDelta { delta: received, .. }) = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await.unwrap()
+    else {
+        panic!("no text")
+    };
+    looping.abort();
+    assert_eq!(received, delta);
+}
+
+/// A turn waiting on `msg_x` with a stream that says nothing, over a server that stored `stored` (newest first).
+async fn settle(active: Value, stored: Vec<Value>, live_text: Option<&str>) -> Vec<DriverEvent> {
+    let mock = Mock::start(move |method, path, _| match (method, path) {
+        ("GET", "/api/event") => Reply::Stream(vec![frame(event("server.heartbeat", json!({})))]),
+        ("GET", "/api/session/active") => Reply::Json(200, json!({ "data": active })),
+        ("GET", "/api/session/ses_root/message") => Reply::Json(200, json!({ "data": stored })),
+        _ => Reply::Json(200, json!({})),
+    })
+    .await;
+    let (session, mut rx) = session(&mock.base);
+    {
+        let mut state = session.state.lock().await;
+        state.active = true;
+        state.turn_started = Some(std::time::Instant::now());
+        state.current_message_id = Some("msg_x".into());
+    }
+    if let Some(text) = live_text {
+        session
+            .handle_event(&event(
+                "session.text.ended",
+                json!({"sessionID":"ses_root","assistantMessageID":"msg_a","ordinal":0,"text":text}),
+            ))
+            .await;
+    }
+    let looping = tokio::spawn(session.clone().event_loop_with(None, Duration::from_millis(150)));
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    looping.abort();
+    drain(&mut rx)
+}
+
+fn user() -> Value {
+    json!({"type": "user", "id": "msg_x"})
+}
+
+fn reply(text: &str) -> Value {
+    json!({"type": "assistant", "id": "msg_a", "content": [{"type": "reasoning", "text": "hm"}, {"type": "text", "text": text}]})
+}
+
+#[tokio::test]
+async fn a_missed_end_of_turn_is_settled_with_the_reply_it_was_missing() {
+    let idle = |outcome: &str| json!({"type": "idle", "id": "msg_i", "outcome": outcome});
+    let events = settle(json!({}), vec![idle("succeeded"), reply("The final answer."), user()], None).await;
+    let [DriverEvent::MessageCompleted { message_id, text, .. }, DriverEvent::TurnCompleted { stop_reason, anchors, .. }] =
+        events.as_slice()
+    else {
+        panic!("{events:?}")
+    };
+    assert_eq!(
+        (message_id.as_str(), text.as_str(), *stop_reason, anchors.turn_id.as_deref()),
+        ("msg_a", "The final answer.", StopReason::Completed, Some("msg_x"))
+    );
+
+    // Text the stream already delivered is not delivered twice.
+    let events = settle(json!({}), vec![idle("succeeded"), reply("Done."), user()], Some("Done.")).await;
+    assert!(matches!(events.as_slice(), [DriverEvent::MessageCompleted { .. }, DriverEvent::TurnCompleted { .. }]), "{events:?}");
+
+    // The session failed while nobody listened.
+    let events = settle(json!({}), vec![idle("failed"), user()], None).await;
+    assert!(matches!(events.as_slice(), [DriverEvent::TurnFailed { .. }]), "{events:?}");
+
+    // An execution that left no idle message was lost: the turn is interrupted.
+    let events = settle(json!({}), vec![reply("Partial"), user()], None).await;
+    assert!(matches!(events.last(), Some(DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, .. })), "{events:?}");
+}
+
+#[tokio::test]
+async fn a_turn_still_running_or_not_yet_stored_is_left_alone_after_a_reconnect() {
+    let idle = json!({"type": "idle", "id": "msg_i", "outcome": "succeeded"});
+    // OpenCode still runs the session: the stream carries on from here.
+    let events = settle(json!({"ses_root": {"type": "running"}}), vec![idle.clone(), reply("x"), user()], None).await;
+    assert!(events.is_empty(), "{events:?}");
+    // The prompt is not in the stored messages yet; what is there belongs to the last turn.
+    let events = settle(json!({}), vec![idle, reply("old"), json!({"type": "user", "id": "msg_old"})], None).await;
+    assert!(events.is_empty(), "{events:?}");
+}

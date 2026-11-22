@@ -403,62 +403,7 @@ impl AgentDriver for OpencodeDriver {
             config.env.get("OPENCODE_CONFIG_CONTENT"),
             compaction_config(config.model.as_deref(), config.compaction.auto_compact_tokens),
         )?;
-        let mut cmd = crate::binary::command(&bin).no_window();
-        cmd.current_dir(&config.cwd)
-            .args(["serve", "--port", "0", "--hostname", "127.0.0.1"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        for (k, v) in &config.env {
-            cmd.env(k, v);
-        }
-        if let Some(native_config) = native_config {
-            cmd.env("OPENCODE_CONFIG_CONTENT", native_config);
-        }
-        tracing::info!(bin = %bin.display(), cwd = %config.cwd.display(), "spawning opencode serve");
-        #[cfg(unix)]
-        cmd.process_group(0);
-        let mut child = cmd.spawn()?;
-        let tree = crate::process_tree::ProcessTree::new(child.id().expect("spawned opencode"));
-        let stdout = child.stdout.take().ok_or_else(|| DriverError::Protocol("no stdout".into()))?;
-        let stderr = child.stderr.take().ok_or_else(|| DriverError::Protocol("no stderr".into()))?;
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(l)) = lines.next_line().await {
-                tracing::debug!(target: "provider.stderr", "{l}");
-            }
-        });
-
-        // Wait for "opencode server listening on http://127.0.0.1:PORT".
-        let base = {
-            let mut lines = BufReader::new(stdout).lines();
-            let found = tokio::time::timeout(std::time::Duration::from_secs(60), async {
-                while let Ok(Some(l)) = lines.next_line().await {
-                    tracing::debug!(target: "provider.stdout", "{l}");
-                    if let Some(idx) = l.find("http://") {
-                        let url = l[idx..].trim().trim_end_matches('/').to_string();
-                        return Some((url, lines));
-                    }
-                }
-                None
-            })
-            .await;
-            match found {
-                Ok(Some((url, mut lines))) => {
-                    tokio::spawn(async move {
-                        while let Ok(Some(l)) = lines.next_line().await {
-                            tracing::debug!(target: "provider.stdout", "{l}");
-                        }
-                    });
-                    url
-                }
-                _ => {
-                    let _ = child.kill().await;
-                    return Err(DriverError::Protocol("opencode serve did not announce a listening address".into()));
-                }
-            }
-        };
+        let (child, tree, base) = retry_locked_start(|| start_server(&bin, &config.cwd, &config.env, native_config.as_deref())).await?;
 
         let http = reqwest::Client::builder().build().map_err(|e| DriverError::Protocol(e.to_string()))?;
         let dir = config.cwd.to_string_lossy().to_string();
@@ -493,9 +438,21 @@ impl AgentDriver for OpencodeDriver {
                 active: false,
                 pending: HashMap::new(),
                 current_message_id: None,
+                context_overflow: None,
                 children: HashMap::new(),
             }),
         });
+
+        // Subscribe before the session exists so no event of the first turn is
+        // missed: a quick turn can finish before a late subscription attaches.
+        let stream =
+            tokio::time::timeout(FIRST_SUBSCRIBE_TIMEOUT, session.http.get(format!("{base}/event")).query(&[("directory", &dir)]).send())
+                .await
+                .map_err(|_| DriverError::Protocol("opencode /event did not answer".into()))?
+                .map_err(net)?;
+        if !stream.status().is_success() {
+            return Err(DriverError::Protocol(format!("opencode /event: {}", stream.status())));
+        }
 
         // Create or adopt the session.
         let session_id = match (&config.resume_session_id, config.fork) {
@@ -546,14 +503,86 @@ impl AgentDriver for OpencodeDriver {
             }
         };
         session.state.lock().await.session_id = Some(session_id.clone());
+        if config.resume_session_id.is_some() {
+            // A resumed or forked session keeps the rules it was stored with;
+            // write the ones for this thread's current mode. A server that
+            // refuses leaves the stored rules, as before.
+            let rules = json!({ "permission": ruleset(config.permission_mode) });
+            if let Err(error) =
+                session.send(reqwest::Method::PATCH, &format!("/session/{session_id}"), rules, Some(CHILD_RULES_TIMEOUT)).await
+            {
+                tracing::warn!(%error, "could not apply the permission mode to the resumed OpenCode session");
+            }
+        }
         session.emit(DriverEvent::SessionBound { session_id, model: config.model.clone() }).await;
 
         let reader = session.clone();
         let worker = crate::process_tree::SessionTask(tokio::spawn(async move {
-            tokio::join!(reader.discover_metadata(), reader.clone().event_loop());
+            tokio::join!(reader.discover_metadata(), reader.clone().event_loop(Some(stream)));
         }));
 
         Ok(SpawnedSession { session: Box::new(Handle(session, std::sync::Mutex::new(Some(tree)), Some(worker))), events: rx })
+    }
+}
+
+/// One `opencode serve` start: the process, its process tree and its address.
+async fn start_server(
+    bin: &Path,
+    cwd: &Path,
+    env: &HashMap<String, String>,
+    native_config: Option<&str>,
+) -> std::result::Result<(Child, crate::process_tree::ProcessTree, String), StartFailure> {
+    let mut cmd = crate::binary::command(bin).no_window();
+    cmd.current_dir(cwd)
+        .args(["serve", "--port", "0", "--hostname", "127.0.0.1"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    if let Some(native_config) = native_config {
+        cmd.env("OPENCODE_CONFIG_CONTENT", native_config);
+    }
+    tracing::info!(bin = %bin.display(), cwd = %cwd.display(), "spawning opencode serve");
+    #[cfg(unix)]
+    cmd.process_group(0);
+    let mut child = cmd.spawn().map_err(|error| StartFailure::plain(error.into()))?;
+    let tree = crate::process_tree::ProcessTree::new(child.id().expect("spawned opencode"));
+    let stdout = child.stdout.take().ok_or_else(|| DriverError::Protocol("no stdout".into()))?;
+    let stderr = child.stderr.take().ok_or_else(|| DriverError::Protocol("no stderr".into()))?;
+    let stderr = StderrTail::capture(stderr);
+
+    // Wait for "opencode server listening on http://127.0.0.1:PORT".
+    let mut lines = BufReader::new(stdout).lines();
+    let found = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        while let Ok(Some(l)) = lines.next_line().await {
+            tracing::debug!(target: "provider.stdout", "{l}");
+            if let Some(idx) = l.find("http://") {
+                return Some(l[idx..].trim().trim_end_matches('/').to_string());
+            }
+        }
+        None
+    })
+    .await;
+    match found {
+        Ok(Some(url)) => {
+            tokio::spawn(async move {
+                while let Ok(Some(l)) = lines.next_line().await {
+                    tracing::debug!(target: "provider.stdout", "{l}");
+                }
+            });
+            Ok((child, tree, url))
+        }
+        _ => {
+            let _ = child.kill().await;
+            let database_locked = is_database_locked(&stderr.finish().await);
+            Err(StartFailure {
+                error: DriverError::Protocol("opencode serve did not announce a listening address".into()),
+                database_locked,
+            })
+        }
     }
 }
 
@@ -564,6 +593,187 @@ fn net(e: reqwest::Error) -> DriverError {
 fn split_model(s: &str) -> Option<(String, String)> {
     let (p, m) = s.split_once('/')?;
     Some((p.to_string(), m.to_string()))
+}
+
+/// How long an event stream may stay silent. OpenCode sends a heartbeat every
+/// 10-15 seconds, so more silence than this means the stream is stuck, not idle.
+pub(super) const SILENT_STREAM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
+/// How long a re-subscription to the event stream may take to answer.
+pub(super) const SUBSCRIBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// The first subscription also waits for a cold server to load its project.
+pub(super) const FIRST_SUBSCRIBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// One read or write while settling a turn after a reconnect.
+pub(super) const RECONCILE_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// One rules update sent to a subagent session.
+pub(super) const CHILD_RULES_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Server-sent events cut out of a byte stream. A network chunk can end in the
+/// middle of a multibyte character, so bytes are kept until a whole event
+/// (ending in a blank line) has arrived and only that is decoded.
+#[derive(Default)]
+pub(super) struct SseFrames {
+    buf: Vec<u8>,
+}
+
+impl SseFrames {
+    /// Add a chunk and return the JSON `data:` payloads of every event it completed.
+    pub(super) fn push(&mut self, chunk: &[u8]) -> Vec<Value> {
+        self.buf.extend_from_slice(chunk);
+        let mut payloads = Vec::new();
+        while let Some(end) = self.buf.windows(2).position(|pair| pair == b"\n\n") {
+            let frame: Vec<u8> = self.buf.drain(..end + 2).collect();
+            for line in String::from_utf8_lossy(&frame[..end]).lines() {
+                if let Some(data) = line.strip_prefix("data:")
+                    && let Ok(value) = serde_json::from_str::<Value>(data.trim())
+                {
+                    payloads.push(value);
+                }
+            }
+        }
+        payloads
+    }
+}
+
+/// Why [`read_frames`] stopped.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum StreamEnd {
+    /// The server closed the stream or the connection broke.
+    Closed,
+    /// No bytes (not even a heartbeat) arrived for the silence limit.
+    Silent,
+}
+
+/// Feed every event of `stream` to `on_event` until it ends, breaks or stays
+/// silent for `silence`.
+pub(super) async fn read_frames<S, B, E, F, Fut>(mut stream: S, silence: std::time::Duration, mut on_event: F) -> StreamEnd
+where
+    S: futures::Stream<Item = std::result::Result<B, E>> + Unpin,
+    B: AsRef<[u8]>,
+    F: FnMut(Value) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    let mut frames = SseFrames::default();
+    loop {
+        match tokio::time::timeout(silence, stream.next()).await {
+            Err(_) => return StreamEnd::Silent,
+            Ok(None) | Ok(Some(Err(_))) => return StreamEnd::Closed,
+            Ok(Some(Ok(chunk))) => {
+                for event in frames.push(chunk.as_ref()) {
+                    on_event(event).await;
+                }
+            }
+        }
+    }
+}
+
+/// The context window a model offers: its input limit when it has one, else its whole context.
+pub(super) fn model_window(limit: &Value) -> Option<u64> {
+    let size = |key: &str| limit.get(key).and_then(Value::as_u64).filter(|size| *size > 0);
+    size("input").or_else(|| size("context"))
+}
+
+/// Rules as a list, for either server API.
+fn rule_list(rules: &Value) -> Vec<Value> {
+    rules.as_array().cloned().unwrap_or_default()
+}
+
+/// The rules a subagent session ends up with after Kybern writes the parent's
+/// policy into it: the parent's rules first, then whatever the child set for
+/// itself (its agent's restrictions). `inherits` says which rules OpenCode
+/// itself copies from a parent; `previous` are the parent rules written into
+/// the child earlier, so they are not kept as the child's own.
+fn merge_child_rules(parent: &[Value], child: &[Value], previous: &[Value], inherits: impl Fn(&Value) -> bool) -> Vec<Value> {
+    let inherited: Vec<&Value> = parent.iter().filter(|rule| inherits(rule)).chain(previous).collect();
+    let own = child.iter().filter(|rule| !inherited.contains(rule));
+    parent.iter().cloned().chain(own.cloned()).collect()
+}
+
+/// Server start-up failed because another OpenCode holds the shared database.
+pub(super) fn is_database_locked(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    lower.contains("sqlite_busy") || lower.contains("database is locked")
+}
+
+/// Start-up tries after the first one, when OpenCode cannot get its database.
+const START_RETRIES: usize = 3;
+const START_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// A failed server start, with whether the shared database was locked.
+pub(super) struct StartFailure {
+    pub(super) error: DriverError,
+    pub(super) database_locked: bool,
+}
+
+impl StartFailure {
+    pub(super) fn plain(error: DriverError) -> Self {
+        Self { error, database_locked: false }
+    }
+}
+
+impl From<DriverError> for StartFailure {
+    fn from(error: DriverError) -> Self {
+        Self::plain(error)
+    }
+}
+
+/// Run `attempt` again after a database lock (OpenCode instances share one
+/// database, and a migration or checkpoint in another holds it briefly).
+/// Every other failure is final.
+pub(super) async fn retry_locked_start<T, F, Fut>(mut attempt: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<T, StartFailure>>,
+{
+    let mut retries = 0;
+    loop {
+        match attempt().await {
+            Ok(value) => return Ok(value),
+            Err(failure) if failure.database_locked && retries < START_RETRIES => {
+                retries += 1;
+                tracing::debug!(retries, "opencode serve could not open its database; starting again");
+                tokio::time::sleep(START_RETRY_DELAY).await;
+            }
+            Err(failure) => return Err(failure.error),
+        }
+    }
+}
+
+/// The tail of a server's stderr, kept so a failed start can say why.
+pub(super) struct StderrTail {
+    text: Arc<std::sync::Mutex<String>>,
+    reader: tokio::task::JoinHandle<()>,
+}
+
+const STDERR_TAIL_BYTES: usize = 16 * 1024;
+
+impl StderrTail {
+    pub(super) fn capture(stderr: tokio::process::ChildStderr) -> Self {
+        let text = Arc::new(std::sync::Mutex::new(String::new()));
+        let kept = text.clone();
+        let reader = tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                tracing::debug!(target: "provider.stderr", "{line}");
+                let mut kept = kept.lock().unwrap();
+                kept.push_str(&line);
+                kept.push('\n');
+                if kept.len() > STDERR_TAIL_BYTES {
+                    let mut cut = kept.len() - STDERR_TAIL_BYTES;
+                    while !kept.is_char_boundary(cut) {
+                        cut += 1;
+                    }
+                    kept.drain(..cut);
+                }
+            }
+        });
+        Self { text, reader }
+    }
+
+    /// What the server wrote, once its pipe closed (or after a short wait for it).
+    pub(super) async fn finish(self) -> String {
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(500), self.reader).await;
+        self.text.lock().unwrap().clone()
+    }
 }
 
 fn opencode_config_content(base: Option<&String>, bridge: &NativeToolBridge) -> Result<String> {
@@ -673,33 +883,54 @@ fn mcp_config(base: Option<&String>, bridge: &NativeToolBridge) -> Result<Value>
 /// plus asking the user a question and running a skill. None of them edits a file.
 const OPENCODE_READ_ONLY_TOOLS: &[&str] = &["read", "grep", "glob", "list", "webfetch", "question", "skill"];
 
+/// Permissions a mode asks for or allows one by one.
+const RESTRICTED_PERMISSIONS: [&str; 6] = ["bash", "edit", "webfetch", "websearch", "external_directory", "doom_loop"];
+
 /// Per-session permission ruleset for a kybern mode. Last matching rule wins.
+///
+/// A subagent session copies only the parent's `deny` and `external_directory`
+/// rules when it starts, before Kybern can write the whole policy into it. So
+/// the modes that ask start with denies: later rules override them in the
+/// parent, but they are all a new subagent has until it is updated, and a
+/// subagent that is never updated can do nothing without a person's say.
 fn ruleset(mode: PermissionMode) -> Value {
     let rule = |permission: &str, action: &str| json!({ "permission": permission, "pattern": "*", "action": action });
-    match mode {
-        PermissionMode::Supervised => json!([
-            rule("*", "ask"),
-            rule("read", "allow"),
-            rule("glob", "allow"),
-            rule("grep", "allow"),
-            rule("list", "allow"),
-            rule("todowrite", "allow"),
-            rule("question", "allow"),
-            rule("skill", "allow"),
-            rule("task", "allow"),
-            rule("lsp", "allow"),
-        ]),
-        PermissionMode::AcceptEdits => json!([
-            rule("*", "allow"),
-            rule("bash", "ask"),
-            rule("webfetch", "ask"),
-            rule("websearch", "ask"),
-            rule("external_directory", "ask"),
-            rule("doom_loop", "ask"),
-        ]),
-        PermissionMode::Auto => json!([rule("*", "allow"), rule("external_directory", "ask"), rule("doom_loop", "ask")]),
-        PermissionMode::FullAccess => json!([rule("*", "allow")]),
-    }
+    let denies = || std::iter::once(rule("*", "deny")).chain(RESTRICTED_PERMISSIONS.iter().map(|permission| rule(permission, "deny")));
+    let rules: Vec<Value> = match mode {
+        PermissionMode::Supervised => denies()
+            .chain([
+                rule("*", "ask"),
+                rule("read", "allow"),
+                rule("glob", "allow"),
+                rule("grep", "allow"),
+                rule("list", "allow"),
+                rule("todowrite", "allow"),
+                rule("question", "allow"),
+                rule("skill", "allow"),
+                rule("task", "allow"),
+                rule("lsp", "allow"),
+            ])
+            .collect(),
+        PermissionMode::AcceptEdits => denies()
+            .chain([
+                rule("*", "allow"),
+                rule("bash", "ask"),
+                rule("webfetch", "ask"),
+                rule("websearch", "ask"),
+                rule("external_directory", "ask"),
+                rule("doom_loop", "ask"),
+            ])
+            .collect(),
+        PermissionMode::Auto => denies().chain([rule("*", "allow"), rule("external_directory", "ask"), rule("doom_loop", "ask")]).collect(),
+        // `external_directory` is one of the two rules a subagent copies.
+        PermissionMode::FullAccess => vec![rule("*", "allow"), rule("external_directory", "allow")],
+    };
+    Value::Array(rules)
+}
+
+/// What OpenCode 1 copies from a parent session into a subagent session.
+fn v1_inherits(rule: &Value) -> bool {
+    rule["permission"] == "external_directory" || rule["action"] == "deny"
 }
 
 struct PartInfo {
@@ -711,6 +942,13 @@ struct PartInfo {
 #[derive(Default)]
 struct ChildRuntime {
     task_id: String,
+    /// The tool call that started (or last resumed) this child.
+    call_id: Option<String>,
+    /// The rules the child holds once Kybern wrote this thread's policy into it,
+    /// and the parent rules those include. `None` until written.
+    rules: Option<Vec<Value>>,
+    inherited: Vec<Value>,
+    rules_warned: bool,
     seen_tool_parts: HashSet<String>,
     stats: RuntimeTaskStats,
     stop_requested: bool,
@@ -851,6 +1089,9 @@ struct State {
     pending: HashMap<String, String>,
     /// Client-chosen OpenCode message id of the current turn's user message.
     current_message_id: Option<String>,
+    /// A context overflow OpenCode reported during this turn. It compacts and
+    /// carries on; the turn fails only if it goes idle without compacting.
+    context_overflow: Option<String>,
     /// Provider child session id -> runtime bookkeeping. Child output stays out
     /// of the parent transcript; only compact lifecycle/progress is projected.
     children: HashMap<String, ChildRuntime>,
@@ -898,7 +1139,7 @@ impl OpencodeSession {
             for provider in value["all"].as_array().into_iter().flatten() {
                 if let (Some(id), Some(models)) = (provider["id"].as_str(), provider["models"].as_object()) {
                     for (model, value) in models {
-                        if let Some(window) = value.pointer("/limit/context").and_then(Value::as_u64).filter(|w| *w > 0) {
+                        if let Some(window) = value.get("limit").and_then(model_window) {
                             windows.insert(format!("{id}/{model}"), window);
                         }
                     }
@@ -913,12 +1154,116 @@ impl OpencodeSession {
         let _ = self.events.send(ev).await;
     }
 
-    async fn observe_child(&self, child_id: String, task: DriverRuntimeTask) {
+    /// A subagent session showed up (or showed up again). Its rules are written
+    /// before it is announced, so what it does next follows this thread's mode.
+    async fn observe_child(&self, child_id: String, task: DriverRuntimeTask, rules: Option<Vec<Value>>) {
         let task_id = task.id.clone();
-        let mut state = self.state.lock().await;
-        state.children.entry(child_id).or_default().task_id = task_id;
-        drop(state);
+        {
+            let mut state = self.state.lock().await;
+            let child = state.children.entry(child_id.clone()).or_default();
+            // A new tool call for a finished child resumes it: its earlier end
+            // must not swallow the new run's, and its rules may be stale.
+            let resumed = child.terminal && matches!((&child.call_id, &task.tool_call_id), (Some(old), Some(new)) if old != new);
+            if resumed {
+                child.terminal = false;
+                child.stop_requested = false;
+                child.rules = None;
+            }
+            if task.tool_call_id.is_some() {
+                child.call_id = task.tool_call_id.clone();
+            }
+            child.task_id = task_id;
+        }
+        self.install_child_rules(&child_id, rules).await;
         self.emit(DriverEvent::RuntimeTaskStarted(task)).await;
+    }
+
+    /// Write this thread's rules into a subagent session. OpenCode 1 gives it
+    /// only the parent's denies, so without this it would run on its agent's
+    /// defaults and never ask. `known` is the rules the session already holds,
+    /// when the event that announced it carried them.
+    async fn install_child_rules(&self, child_id: &str, known: Option<Vec<Value>>) {
+        let mode = {
+            let state = self.state.lock().await;
+            if state.children.get(child_id).is_none_or(|child| child.rules.is_some()) {
+                return;
+            }
+            state.mode
+        };
+        let parent = rule_list(&ruleset(mode));
+        let current = match known {
+            Some(rules) => rules,
+            None => match self.send(reqwest::Method::GET, &format!("/session/{child_id}"), Value::Null, Some(CHILD_RULES_TIMEOUT)).await {
+                Ok(info) => rule_list(&info["permission"]),
+                Err(error) => return self.child_rules_failed(child_id, &error).await,
+            },
+        };
+        let rules = merge_child_rules(&parent, &current, &parent, v1_inherits);
+        if let Err(error) = self.write_rules(child_id, &rules).await {
+            return self.child_rules_failed(child_id, &error).await;
+        }
+        if let Some(child) = self.state.lock().await.children.get_mut(child_id) {
+            child.rules = Some(rules);
+            child.inherited = parent;
+        }
+    }
+
+    /// Replace a session's permission rules.
+    async fn write_rules(&self, session_id: &str, rules: &[Value]) -> Result<()> {
+        self.send(reqwest::Method::PATCH, &format!("/session/{session_id}"), json!({ "permission": rules }), Some(CHILD_RULES_TIMEOUT))
+            .await
+            .map(|_| ())
+    }
+
+    /// A subagent kept only the denies it copied: it is blocked, not unguarded.
+    async fn child_rules_failed(&self, child_id: &str, error: &DriverError) {
+        tracing::warn!(%error, child_id, "could not write approval rules into an OpenCode subagent");
+        let first =
+            self.state.lock().await.children.get_mut(child_id).is_some_and(|child| !std::mem::replace(&mut child.rules_warned, true));
+        if first {
+            self.emit(DriverEvent::Notice {
+                level: NoticeLevel::Warning,
+                text: "A subagent could not get this thread's approval rules, so OpenCode may block its tools. Stop it and ask again."
+                    .into(),
+                data: None,
+            })
+            .await;
+        }
+    }
+
+    /// Write a new mode's rules into every subagent session still running.
+    async fn rewrite_child_rules(&self, mode: PermissionMode) -> Result<()> {
+        let parent = rule_list(&ruleset(mode));
+        let children: Vec<(String, Vec<Value>, Vec<Value>)> = {
+            let state = self.state.lock().await;
+            state
+                .children
+                .iter()
+                .filter(|(_, child)| !child.terminal)
+                .filter_map(|(id, child)| Some((id.clone(), child.rules.clone()?, child.inherited.clone())))
+                .collect()
+        };
+        let mut first_error = None;
+        let unwritten: Vec<String> = {
+            let state = self.state.lock().await;
+            state.children.iter().filter(|(_, child)| !child.terminal && child.rules.is_none()).map(|(id, _)| id.clone()).collect()
+        };
+        for id in unwritten {
+            self.install_child_rules(&id, None).await;
+        }
+        for (id, current, inherited) in children {
+            let rules = merge_child_rules(&parent, &current, &inherited, v1_inherits);
+            match self.write_rules(&id, &rules).await {
+                Ok(()) => {
+                    if let Some(child) = self.state.lock().await.children.get_mut(&id) {
+                        child.rules = Some(rules);
+                        child.inherited = parent.clone();
+                    }
+                }
+                Err(error) => first_error = first_error.or(Some(error)),
+            }
+        }
+        first_error.map_or(Ok(()), Err)
     }
 
     async fn update_child(
@@ -974,32 +1319,35 @@ impl OpencodeSession {
         Ok(())
     }
 
-    async fn event_loop(self: Arc<Self>) {
+    async fn event_loop(self: Arc<Self>, first: Option<reqwest::Response>) {
+        self.event_loop_with(first, SILENT_STREAM_TIMEOUT).await
+    }
+
+    /// Read events until the server exits. A stream that closes, breaks or goes
+    /// silent is subscribed again, and the turn it may have lost the end of is
+    /// settled from the stored messages.
+    async fn event_loop_with(self: Arc<Self>, mut first: Option<reqwest::Response>, silence: std::time::Duration) {
         let mut backoff = 200u64;
+        let mut reconnect = false;
         loop {
-            let resp = self.http.get(format!("{}/event", self.base)).query(&[("directory", &self.dir)]).send().await;
-            match resp {
-                Ok(r) if r.status().is_success() => {
-                    backoff = 200;
-                    let mut stream = r.bytes_stream();
-                    let mut buf = String::new();
-                    while let Some(chunk) = stream.next().await {
-                        let Ok(chunk) = chunk else { break };
-                        buf.push_str(&String::from_utf8_lossy(&chunk));
-                        while let Some(pos) = buf.find("\n\n") {
-                            let frame = buf[..pos].to_string();
-                            buf.drain(..pos + 2);
-                            for line in frame.lines() {
-                                if let Some(data) = line.strip_prefix("data:")
-                                    && let Ok(v) = serde_json::from_str::<Value>(data.trim())
-                                {
-                                    self.handle_event(&v).await;
-                                }
-                            }
-                        }
-                    }
+            let response = match first.take() {
+                Some(response) => Some(response),
+                None => tokio::time::timeout(
+                    SUBSCRIBE_TIMEOUT,
+                    self.http.get(format!("{}/event", self.base)).query(&[("directory", &self.dir)]).send(),
+                )
+                .await
+                .ok()
+                .and_then(|response| response.ok()),
+            };
+            if let Some(response) = response.filter(|response| response.status().is_success()) {
+                backoff = 200;
+                if reconnect {
+                    self.settle_after_reconnect().await;
                 }
-                _ => {}
+                reconnect = true;
+                let this = &*self;
+                read_frames(response.bytes_stream(), silence, |event| async move { this.handle_event(&event).await }).await;
             }
             // Stream dropped: is the server still alive?
             if let Ok(Some(status)) = self.child.lock().await.try_wait() {
@@ -1013,6 +1361,111 @@ impl OpencodeSession {
             }
             tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
             backoff = (backoff * 2).min(5000);
+        }
+    }
+
+    /// The event stream was down, so the end of the running turn may have gone
+    /// by. Read what OpenCode stored: if the session is idle and the turn's
+    /// reply is there, finish the turn with the text it was missing.
+    async fn settle_after_reconnect(&self) {
+        let (session_id, message_id) = {
+            let state = self.state.lock().await;
+            match (state.active, state.compact_operation.is_none(), &state.session_id, &state.current_message_id) {
+                (true, true, Some(session), Some(message)) => (session.clone(), message.clone()),
+                _ => return,
+            }
+        };
+        let get = |path: String| async move { self.send(reqwest::Method::GET, &path, Value::Null, Some(RECONCILE_CALL_TIMEOUT)).await };
+        let Ok(status) = get("/session/status".into()).await else { return };
+        if status.get(&session_id).is_some_and(|status| status["type"] != "idle") {
+            return;
+        }
+        let Ok(messages) = get(format!("/session/{session_id}/message?limit=100")).await else { return };
+        let messages = messages.as_array().map(Vec::as_slice).unwrap_or_default();
+        // The prompt may not have been stored yet; then there is nothing to settle.
+        let Some(start) = messages.iter().position(|message| message.pointer("/info/id").and_then(Value::as_str) == Some(&message_id))
+        else {
+            return;
+        };
+        let replies: Vec<&Value> =
+            messages[start + 1..].iter().filter(|message| message.pointer("/info/role") == Some(&json!("assistant"))).collect();
+        if replies.is_empty() {
+            return;
+        }
+        for reply in &replies {
+            for part in reply["parts"].as_array().into_iter().flatten().filter(|part| part["type"] == "text") {
+                self.handle_part(part).await;
+            }
+        }
+        match replies.last().and_then(|reply| reply.pointer("/info/error")).filter(|error| !error.is_null()) {
+            Some(error) => self.handle_session_error(error).await,
+            None => self.finish_turn_idle().await,
+        }
+    }
+
+    /// `session.idle`: the turn ended. A context overflow that was never
+    /// followed by a compaction fails it.
+    async fn finish_turn_idle(&self) {
+        let (usage, cost, duration_ms, active, anchors, overflow) = {
+            let mut st = self.state.lock().await;
+            let active = st.active;
+            st.compact_operation = None;
+            st.active = false;
+            let d = st.turn_started.take().map(|t| t.elapsed().as_millis() as u64).unwrap_or(0);
+            let anchors = crate::TurnAnchors { turn_id: st.current_message_id.take(), previous_end: None };
+            (std::mem::take(&mut st.turn_usage), st.turn_cost, d, active, anchors, st.context_overflow.take())
+        };
+        if !active {
+            return;
+        }
+        match overflow {
+            Some(text) => self.emit(DriverEvent::turn_failed(ProviderKind::Opencode, text)).await,
+            None => {
+                self.emit(DriverEvent::TurnCompleted {
+                    stop_reason: StopReason::Completed,
+                    usage,
+                    cost_usd: Some(cost),
+                    duration_ms,
+                    anchors,
+                })
+                .await
+            }
+        }
+    }
+
+    /// `session.error`.
+    async fn handle_session_error(&self, err: &Value) {
+        let name = err.get("name").and_then(|n| n.as_str()).unwrap_or("error");
+        let msg = err.pointer("/data/message").and_then(|m| m.as_str()).unwrap_or("");
+        if name == "ContextOverflowError" && self.state.lock().await.active {
+            // OpenCode stays busy and compacts; the idle that follows decides.
+            self.state.lock().await.context_overflow = Some(format!("{name}: {msg}"));
+            return;
+        }
+        let active = {
+            let mut st = self.state.lock().await;
+            let a = st.active;
+            st.compact_operation = None;
+            st.active = false;
+            st.turn_started = None;
+            st.context_overflow = None;
+            a
+        };
+        if name == "MessageAbortedError" {
+            if active {
+                self.emit(DriverEvent::TurnCompleted {
+                    stop_reason: StopReason::Interrupted,
+                    usage: Usage::default(),
+                    cost_usd: None,
+                    duration_ms: 0,
+                    anchors: crate::TurnAnchors::default(),
+                })
+                .await;
+            }
+        } else if active {
+            self.emit(DriverEvent::turn_failed(ProviderKind::Opencode, format!("{name}: {msg}"))).await;
+        } else {
+            self.emit(DriverEvent::Notice { level: NoticeLevel::Error, text: format!("{name}: {msg}"), data: Some(err.clone()) }).await;
         }
     }
 
@@ -1035,7 +1488,7 @@ impl OpencodeSession {
             if let Some(parent_task_id) = parent_task_id
                 && let Some((child_id, task)) = opencode_child_session(info, parent_task_id)
             {
-                self.observe_child(child_id, task).await;
+                self.observe_child(child_id, task, Some(rule_list(&info["permission"]))).await;
             }
             return;
         }
@@ -1190,58 +1643,10 @@ impl OpencodeSession {
                     _ => {}
                 }
             }
-            "session.idle" => {
-                let (usage, cost, duration_ms, active, anchors) = {
-                    let mut st = self.state.lock().await;
-                    let active = st.active;
-                    st.compact_operation = None;
-                    st.active = false;
-                    let d = st.turn_started.take().map(|t| t.elapsed().as_millis() as u64).unwrap_or(0);
-                    let anchors = crate::TurnAnchors { turn_id: st.current_message_id.take(), previous_end: None };
-                    (std::mem::take(&mut st.turn_usage), st.turn_cost, d, active, anchors)
-                };
-                if active {
-                    self.emit(DriverEvent::TurnCompleted {
-                        stop_reason: StopReason::Completed,
-                        usage,
-                        cost_usd: Some(cost),
-                        duration_ms,
-                        anchors,
-                    })
-                    .await;
-                }
-            }
-            "session.error" => {
-                let err = &p["error"];
-                let name = err.get("name").and_then(|n| n.as_str()).unwrap_or("error");
-                let msg = err.pointer("/data/message").and_then(|m| m.as_str()).unwrap_or("");
-                let active = {
-                    let mut st = self.state.lock().await;
-                    let a = st.active;
-                    st.compact_operation = None;
-                    st.active = false;
-                    st.turn_started = None;
-                    a
-                };
-                if name == "MessageAbortedError" {
-                    if active {
-                        self.emit(DriverEvent::TurnCompleted {
-                            stop_reason: StopReason::Interrupted,
-                            usage: Usage::default(),
-                            cost_usd: None,
-                            duration_ms: 0,
-                            anchors: crate::TurnAnchors::default(),
-                        })
-                        .await;
-                    }
-                } else if active {
-                    self.emit(DriverEvent::turn_failed(ProviderKind::Opencode, format!("{name}: {msg}"))).await;
-                } else {
-                    self.emit(DriverEvent::Notice { level: NoticeLevel::Error, text: format!("{name}: {msg}"), data: Some(err.clone()) })
-                        .await;
-                }
-            }
+            "session.idle" => self.finish_turn_idle().await,
+            "session.error" => self.handle_session_error(&p["error"]).await,
             "session.compacted" => {
+                self.state.lock().await.context_overflow = None;
                 self.emit(DriverEvent::Notice { level: NoticeLevel::Info, text: "context compacted".into(), data: None }).await
             }
             "todo.updated" => {
@@ -1410,7 +1815,7 @@ impl OpencodeSession {
 
     async fn handle_child_part(&self, session_id: &str, owner_task_id: &str, part: &Value) {
         if let Some((child_id, task)) = opencode_child_task(part, Some(owner_task_id.to_string())) {
-            self.observe_child(child_id, task).await;
+            self.observe_child(child_id, task, None).await;
         }
         self.forward_child_part(session_id, owner_task_id, part).await;
 
@@ -1456,7 +1861,7 @@ impl OpencodeSession {
 
     async fn handle_part(&self, part: &Value) {
         if let Some((child_id, task)) = opencode_child_task(part, None) {
-            self.observe_child(child_id, task).await;
+            self.observe_child(child_id, task, None).await;
         }
         let id = part.get("id").and_then(|s| s.as_str()).unwrap_or("").to_string();
         let kind = part.get("type").and_then(|s| s.as_str()).unwrap_or("").to_string();
@@ -1486,8 +1891,11 @@ impl OpencodeSession {
                 let text = part.get("text").and_then(|t| t.as_str()).unwrap_or("").to_string();
                 let finished = part.pointer("/time/end").is_some_and(|e| !e.is_null());
                 let synthetic = part.get("synthetic").and_then(|b| b.as_bool()).unwrap_or(false);
+                // `started` marks the text as reported: a reply read back after a
+                // reconnect must not repeat one the event stream already delivered.
+                let report = finished && !synthetic && !text.is_empty() && !std::mem::replace(&mut info.started, true);
                 drop(st);
-                if finished && !synthetic && !text.is_empty() {
+                if report {
                     self.emit(DriverEvent::MessageCompleted { message_id, origin: EventOrigin::Root, text, thinking: None }).await;
                 }
             }
@@ -1543,15 +1951,25 @@ impl OpencodeSession {
     }
 
     async fn post(&self, path: &str, body: Value) -> Result<Value> {
-        let r = self
-            .http
-            .post(format!("{}{path}", self.base))
-            .query(&[("directory", &self.dir)])
-            .json(&body)
-            .timeout(std::time::Duration::from_secs(600))
-            .send()
-            .await
-            .map_err(net)?;
+        self.send(reqwest::Method::POST, path, body, Some(std::time::Duration::from_secs(600))).await
+    }
+
+    /// The request for `path`; a `Null` body sends none.
+    fn request(&self, method: reqwest::Method, path: &str, body: &Value, timeout: Option<std::time::Duration>) -> reqwest::RequestBuilder {
+        let mut request = self.http.request(method, format!("{}{path}", self.base)).query(&[("directory", &self.dir)]);
+        if !body.is_null() {
+            request = request.json(body);
+        }
+        match timeout {
+            Some(timeout) => request.timeout(timeout),
+            None => request,
+        }
+    }
+
+    /// Send one request and return its JSON body (`Null` for an empty reply).
+    /// `timeout: None` waits as long as the server takes.
+    async fn send(&self, method: reqwest::Method, path: &str, body: Value, timeout: Option<std::time::Duration>) -> Result<Value> {
+        let r = self.request(method, path, &body, timeout).send().await.map_err(net)?;
         let status = r.status();
         let text = r.text().await.unwrap_or_default();
         if !status.is_success() {
@@ -1657,6 +2075,7 @@ impl AgentSession for Handle {
             state.turn_usage = Usage::default();
             state.turn_cost = 0.0;
             state.current_message_id = None;
+            state.context_overflow = None;
             state.compact_operation = Some(operation.clone());
             (id, provider, model)
         };
@@ -1744,13 +2163,20 @@ impl AgentSession for Handle {
             st.turn_usage = Usage::default();
             st.turn_cost = 0.0;
             st.current_message_id = Some(oc_message_id);
+            st.context_overflow = None;
         }
         if command.is_some() {
             let session = s.clone();
             tokio::spawn(async move {
-                if let Err(error) = session.post(&format!("/session/{session_id}/command"), body).await {
-                    session.state.lock().await.active = false;
-                    session.emit(DriverEvent::turn_failed(ProviderKind::Opencode, error.to_string())).await;
+                // OpenCode answers a command only when it has finished generating,
+                // however long that takes, so this request has no time limit; the
+                // event stream reports the outcome.
+                let result = session.send(reqwest::Method::POST, &format!("/session/{session_id}/command"), body, None).await;
+                if let Err(error) = result {
+                    // A turn the event stream already ended is not failed twice.
+                    if std::mem::take(&mut session.state.lock().await.active) {
+                        session.emit(DriverEvent::turn_failed(ProviderKind::Opencode, error.to_string())).await;
+                    }
                 }
             });
             Ok(())
@@ -1766,9 +2192,15 @@ impl AgentSession for Handle {
     }
 
     async fn set_permission_mode(&self, mode: PermissionMode) -> Result<()> {
-        // Session rulesets are fixed at creation; the mode applies to the next session (resume creates none).
-        self.0.state.lock().await.mode = mode;
-        Err(DriverError::Unsupported("OpenCode permission rules are set when the session starts; start a new thread to change them".into()))
+        let s = &self.0;
+        let session_id = {
+            let mut state = s.state.lock().await;
+            state.mode = mode;
+            state.session_id.clone().ok_or_else(|| DriverError::Protocol("no opencode session".into()))?
+        };
+        // The session's rules are replaceable in place, and so are its running subagents'.
+        s.write_rules(&session_id, &rule_list(&ruleset(mode))).await?;
+        s.rewrite_child_rules(mode).await
     }
 
     async fn set_model(&self, model: &str) -> Result<()> {
@@ -1857,6 +2289,7 @@ mod tests {
                 active: true,
                 pending: HashMap::new(),
                 current_message_id: None,
+                context_overflow: None,
                 children: HashMap::new(),
             }),
         });
@@ -1984,6 +2417,7 @@ mod tests {
                 active: true,
                 pending: HashMap::new(),
                 current_message_id: None,
+                context_overflow: None,
                 children: HashMap::new(),
             }),
         });
@@ -2084,6 +2518,7 @@ mod tests {
                 active: true,
                 pending: HashMap::new(),
                 current_message_id: None,
+                context_overflow: None,
                 children: HashMap::new(),
             }),
         });
@@ -2350,6 +2785,9 @@ mod tests {
         assert_eq!(task.parent_id.as_deref(), Some("opencode:ses_parent_child"));
     }
 }
+
+#[cfg(test)]
+pub(crate) mod resilience_tests;
 
 #[cfg(test)]
 mod orchestration_part_tests {
