@@ -827,10 +827,8 @@ async fn await_session_load<T>(
     idle_gap: Duration,
     timeout: Duration,
 ) -> LoadOutcome<T> {
-    let load = std::pin::pin!(load);
-    let deadline = std::pin::pin!(tokio::time::sleep(timeout));
-    let mut load = load;
-    let mut deadline = deadline;
+    let mut load = std::pin::pin!(load);
+    let mut deadline = std::pin::pin!(tokio::time::sleep(timeout));
     let mut tick = tokio::time::interval(Duration::from_millis(50));
     loop {
         tokio::select! {
