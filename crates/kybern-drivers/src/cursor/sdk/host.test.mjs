@@ -1,17 +1,39 @@
 import assert from "node:assert/strict";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
-import { createHost, createAccountHost, kybernTools, toolResult, nativeCatalog, modelCatalog, modelSelection, runtimePolicy, errorText, modelError } from "./host.mjs";
+import {
+  createHost,
+  createAccountHost,
+  kybernTools,
+  toolResult,
+  nativeCatalog,
+  modelCatalog,
+  modelSelection,
+  runtimePolicy,
+  errorText,
+  modelError,
+  handleUnhandledRejection,
+  configureAgentTransport,
+} from "./host.mjs";
 
-function fixture({ duringStart, failStart, warmGate, fetch } = {}) {
+function fixture({ duringStart, failStart, warmGate, fetch, platform, checkpoint, runRecord, runSteer } = {}) {
   const terminal = Promise.withResolvers();
   const started = Promise.withResolvers();
   const events = [];
   const calls = [];
   let callback;
   let sends = 0;
-  const run = { id: "r1", wait: () => terminal.promise, cancel: async () => {
-    calls.push(["cancel"]); terminal.resolve({ id: "r1", status: "cancelled" });
-  } };
+  const run = {
+    id: "r1",
+    wait: () => terminal.promise,
+    cancel: async () => {
+      calls.push(["cancel"]);
+      terminal.resolve({ id: "r1", status: "cancelled" });
+    },
+    ...(runSteer !== undefined ? { steer: runSteer } : {}),
+  };
   const agent = { summarize: async () => { calls.push(["summarize"]); return run; }, agentId: "a1", close: () => calls.push(["close"]), send: async (message, options) => {
     callback = options.onDelta;
     calls.push(["send", message, options]);
@@ -35,16 +57,20 @@ function fixture({ duringStart, failStart, warmGate, fetch } = {}) {
     createAgent: async (options) => sdk.Agent.create(options),
     resumeAgent: async (id,options) => sdk.Agent.resume(id,options),
     prewarmLocalWorkspace: async (options) => { calls.push(["prime", options]); await warmGate; return () => {}; },
+    ...(checkpoint !== undefined ? { checkpointStore: { loadLatest: async () => (typeof checkpoint === "function" ? checkpoint() : checkpoint) } } : {}),
+    ...(runRecord !== undefined ? { store: { getRun: async (agentId, runId) => (typeof runRecord === "function" ? runRecord(agentId, runId) : runRecord) } } : {}),
   }) };
-  const host = createHost(sdk, async (event) => { await Promise.resolve(); events.push(event); }, { apiKey: "secret", fetch });
+  const host = createHost(sdk, async (event) => { await Promise.resolve(); events.push(event); }, { apiKey: "secret", fetch, ...(platform ? { platform } : {}) });
   return { host, events, calls, terminal, started, delta: (update) => callback({ update }) };
 }
 const open = (host, extra = {}) => host.request({ type: "open", cwd: "/repo", mode: "auto", model: "model", ...extra });
 const tick = () => new Promise((done) => setImmediate(done));
 
 test("sandbox approval policy is explicit; model variants retain parameters", () => {
-  assert.deepEqual(runtimePolicy("auto"), { sandboxOptions: { enabled: true }, autoReview: true });
-  assert.deepEqual(runtimePolicy("full-access"), { sandboxOptions: { enabled: false }, autoReview: false });
+  assert.deepEqual(runtimePolicy("auto", "linux"), { sandboxOptions: { enabled: true }, autoReview: true });
+  assert.deepEqual(runtimePolicy("auto", "darwin"), { sandboxOptions: { enabled: true }, autoReview: true });
+  assert.deepEqual(runtimePolicy("auto", "win32"), { sandboxOptions: { enabled: false }, autoReview: true });
+  assert.deepEqual(runtimePolicy("full-access", "linux"), { sandboxOptions: { enabled: false }, autoReview: false });
   assert.throws(() => runtimePolicy("supervised"), /no interactive approvals/);
   assert.throws(() => runtimePolicy("accept-edits"));
   const models = modelCatalog([{ id: "m", variants: [{ displayName: "Thinking", params: [{ id: "thinking", value: "on" }] }] }]);
@@ -431,4 +457,191 @@ test("compress uses the SDK summarize run", async () => {
   await tick();
   assert.deepEqual(f.events.map(e=>e.type), ["run_started","run_completed"]);
   await f.host.close();
+});
+
+test("unhandled rejection filter ignores only the three known harmless SDK rejections", () => {
+  const runGuard = (reason) => {
+    const logs = [];
+    const exits = [];
+    handleUnhandledRejection(reason, { log: (m) => logs.push(m), exit: (code) => exits.push(code) });
+    return { logs, exits };
+  };
+  // 1. Minified WriteIterableClosedError.
+  class o extends Error {
+    name = "WriteIterableClosedError";
+  }
+  assert.deepEqual(runGuard(new o("WritableIterable is closed")).exits, []);
+
+  // 2. ConnectError wrapping ERR_STREAM_WRITE_AFTER_END.
+  const writeAfterEnd = Object.assign(
+    new Error("[aborted] write after end", { cause: Object.assign(new Error("write after end"), { code: "ERR_STREAM_WRITE_AFTER_END" }) }),
+    { name: "ConnectError", code: 10 },
+  );
+  assert.deepEqual(runGuard(writeAfterEnd).exits, []);
+
+  // 3. Stall-detector AbortError from onStall.
+  const stall = new DOMException("This operation was aborted", "AbortError");
+  stall.stack = "AbortError: This operation was aborted\n    at Is.onStall (689.js:1:111536)";
+  assert.deepEqual(runGuard(stall).exits, []);
+
+  // Everything else must still crash the host so pool.rs restarts it.
+  assert.deepEqual(runGuard(new Error("WritableIterable is closed")).exits, [1]);
+  const otherConnect = Object.assign(
+    new Error("[aborted] socket hang up", { cause: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }) }),
+    { name: "ConnectError", code: 10 },
+  );
+  assert.deepEqual(runGuard(otherConnect).exits, [1]);
+  const otherAbort = new DOMException("onStall was aborted", "AbortError");
+  otherAbort.stack = "AbortError: onStall was aborted\n    at somewhereElse (app.js:1:1)";
+  assert.deepEqual(runGuard(otherAbort).exits, [1]);
+  assert.deepEqual(runGuard("unexpected string rejection").exits, [1]);
+});
+
+test("Windows Auto keeps Auto-review on without sandbox and emits a one-time warning notice", async () => {
+  const f = fixture({ platform: "win32" });
+  await open(f.host, { mode: "auto" });
+  const created = f.calls.find((c) => c[0] === "create")[1];
+  assert.equal(created.local.autoReview, true);
+  assert.equal(created.local.sandboxOptions.enabled, false);
+  // No sandbox prime call on win32.
+  assert.ok(!f.calls.some((c) => c[0] === "prime" && c[1].local.settingSources.length === 0));
+  const notices = () => f.events.filter((e) => e.type === "notice");
+  assert.equal(notices().length, 1);
+  assert.equal(notices()[0].level, "warning");
+  assert.match(notices()[0].text, /Windows/);
+
+  await f.host.request({ type: "set_mode", mode: "full-access", model: "model" });
+  await f.host.request({ type: "set_mode", mode: "auto", model: "model" });
+  assert.equal(notices().length, 1, "notice is emitted at most once per session");
+  await f.host.close();
+});
+
+test("run_completed includes contextUsage from checkpointStore.loadLatest and checkpointed from store.getRun", async () => {
+  const f = fixture({
+    checkpoint: { tokenDetails: { usedTokens: 12_345, maxTokens: 200_000 } },
+    runRecord: { startCheckpointRef: { blobId: "b0" }, latestCheckpointRef: { blobId: "b1" } },
+  });
+  await open(f.host);
+  await f.host.request({ type: "send", message: { text: "hi" } });
+  f.terminal.resolve({ id: "r1", status: "finished", result: "done" });
+  await tick();
+  const completed = f.events.find((e) => e.type === "run_completed");
+  assert.deepEqual(completed.result.contextUsage, { usedTokens: 12_345, maxTokens: 200_000 });
+  assert.equal(completed.result.checkpointed, true);
+  await f.host.close();
+
+  // Zero maxTokens (unset protobuf) omits contextUsage; cancelled run without a new checkpoint sets checkpointed=false.
+  const f2 = fixture({
+    checkpoint: { tokenDetails: { usedTokens: 0, maxTokens: 0 } },
+    runRecord: { startCheckpointRef: { blobId: "b0" }, latestCheckpointRef: { blobId: "b0" } },
+  });
+  await open(f2.host);
+  await f2.host.request({ type: "send", message: { text: "hi" } });
+  await f2.host.request({ type: "cancel" });
+  await tick();
+  const cancelled = f2.events.find((e) => e.type === "run_completed");
+  assert.equal(cancelled.result.status, "cancelled");
+  assert.equal(cancelled.result.contextUsage, undefined);
+  assert.equal(cancelled.result.checkpointed, false);
+  await f2.host.close();
+
+  // Cancelled run that already saved a new checkpoint sets checkpointed=true.
+  const f3 = fixture({
+    runRecord: { startCheckpointRef: { blobId: "b0" }, latestCheckpointRef: { blobId: "b1" } },
+  });
+  await open(f3.host);
+  await f3.host.request({ type: "send", message: { text: "hi" } });
+  await f3.host.request({ type: "cancel" });
+  await tick();
+  const cancelledAfterCheckpoint = f3.events.find((e) => e.type === "run_completed");
+  assert.equal(cancelledAfterCheckpoint.result.checkpointed, true);
+  await f3.host.close();
+});
+
+test("steer forwards run.steer(text) and reports acknowledgement outcomes", async () => {
+  const steered = [];
+  let outcome = "complete_delivered";
+  const f = fixture({ runSteer: async (text) => { steered.push(text); return outcome; } });
+  await open(f.host);
+  await assert.rejects(f.host.request({ type: "steer", text: "too early" }), /ended/);
+  await f.host.request({ type: "send", message: { text: "start" } });
+  assert.deepEqual(await f.host.request({ type: "steer", text: "change direction" }), { outcome: "complete_delivered" });
+  assert.deepEqual(steered, ["change direction"]);
+  outcome = "revert_to_followup";
+  assert.deepEqual(await f.host.request({ type: "steer", text: "too late" }), { outcome: "revert_to_followup" });
+  await assert.rejects(f.host.request({ type: "steer", text: "   " }), /requires text/);
+  f.terminal.resolve({ id: "r1", status: "finished" });
+  await tick();
+  await f.host.close();
+
+  // A run without steer() falls back to revert_to_followup.
+  const plain = fixture();
+  await open(plain.host);
+  await plain.host.request({ type: "send", message: { text: "start" } });
+  assert.deepEqual(await plain.host.request({ type: "steer", text: "nudge" }), { outcome: "revert_to_followup" });
+  plain.terminal.resolve({ id: "r1", status: "finished" });
+  await tick();
+  await plain.host.close();
+});
+
+test("configureAgentTransport honours useHttp1ForAgent from cli-config.json", async () => {
+  const root = await mkdtemp(join(tmpdir(), "kybern-cursor-http1-"));
+  try {
+    const http1 = JSON.stringify({ network: { useHttp1ForAgent: true } });
+    const runCase = async ({ env, file, text }) => {
+      const caseDir = await mkdtemp(join(root, "case-"));
+      if (file) {
+        const target = join(caseDir, file);
+        await mkdir(join(target, ".."), { recursive: true });
+        await writeFile(target, text, "utf8");
+      }
+      const resolvedEnv = Object.fromEntries(Object.entries(env).map(([k, v]) => [k, join(caseDir, v)]));
+      const configured = [];
+      const warnings = [];
+      const applied = await configureAgentTransport(
+        { Cursor: { configure: (opts) => configured.push(opts) } },
+        { env: resolvedEnv, home: join(caseDir, "home"), warn: (m) => warnings.push(m) },
+      );
+      return { applied, configured, warnings };
+    };
+
+    // CURSOR_CONFIG_DIR takes precedence over XDG_CONFIG_HOME.
+    const fromCursorDir = await runCase({
+      env: { CURSOR_CONFIG_DIR: "cfg", XDG_CONFIG_HOME: "xdg" },
+      file: "cfg/cli-config.json",
+      text: http1,
+    });
+    assert.equal(fromCursorDir.applied, true);
+    assert.deepEqual(fromCursorDir.configured, [{ local: { useHttp1ForAgent: true } }]);
+
+    // XDG_CONFIG_HOME/cursor/cli-config.json.
+    const fromXdg = await runCase({ env: { XDG_CONFIG_HOME: "xdg" }, file: "xdg/cursor/cli-config.json", text: http1 });
+    assert.equal(fromXdg.applied, true);
+
+    // ~/.cursor/cli-config.json.
+    const fromHome = await runCase({ env: {}, file: "home/.cursor/cli-config.json", text: http1 });
+    assert.equal(fromHome.applied, true);
+
+    // Explicit false does not configure.
+    const disabled = await runCase({
+      env: {},
+      file: "home/.cursor/cli-config.json",
+      text: JSON.stringify({ network: { useHttp1ForAgent: false } }),
+    });
+    assert.equal(disabled.applied, false);
+    assert.deepEqual(disabled.configured, []);
+    assert.equal(disabled.warnings.length, 0);
+
+    // Malformed JSON warns and does not throw or configure.
+    const damaged = await runCase({ env: {}, file: "home/.cursor/cli-config.json", text: "{" });
+    assert.equal(damaged.applied, false);
+    assert.equal(damaged.warnings.length, 1);
+
+    // Missing file silently skips.
+    const missing = await runCase({ env: {} });
+    assert.equal(missing.applied, false);
+    assert.equal(missing.warnings.length, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

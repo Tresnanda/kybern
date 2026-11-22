@@ -4,6 +4,7 @@
 import { createRequire } from "node:module";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { format } from "node:util";
@@ -16,10 +17,81 @@ function timing(phase, started, extra = {}) {
   process.stderr.write(`cursor_timing ${JSON.stringify({phase, ms: Math.round((performance.now() - started) * 100) / 100, ...extra})}\n`);
 }
 
-export function runtimePolicy(mode) {
+/**
+ * Known harmless unhandled rejections emitted by `@cursor/sdk` from fire-and-forget
+ * internal promises. Only these are swallowed; anything else must crash the host so
+ * the Rust supervisor restarts it.
+ */
+export function ignorableSdkRejection(reason) {
+  if (!(reason instanceof Error)) return null;
+  if (reason.name === "WriteIterableClosedError") {
+    return "Cursor SDK wrote to a closed stream. Keeping the host running.";
+  }
+  if (
+    reason.name === "ConnectError" &&
+    reason.cause instanceof Error &&
+    reason.cause.code === "ERR_STREAM_WRITE_AFTER_END"
+  ) {
+    return "Cursor SDK wrote after its request stream ended. Keeping the host running.";
+  }
+  if (
+    reason.name === "AbortError" &&
+    typeof reason.stack === "string" &&
+    /^\s+at (?:\S+\.)?onStall\b/m.test(reason.stack)
+  ) {
+    return "Cursor SDK aborted a stalled request. Keeping the host running.";
+  }
+  return null;
+}
+
+export function handleUnhandledRejection(reason, { log = (...args) => process.stderr.write(`${format(...args)}\n`), exit = process.exit } = {}) {
+  const ignored = ignorableSdkRejection(reason);
+  if (ignored) {
+    log(ignored);
+    return;
+  }
+  log(reason);
+  exit(1);
+}
+
+/** Proxies without HTTP/2 need this Cursor CLI setting, which the SDK never reads itself. */
+export async function readCliUseHttp1ForAgent({ env = process.env, home = homedir(), warn = () => {} } = {}) {
+  const configDir = env.CURSOR_CONFIG_DIR?.trim()
+    ? env.CURSOR_CONFIG_DIR.trim()
+    : env.XDG_CONFIG_HOME?.trim()
+      ? join(env.XDG_CONFIG_HOME.trim(), "cursor")
+      : join(home, ".cursor");
+  const configPath = join(configDir, "cli-config.json");
+  let raw;
+  try {
+    raw = await readFile(configPath, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    warn(`Cursor CLI config could not be read (${configPath}); using default agent transport.`);
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed?.network?.useHttp1ForAgent === true;
+  } catch {
+    warn(`Cursor CLI config could not be parsed (${configPath}); using default agent transport.`);
+    return false;
+  }
+}
+
+export async function configureAgentTransport(sdk, options) {
+  if (await readCliUseHttp1ForAgent(options)) {
+    sdk.Cursor?.configure?.({ local: { useHttp1ForAgent: true } });
+    return true;
+  }
+  return false;
+}
+
+export function runtimePolicy(mode, platform = process.platform) {
   switch (mode) {
     case "auto":
-      return { sandboxOptions: { enabled: true }, autoReview: true };
+      // The Windows SDK has no filesystem sandbox; keep Auto-review on and disable the sandbox there.
+      return { sandboxOptions: { enabled: platform !== "win32" }, autoReview: true };
     case "full-access":
       return { sandboxOptions: { enabled: false }, autoReview: false };
     default:
@@ -230,9 +302,37 @@ export function toolResult(result) {
   return { content, ...(result?.isError ? { isError: true } : {}), ...(result?.structuredContent ? { structuredContent: result.structuredContent } : {}) };
 }
 
+async function readContextUsage(platform, agentId) {
+  try {
+    const checkpoint = await platform?.checkpointStore?.loadLatest?.(agentId);
+    const details = checkpoint?.tokenDetails;
+    if (!details || typeof details !== "object") return undefined;
+    const usedTokens = Number(details.usedTokens);
+    const maxTokens = Number(details.maxTokens);
+    // An unset protobuf message reads as zeros.
+    if (!Number.isFinite(usedTokens) || !Number.isFinite(maxTokens) || usedTokens < 0 || maxTokens <= 0) {
+      return undefined;
+    }
+    return { usedTokens: Math.trunc(usedTokens), maxTokens: Math.trunc(maxTokens) };
+  } catch {
+    return undefined;
+  }
+}
+
+async function readRunCheckpointed(platform, agentId, runId) {
+  try {
+    const run = await platform?.store?.getRun?.(agentId, runId);
+    const checkpoint = run?.latestCheckpointRef?.blobId;
+    return Boolean(checkpoint && checkpoint !== run?.startCheckpointRef?.blobId);
+  } catch {
+    return false;
+  }
+}
+
 /** One agent per logical session. emit is ordered and applies stdout backpressure. */
-export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}, sessionId, ensureCatalog, fetch } = {}) {
+export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}, sessionId, ensureCatalog, fetch, platform: hostPlatform = process.platform } = {}) {
   let agent;
+  let activePlatform;
   let options;
   let modelSelector;
   let selectedEffort;
@@ -242,6 +342,7 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
   let opened = Promise.resolve();
   let closing = false;
   let recoverAbandonedRun = false;
+  let warnedWindowsSandbox = false;
   let lease;
   const localReadOptions = (cwd) => ({ runtime: "local", cwd, ...(store ? { store } : {}) });
   secrets = [...new Set([...secrets, apiKey])];
@@ -324,9 +425,9 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
     opened = openingDone.promise;
     let next;
     try {
-      const local = { cwd: request.cwd, settingSources: SETTING_SOURCES, ...runtimePolicy(request.mode), enableAgentRetries: true, ...(store ? { store } : {}) };
+      const local = { cwd: request.cwd, settingSources: SETTING_SOURCES, ...runtimePolicy(request.mode, hostPlatform), enableAgentRetries: true, ...(store ? { store } : {}) };
       const platform = await platformFor(request.cwd);
-      if (!local.sandboxOptions.enabled) await primeSandbox(request.cwd);
+      if (!local.sandboxOptions.enabled && hostPlatform !== "win32") await primeSandbox(request.cwd);
       // Start the workspace scan before anything else: it needs neither the
       // model catalog nor the agent, so their requests overlap it.
       next = acquireWarm(platform, local);
@@ -349,6 +450,7 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
       catch (error) { throw modelError(error, nextOptions.model); }
       finally { trace("agent_creation", createStarted, {resume: !!id}); }
       options = nextOptions;
+      activePlatform = platform;
       tools = nextTools;
       modelSelector = request.model;
       selectedEffort = request.effort;
@@ -356,6 +458,14 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
       [lease, next] = [next, lease];
       recoverAbandonedRun = !!id;
       if (closing) throw new Error("Cursor session is closing.");
+      if (hostPlatform === "win32" && request.mode === "auto" && !local.sandboxOptions.enabled && !warnedWindowsSandbox) {
+        warnedWindowsSandbox = true;
+        await emit({
+          type: "notice",
+          level: "warning",
+          text: "Cursor has no filesystem sandbox on Windows. Auto-review stays on, without filesystem isolation.",
+        });
+      }
       return { agentId: agent.agentId, model: request.model || "default" };
     } finally {
       next?.release();
@@ -447,23 +557,35 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
       turn.pending.length = 0;
       turn.ready = true;
       if (turn.cancelled || closing) await cancelRun(turn);
+      const turnAgentId = agent.agentId;
+      const turnPlatform = activePlatform;
       turn.done = (async () => {
         try {
           const result = await turn.run.wait();
           await turn.updates;
           if (active === turn) active = null;
+          const finalStatus = turn.cancelled ? "cancelled" : result.status;
+          const contextUsage = await readContextUsage(turnPlatform, turnAgentId);
+          const checkpointed = finalStatus === "finished" ? true : await readRunCheckpointed(turnPlatform, turnAgentId, turn.run.id);
           await emit({ type: "run_completed", result: {
-            id: result.id, status: turn.cancelled ? "cancelled" : result.status,
+            id: result.id, status: finalStatus,
             result: result.result, usage: result.usage, durationMs: result.durationMs,
+            checkpointed,
+            ...(contextUsage ? { contextUsage } : {}),
             ...(result.error ? { error: { message: safeError(result.error.message) } } : {}),
           } });
         } catch (error) {
           await turn.updates.catch(() => {});
           if (active === turn) active = null;
+          const contextUsage = await readContextUsage(turnPlatform, turnAgentId);
+          const checkpointed = await readRunCheckpointed(turnPlatform, turnAgentId, turn.run.id);
           if (turn.cancelled && isAbort(error)) {
-            await emit({ type: "run_completed", result: { id: turn.run.id, status: "cancelled" } });
+            await emit({ type: "run_completed", result: {
+              id: turn.run.id, status: "cancelled", checkpointed,
+              ...(contextUsage ? { contextUsage } : {}),
+            } });
           } else {
-            await emit({ type: "run_failed", error: safeError(error) });
+            await emit({ type: "run_failed", error: safeError(error), checkpointed, ...(contextUsage ? { contextUsage } : {}) });
           }
         }
       })();
@@ -475,6 +597,22 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
     } finally {
       starting.resolve();
     }
+  }
+
+  async function steer(request) {
+    if (closing) throw new Error("Cursor session is closing.");
+    const turn = active;
+    if (!turn || !turn.run) {
+      throw new Error("The turn has ended. Send your message to start the next turn.");
+    }
+    const text = typeof request.text === "string" ? request.text : "";
+    if (!text.trim()) {
+      throw new Error("Cursor steering requires text.");
+    }
+    const outcome = typeof turn.run.steer === "function"
+      ? await turn.run.steer(text)
+      : "revert_to_followup";
+    return { outcome, ...(turn.cancelled ? { interrupted: true } : {}) };
   }
 
   async function close() {
@@ -507,6 +645,7 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
       switch (request.type) {
         case "open": return open(request);
         case "send": return send(request);
+        case "steer": return steer(request);
         case "cancel": if (active) await cancelRun(active); return {};
         case "set_model": idle(); if (!agent) throw new Error("Cursor session is not open."); options.model = modelSelection(request.model); modelSelector = request.model; selectedEffort = undefined; return {};
         case "set_effort": idle(); if (!agent) throw new Error("Cursor session is not open."); options.model = modelSelection(modelSelector, request.effort); selectedEffort = request.effort; return {};
@@ -660,9 +799,11 @@ async function main(mode) {
   let sanitize = (error) => errorText(error, runtimeSecrets);
   const log = (...args) => process.stderr.write(`${sanitize(format(...args))}\n`);
   console.log = console.info = console.debug = log;
+  process.on("unhandledRejection", (reason) => handleUnhandledRejection(reason, { log }));
   timing("node_start", processStarted, {uptimeMs: Math.round(process.uptime() * 1000)});
   const sdkStarted = performance.now();
   const sdk = await loadSdk();
+  await configureAgentTransport(sdk, { warn: log });
   timing("sdk_load", sdkStarted);
   const credentialStore = new sdk.FileCredentialStore(process.env.KYBERN_CURSOR_AUTH_FILE);
   if (mode === "version") { await emit({ version: SDK_VERSION }); return; }
