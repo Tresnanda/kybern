@@ -157,3 +157,954 @@ fn antigravity_has_one_account_per_machine() {
     settings.providers.insert(ProviderKind::Antigravity, provider);
     assert!(crate::provider_accounts::validate(&settings).is_err(), "a named Antigravity account can't be saved");
 }
+
+type RecordedSends = Arc<std::sync::Mutex<Vec<(Option<String>, String)>>>;
+
+#[derive(Clone)]
+struct AgyRecord {
+    resume_session_id: Option<String>,
+    /// `(conversation_used_for_send, plain_text_prompt)` for every `send_message` on this session.
+    sends: RecordedSends,
+}
+
+impl AgyRecord {
+    fn messages(&self) -> Vec<String> {
+        self.sends.lock().unwrap().iter().map(|(_, text)| text.clone()).collect()
+    }
+}
+
+#[derive(Clone)]
+struct Barrier {
+    entered: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+}
+
+impl Barrier {
+    fn new() -> Self {
+        Self { entered: Arc::new(tokio::sync::Notify::new()), release: Arc::new(tokio::sync::Notify::new()) }
+    }
+}
+
+enum ScriptStep {
+    Events(Vec<DriverEvent>),
+    SendError(String),
+}
+
+struct ScriptedAgyDriver {
+    kind: ProviderKind,
+    supports_fork: bool,
+    spawns: Arc<std::sync::Mutex<Vec<AgyRecord>>>,
+    scripts: Arc<std::sync::Mutex<std::collections::VecDeque<ScriptStep>>>,
+    /// Optional barrier triggered on `close()` of the Nth (0-indexed) spawned session.
+    close_barriers: Arc<std::sync::Mutex<HashMap<usize, Barrier>>>,
+    /// Optional barrier triggered on `spawn()` of the Nth (0-indexed) spawned session.
+    spawn_barriers: Arc<std::sync::Mutex<HashMap<usize, Barrier>>>,
+    /// Notified whenever `send_message` is invoked on any spawned session.
+    send_notify: Arc<tokio::sync::Notify>,
+}
+
+impl ScriptedAgyDriver {
+    fn antigravity(scripts: Vec<Vec<DriverEvent>>) -> Self {
+        Self::new(ProviderKind::Antigravity, false, scripts.into_iter().map(ScriptStep::Events).collect())
+    }
+
+    fn new(kind: ProviderKind, supports_fork: bool, scripts: Vec<ScriptStep>) -> Self {
+        Self {
+            kind,
+            supports_fork,
+            spawns: Arc::new(std::sync::Mutex::new(Vec::new())),
+            scripts: Arc::new(std::sync::Mutex::new(scripts.into())),
+            close_barriers: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            spawn_barriers: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            send_notify: Arc::new(tokio::sync::Notify::new()),
+        }
+    }
+
+    fn pause_close(&self, spawn_index: usize) -> Barrier {
+        let barrier = Barrier::new();
+        self.close_barriers.lock().unwrap().insert(spawn_index, barrier.clone());
+        barrier
+    }
+
+    fn pause_spawn(&self, spawn_index: usize) -> Barrier {
+        let barrier = Barrier::new();
+        self.spawn_barriers.lock().unwrap().insert(spawn_index, barrier.clone());
+        barrier
+    }
+}
+
+struct ScriptedAgySession {
+    kind: ProviderKind,
+    /// Models Antigravity's `State.conversation`, which drops to `None` on a thinking-signature error.
+    conversation: Arc<std::sync::Mutex<Option<String>>>,
+    sends: RecordedSends,
+    tx: tokio::sync::mpsc::Sender<DriverEvent>,
+    scripts: Arc<std::sync::Mutex<std::collections::VecDeque<ScriptStep>>>,
+    close_barrier: Option<Barrier>,
+    send_notify: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait::async_trait]
+impl kybern_drivers::AgentSession for ScriptedAgySession {
+    async fn send_message(&self, _id: &str, message: &UserMessage) -> kybern_drivers::Result<()> {
+        let used_conversation = self.conversation.lock().unwrap().clone();
+        self.sends.lock().unwrap().push((used_conversation, message.plain_text()));
+        self.send_notify.notify_waiters();
+        let step = self.scripts.lock().unwrap().pop_front().unwrap_or(ScriptStep::Events(Vec::new()));
+        match step {
+            ScriptStep::SendError(text) => Err(kybern_drivers::DriverError::Protocol(text)),
+            ScriptStep::Events(batch) => {
+                let tx = self.tx.clone();
+                let conversation = self.conversation.clone();
+                let kind = self.kind;
+                tokio::spawn(async move {
+                    for event in batch {
+                        match &event {
+                            DriverEvent::SessionBound { session_id, .. } => {
+                                *conversation.lock().unwrap() = Some(session_id.clone());
+                            }
+                            DriverEvent::TurnFailed { error, problem } if kind == ProviderKind::Antigravity => {
+                                let poisoned = problem
+                                    .as_ref()
+                                    .and_then(|p| p.detail.as_deref())
+                                    .is_some_and(kybern_drivers::antigravity::is_invalid_thinking_signature)
+                                    || kybern_drivers::antigravity::is_invalid_thinking_signature(error);
+                                if poisoned {
+                                    // Models `antigravity.rs`: the driver clears `state.conversation`
+                                    // before delivering `TurnFailed`.
+                                    *conversation.lock().unwrap() = None;
+                                }
+                            }
+                            _ => {}
+                        }
+                        let _ = tx.send(event).await;
+                    }
+                });
+                Ok(())
+            }
+        }
+    }
+    async fn interrupt(&self) -> kybern_drivers::Result<()> {
+        Ok(())
+    }
+    async fn set_permission_mode(&self, _: PermissionMode) -> kybern_drivers::Result<()> {
+        Ok(())
+    }
+    async fn set_model(&self, _: &str) -> kybern_drivers::Result<()> {
+        Ok(())
+    }
+    async fn set_effort(&self, _: &str) -> kybern_drivers::Result<()> {
+        Ok(())
+    }
+    async fn respond_permission(&self, _: &str, _: &ApprovalDecision) -> kybern_drivers::Result<()> {
+        Ok(())
+    }
+    async fn close(&self) -> kybern_drivers::Result<()> {
+        if let Some(barrier) = &self.close_barrier {
+            barrier.entered.notify_one();
+            barrier.release.notified().await;
+        }
+        let _ = self.tx.send(DriverEvent::Exited { code: Some(0), error: None }).await;
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl kybern_drivers::AgentDriver for ScriptedAgyDriver {
+    fn kind(&self) -> ProviderKind {
+        self.kind
+    }
+    fn supports_fork(&self) -> bool {
+        self.supports_fork
+    }
+    async fn probe(&self, _: Option<&std::path::PathBuf>) -> ProviderStatus {
+        ProviderStatus {
+            kind: self.kind,
+            display_name: self.kind.display_name().into(),
+            available: true,
+            binary_path: None,
+            version: Some("1.5.14".into()),
+            unavailable_reason: None,
+            supported_permission_modes: if self.kind == ProviderKind::Antigravity {
+                vec![PermissionMode::FullAccess]
+            } else {
+                PermissionMode::ALL.to_vec()
+            },
+            supports_fork: self.supports_fork,
+            supports_model_switch: true,
+            supports_effort_switch: true,
+            supported_efforts: vec![],
+            models: vec![],
+            instances: vec!["default".into()],
+        }
+    }
+    async fn spawn(&self, config: kybern_drivers::SessionConfig) -> kybern_drivers::Result<kybern_drivers::SpawnedSession> {
+        let spawn_index = self.spawns.lock().unwrap().len();
+        let spawn_barrier = self.spawn_barriers.lock().unwrap().remove(&spawn_index);
+        if let Some(barrier) = spawn_barrier {
+            barrier.entered.notify_one();
+            barrier.release.notified().await;
+        }
+        let (tx, events) = tokio::sync::mpsc::channel(64);
+        let sends = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let conversation = Arc::new(std::sync::Mutex::new(config.resume_session_id.clone()));
+        let close_barrier = self.close_barriers.lock().unwrap().remove(&spawn_index);
+        self.spawns.lock().unwrap().push(AgyRecord {
+            resume_session_id: config.resume_session_id,
+            sends: sends.clone(),
+        });
+        Ok(kybern_drivers::SpawnedSession {
+            session: Box::new(ScriptedAgySession {
+                kind: self.kind,
+                conversation,
+                sends,
+                tx,
+                scripts: self.scripts.clone(),
+                close_barrier,
+                send_notify: self.send_notify.clone(),
+            }),
+            events,
+        })
+    }
+}
+
+async fn wait_for_thread_event(
+    events: &mut crate::bounded_broadcast::Receiver<ThreadEvent>,
+    thread_id: ThreadId,
+    mut predicate: impl FnMut(&ThreadEvent) -> bool,
+) -> ThreadEvent {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match events.recv().await {
+                Ok(event) if event.thread_id == thread_id && predicate(&event) => return event,
+                Ok(_) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => panic!("orchestrator event bus closed"),
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for thread event")
+}
+
+async fn wait_for_thread_status(
+    events: &mut crate::bounded_broadcast::Receiver<ThreadEvent>,
+    thread_id: ThreadId,
+    expected: ThreadStatus,
+) -> Thread {
+    let event = wait_for_thread_event(events, thread_id, |event| {
+        matches!(&event.payload, EventPayload::ThreadUpdated { thread } if thread.status == expected)
+    })
+    .await;
+    match event.payload {
+        EventPayload::ThreadUpdated { thread } => thread,
+        _ => unreachable!(),
+    }
+}
+
+async fn wait_for_turn_settled(
+    events: &mut crate::bounded_broadcast::Receiver<ThreadEvent>,
+    thread_id: ThreadId,
+    turn_id: TurnId,
+    expected: ThreadStatus,
+) -> Thread {
+    wait_for_thread_event(events, thread_id, |event| {
+        event.turn_id == Some(turn_id)
+            && matches!(event.payload, EventPayload::TurnCompleted { .. } | EventPayload::TurnFailed { .. })
+    })
+    .await;
+    wait_for_thread_status(events, thread_id, expected).await
+}
+
+async fn wait_for_after_checkpoint(fixture: &Fixture, thread_id: ThreadId, turn_id: TurnId) {
+    // `checkpoint_after_turn` acquires `checkpoint_lock` before `TurnCompleted` / `ThreadUpdated`,
+    // so acquiring and dropping the lock waits directly for the background snapshot to finish.
+    drop(fixture.orchestrator.checkpoint_lock(thread_id).lock_owned().await);
+    assert!(
+        fixture.store.checkpoint_get(turn_id).unwrap().is_some_and(|c| c.after.is_some()),
+        "checkpoint after snapshot recorded for {turn_id}"
+    );
+}
+
+#[tokio::test]
+async fn antigravity_thinking_signature_failure_retries_once_on_a_fresh_conversation_with_context() {
+    let raw_sig_err = r#"Error 400, Message: {"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.0.thinking.signature: Field required"}}, Status: INVALID_ARGUMENT"#;
+    let sig_problem = kybern_protocol::rpc::Problem::new(kybern_protocol::rpc::ProblemKind::Internal, raw_sig_err)
+        .with_subject("antigravity");
+
+    let driver = Arc::new(ScriptedAgyDriver::antigravity(vec![
+        // Turn 1 succeeds and binds the conversation id.
+        vec![
+            DriverEvent::SessionBound { session_id: "conv-poisoned".into(), model: None },
+            DriverEvent::MessageCompleted {
+                message_id: "m1".into(),
+                origin: EventOrigin::Root,
+                text: "earlier answer".into(),
+                thinking: None,
+            },
+            completed_response(StopReason::Completed),
+        ],
+        // Turn 2 fails on the poisoned conversation with a missing thinking signature.
+        vec![DriverEvent::TurnFailed {
+            error: "Antigravity's saved conversation can no longer be sent to the model.".into(),
+            problem: Some(sig_problem.clone()),
+        }],
+        // Automatic retry on a fresh conversation succeeds.
+        vec![
+            DriverEvent::SessionBound { session_id: "conv-fresh".into(), model: None },
+            DriverEvent::MessageCompleted {
+                message_id: "m2".into(),
+                origin: EventOrigin::Root,
+                text: "recovered answer".into(),
+                thinking: None,
+            },
+            completed_response(StopReason::Completed),
+        ],
+        // Turn 3 fails twice in a row: must stop after one retry instead of looping.
+        vec![DriverEvent::TurnFailed { error: raw_sig_err.into(), problem: Some(sig_problem.clone()) }],
+        vec![
+            DriverEvent::SessionBound { session_id: "conv-also-bad".into(), model: None },
+            DriverEvent::TurnFailed { error: raw_sig_err.into(), problem: Some(sig_problem) },
+        ],
+        // Turn 4 (after daemon declined a second automatic retry): the driver dropped its
+        // conversation id, and the daemon preserved a portable handoff so Turn 4 keeps context.
+        vec![
+            DriverEvent::SessionBound { session_id: "conv-after-decline".into(), model: None },
+            DriverEvent::MessageCompleted {
+                message_id: "m4".into(),
+                origin: EventOrigin::Root,
+                text: "kept context answer".into(),
+                thinking: None,
+            },
+            completed_response(StopReason::Completed),
+        ],
+    ]));
+
+    let mut drivers = DriverRegistry::default();
+    drivers.register(driver.clone());
+    let fixture = Fixture::with_drivers_and_gateway(drivers, None);
+    std::fs::create_dir_all(&fixture.root).unwrap();
+    let mut thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Antigravity);
+    thread.permission_mode = PermissionMode::FullAccess;
+    thread.provider_session_id = None;
+    fixture.store.thread_upsert(&thread).unwrap();
+
+    let mut events = fixture.orchestrator.inner.events.subscribe();
+
+    // Turn 1 establishes the conversation.
+    fixture.orchestrator.send(thread.id, UserMessage::text("earlier question")).await.unwrap();
+    let after_t1 = wait_for_thread_status(&mut events, thread.id, ThreadStatus::Idle).await;
+    assert_eq!(after_t1.provider_session_id.as_deref(), Some("conv-poisoned"));
+
+    // Turn 2 hits the thinking-signature error and recovers automatically on a fresh conversation.
+    fixture.orchestrator.send(thread.id, UserMessage::text("follow-up question")).await.unwrap();
+    let after_t2 = wait_for_thread_event(&mut events, thread.id, |event| {
+        matches!(
+            &event.payload,
+            EventPayload::ThreadUpdated { thread }
+                if thread.status == ThreadStatus::Idle && thread.provider_session_id.as_deref() == Some("conv-fresh")
+        )
+    })
+    .await;
+    assert!(matches!(after_t2.payload, EventPayload::ThreadUpdated { .. }));
+
+    let spawns = driver.spawns.lock().unwrap().clone();
+    assert_eq!(spawns.len(), 2, "second spawn was a fresh conversation");
+    assert_eq!(spawns[1].resume_session_id, None, "poisoned conversation id must be dropped");
+    let retried_prompt = spawns[1].messages()[0].clone();
+    assert!(retried_prompt.contains("earlier question"), "missing prior user turn: {retried_prompt}");
+    assert!(retried_prompt.contains("earlier answer"), "missing prior assistant turn: {retried_prompt}");
+    assert_eq!(
+        retried_prompt.matches("follow-up question").count(),
+        1,
+        "failed turn's own prompt must appear exactly once in the seed: {retried_prompt}"
+    );
+
+    // Turn 3 fails twice: only one automatic retry occurs, then the turn fails cleanly.
+    fixture.orchestrator.send(thread.id, UserMessage::text("third question")).await.unwrap();
+    let after_t3 = wait_for_thread_status(&mut events, thread.id, ThreadStatus::Failed).await;
+    assert_eq!(driver.spawns.lock().unwrap().len(), 3, "only one retry spawn for the double failure");
+    assert_eq!(after_t3.provider_session_id, None, "declined recovery must still clear provider_session_id");
+    assert!(
+        fixture.store.meta_get(&format!("handoff:{}", thread.id)).unwrap().is_some_and(|v| !v.is_empty()),
+        "declined recovery must keep a portable handoff for the next message"
+    );
+
+    // Turn 4 runs on the existing session (whose driver dropped `state.conversation` to `None`)
+    // and receives the portable handoff so earlier turns are not silently lost.
+    fixture.orchestrator.send(thread.id, UserMessage::text("fourth question")).await.unwrap();
+    let after_t4 = wait_for_thread_status(&mut events, thread.id, ThreadStatus::Idle).await;
+    assert_eq!(after_t4.provider_session_id.as_deref(), Some("conv-after-decline"));
+    let spawns = driver.spawns.lock().unwrap().clone();
+    let sends_on_session = spawns[2].sends.lock().unwrap().clone();
+    let (used_conv, fourth_prompt) = sends_on_session.last().unwrap();
+    assert_eq!(*used_conv, None, "driver started a fresh conversation after dropping poisoned id");
+    assert!(fourth_prompt.contains("earlier question") && fourth_prompt.contains("earlier answer"), "{fourth_prompt}");
+    assert!(fourth_prompt.contains("follow-up question") && fourth_prompt.contains("recovered answer"), "{fourth_prompt}");
+    assert!(!fourth_prompt.contains("third question"), "declined turn's failed prompt must be absent from the seed: {fourth_prompt}");
+    assert!(fourth_prompt.contains("fourth question"), "{fourth_prompt}");
+}
+
+#[tokio::test]
+async fn antigravity_declined_recovery_when_session_is_released_preserves_handoff() {
+    let raw_sig_err = r#"Error 400, Message: {"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.0.thinking.signature: Field required"}}, Status: INVALID_ARGUMENT"#;
+    let sig_problem = kybern_protocol::rpc::Problem::new(kybern_protocol::rpc::ProblemKind::Internal, raw_sig_err)
+        .with_subject("antigravity");
+
+    let driver = Arc::new(ScriptedAgyDriver::antigravity(vec![
+        // Turn 1 succeeds and binds `conv-1`.
+        vec![
+            DriverEvent::SessionBound { session_id: "conv-1".into(), model: None },
+            DriverEvent::MessageCompleted {
+                message_id: "m1".into(),
+                origin: EventOrigin::Root,
+                text: "saved answer".into(),
+                thinking: None,
+            },
+            completed_response(StopReason::Completed),
+        ],
+        // Turn 2: does not emit yet; we mark `live` released and inject `TurnFailed` directly.
+        vec![],
+        // Turn 3 after decline must start fresh with Turn 1's context.
+        vec![
+            DriverEvent::SessionBound { session_id: "conv-2".into(), model: None },
+            DriverEvent::MessageCompleted {
+                message_id: "m3".into(),
+                origin: EventOrigin::Root,
+                text: "after release".into(),
+                thinking: None,
+            },
+            completed_response(StopReason::Completed),
+        ],
+    ]));
+
+    let mut drivers = DriverRegistry::default();
+    drivers.register(driver.clone());
+    let fixture = Fixture::with_drivers_and_gateway(drivers, None);
+    std::fs::create_dir_all(&fixture.root).unwrap();
+    let mut thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Antigravity);
+    thread.permission_mode = PermissionMode::FullAccess;
+    thread.provider_session_id = None;
+    fixture.store.thread_upsert(&thread).unwrap();
+
+    let mut events = fixture.orchestrator.inner.events.subscribe();
+
+    let (t1, _) = fixture.orchestrator.send(thread.id, UserMessage::text("saved question")).await.unwrap();
+    wait_for_turn_settled(&mut events, thread.id, t1, ThreadStatus::Idle).await;
+
+    let sent_turn2 = driver.send_notify.notified();
+    fixture.orchestrator.send(thread.id, UserMessage::text("turn on released session")).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), sent_turn2).await.expect("turn 2 started and sent to session");
+    let live = fixture.orchestrator.inner.sessions.lock().await.get(&thread.id).cloned().unwrap();
+    live.mark_released();
+    fixture
+        .orchestrator
+        .process_driver_event(
+            thread.id,
+            &live,
+            DriverEvent::TurnFailed { error: raw_sig_err.into(), problem: Some(sig_problem) },
+            false,
+        )
+        .await
+        .unwrap();
+
+    // Recovery was declined (still only 1 spawn), yet provider_session_id was cleared and handoff set.
+    assert_eq!(driver.spawns.lock().unwrap().len(), 1);
+    assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().provider_session_id, None);
+    assert!(fixture.store.meta_get(&format!("handoff:{}", thread.id)).unwrap().is_some_and(|v| !v.is_empty()));
+
+    // Remove the released session as session retirement would, then send Turn 3.
+    fixture.orchestrator.inner.sessions.lock().await.remove(&thread.id);
+    let (t3, _) = fixture.orchestrator.send(thread.id, UserMessage::text("next prompt")).await.unwrap();
+    wait_for_turn_settled(&mut events, thread.id, t3, ThreadStatus::Idle).await;
+    let spawns = driver.spawns.lock().unwrap().clone();
+    assert_eq!(spawns.len(), 2);
+    assert_eq!(spawns[1].resume_session_id, None);
+    let seeded = spawns[1].messages()[0].clone();
+    assert!(seeded.contains("saved question") && seeded.contains("saved answer"), "{seeded}");
+    assert!(
+        !seeded.contains("turn on released session"),
+        "declined turn's failed prompt must be absent from the seed: {seeded}"
+    );
+    assert!(seeded.contains("next prompt"), "{seeded}");
+}
+
+#[tokio::test]
+async fn stop_during_antigravity_thinking_signature_retry_cancels_resend() {
+    let raw_sig_err = r#"Error 400, Message: {"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.0.thinking.signature: Field required"}}, Status: INVALID_ARGUMENT"#;
+    let sig_problem = kybern_protocol::rpc::Problem::new(kybern_protocol::rpc::ProblemKind::Internal, raw_sig_err)
+        .with_subject("antigravity");
+
+    // Window 1: Stop arrives while closing the poisoned session (removed from `sessions`, before `start_turn_erased`).
+    {
+        let driver = Arc::new(ScriptedAgyDriver::antigravity(vec![
+            vec![
+                DriverEvent::SessionBound { session_id: "conv-poisoned".into(), model: None },
+                DriverEvent::MessageCompleted {
+                    message_id: "m1".into(),
+                    origin: EventOrigin::Root,
+                    text: "ok".into(),
+                    thinking: None,
+                },
+                completed_response(StopReason::Completed),
+            ],
+            vec![DriverEvent::TurnFailed { error: raw_sig_err.into(), problem: Some(sig_problem.clone()) }],
+        ]));
+        let close_barrier = driver.pause_close(0);
+
+        let mut drivers = DriverRegistry::default();
+        drivers.register(driver.clone());
+        let fixture = Fixture::with_drivers_and_gateway(drivers, None);
+        std::fs::create_dir_all(&fixture.root).unwrap();
+        let mut thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Antigravity);
+        thread.permission_mode = PermissionMode::FullAccess;
+        thread.provider_session_id = None;
+        fixture.store.thread_upsert(&thread).unwrap();
+
+        let mut events = fixture.orchestrator.inner.events.subscribe();
+        fixture.orchestrator.send(thread.id, UserMessage::text("turn 1")).await.unwrap();
+        wait_for_thread_status(&mut events, thread.id, ThreadStatus::Idle).await;
+
+        fixture.orchestrator.send(thread.id, UserMessage::text("turn 2")).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(10), close_barrier.entered.notified()).await.expect("recovery entered close()");
+        // The poisoned session is already removed from `sessions`; Stop must still succeed cleanly.
+        assert!(fixture.orchestrator.inner.sessions.lock().await.get(&thread.id).is_none());
+
+        let mut resend_rx =
+            fixture.orchestrator.inner.resends.get(thread.id).expect("resend entry registered on shared guard").subscribe();
+        fixture.orchestrator.stop_thread(thread.id, "test stop during close").await.expect("Stop during retry close must not fail with no live session");
+        close_barrier.release.notify_one();
+        // Wait for the background `run_resend` task to drop its `ResendGuard` and finish cleanly.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while resend_rx.changed().await.is_ok() {}
+        })
+        .await
+        .expect("run_resend task finished after close barrier released");
+
+        let ended = wait_for_thread_event(&mut events, thread.id, |event| {
+            matches!(event.payload, EventPayload::TurnCompleted { stop_reason: StopReason::Interrupted, .. })
+        })
+        .await;
+        assert!(matches!(ended.payload, EventPayload::TurnCompleted { stop_reason: StopReason::Interrupted, .. }));
+        assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::Idle);
+        assert!(fixture.orchestrator.inner.resends.is_empty());
+        assert_eq!(driver.spawns.lock().unwrap().len(), 1, "stopped retry must not spawn a fresh session");
+    }
+
+    // Window 2: Stop arrives during `ensure_session` (before `ActiveTurn` exists or `send_message` runs).
+    {
+        let driver = Arc::new(ScriptedAgyDriver::antigravity(vec![
+            vec![
+                DriverEvent::SessionBound { session_id: "conv-poisoned".into(), model: None },
+                DriverEvent::MessageCompleted {
+                    message_id: "m1".into(),
+                    origin: EventOrigin::Root,
+                    text: "ok".into(),
+                    thinking: None,
+                },
+                completed_response(StopReason::Completed),
+            ],
+            vec![DriverEvent::TurnFailed { error: raw_sig_err.into(), problem: Some(sig_problem) }],
+        ]));
+        let spawn_barrier = driver.pause_spawn(1);
+
+        let mut drivers = DriverRegistry::default();
+        drivers.register(driver.clone());
+        let fixture = Fixture::with_drivers_and_gateway(drivers, None);
+        std::fs::create_dir_all(&fixture.root).unwrap();
+        let mut thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Antigravity);
+        thread.permission_mode = PermissionMode::FullAccess;
+        thread.provider_session_id = None;
+        fixture.store.thread_upsert(&thread).unwrap();
+
+        let mut events = fixture.orchestrator.inner.events.subscribe();
+        fixture.orchestrator.send(thread.id, UserMessage::text("turn 1")).await.unwrap();
+        wait_for_thread_status(&mut events, thread.id, ThreadStatus::Idle).await;
+
+        fixture.orchestrator.send(thread.id, UserMessage::text("turn 2")).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(10), spawn_barrier.entered.notified()).await.expect("recovery entered second spawn()");
+
+        let mut resend_rx =
+            fixture.orchestrator.inner.resends.get(thread.id).expect("resend entry registered during ensure_session").subscribe();
+        fixture.orchestrator.stop_thread(thread.id, "test stop during spawn").await.expect("Stop during ensure_session must succeed");
+        spawn_barrier.release.notify_one();
+        // Wait for `start_turn_with` and `run_resend` to finish and drop their `ResendEntry` handles.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while resend_rx.changed().await.is_ok() {}
+        })
+        .await
+        .expect("run_resend task finished after spawn barrier released");
+
+        wait_for_thread_event(&mut events, thread.id, |event| {
+            matches!(event.payload, EventPayload::TurnCompleted { stop_reason: StopReason::Interrupted, .. })
+        })
+        .await;
+        assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::Idle);
+        assert!(fixture.orchestrator.inner.resends.is_empty());
+        let spawns = driver.spawns.lock().unwrap().clone();
+        assert_eq!(spawns.len(), 2);
+        assert!(spawns[1].messages().is_empty(), "stopped retry must not resend after ensure_session");
+    }
+}
+
+#[tokio::test]
+async fn edit_from_here_after_failed_harness_switch_preserves_handoff_for_non_antigravity() {
+    let claude = Arc::new(ScriptedAgyDriver::new(
+        ProviderKind::ClaudeCode,
+        true,
+        vec![
+            ScriptStep::Events(vec![
+                DriverEvent::SessionBound { session_id: "claude-1".into(), model: None },
+                DriverEvent::MessageCompleted {
+                    message_id: "c1".into(),
+                    origin: EventOrigin::Root,
+                    text: "claude answer one".into(),
+                    thinking: None,
+                },
+                completed_response(StopReason::Completed),
+            ]),
+            ScriptStep::Events(vec![
+                DriverEvent::MessageCompleted {
+                    message_id: "c2".into(),
+                    origin: EventOrigin::Root,
+                    text: "claude answer two".into(),
+                    thinking: None,
+                },
+                completed_response(StopReason::Completed),
+            ]),
+        ],
+    ));
+    let codex = Arc::new(ScriptedAgyDriver::new(
+        ProviderKind::Codex,
+        true,
+        vec![
+            // First send after switching to Codex fails before binding a session id, leaving the
+            // handoff pending and `provider_session_id = None`.
+            ScriptStep::SendError("temporary codex failure".into()),
+            // Edited resend after "Edit from here" on turn 3 succeeds.
+            ScriptStep::Events(vec![
+                DriverEvent::SessionBound { session_id: "codex-1".into(), model: None },
+                DriverEvent::MessageCompleted {
+                    message_id: "x3".into(),
+                    origin: EventOrigin::Root,
+                    text: "codex answer".into(),
+                    thinking: None,
+                },
+                completed_response(StopReason::Completed),
+            ]),
+            // After rewinding to turn 1 (`idx == 0`), a fresh send carries no prior context.
+            ScriptStep::Events(vec![
+                DriverEvent::SessionBound { session_id: "codex-2".into(), model: None },
+                DriverEvent::MessageCompleted {
+                    message_id: "x1".into(),
+                    origin: EventOrigin::Root,
+                    text: "fresh start".into(),
+                    thinking: None,
+                },
+                completed_response(StopReason::Completed),
+            ]),
+        ],
+    ));
+
+    let mut drivers = DriverRegistry::default();
+    drivers.register(claude.clone());
+    drivers.register(codex.clone());
+    let fixture = Fixture::with_drivers_and_gateway(drivers, None);
+    std::fs::create_dir_all(&fixture.root).unwrap();
+    let git = |args: &[&str]| {
+        assert!(std::process::Command::new("git").arg("-C").arg(&fixture.root).args(args).status().unwrap().success());
+    };
+    git(&["init", "-q"]);
+    git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]);
+
+    let mut thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::ClaudeCode);
+    thread.provider_session_id = None;
+    fixture.store.thread_upsert(&thread).unwrap();
+
+    let mut events = fixture.orchestrator.inner.events.subscribe();
+
+    // Turns 1 and 2 on Claude Code.
+    let (t1, _) = fixture.orchestrator.send(thread.id, UserMessage::text("first claude prompt")).await.unwrap();
+    wait_for_turn_settled(&mut events, thread.id, t1, ThreadStatus::Idle).await;
+    wait_for_after_checkpoint(&fixture, thread.id, t1).await;
+
+    let (t2, _) = fixture.orchestrator.send(thread.id, UserMessage::text("second claude prompt")).await.unwrap();
+    wait_for_turn_settled(&mut events, thread.id, t2, ThreadStatus::Idle).await;
+    wait_for_after_checkpoint(&fixture, thread.id, t2).await;
+
+    // Switch target to Codex and send turn 3, which fails during `send_message`.
+    fixture
+        .orchestrator
+        .set_thread_target(methods::ThreadTargetParams {
+            thread_id: thread.id,
+            target: SessionTarget { provider: ProviderInstance::default_for(ProviderKind::Codex), model: None, effort: None },
+            inherit_account: true,
+        })
+        .await
+        .unwrap();
+    let (t3, _) = fixture.orchestrator.send(thread.id, UserMessage::text("failed codex turn")).await.unwrap();
+    wait_for_turn_settled(&mut events, thread.id, t3, ThreadStatus::Failed).await;
+    assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().provider_session_id, None);
+    assert!(fixture.store.meta_get(&format!("handoff:{}", thread.id)).unwrap().is_some_and(|v| !v.is_empty()));
+
+    // "Edit from here" on turn 3 (`idx > 0` with `provider_session_id == None`) must keep a handoff
+    // covering turns 1 and 2 instead of clearing it to "".
+    let (_, rewound) = fixture.orchestrator.revert(thread.id, t3).await.unwrap();
+    assert!(rewound);
+    assert!(
+        fixture.store.meta_get(&format!("handoff:{}", thread.id)).unwrap().is_some_and(|v| !v.is_empty()),
+        "Edit from here on turn 3 must not wipe the pending handoff"
+    );
+
+    // Sending the edited turn 3 on Codex delivers turns 1 & 2 as portable context, without the failed turn 3.
+    let (t3_edited, _) = fixture.orchestrator.send(thread.id, UserMessage::text("edited codex prompt")).await.unwrap();
+    wait_for_turn_settled(&mut events, thread.id, t3_edited, ThreadStatus::Idle).await;
+    let codex_spawns = codex.spawns.lock().unwrap().clone();
+    let edited_prompt = codex_spawns.last().unwrap().messages().last().unwrap().clone();
+    assert!(edited_prompt.contains("first claude prompt") && edited_prompt.contains("claude answer one"), "{edited_prompt}");
+    assert!(edited_prompt.contains("second claude prompt") && edited_prompt.contains("claude answer two"), "{edited_prompt}");
+    assert!(!edited_prompt.contains("failed codex turn"), "reverted turn leaked: {edited_prompt}");
+    assert!(edited_prompt.contains("edited codex prompt"), "{edited_prompt}");
+
+    // Rewinding to turn 1 (`idx == 0`) DOES clear the handoff.
+    let (_, rewound_first) = fixture.orchestrator.revert(thread.id, t1).await.unwrap();
+    assert!(rewound_first);
+    assert_eq!(fixture.store.meta_get(&format!("handoff:{}", thread.id)).unwrap().as_deref(), Some(""));
+}
+
+#[tokio::test]
+async fn antigravity_revert_rewinds_by_starting_a_fresh_conversation_seeded_with_kept_transcript() {
+    let driver = Arc::new(ScriptedAgyDriver::antigravity(vec![
+        // Turn 1
+        vec![
+            DriverEvent::SessionBound { session_id: "conv-1".into(), model: None },
+            DriverEvent::MessageCompleted {
+                message_id: "m1".into(),
+                origin: EventOrigin::Root,
+                text: "keep this answer".into(),
+                thinking: None,
+            },
+            completed_response(StopReason::Completed),
+        ],
+        // Turn 2 (will be rewound)
+        vec![
+            DriverEvent::MessageCompleted {
+                message_id: "m2".into(),
+                origin: EventOrigin::Root,
+                text: "drop this answer".into(),
+                thinking: None,
+            },
+            completed_response(StopReason::Completed),
+        ],
+        // Turn 3 (after first rewind)
+        vec![
+            DriverEvent::SessionBound { session_id: "conv-2".into(), model: None },
+            DriverEvent::MessageCompleted {
+                message_id: "m3".into(),
+                origin: EventOrigin::Root,
+                text: "second branch answer".into(),
+                thinking: None,
+            },
+            completed_response(StopReason::Completed),
+        ],
+        // Turn 4 (will also be rewound)
+        vec![
+            DriverEvent::MessageCompleted {
+                message_id: "m4".into(),
+                origin: EventOrigin::Root,
+                text: "drop second branch tail".into(),
+                thinking: None,
+            },
+            completed_response(StopReason::Completed),
+        ],
+        // Turn 5 (after second rewind)
+        vec![
+            DriverEvent::SessionBound { session_id: "conv-3".into(), model: None },
+            DriverEvent::MessageCompleted {
+                message_id: "m5".into(),
+                origin: EventOrigin::Root,
+                text: "final answer".into(),
+                thinking: None,
+            },
+            completed_response(StopReason::Completed),
+        ],
+    ]));
+
+    let mut drivers = DriverRegistry::default();
+    drivers.register(driver.clone());
+    let fixture = Fixture::with_drivers_and_gateway(drivers, None);
+    std::fs::create_dir_all(&fixture.root).unwrap();
+    let git = |args: &[&str]| {
+        assert!(std::process::Command::new("git").arg("-C").arg(&fixture.root).args(args).status().unwrap().success());
+    };
+    git(&["init", "-q"]);
+    git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]);
+
+    let mut thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Antigravity);
+    thread.permission_mode = PermissionMode::FullAccess;
+    thread.provider_session_id = None;
+    fixture.store.thread_upsert(&thread).unwrap();
+
+    let mut events = fixture.orchestrator.inner.events.subscribe();
+
+    // Turn 1
+    let (t1, _) = fixture.orchestrator.send(thread.id, UserMessage::text("keep this question")).await.unwrap();
+    wait_for_turn_settled(&mut events, thread.id, t1, ThreadStatus::Idle).await;
+    wait_for_after_checkpoint(&fixture, thread.id, t1).await;
+
+    // Turn 2
+    let (t2, _) = fixture.orchestrator.send(thread.id, UserMessage::text("drop this question")).await.unwrap();
+    wait_for_turn_settled(&mut events, thread.id, t2, ThreadStatus::Idle).await;
+    wait_for_after_checkpoint(&fixture, thread.id, t2).await;
+
+    // Rewind to before Turn 2.
+    let (_, rewound) = fixture.orchestrator.revert(thread.id, t2).await.unwrap();
+    assert!(rewound, "Antigravity rewind must report conversation_rewound=true");
+    assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().provider_session_id, None);
+
+    // Turn 3 starts fresh with Turn 1's transcript and none of Turn 2.
+    let (t3, _) = fixture.orchestrator.send(thread.id, UserMessage::text("edited replacement")).await.unwrap();
+    wait_for_turn_settled(&mut events, thread.id, t3, ThreadStatus::Idle).await;
+    wait_for_after_checkpoint(&fixture, thread.id, t3).await;
+
+    let spawns = driver.spawns.lock().unwrap().clone();
+    assert_eq!(spawns.len(), 2);
+    assert_eq!(spawns[1].resume_session_id, None);
+    let seeded = spawns[1].messages()[0].clone();
+    assert!(seeded.contains("keep this question") && seeded.contains("keep this answer"), "{seeded}");
+    assert!(!seeded.contains("drop this question") && !seeded.contains("drop this answer"), "rewound turn leaked: {seeded}");
+    assert!(seeded.contains("edited replacement"), "{seeded}");
+
+    // Turn 4, then a second rewind to before Turn 4: Turn 5 must keep Turn 1 + Turn 3, and omit Turn 2 + Turn 4.
+    let (t4, _) = fixture.orchestrator.send(thread.id, UserMessage::text("drop second branch question")).await.unwrap();
+    wait_for_turn_settled(&mut events, thread.id, t4, ThreadStatus::Idle).await;
+    wait_for_after_checkpoint(&fixture, thread.id, t4).await;
+    let (_, rewound2) = fixture.orchestrator.revert(thread.id, t4).await.unwrap();
+    assert!(rewound2);
+
+    let (t5, _) = fixture.orchestrator.send(thread.id, UserMessage::text("final replacement")).await.unwrap();
+    wait_for_turn_settled(&mut events, thread.id, t5, ThreadStatus::Idle).await;
+
+    let spawns = driver.spawns.lock().unwrap().clone();
+    assert_eq!(spawns.len(), 3);
+    assert_eq!(spawns[2].resume_session_id, None);
+    let seeded2 = spawns[2].messages()[0].clone();
+    assert!(seeded2.contains("keep this question") && seeded2.contains("keep this answer"), "{seeded2}");
+    assert!(seeded2.contains("edited replacement") && seeded2.contains("second branch answer"), "{seeded2}");
+    assert!(!seeded2.contains("drop this question") && !seeded2.contains("drop this answer"), "{seeded2}");
+    assert!(!seeded2.contains("drop second branch question") && !seeded2.contains("drop second branch tail"), "{seeded2}");
+    assert!(seeded2.contains("final replacement"), "{seeded2}");
+}
+
+#[tokio::test]
+async fn edit_from_here_at_first_checkpoint_preserves_imported_history() {
+    let driver = Arc::new(ScriptedAgyDriver::antigravity(vec![
+        // First Kybern turn on an imported thread (creates checkpoint idx == 0).
+        vec![
+            DriverEvent::SessionBound { session_id: "conv-imported".into(), model: None },
+            DriverEvent::MessageCompleted {
+                message_id: "m1".into(),
+                origin: EventOrigin::Root,
+                text: "drop first kybern reply".into(),
+                thinking: None,
+            },
+            completed_response(StopReason::Completed),
+        ],
+        // Replacement turn after rewinding to the first checkpoint (`idx == 0`).
+        vec![
+            DriverEvent::SessionBound { session_id: "conv-fresh".into(), model: None },
+            DriverEvent::MessageCompleted {
+                message_id: "m2".into(),
+                origin: EventOrigin::Root,
+                text: "fresh reply".into(),
+                thinking: None,
+            },
+            completed_response(StopReason::Completed),
+        ],
+    ]));
+
+    let mut drivers = DriverRegistry::default();
+    drivers.register(driver.clone());
+    let fixture = Fixture::with_drivers_and_gateway(drivers, None);
+    std::fs::create_dir_all(&fixture.root).unwrap();
+    let git = |args: &[&str]| {
+        assert!(std::process::Command::new("git").arg("-C").arg(&fixture.root).args(args).status().unwrap().success());
+    };
+    git(&["init", "-q"]);
+    git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]);
+
+    let mut thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Antigravity);
+    thread.permission_mode = PermissionMode::FullAccess;
+    thread.provider_session_id = Some("conv-imported".into());
+    fixture.store.thread_upsert(&thread).unwrap();
+
+    // Seed imported / pre-checkpoint transcript events (no checkpoint row for `imported_turn`).
+    let imported_turn = TurnId::now_v7();
+    fixture
+        .orchestrator
+        .emit(
+            thread.id,
+            Some(imported_turn),
+            EventPayload::TurnStarted { message_id: MessageId::now_v7(), message: UserMessage::text("imported question") },
+        )
+        .unwrap();
+    fixture
+        .orchestrator
+        .emit(
+            thread.id,
+            Some(imported_turn),
+            EventPayload::AssistantMessageCompleted {
+                message_id: MessageId::now_v7(),
+                origin: EventOrigin::Root,
+                text: "imported answer".into(),
+                thinking: None,
+            },
+        )
+        .unwrap();
+    fixture
+        .orchestrator
+        .emit(
+            thread.id,
+            Some(imported_turn),
+            EventPayload::TurnCompleted {
+                stop_reason: StopReason::Completed,
+                usage: Usage::default(),
+                cost_usd: None,
+                duration_ms: 0,
+                terminal_message_id: None,
+            },
+        )
+        .unwrap();
+
+    let mut events = fixture.orchestrator.inner.events.subscribe();
+
+    // First Kybern-driven turn creates the thread's only checkpoint (`idx == 0`).
+    let (t1, _) = fixture.orchestrator.send(thread.id, UserMessage::text("drop first kybern prompt")).await.unwrap();
+    wait_for_turn_settled(&mut events, thread.id, t1, ThreadStatus::Idle).await;
+    wait_for_after_checkpoint(&fixture, thread.id, t1).await;
+    assert_eq!(fixture.store.checkpoints_for_thread(thread.id).unwrap().len(), 1);
+
+    // Edit from here on `t1` (`idx == 0`) must clear `provider_session_id` AND keep a handoff
+    // covering the pre-checkpoint imported history.
+    let (_, rewound) = fixture.orchestrator.revert(thread.id, t1).await.unwrap();
+    assert!(rewound);
+    assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().provider_session_id, None);
+    assert!(
+        fixture.store.meta_get(&format!("handoff:{}", thread.id)).unwrap().is_some_and(|v| !v.is_empty()),
+        "rewinding to idx == 0 with pre-checkpoint history must preserve a portable handoff"
+    );
+
+    let (t2, _) = fixture.orchestrator.send(thread.id, UserMessage::text("edited first kybern prompt")).await.unwrap();
+    wait_for_turn_settled(&mut events, thread.id, t2, ThreadStatus::Idle).await;
+
+    let spawns = driver.spawns.lock().unwrap().clone();
+    assert_eq!(spawns.len(), 2);
+    assert_eq!(spawns[1].resume_session_id, None);
+    let seeded = spawns[1].messages()[0].clone();
+    assert!(seeded.contains("imported question") && seeded.contains("imported answer"), "pre-checkpoint history lost: {seeded}");
+    assert!(
+        !seeded.contains("drop first kybern prompt") && !seeded.contains("drop first kybern reply"),
+        "reverted turn leaked: {seeded}"
+    );
+    assert!(seeded.contains("edited first kybern prompt"), "{seeded}");
+}

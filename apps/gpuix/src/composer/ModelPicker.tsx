@@ -105,6 +105,8 @@ export interface ModelPickerProps {
   loading: boolean
   busy: boolean
   onOpenChange?: (open: boolean) => void
+  /** Registers an opener callback while the picker is enabled, so external actions (e.g. "Choose another model") can open it. */
+  onRegisterOpen?: (open: () => void) => (() => void) | void
   onModelChange: (model: string, effort: string | undefined) => Promise<boolean>
   onEffortChange: (effort: string) => Promise<boolean>
   onProviderChange: (provider: ProviderInstance, choice?: { model?: string; effort?: string; pinAccount?: boolean }) => Promise<boolean>
@@ -132,6 +134,15 @@ export function ModelPicker(props: ModelPickerProps) {
   const triggerRef = useRef<PublicInstance | null>(null)
   const enabled = props.canPickModel || props.canPickProvider || props.canReload
   const fit = useFooterFit()
+  const onOpenChangeRef = useRef(props.onOpenChange)
+  onOpenChangeRef.current = props.onOpenChange
+  useEffect(() => {
+    if (!props.onRegisterOpen || !enabled) return
+    return props.onRegisterOpen(() => {
+      setOpen(true)
+      onOpenChangeRef.current?.(true)
+    })
+  }, [props.onRegisterOpen, enabled])
   const close = () => {
     setOpen(false)
     props.onOpenChange?.(false)

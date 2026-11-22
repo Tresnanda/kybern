@@ -18,6 +18,7 @@ pub(crate) mod tools;
 mod usage;
 
 pub use login::{LoginRead, StoredLogin, parse_login, read_login, read_login_state};
+pub use stream::is_invalid_thinking_signature;
 pub use usage::{
     ANTIGRAVITY_USER_AGENT_PREFIX, QuotaBucket, QuotaReading, forget_sign_in_waits, merge_buckets, parse_load_code_assist,
     parse_quota_summary, plan_name, read_account_usage, to_limits,
@@ -345,19 +346,22 @@ impl AgentDriver for AntigravityDriver {
         crate::sessions::reader(ProviderKind::Antigravity, context).await
     }
 
-    /// A single tool-free run. `--mode plan` keeps the model from editing the
-    /// checkout; it still reads files if it chooses to, which a title does not need.
-    async fn one_shot(&self, cwd: &Path, prompt: &str, binary: Option<&PathBuf>, env: &BTreeMap<String, String>) -> Result<String> {
+    /// A single tool-free run. Runs in a scratch folder with `--mode plan` so it
+    /// never touches the checkout, and removes the temporary conversation `agy`
+    /// wrote so one-shots do not clutter `agy`'s history or Kybern's session scan.
+    async fn one_shot(&self, _cwd: &Path, prompt: &str, binary: Option<&PathBuf>, env: &BTreeMap<String, String>) -> Result<String> {
         let bin = resolve(ProviderKind::Antigravity, binary)?;
         let scratch = Scratch::new()?;
+        let work_dir = scratch.work_dir();
+        std::fs::create_dir_all(&work_dir)?;
         let mut command = Command::new(&bin).no_window();
-        command.current_dir(cwd).args(["--output-format", "stream-json", "--input-format", "stream-json", "--mode", "plan"]);
+        command.current_dir(&work_dir).args(["--output-format", "stream-json", "--input-format", "stream-json", "--mode", "plan"]);
         command.arg("--log-file").arg(scratch.log_file()).arg("-p=").envs(env);
         let child = NdjsonChild::spawn(command)?;
+        let mut mapper = TurnMapper::new(None);
         let run = async {
             child.write(&prompt_line(prompt)).await?;
             child.close_stdin().await?;
-            let mut mapper = TurnMapper::new(None);
             let mut lines = child.lines.lock().await;
             while let Some(line) = lines.recv().await {
                 mapper.handle(&line);
@@ -366,6 +370,12 @@ impl AgentDriver for AntigravityDriver {
         };
         let result = tokio::time::timeout(ONE_SHOT_TIMEOUT, run).await;
         child.kill().await;
+        if let Some(conversation_id) = mapper.conversation().map(str::to_string)
+            && let Some(home) = env_home(env)
+        {
+            let scratch_dir = work_dir.clone();
+            let _ = tokio::task::spawn_blocking(move || cleanup_one_shot_conversation(&home, &conversation_id, &scratch_dir)).await;
+        }
         match result {
             Ok(result) => result,
             Err(_) => Err(DriverError::Protocol("Antigravity one-shot timed out".into())),
@@ -395,12 +405,8 @@ impl AgentDriver for AntigravityDriver {
             (None, _) | (Some(_), true) => config.native_tool_bridge.as_ref().and_then(|bridge| bridge.provider_instructions()),
             (Some(_), false) => None,
         };
-        let home = ["HOME", "USERPROFILE"]
-            .iter()
-            .find_map(|key| config.env.get(*key).cloned().or_else(|| std::env::var(key).ok()))
-            .filter(|home| !home.is_empty())
-            .map(PathBuf::from);
         let mut env: BTreeMap<String, String> = config.env.into_iter().collect();
+        let home = env_home(&env);
         // The bridge process `agy` starts inherits these; without them it serves no tools.
         for key in [BRIDGE_URL, BRIDGE_AUTHORIZATION] {
             env.remove(key);
@@ -440,9 +446,130 @@ impl Scratch {
         self.0.join("agy.log")
     }
 
+    fn work_dir(&self) -> PathBuf {
+        self.0.join("work")
+    }
+
     fn image_dir(&self) -> PathBuf {
         self.0.join("images")
     }
+}
+
+#[cfg(windows)]
+const HOME_KEYS: [&str; 2] = ["USERPROFILE", "HOME"];
+#[cfg(not(windows))]
+const HOME_KEYS: [&str; 2] = ["HOME", "USERPROFILE"];
+
+fn env_home(env: &BTreeMap<String, String>) -> Option<PathBuf> {
+    env_home_with(env, |key| std::env::var(key).ok())
+}
+
+fn env_home_with(env: &BTreeMap<String, String>, host: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    HOME_KEYS
+        .iter()
+        .find_map(|key| env.get(*key).cloned().filter(|home| !home.is_empty()).or_else(|| host(key).filter(|home| !home.is_empty())))
+        .map(PathBuf::from)
+}
+
+fn valid_conversation_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 128 && id.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
+enum WorkspaceOwnership {
+    /// No workspace URI was recorded on the summary row (`NULL`, empty, or `[]`).
+    Absent,
+    /// At least one recorded workspace URI points at `expected`.
+    Matches,
+    /// One or more workspace URIs are present and none match `expected`.
+    Different,
+}
+
+fn summary_workspace_ownership_text(raw: &str, expected: &Path) -> WorkspaceOwnership {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return WorkspaceOwnership::Absent;
+    }
+    let uris: Vec<String> = match serde_json::from_str::<Value>(trimmed) {
+        Ok(Value::Null) => return WorkspaceOwnership::Absent,
+        Ok(Value::Array(items)) => {
+            items.into_iter().filter_map(|v| v.as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)).collect()
+        }
+        Ok(Value::String(uri)) => {
+            let uri = uri.trim();
+            if uri.is_empty() {
+                return WorkspaceOwnership::Absent;
+            }
+            vec![uri.to_string()]
+        }
+        _ => vec![trimmed.to_string()],
+    };
+    if uris.is_empty() {
+        return WorkspaceOwnership::Absent;
+    }
+    let expected_canon = std::fs::canonicalize(expected).unwrap_or_else(|_| expected.to_path_buf());
+    let matches = uris.into_iter().filter_map(|uri| crate::sessions::antigravity::uri_path(&uri)).any(|path| {
+        let candidate = PathBuf::from(&path);
+        let candidate_canon = std::fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
+        candidate == expected || candidate_canon == expected_canon
+    });
+    if matches { WorkspaceOwnership::Matches } else { WorkspaceOwnership::Different }
+}
+
+fn summary_workspace_ownership(value: &rusqlite::types::Value, expected: &Path) -> WorkspaceOwnership {
+    match value {
+        rusqlite::types::Value::Null => WorkspaceOwnership::Absent,
+        rusqlite::types::Value::Text(raw) => summary_workspace_ownership_text(raw, expected),
+        rusqlite::types::Value::Blob(bytes) => match std::str::from_utf8(bytes) {
+            Ok(raw) => summary_workspace_ownership_text(raw, expected),
+            Err(_) => WorkspaceOwnership::Different,
+        },
+        _ => WorkspaceOwnership::Different,
+    }
+}
+
+/// Remove the files and summary row `agy` wrote for a temporary `one_shot` conversation.
+/// Best-effort: never fails the caller when a file is already gone or locked, and refuses
+/// to delete a summary row (or its files) when a workspace is present and doesn't match
+/// `scratch_work_dir`.
+pub(crate) fn cleanup_one_shot_conversation(home: &Path, conversation_id: &str, scratch_work_dir: &Path) {
+    if !valid_conversation_id(conversation_id) {
+        return;
+    }
+    let root = home.join(".gemini").join("antigravity-cli");
+    if !root.is_dir() {
+        return;
+    }
+    let summaries = root.join("conversation_summaries.db");
+    if summaries.is_file()
+        && let Ok(conn) = rusqlite::Connection::open_with_flags(
+            &summaries,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+    {
+        let _ = conn.busy_timeout(Duration::from_millis(500));
+        // When no summary row was written yet (e.g. timed out early) or schema differs,
+        // keep going for any temporary files without deleting any summary row.
+        if let Ok(value) =
+            conn.query_row("SELECT workspace_uris FROM conversation_summaries WHERE conversation_id = ?1", [conversation_id], |row| {
+                row.get::<_, rusqlite::types::Value>(0)
+            })
+        {
+            match summary_workspace_ownership(&value, scratch_work_dir) {
+                WorkspaceOwnership::Matches | WorkspaceOwnership::Absent => {
+                    let _ = conn.execute("DELETE FROM conversation_summaries WHERE conversation_id = ?1", [conversation_id]);
+                }
+                // A summary row exists for a different workspace: leave both the row and its files untouched.
+                WorkspaceOwnership::Different => return,
+            }
+        }
+    }
+    let conversations = root.join("conversations");
+    for suffix in [".db", ".db-wal", ".db-shm", ".db-journal", ".meta"] {
+        let _ = std::fs::remove_file(conversations.join(format!("{conversation_id}{suffix}")));
+    }
+    let _ = std::fs::remove_dir_all(root.join("brain").join(conversation_id));
+    let _ = std::fs::remove_file(root.join("annotations").join(format!("{conversation_id}.pbtxt")));
+    let _ = std::fs::remove_file(root.join("presence").join(format!("{conversation_id}.lock")));
 }
 
 impl Drop for Scratch {
@@ -686,23 +813,37 @@ async fn run_turn(
     let was_interrupted = interrupted.load(Ordering::SeqCst);
     let conversation = mapper.conversation().map(str::to_string);
     let started = mapper.saw_init();
-    for event in mapper.finish(code, last_stderr.as_deref(), was_interrupted) {
-        if run.tx.send(event).await.is_err() {
-            return;
-        }
-    }
-    let Some(state) = state.upgrade() else { return };
-    let turn = {
+    let events = mapper.finish(code, last_stderr.as_deref(), was_interrupted);
+    let poisoned = mapper.conversation_poisoned();
+    // Update session state and release the turn slot before delivering the terminal event so an
+    // immediate follow-up `send_message` sees the freed slot and updated conversation id.
+    let turn = if let Some(state) = state.upgrade() {
         let mut state = state.lock().await;
-        if let Some(conversation) = conversation {
-            state.conversation = Some(conversation);
-        }
-        // The prompt never reached a conversation: carry the guide on the retry.
-        if !started && state.guide.is_none() {
-            state.guide = guide;
+        if poisoned {
+            // The saved conversation's thinking block has a bad/missing signature:
+            // never reuse it on the next turn.
+            state.conversation = None;
+            if state.guide.is_none() {
+                state.guide = guide;
+            }
+        } else {
+            if let Some(conversation) = conversation {
+                state.conversation = Some(conversation);
+            }
+            // The prompt never reached a conversation: carry the guide on the retry.
+            if !started && state.guide.is_none() {
+                state.guide = guide;
+            }
         }
         if state.turn.as_ref().is_some_and(|turn| turn.id == id) { state.turn.take() } else { None }
+    } else {
+        None
     };
+    for event in events {
+        if run.tx.send(event).await.is_err() {
+            break;
+        }
+    }
     // Dropping the turn stops this task, so it is the last thing done.
     drop(turn);
 }

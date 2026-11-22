@@ -64,7 +64,7 @@ fn a_text_turn_streams_binds_and_completes_with_step_usage() {
 const TOOL_TURN: &str = r#"
 {"event":"init","conversation_id":"4324f2c8-c69e-4505-a32a-b3849aeef895","init":{"model":"gemini-3.8-flash-low","cwd":"/work","permission_mode":"always-proceed"}}
 {"event":"step_update","step_update":{"conversation_id":"4324f2c8-c69e-4505-a32a-b3849aeef895","step_index":7,"state":"DONE","step_type":"user_input"}}
-{"event":"step_update","step_update":{"conversation_id":"4324f2c8-c69e-4505-a32a-b3849aeef895","step_index":8,"state":"DONE","step_type":"agent_response","duration_seconds":2.0,"usage":{"input_tokens":100,"output_tokens":20,"thinking_tokens":5,"cache_read_tokens":10,"total_tokens":135}}}
+{"event":"step_update","step_update":{"conversation_id":"4324f2c8-c69e-4505-a32a-b3849aeef895","step_index":8,"state":"DONE","step_type":"agent_response","duration_seconds":2.0,"usage":{"input_tokens":100,"output_tokens":20,"thinking_tokens":5,"cache_read_tokens":10,"total_tokens":120}}}
 
 {"event":"step_update","step_update":{"conversation_id":"4324f2c8-c69e-4505-a32a-b3849aeef895","step_index":9,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"echo hi","Cwd":"/work"}}}}
 {"event":"step_update","step_update":{"conversation_id":"4324f2c8-c69e-4505-a32a-b3849aeef895","step_index":9,"state":"DONE","step_type":"tool","tool_name":"run_command","duration_seconds":0.2,"tool_info":{"name":"run_command","parameters":{"CommandLine":"echo hi","Cwd":"/work"},"output":"Command exited with code 0.\n\nCommand output:\nhi\r\n"}}}
@@ -104,7 +104,7 @@ fn tool_steps_become_cards_and_cumulative_result_usage_is_ignored() {
     assert_eq!(completions, 1);
     let Some(DriverEvent::TurnCompleted { usage, .. }) = events.last() else { panic!() };
     assert_eq!(usage.input_tokens, 300);
-    assert_eq!(usage.output_tokens, 20 + 5 + 3, "thinking tokens count as output");
+    assert_eq!(usage.output_tokens, 20 + 3, "output_tokens already includes thinking_tokens");
     assert_eq!(usage.cache_read_tokens, 60);
 }
 
@@ -257,7 +257,7 @@ fn a_failed_turn_with_an_error_step_still_fails() {
     feed(&mut mapper, FAILED_TURN);
     let events = mapper.finish(Some(3), None, false);
     assert!(matches!(&events[..], [DriverEvent::TurnFailed { error, .. }] if error.contains("plan model not specified")), "{events:?}");
-    // The field case: the model API's 404 on the first turn.
+    // The field case: the model API's 404 on the first turn (before the model answered) is not retryable.
     let mut field = TurnMapper::new(None);
     feed(
         &mut field,
@@ -267,7 +267,73 @@ fn a_failed_turn_with_an_error_step_still_fails() {
         ),
     );
     let events = field.finish(Some(1), None, false);
-    assert!(matches!(&events[..], [DriverEvent::TurnFailed { error, .. }] if error.contains("NOT_FOUND")), "{events:?}");
+    let [DriverEvent::TurnFailed { error, problem }] = &events[..] else { panic!("{events:?}") };
+    assert!(error.contains("NOT_FOUND"), "{error}");
+    let problem = problem.as_ref().expect("404 problem");
+    assert_eq!((problem.kind, problem.subject.as_deref()), (kybern_protocol::rpc::ProblemKind::NotFound, Some("antigravity")));
+    assert_eq!(problem.title.as_deref(), Some("Antigravity couldn't use this model"));
+    assert_eq!(problem.hint.as_deref(), Some("Choose another model, then send your message again."));
+    let action = problem.action.as_ref().expect("model-picker action");
+    assert_eq!((action.id.as_str(), action.label.as_str()), ("choose_model", "Choose another model"));
+    assert_eq!(action.params, Some(json!({ "provider": "antigravity" })));
+    assert!(!problem.retryable, "a 404 before reaching the model is not retryable: {problem:?}");
+
+    // A 404 after the model already answered in this turn is a transient edge error and retryable.
+    let mut mid_turn = TurnMapper::new(None);
+    feed(
+        &mut mid_turn,
+        r#"
+{"event":"init","conversation_id":"c-404","init":{"model":"gemini-4-neon-low"}}
+{"event":"step_update","step_update":{"conversation_id":"c-404","step_index":0,"state":"DONE","step_type":"user_input"}}
+{"event":"step_update","step_update":{"conversation_id":"c-404","step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"checking"}}
+{"event":"step_update","step_update":{"conversation_id":"c-404","step_index":2,"state":"DONE","step_type":"error_message"}}
+{"event":"result","result":{"conversation_id":"c-404","status":"ERROR","response":"","error":"NOT_FOUND (code 404): Requested entity was not found.","finished_reason":"error"}}
+"#,
+    );
+    let events = mid_turn.finish(Some(1), None, false);
+    let [DriverEvent::TurnFailed { problem, .. }] = &events[..] else { panic!("{events:?}") };
+    let problem = problem.as_ref().expect("mid-turn 404 problem");
+    assert_eq!((problem.kind, problem.subject.as_deref()), (kybern_protocol::rpc::ProblemKind::Internal, Some("antigravity")));
+    assert_eq!(problem.title.as_deref(), Some("Antigravity hit a temporary error"));
+    assert_eq!(problem.hint.as_deref(), Some("Send your message again to continue."));
+    assert!(problem.retryable, "a mid-turn 404 is retryable: {problem:?}");
+    assert_eq!(problem.action.as_ref().map(|a| (a.id.as_str(), a.label.as_str())), Some(("retry", "Try again")));
+}
+
+#[test]
+fn friendly_error_does_not_blame_sign_in_for_runtime_crashes() {
+    assert!(!friendly_error("panic in oauth_client.go: nil pointer").contains("Settings → Agents → Antigravity"));
+    assert!(!friendly_error("failed reading login.go").contains("Settings → Agents → Antigravity"));
+    assert!(!friendly_error("credential store locked").contains("Settings → Agents → Antigravity"));
+    assert!(!friendly_error("timed out after 401ms").contains("Settings → Agents → Antigravity"));
+    assert!(friendly_error("Authentication required. Please visit the URL to log in:").contains("Settings → Agents → Antigravity"));
+}
+
+#[test]
+fn invalid_thinking_signature_is_detected_and_poisons_the_mapper() {
+    let missing = r#"Error 400, Message: {"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.0.thinking.signature: Field required"}}, Status: INVALID_ARGUMENT"#;
+    let invalid = r#"Error 400, Message: {"type":"error","error":{"type":"invalid_request_error","message":"messages.3.content.0: Invalid `signature` in `thinking` block"}}, Status: INVALID_ARGUMENT"#;
+    assert!(is_invalid_thinking_signature(missing));
+    assert!(is_invalid_thinking_signature(invalid));
+    assert!(!is_invalid_thinking_signature("xmessages.1.content.0.thinking.signature: Field required"));
+    assert!(!is_invalid_thinking_signature("Error 400, Message: Request contains an invalid argument."));
+
+    let mut mapper = TurnMapper::resumed(None, Some("conv-old".into()));
+    feed(
+        &mut mapper,
+        &serde_json::json!({
+            "event": "result",
+            "result": {"conversation_id": "conv-old", "status": "ERROR", "response": "", "error": invalid, "finished_reason": "error"}
+        })
+        .to_string(),
+    );
+    let events = mapper.finish(Some(1), None, false);
+    assert!(mapper.conversation_poisoned());
+    let [DriverEvent::TurnFailed { error, problem }] = &events[..] else { panic!("{events:?}") };
+    assert!(error.contains("fresh conversation"), "{error}");
+    let problem = problem.as_ref().expect("problem");
+    assert!(problem.retryable);
+    assert_eq!(problem.detail.as_deref(), Some(invalid));
 }
 
 #[test]
@@ -279,7 +345,7 @@ fn an_earlier_turns_error_repeated_after_an_answer_does_not_fail_the_turn() {
     assert!(events.iter().any(|event| matches!(event, DriverEvent::MessageCompleted { text, .. } if text == "hi\n")));
     let Some(DriverEvent::TurnCompleted { stop_reason, usage, .. }) = events.last() else { panic!("{events:?}") };
     assert_eq!(*stop_reason, StopReason::Completed);
-    assert_eq!((usage.input_tokens, usage.output_tokens), (13097, 42));
+    assert_eq!((usage.input_tokens, usage.output_tokens), (13097, 22));
 
     // The same error with an error step of this turn's own is a real failure.
     let mut own = TurnMapper::new(None);
@@ -564,13 +630,16 @@ fn quota_buckets_merge_by_id_and_map_the_windows() {
     assert_eq!(merged.len(), 3, "disabled and unknown windows are skipped: {merged:?}");
     let limits = to_limits(&merged);
     assert_eq!(limits[0].name, "Gemini · 5-hour");
-    assert_eq!(limits[0].used_percent, 50.0, "the most-used reading wins");
+    assert_eq!(limits[0].used_percent, 25.0, "the metered (first) host reading wins even when less used");
     assert_eq!(limits[0].window_minutes, Some(300));
     assert_eq!(limits[0].resets_at, Some(1_793_534_400));
     assert_eq!(limits[1].name, "Gemini · Weekly");
     assert_eq!(limits[1].used_percent, 0.0);
     assert_eq!(limits[2].name, "Claude · Weekly");
     assert_eq!(limits[2].used_percent, 10.0);
+    // Reversing the host order (Workspace/business accounts billed on prod) makes production win.
+    let business = to_limits(&merge_buckets([parse_quota_summary(&production), parse_quota_summary(&daily)]));
+    assert_eq!(business[0].used_percent, 50.0);
 }
 
 #[test]
@@ -613,6 +682,91 @@ fn agy_is_found_where_its_installer_puts_it() {
     let candidates = crate::binary::antigravity_candidates(Some(home), Some(local));
     assert_eq!(candidates[0], home.join(".local/bin/agy"));
     assert_eq!(candidates[1], local.join("agy/bin/agy.exe"));
+}
+
+#[test]
+fn env_home_prefers_platform_home_variable_and_skips_empty() {
+    let both = BTreeMap::from([("HOME".into(), "/home/unix".into()), ("USERPROFILE".into(), r"C:\Users\win".into())]);
+    #[cfg(windows)]
+    assert_eq!(env_home_with(&both, |_| None), Some(PathBuf::from(r"C:\Users\win")));
+    #[cfg(not(windows))]
+    assert_eq!(env_home_with(&both, |_| None), Some(PathBuf::from("/home/unix")));
+    let empty_primary = BTreeMap::from([("HOME".into(), String::new()), ("USERPROFILE".into(), r"C:\Users\win".into())]);
+    assert_eq!(env_home_with(&empty_primary, |_| None), Some(PathBuf::from(r"C:\Users\win")));
+    assert_eq!(
+        env_home_with(&BTreeMap::new(), |key| (key == "USERPROFILE").then(|| r"C:\Users\fallback".into())),
+        Some(PathBuf::from(r"C:\Users\fallback"))
+    );
+}
+
+#[test]
+fn one_shot_cleanup_only_deletes_summary_rows_for_its_scratch_workspace() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let real_scratch = root.path().join("real-scratch/work");
+    std::fs::create_dir_all(&real_scratch).unwrap();
+    #[cfg(unix)]
+    let scratch_work = {
+        let link = root.path().join("link-scratch");
+        std::os::unix::fs::symlink(root.path().join("real-scratch"), &link).unwrap();
+        link.join("work")
+    };
+    #[cfg(not(unix))]
+    let scratch_work = real_scratch.clone();
+    let canonical_work = std::fs::canonicalize(&real_scratch).unwrap();
+    #[cfg(unix)]
+    assert_ne!(scratch_work, canonical_work, "test must compare a non-canonical path against a canonical file:// URI");
+
+    let agy_dir = home.join(".gemini/antigravity-cli");
+    std::fs::create_dir_all(agy_dir.join("conversations")).unwrap();
+    for id in ["conv-scratch", "conv-null", "conv-empty", "conv-real"] {
+        std::fs::create_dir_all(agy_dir.join("brain").join(id)).unwrap();
+        std::fs::write(agy_dir.join(format!("conversations/{id}.db")), id).unwrap();
+    }
+
+    let slash = canonical_work.display().to_string().replace('\\', "/");
+    let scratch_uri = if slash.starts_with('/') { format!("file://{slash}") } else { format!("file:///{slash}") };
+    let db = rusqlite::Connection::open(agy_dir.join("conversation_summaries.db")).unwrap();
+    db.execute_batch(
+        "CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT, preview TEXT, last_modified_time INTEGER, workspace_uris TEXT, parent_conversation_id TEXT);",
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO conversation_summaries VALUES ('conv-scratch', 'Title', '', 1790000100, ?1, NULL)",
+        [serde_json::to_string(&vec![scratch_uri]).unwrap()],
+    )
+    .unwrap();
+    db.execute("INSERT INTO conversation_summaries VALUES ('conv-null', 'No workspace', '', 1790000101, NULL, NULL)", []).unwrap();
+    db.execute("INSERT INTO conversation_summaries VALUES ('conv-empty', 'Empty workspace', '', 1790000102, '[]', NULL)", []).unwrap();
+    db.execute(
+        "INSERT INTO conversation_summaries VALUES ('conv-real', 'Real', '', 1790000200, '[\"file:///work/real-project\"]', NULL)",
+        [],
+    )
+    .unwrap();
+    drop(db);
+
+    // Matching scratch workspace (via canonical URI vs symlinked path), NULL workspace, and `[]`:
+    // all have their summary rows and files removed.
+    for id in ["conv-scratch", "conv-null", "conv-empty"] {
+        cleanup_one_shot_conversation(&home, id, &scratch_work);
+        assert!(!agy_dir.join(format!("conversations/{id}.db")).exists(), "{id} db leaked");
+        assert!(!agy_dir.join("brain").join(id).exists(), "{id} brain leaked");
+    }
+
+    // Mismatched workspace: neither the summary row nor the files are touched.
+    cleanup_one_shot_conversation(&home, "conv-real", &scratch_work);
+    assert!(agy_dir.join("conversations/conv-real.db").exists());
+    assert!(agy_dir.join("brain/conv-real").exists());
+
+    let db = rusqlite::Connection::open(agy_dir.join("conversation_summaries.db")).unwrap();
+    let remaining: Vec<String> = db
+        .prepare("SELECT conversation_id FROM conversation_summaries ORDER BY conversation_id")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(std::result::Result::unwrap)
+        .collect();
+    assert_eq!(remaining, ["conv-real"]);
 }
 
 #[cfg(unix)]
@@ -772,13 +926,7 @@ printf '%s\n\n' '{"event":"result","result":{"conversation_id":"conv-1","status"
             matches!(ended.last(), Some(DriverEvent::TurnFailed { error, .. }) if error.contains("Settings → Agents → Antigravity")),
             "{ended:?}"
         );
-        // Wait until the session frees itself, then send again.
-        for _ in 0..100 {
-            if session.send_message("m2", &UserMessage::text("again")).await.is_ok() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        session.send_message("m2", &UserMessage::text("again")).await.unwrap();
         next_turn_end(&mut events).await;
         let stdin = std::fs::read_to_string(root.path().join("stdin.log")).unwrap();
         assert_eq!(stdin.matches("GUIDE").count(), 2, "{stdin}");
@@ -879,6 +1027,149 @@ printf '%s\n\n' '{"event":"result","result":{"conversation_id":"conv-1","status"
         assert_eq!(answer, "A short title");
         let args = std::fs::read_to_string(root.path().join("args.log")).unwrap();
         assert!(args.contains("--mode plan") && !args.contains("--dangerously-skip-permissions"), "{args}");
+    }
+
+    #[tokio::test]
+    async fn one_shot_cleans_up_its_temporary_conversation_and_leaves_others_alone() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let agy_dir = home.join(".gemini/antigravity-cli");
+        std::fs::create_dir_all(agy_dir.join("conversations")).unwrap();
+        std::fs::create_dir_all(agy_dir.join("annotations")).unwrap();
+        std::fs::create_dir_all(agy_dir.join("presence")).unwrap();
+        // Seed an existing real conversation that must survive one-shot cleanup.
+        let keep_logs = agy_dir.join("brain/keep-conv/.system_generated/logs");
+        std::fs::create_dir_all(&keep_logs).unwrap();
+        std::fs::write(keep_logs.join("transcript.jsonl"), "{\"step_index\":0,\"type\":\"USER_INPUT\",\"content\":\"keep\"}\n").unwrap();
+        std::fs::write(agy_dir.join("conversations/keep-conv.db"), "keep").unwrap();
+        let db = rusqlite::Connection::open(agy_dir.join("conversation_summaries.db")).unwrap();
+        db.execute_batch(
+            "CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT, preview TEXT, last_modified_time INTEGER, workspace_uris TEXT, parent_conversation_id TEXT);
+             INSERT INTO conversation_summaries VALUES ('keep-conv', 'Keep me', '', 1790000000, '[\"file:///work\"]', NULL);",
+        )
+        .unwrap();
+        drop(db);
+
+        // Fake `agy` writes all the artifacts a real `-p=` run creates for `conv-temp`,
+        // including a summary row whose workspace is `pwd -P`.
+        let script = format!(
+            r#"mkdir -p "{agy}/brain/conv-temp/.system_generated/logs"
+printf '{{"step_index":0,"type":"USER_INPUT","content":"title"}}\n' > "{agy}/brain/conv-temp/.system_generated/logs/transcript.jsonl"
+printf 'x' > "{agy}/conversations/conv-temp.db"
+printf 'x' > "{agy}/conversations/conv-temp.db-wal"
+printf 'x' > "{agy}/annotations/conv-temp.pbtxt"
+printf 'x' > "{agy}/presence/conv-temp.lock"
+ws=$(pwd -P)
+python3 -c 'import json, sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+conn.execute("INSERT INTO conversation_summaries VALUES (?, ?, ?, ?, ?, NULL)", ("conv-temp", "Title", "", 1790000100, json.dumps(["file://" + sys.argv[2]])))
+conn.commit()
+conn.close()' "{agy}/conversation_summaries.db" "$ws"
+printf '%s\n\n' '{{"event":"init","conversation_id":"conv-temp","init":{{"model":"gemini-3.8-flash-low"}}}}'
+printf '%s\n\n' '{{"event":"result","result":{{"conversation_id":"conv-temp","status":"SUCCESS","response":"Short title"}}}}'"#,
+            agy = agy_dir.display()
+        );
+        let binary = fake_agy(root.path(), &script);
+
+        let env = BTreeMap::from([("HOME".to_string(), home.display().to_string())]);
+        let answer = AntigravityDriver::default().one_shot(root.path(), "title please", Some(&binary), &env).await.unwrap();
+        assert_eq!(answer, "Short title");
+        assert!(!agy_dir.join("conversations/conv-temp.db").exists());
+        assert!(!agy_dir.join("conversations/conv-temp.db-wal").exists());
+        assert!(!agy_dir.join("brain/conv-temp").exists());
+        assert!(!agy_dir.join("annotations/conv-temp.pbtxt").exists());
+        assert!(!agy_dir.join("presence/conv-temp.lock").exists());
+        // The real conversation stays intact and is the only one listed in SQLite and the session scanner.
+        let db = rusqlite::Connection::open(agy_dir.join("conversation_summaries.db")).unwrap();
+        let rows: Vec<String> = db
+            .prepare("SELECT conversation_id FROM conversation_summaries ORDER BY conversation_id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(std::result::Result::unwrap)
+            .collect();
+        assert_eq!(rows, ["keep-conv"]);
+        drop(db);
+        assert!(agy_dir.join("conversations/keep-conv.db").exists());
+        assert!(keep_logs.join("transcript.jsonl").exists());
+        let listed = crate::sessions::list(ProviderKind::Antigravity, &ProbeContext { env, ..Default::default() }, None, "").await.unwrap();
+        let ids: Vec<&str> = listed.sessions.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["keep-conv"]);
+    }
+
+    #[tokio::test]
+    async fn one_shot_cleans_up_summary_row_with_no_workspace() {
+        for (conv_id, workspace_sql) in [("conv-null-ws", "NULL"), ("conv-empty-ws", "'[]'")] {
+            let root = tempfile::tempdir().unwrap();
+            let home = root.path().join("home");
+            let agy_dir = home.join(".gemini/antigravity-cli");
+            std::fs::create_dir_all(agy_dir.join("conversations")).unwrap();
+            let db = rusqlite::Connection::open(agy_dir.join("conversation_summaries.db")).unwrap();
+            db.execute_batch(
+                "CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT, preview TEXT, last_modified_time INTEGER, workspace_uris TEXT, parent_conversation_id TEXT);",
+            )
+            .unwrap();
+            drop(db);
+
+            let script = format!(
+                r#"mkdir -p "{agy}/brain/{id}/.system_generated/logs"
+printf '{{"step_index":0,"type":"USER_INPUT","content":"title"}}\n' > "{agy}/brain/{id}/.system_generated/logs/transcript.jsonl"
+printf 'x' > "{agy}/conversations/{id}.db"
+python3 -c 'import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+conn.execute(f"INSERT INTO conversation_summaries VALUES (?, ?, ?, ?, {ws}, NULL)", (sys.argv[2], "Title", "", 1790000100))
+conn.commit()
+conn.close()' "{agy}/conversation_summaries.db" "{id}"
+printf '%s\n\n' '{{"event":"init","conversation_id":"{id}","init":{{"model":"gemini-3.8-flash-low"}}}}'
+printf '%s\n\n' '{{"event":"result","result":{{"conversation_id":"{id}","status":"SUCCESS","response":"Done"}}}}'"#,
+                agy = agy_dir.display(),
+                id = conv_id,
+                ws = workspace_sql,
+            );
+            let binary = fake_agy(root.path(), &script);
+            let env = BTreeMap::from([("HOME".to_string(), home.display().to_string())]);
+            let answer = AntigravityDriver::default().one_shot(root.path(), "title", Some(&binary), &env).await.unwrap();
+            assert_eq!(answer, "Done");
+            assert!(!agy_dir.join(format!("conversations/{conv_id}.db")).exists(), "{conv_id} db leaked");
+            assert!(!agy_dir.join("brain").join(conv_id).exists(), "{conv_id} brain leaked");
+            let db = rusqlite::Connection::open(agy_dir.join("conversation_summaries.db")).unwrap();
+            let count: i64 = db
+                .query_row("SELECT COUNT(*) FROM conversation_summaries WHERE conversation_id = ?1", [conv_id], |row| row.get(0))
+                .unwrap();
+            assert_eq!(count, 0, "{conv_id} summary row leaked");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_poisoned_thinking_signature_drops_the_conversation_id_for_the_next_turn() {
+        let root = tempfile::tempdir().unwrap();
+        let flag = root.path().join("failed-once");
+        let script = format!(
+            r#"if [ ! -e "{flag}" ]; then
+  touch "{flag}"
+  printf '%s\n\n' '{{"event":"init","conversation_id":"conv-poisoned","init":{{"model":"claude-sonnet-4-6"}}}}'
+  printf '%s\n\n' '{{"event":"result","result":{{"conversation_id":"conv-poisoned","status":"ERROR","response":"","error":"Error 400, Message: {{\"type\":\"error\",\"error\":{{\"message\":\"messages.1.content.0.thinking.signature: Field required\"}}}}, Status: INVALID_ARGUMENT","finished_reason":"error"}}}}'
+  exit 1
+fi
+printf '%s\n\n' '{{"event":"init","conversation_id":"conv-fresh","init":{{"model":"claude-sonnet-4-6"}}}}'
+printf '%s\n\n' '{{"event":"result","result":{{"conversation_id":"conv-fresh","status":"SUCCESS","response":"recovered"}}}}'"#,
+            flag = flag.display()
+        );
+        let binary = fake_agy(root.path(), &script);
+        let mut cfg = config(&binary, root.path());
+        cfg.resume_session_id = Some("conv-poisoned".into());
+        let SpawnedSession { session, mut events } = AntigravityDriver::default().spawn(cfg).await.unwrap();
+        session.send_message("m1", &UserMessage::text("first")).await.unwrap();
+        let failed = next_turn_end(&mut events).await;
+        assert!(matches!(failed.last(), Some(DriverEvent::TurnFailed { .. })), "{failed:?}");
+        session.send_message("m2", &UserMessage::text("retry")).await.unwrap();
+        let recovered = next_turn_end(&mut events).await;
+        assert!(matches!(recovered.last(), Some(DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. })), "{recovered:?}");
+        let args = std::fs::read_to_string(root.path().join("args.log")).unwrap();
+        let lines: Vec<&str> = args.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("--conversation conv-poisoned"), "{}", lines[0]);
+        assert!(!lines[1].contains("--conversation"), "poisoned conversation must be dropped: {}", lines[1]);
     }
 
     async fn pid_alive(pid: u32) -> bool {
@@ -1373,4 +1664,105 @@ fn a_keyring_value_is_read_in_each_of_go_keyrings_wrappers() {
     }
     assert!(parse_login("go-keyring-encoded:zz").is_none());
     assert!(parse_login("go-keyring-encoded:abc").is_none());
+}
+
+#[test]
+fn business_and_consumer_accounts_are_distinguished_for_quota_host_order() {
+    use super::usage::is_business_account;
+    assert!(!is_business_account(Some("consumer"), &json!({})));
+    assert!(!is_business_account(Some("oauth-personal"), &json!({"paidTier": {"id": "enterprise-tier"}})));
+    assert!(is_business_account(Some("oauth-business"), &json!({"paidTier": {"id": "g1-pro-tier"}})));
+    assert!(is_business_account(Some("workspace"), &json!({})));
+    assert!(!is_business_account(Some("oauth"), &json!({"paidTier": {"id": "g1-pro-tier"}, "currentTier": {"id": "free-tier"}})));
+    assert!(!is_business_account(None, &json!({"currentTier": {"id": "standard-tier"}})));
+    assert!(is_business_account(Some("oauth"), &json!({"paidTier": {"id": "enterprise-tier"}})));
+    assert!(is_business_account(None, &json!({"currentTier": {"id": "standard-tier", "userDefinedCloudaicompanionProject": true}})));
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[tokio::test]
+async fn workspace_and_personal_accounts_read_their_own_metered_quota_host() {
+    use super::usage::{TEST_HOSTS, read_account_usage};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn mock_host(load_body: Value, summary_body: Value) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let (load_body, summary_body) = (load_body.clone(), summary_body.clone());
+                tokio::spawn(async move {
+                    let mut request = Vec::new();
+                    let mut chunk = [0u8; 4096];
+                    loop {
+                        let Ok(read) = socket.read(&mut chunk).await else { return };
+                        if read == 0 {
+                            break;
+                        }
+                        request.extend_from_slice(&chunk[..read]);
+                        let text = String::from_utf8_lossy(&request).to_lowercase();
+                        if let Some(end) = text.find("\r\n\r\n") {
+                            let length = text[..end]
+                                .lines()
+                                .find_map(|line| line.strip_prefix("content-length:").and_then(|v| v.trim().parse::<usize>().ok()))
+                                .unwrap_or(0);
+                            if request.len() >= end + 4 + length {
+                                break;
+                            }
+                        }
+                    }
+                    let text = String::from_utf8_lossy(&request);
+                    let body = if text.starts_with("POST /v1internal:loadCodeAssist") { load_body } else { summary_body }.to_string();
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+        format!("http://{address}")
+    }
+
+    let daily_summary = json!({"groups": [
+        {"displayName": "Gemini Models", "buckets": [
+            {"bucketId": "gemini-5h", "window": "5h", "resetTime": "2099-01-01T05:00:00Z", "remainingFraction": 0.8},
+            {"bucketId": "gemini-weekly", "window": "weekly", "resetTime": "2099-01-07T00:00:00Z", "remainingFraction": 0.2}
+        ]}
+    ]});
+    let prod_summary = json!({"groups": [
+        {"displayName": "Gemini Models", "buckets": [
+            {"bucketId": "gemini-5h", "window": "5h", "resetTime": "2099-01-01T05:00:00Z", "remainingFraction": 0.4},
+            {"bucketId": "gemini-weekly", "window": "weekly", "resetTime": "2099-01-07T00:00:00Z", "remainingFraction": 0.9}
+        ]},
+        {"displayName": "Claude and GPT models", "buckets": [
+            {"bucketId": "3p-5h", "window": "5h", "resetTime": "2099-01-01T05:00:00Z", "remainingFraction": 0.6}
+        ]}
+    ]});
+
+    // Business account: production host wins even when daily shows more usage (weekly 80% vs 10%).
+    let daily_url = mock_host(json!({}), daily_summary.clone()).await;
+    let prod_url =
+        mock_host(json!({"cloudaicompanionProject": "proj-biz", "paidTier": {"id": "enterprise-tier"}}), prod_summary.clone()).await;
+    *TEST_HOSTS.lock().unwrap() = Some((daily_url, prod_url));
+    let biz_home = home_with_token(2);
+    let (biz_limits, biz_plan) = read_account_usage(biz_home.path(), None, &env_for(biz_home.path())).await.unwrap();
+    assert_eq!(biz_plan.as_deref(), Some("Enterprise"));
+    assert_eq!(biz_limits[0].used_percent, 60.0, "production 5h wins for business account");
+    assert_eq!(biz_limits[1].used_percent, 10.0, "production weekly wins even though daily is higher");
+    assert_eq!(biz_limits[2].used_percent, 40.0);
+
+    // Consumer account: daily host wins even when production shows more usage (5h 20% vs 60%),
+    // while production still fills in groups daily omitted (`Claude and GPT models`).
+    let daily_url = mock_host(json!({}), daily_summary).await;
+    let prod_url = mock_host(json!({"cloudaicompanionProject": "proj-personal", "paidTier": {"id": "g1-pro-tier"}}), prod_summary).await;
+    *TEST_HOSTS.lock().unwrap() = Some((daily_url, prod_url));
+    let personal_home = home_with_token(2);
+    let (personal_limits, personal_plan) = read_account_usage(personal_home.path(), None, &env_for(personal_home.path())).await.unwrap();
+    *TEST_HOSTS.lock().unwrap() = None;
+    assert_eq!(personal_plan.as_deref(), Some("Google AI Pro"));
+    assert_eq!(personal_limits[0].used_percent, 20.0, "daily 5h wins even though production is higher");
+    assert_eq!(personal_limits[1].used_percent, 80.0, "daily weekly wins for personal account");
+    assert_eq!(personal_limits[2].used_percent, 40.0, "missing group is still filled in from fallback host");
 }

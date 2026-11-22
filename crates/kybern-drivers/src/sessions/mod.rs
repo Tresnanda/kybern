@@ -1,6 +1,6 @@
 //! Native saved-session discovery and transcript readers. These never send a
 //! prompt or replay a tool. Each reader follows its harness own storage/API.
-mod antigravity;
+pub(crate) mod antigravity;
 #[cfg(test)]
 mod antigravity_tests;
 mod claude;

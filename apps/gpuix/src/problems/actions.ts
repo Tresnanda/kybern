@@ -12,6 +12,8 @@ export interface ActionContext {
   projectId?: string
   /** Does the thing again (a refresh, a resend). Without it `retry` renders no button. */
   retry?: () => void
+  /** Opens the composer's model picker. Without it `choose_model` renders no button. */
+  chooseModel?: () => void
   /** The technical text `copy_details` copies. Without it that action renders no button. */
   detail?: string
   /** Runs when a fix that opened a terminal closes, to check again. Defaults to `retry`. */
@@ -114,6 +116,8 @@ const openSettings: ProblemActionHandler = {
 
 const retry: ProblemActionHandler = { available: (_, context) => !!context.retry, run: (_, context) => context.retry?.() }
 
+const chooseModel: ProblemActionHandler = { available: (_, context) => !!context.chooseModel, run: (_, context) => context.chooseModel?.() }
+
 const copyDetails: ProblemActionHandler = {
   available: (_, context) => !!context.detail,
   run: (_, context) => { if (context.detail) void writeClipboardText(context.detail).catch(() => {}) },
@@ -141,6 +145,7 @@ export const PROBLEM_ACTIONS: Readonly<Record<string, ProblemActionHandler>> = {
   open_settings: openSettings,
   open_machines: { available: () => true, run: () => openSettings.run({ id: 'open_settings', label: '', params: { section: 'machines' } }, {}) },
   retry,
+  choose_model: chooseModel,
   update,
   // `describeProblem` names it `copy_detail`; the issue and the daemon's wire spelling is `copy_details`.
   copy_detail: copyDetails,

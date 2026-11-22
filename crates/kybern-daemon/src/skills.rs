@@ -11,6 +11,7 @@ use directories::BaseDirs;
 use kybern_protocol::{ProviderKind, SkillHome, SkillInfo, SkillScope};
 
 const MAX_DEPTH: usize = 10;
+const MAX_INHERIT_DEPTH: usize = 10;
 const MAX_ENTRIES: usize = 10_000;
 const MAX_SKILL_BYTES: u64 = 1_000_000;
 const MAX_TOTAL_BYTES: u64 = 8_000_000;
@@ -97,7 +98,15 @@ pub async fn list_homes(homes: Vec<(SkillHome, PathBuf)>) -> Result<Vec<SkillInf
 }
 
 fn scan(cwd: &Path, provider: ProviderKind, env: &BTreeMap<String, String>) -> Vec<SkillInfo> {
-    let home = env.get("HOME").map(PathBuf::from).or_else(|| BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf()));
+    let home = env
+        .get("HOME")
+        .or_else(|| env.get("USERPROFILE"))
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf()));
+    if provider == ProviderKind::Antigravity {
+        return scan_antigravity(cwd, home.as_deref());
+    }
     let roots = roots(cwd, provider, env, home.as_deref());
     let mut found = Vec::new();
     let mut seen_names = HashSet::new();
@@ -149,13 +158,17 @@ fn roots(cwd: &Path, provider: ProviderKind, env: &BTreeMap<String, String>, hom
             }
         }
         ProviderKind::Antigravity => {
-            // `<workspace>/.agents/skills/<name>/SKILL.md` is in `agy`'s own help; its per-user
-            // folder was seen on disk (`~/.gemini/antigravity-cli/skills`).
-            add(cwd.join(".agents/skills"), SkillScope::Project, MAX_DEPTH);
+            // Exact native root order for `agy`: `~/.agents/skills` is never read
+            // (`.agents/skills` is project-only).
             if let Some(home) = home {
-                add(home.join(".agents/skills"), SkillScope::User, MAX_DEPTH);
-                add(home.join(".gemini/antigravity-cli/skills"), SkillScope::User, MAX_DEPTH);
+                add(home.join(".gemini/config/skills"), SkillScope::User, 1);
             }
+            add(cwd.join(".gemini/skills"), SkillScope::Project, 1);
+            if let Some(home) = home {
+                add(home.join(".gemini/antigravity-cli/skills"), SkillScope::User, 1);
+            }
+            add(cwd.join(".agents/skills"), SkillScope::Project, 1);
+            add(cwd.join(".agent/skills"), SkillScope::Project, 1);
         }
         ProviderKind::GrokBuild => {
             for relative in [".grok/skills", ".agents/skills"] {
@@ -469,6 +482,388 @@ fn compact_description(value: &str) -> String {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct AgySkillsManifest {
+    #[serde(default)]
+    inherits: Option<Vec<AgySkillEntry>>,
+    #[serde(default)]
+    entries: Option<Vec<AgySkillEntry>>,
+}
+
+#[derive(serde::Deserialize)]
+struct AgySkillEntry {
+    path: String,
+    #[serde(default)]
+    include_only: Option<Vec<String>>,
+    #[serde(default)]
+    exclude: Option<Vec<String>>,
+}
+
+#[derive(Clone, Default)]
+struct AgyFilter {
+    include_groups: Vec<Vec<String>>,
+    exclude_names: Vec<String>,
+}
+
+impl AgyFilter {
+    fn narrow(&self, entry: &AgySkillEntry) -> Self {
+        let mut include_groups = self.include_groups.clone();
+        if let Some(list) = entry.include_only.as_ref().filter(|list| !list.is_empty()) {
+            include_groups.push(list.clone());
+        }
+        let mut exclude_names = self.exclude_names.clone();
+        if let Some(list) = entry.exclude.as_ref().filter(|list| !list.is_empty()) {
+            exclude_names.extend(list.iter().cloned());
+        }
+        Self { include_groups, exclude_names }
+    }
+
+    fn matches(&self, entry: &str) -> bool {
+        self.include_groups.iter().all(|group| group.iter().any(|name| name == entry))
+            && !self.exclude_names.iter().any(|name| name == entry)
+    }
+}
+
+#[derive(Default)]
+struct AgyScan {
+    budget: Budget,
+    seen_names: HashSet<String>,
+    found: Vec<SkillInfo>,
+}
+
+impl AgyScan {
+    fn exhausted(&self) -> bool {
+        self.budget.entries >= MAX_ENTRIES || self.budget.bytes >= MAX_TOTAL_BYTES
+    }
+}
+
+/// Discover skills the way `agy` loads them:
+/// - native roots in precedence order (`~/.gemini/config/skills`, `.gemini/skills`,
+///   `~/.gemini/antigravity-cli/skills`, `.agents/skills`, `.agent/skills`); never `~/.agents/skills`;
+/// - `skills.json` manifests (`.agents/skills.json`, `.agent/skills.json`, `~/.gemini/config/skills.json`),
+///   with `inherits`, `include_only`, `exclude` (literal matching), null lists, and file entries;
+/// - enabled plugins under `~/.gemini/config/plugins`.
+fn scan_antigravity(cwd: &Path, home: Option<&Path>) -> Vec<SkillInfo> {
+    let mut scan = AgyScan::default();
+
+    let mut native_roots: Vec<(PathBuf, SkillScope)> = Vec::new();
+    if let Some(home) = home {
+        native_roots.push((home.join(".gemini/config/skills"), SkillScope::User));
+    }
+    native_roots.push((cwd.join(".gemini/skills"), SkillScope::Project));
+    if let Some(home) = home {
+        native_roots.push((home.join(".gemini/antigravity-cli/skills"), SkillScope::User));
+    }
+    native_roots.push((cwd.join(".agents/skills"), SkillScope::Project));
+    native_roots.push((cwd.join(".agent/skills"), SkillScope::Project));
+
+    let empty = AgyFilter::default();
+    for (directory, scope) in native_roots {
+        agy_scan_directory(&directory, scope, true, &empty, false, &mut scan);
+        if scan.exhausted() {
+            break;
+        }
+    }
+
+    let mut manifests: Vec<(PathBuf, PathBuf, SkillScope)> = vec![
+        (cwd.join(".agents/skills.json"), cwd.to_path_buf(), SkillScope::Project),
+        (cwd.join(".agent/skills.json"), cwd.to_path_buf(), SkillScope::Project),
+    ];
+    if let Some(home) = home {
+        let config_dir = home.join(".gemini/config");
+        manifests.push((config_dir.join("skills.json"), config_dir, SkillScope::User));
+    }
+    for (config_path, base_dir, scope) in manifests {
+        if scan.exhausted() {
+            break;
+        }
+        agy_scan_manifest(&config_path, &base_dir, scope, &empty, &HashSet::new(), 0, &mut scan);
+    }
+
+    if let Some(home) = home
+        && !scan.exhausted()
+    {
+        agy_scan_plugins(&home.join(".gemini/config"), &mut scan);
+    }
+
+    scan.found.sort_by_key(|skill| skill.name.to_ascii_lowercase());
+    scan.found
+}
+
+fn agy_scan_plugins(config_dir: &Path, scan: &mut AgyScan) {
+    let plugins_dir = config_dir.join("plugins");
+    let Ok(entries) = std::fs::read_dir(&plugins_dir) else { return };
+    let disabled = agy_disabled_plugins(&config_dir.join("config.json"));
+    let mut plugins: Vec<(String, PathBuf)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_str()?.to_string();
+            let path = entry.path();
+            path.is_dir().then_some((name, path))
+        })
+        .collect();
+    plugins.sort_by(|a, b| a.0.cmp(&b.0));
+    let empty = AgyFilter::default();
+    for (name, path) in plugins {
+        if disabled.contains(&name) {
+            continue;
+        }
+        agy_scan_directory(&path.join("skills"), SkillScope::User, true, &empty, false, scan);
+        if scan.exhausted() {
+            break;
+        }
+    }
+}
+
+fn agy_disabled_plugins(config_path: &Path) -> HashSet<String> {
+    let Ok(meta) = std::fs::metadata(config_path) else { return HashSet::new() };
+    if !meta.is_file() || meta.len() > MAX_SKILL_BYTES {
+        return HashSet::new();
+    }
+    let Ok(raw) = std::fs::read_to_string(config_path) else { return HashSet::new() };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else { return HashSet::new() };
+    json.get("plugins")
+        .and_then(serde_json::Value::as_object)
+        .map(|plugins| {
+            plugins
+                .iter()
+                .filter(|(_, value)| value.get("enabled").and_then(serde_json::Value::as_bool) == Some(false))
+                .map(|(name, _)| name.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `agy` does not expand `~`, so a `~/…` path stays relative to `base_dir`.
+fn agy_resolve_manifest_path(raw: &str, base_dir: &Path) -> PathBuf {
+    let path = Path::new(raw);
+    if path.is_absolute() { path.to_path_buf() } else { base_dir.join(path) }
+}
+
+fn agy_scan_manifest(
+    config_path: &Path,
+    base_dir: &Path,
+    scope: SkillScope,
+    filter: &AgyFilter,
+    visited: &HashSet<PathBuf>,
+    depth: usize,
+    scan: &mut AgyScan,
+) {
+    if depth > MAX_INHERIT_DEPTH || scan.exhausted() {
+        return;
+    }
+    let resolved = std::fs::canonicalize(config_path).unwrap_or_else(|_| config_path.to_path_buf());
+    if visited.contains(&resolved) {
+        return;
+    }
+    let Ok(meta) = std::fs::metadata(&resolved) else { return };
+    if !meta.is_file() || meta.len() > MAX_SKILL_BYTES || scan.budget.bytes.saturating_add(meta.len()) > MAX_TOTAL_BYTES {
+        return;
+    }
+    let Ok(raw) = std::fs::read_to_string(&resolved) else { return };
+    scan.budget.bytes = scan.budget.bytes.saturating_add(raw.len() as u64);
+    let Ok(manifest) = serde_json::from_str::<AgySkillsManifest>(&raw) else { return };
+
+    let mut next_visited = visited.clone();
+    next_visited.insert(resolved);
+
+    for inherited in manifest.inherits.unwrap_or_default() {
+        let inherited_path = agy_resolve_manifest_path(&inherited.path, base_dir);
+        let inherited_base = inherited_path.parent().unwrap_or(base_dir).to_path_buf();
+        let narrowed = filter.narrow(&inherited);
+        agy_scan_manifest(&inherited_path, &inherited_base, scope, &narrowed, &next_visited, depth + 1, scan);
+    }
+    for entry in manifest.entries.unwrap_or_default() {
+        let entry_path = agy_resolve_manifest_path(&entry.path, base_dir);
+        let narrowed = filter.narrow(&entry);
+        agy_scan_directory(&entry_path, scope, true, &narrowed, true, scan);
+    }
+}
+
+fn is_agy_skill_file(file_name: &str) -> bool {
+    file_name.eq_ignore_ascii_case("skill.md") && file_name.ends_with(".md")
+}
+
+/// Go's `url.PathEscape` order used by `agy` when sorting children inside a skill root.
+fn agy_sort_key(entry: &str) -> String {
+    let mut out = String::with_capacity(entry.len());
+    for byte in entry.as_bytes() {
+        let keep = byte.is_ascii_alphanumeric()
+            || matches!(byte, b'-' | b'_' | b'.' | b'~' | b'$' | b'&' | b'+' | b',' | b':' | b';' | b'=' | b'@');
+        if keep {
+            out.push(*byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+fn agy_scan_directory(
+    path: &Path,
+    scope: SkillScope,
+    scan_children: bool,
+    filter: &AgyFilter,
+    accept_skill_file: bool,
+    scan: &mut AgyScan,
+) {
+    if scan.exhausted() {
+        return;
+    }
+    let Ok(meta) = std::fs::metadata(path) else { return };
+    if meta.is_file() && accept_skill_file {
+        scan.budget.entries += 1;
+        let parent_name = path.parent().and_then(|parent| parent.file_name()).and_then(|name| name.to_str()).unwrap_or("");
+        if filter.matches(parent_name) {
+            agy_add_skill_file(path, scope, scan);
+        }
+        return;
+    }
+    if !meta.is_dir() {
+        return;
+    }
+    let Ok(read_dir) = std::fs::read_dir(path) else { return };
+    let mut entries: Vec<String> = read_dir.flatten().filter_map(|entry| entry.file_name().to_str().map(str::to_string)).collect();
+    if scan.budget.entries.saturating_add(entries.len()) > MAX_ENTRIES {
+        return;
+    }
+    scan.budget.entries += entries.len();
+    entries.sort();
+
+    if let Some(skill_file) = entries.iter().find(|entry| entry.eq_ignore_ascii_case("skill.md")) {
+        agy_add_skill_file(&path.join(skill_file), scope, scan);
+        return;
+    }
+    if scan_children {
+        let mut children: Vec<(String, String)> =
+            entries.into_iter().filter(|entry| filter.matches(entry)).map(|entry| (agy_sort_key(&entry), entry)).collect();
+        children.sort_by(|left, right| left.0.cmp(&right.0));
+        let empty = AgyFilter::default();
+        for (_, child) in children {
+            agy_scan_directory(&path.join(child), scope, false, &empty, false, scan);
+        }
+    }
+}
+
+fn agy_add_skill_file(skill_path: &Path, scope: SkillScope, scan: &mut AgyScan) {
+    let Some(file_name) = skill_path.file_name().and_then(|name| name.to_str()) else { return };
+    if !is_agy_skill_file(file_name) {
+        return;
+    }
+    let Ok(meta) = std::fs::metadata(skill_path) else { return };
+    if !meta.is_file() || meta.len() > MAX_SKILL_BYTES || scan.budget.bytes.saturating_add(meta.len()) > MAX_TOTAL_BYTES {
+        return;
+    }
+    let Ok(contents) = std::fs::read_to_string(skill_path) else { return };
+    scan.budget.bytes = scan.budget.bytes.saturating_add(meta.len());
+    let Some((name, description)) = parse_agy_frontmatter(&contents, file_name) else { return };
+    if !scan.seen_names.insert(name.to_ascii_lowercase()) {
+        return;
+    }
+    scan.found.push(SkillInfo {
+        name,
+        display_name: None,
+        description,
+        path: skill_path.to_string_lossy().to_string(),
+        scope: effective_scope(skill_path, scope),
+        enabled: true,
+        home: None,
+        plugin: plugin_in_path(skill_path),
+    });
+}
+
+/// Parse Antigravity's `--- ... ---` frontmatter. Requires valid frontmatter delimiters;
+/// falls back to the file stem when `name` is omitted; skips malformed or blank names.
+fn parse_agy_frontmatter(contents: &str, file_name: &str) -> Option<(String, Option<String>)> {
+    let normalized = contents.replace("\r\n", "\n");
+    let start = normalized.find("---")?;
+    let after_open = &normalized[start + 3..];
+    let end = after_open.find("---")?;
+    let block = after_open[..end].trim();
+
+    let mut name: Option<String> = None;
+    let mut description: Option<String> = None;
+    let mut user_invocable = true;
+
+    if !block.is_empty() {
+        let lines: Vec<&str> = block.lines().collect();
+        let mut index = 0;
+        let mut saw_mapping = false;
+        while index < lines.len() {
+            let line = lines[index];
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') || line.starts_with(char::is_whitespace) {
+                index += 1;
+                continue;
+            }
+            let (key, raw_value) = line.split_once(':')?;
+            saw_mapping = true;
+            let key = key.trim();
+            let raw_value = raw_value.trim();
+            let (value, is_null) = if (raw_value.starts_with('|') || raw_value.starts_with('>')) && key == "description" {
+                let mut chunks = Vec::new();
+                index += 1;
+                while index < lines.len() && (lines[index].starts_with(' ') || lines[index].is_empty()) {
+                    let chunk = lines[index].trim();
+                    if !chunk.is_empty() {
+                        chunks.push(chunk);
+                    }
+                    index += 1;
+                }
+                index = index.saturating_sub(1);
+                (chunks.join(" "), false)
+            } else if raw_value.is_empty() || raw_value.eq_ignore_ascii_case("null") || raw_value == "~" {
+                (String::new(), true)
+            } else if raw_value.starts_with('[') || raw_value.starts_with('{') {
+                // Non-string values (lists/objects) or unclosed flow syntax are invalid for string fields.
+                if matches!(key, "name" | "description") {
+                    return None;
+                }
+                (String::new(), false)
+            } else {
+                (unquote_preserving_whitespace(raw_value), false)
+            };
+            match key {
+                "name" if !is_null => {
+                    if value.is_empty() || value != value.trim() {
+                        return None;
+                    }
+                    name = Some(value);
+                }
+                "description" if !is_null => {
+                    let trimmed = value.trim();
+                    if !trimmed.is_empty() {
+                        description = Some(compact_description(trimmed));
+                    }
+                }
+                "user-invocable" if !is_null && is_false(&value) => user_invocable = false,
+                _ => {}
+            }
+            index += 1;
+        }
+        if !saw_mapping {
+            return None;
+        }
+    }
+
+    if !user_invocable {
+        return None;
+    }
+    let resolved_name = name.unwrap_or_else(|| file_name.strip_suffix(".md").unwrap_or(file_name).to_string());
+    if resolved_name.is_empty() || resolved_name != resolved_name.trim() {
+        return None;
+    }
+    Some((resolved_name, description))
+}
+
+fn unquote_preserving_whitespace(value: &str) -> String {
+    if value.len() >= 2 && matches!((value.as_bytes()[0], value.as_bytes()[value.len() - 1]), (b'\'', b'\'') | (b'"', b'"')) {
+        value[1..value.len() - 1].to_string()
+    } else {
+        value.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{parse_frontmatter, roots};
@@ -695,5 +1090,107 @@ mod tests {
         assert!(paths.contains(&home.join(".omp/profiles/work/agent/skills")));
         assert!(!paths.contains(&home.join(".omp/agent/skills")));
         assert!(!paths.contains(&PathBuf::from("/other/agent/skills")));
+    }
+
+    #[tokio::test]
+    async fn antigravity_reads_its_native_roots_and_skips_home_agents_skills() {
+        let tree = TempTree::new();
+        let cwd = tree.0.join("workspace");
+        let home = tree.0.join("home");
+        std::fs::create_dir_all(&cwd).unwrap();
+        write_skill(&home.join(".gemini/config/skills"), "from-config", "body");
+        write_skill(&cwd.join(".gemini/skills"), "from-project-gemini", "body");
+        write_skill(&home.join(".gemini/antigravity-cli/skills"), "from-cli", "body");
+        write_skill(&cwd.join(".agents/skills"), "from-project-agents", "body");
+        write_skill(&cwd.join(".agent/skills"), "from-project-agent", "body");
+        // `~/.agents/skills` is never read by `agy` unless cwd == home or referenced in skills.json.
+        write_skill(&home.join(".agents/skills"), "ignored-home-agents", "body");
+
+        let env = BTreeMap::from([("HOME".into(), home.display().to_string())]);
+        let found = super::list(&cwd, ProviderKind::Antigravity, &env).await.unwrap();
+        let rows: Vec<(&str, kybern_protocol::SkillScope)> = found.iter().map(|s| (s.name.as_str(), s.scope)).collect();
+        assert_eq!(
+            rows,
+            [
+                ("from-cli", kybern_protocol::SkillScope::User),
+                ("from-config", kybern_protocol::SkillScope::User),
+                ("from-project-agent", kybern_protocol::SkillScope::Project),
+                ("from-project-agents", kybern_protocol::SkillScope::Project),
+                ("from-project-gemini", kybern_protocol::SkillScope::Project),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn antigravity_reads_skills_json_manifests_with_inherits_literal_filters_nulls_and_files() {
+        let tree = TempTree::new();
+        let cwd = tree.0.join("workspace");
+        let home = tree.0.join("home");
+        std::fs::create_dir_all(cwd.join(".agents")).unwrap();
+        std::fs::create_dir_all(home.join(".gemini/config")).unwrap();
+
+        let shared = home.join(".agents/skills");
+        write_skill(&shared, "yagni", "body");
+        write_skill(&shared, "experimental-draft", "body");
+
+        let inherited = home.join("inherited-skills");
+        write_skill(&inherited, "linter", "body");
+        write_skill(&inherited, "skipped", "body");
+        write_skill(&inherited, "lint-draft", "body");
+
+        let project_tools = cwd.join("tools/skills");
+        write_skill(&project_tools, "deploy", "body");
+        write_skill(&project_tools, "internal", "body");
+
+        // `agy` does not expand `~`, so `~/tilde-skills` must not be loaded.
+        write_skill(&home.join("tilde-skills"), "tilde", "body");
+
+        // Enabled and disabled plugins.
+        let plugins = home.join(".gemini/config/plugins");
+        write_skill(&plugins.join("demo/skills"), "demo-skill", "body");
+        write_skill(&plugins.join("off/skills"), "off-skill", "body");
+        std::fs::write(home.join(".gemini/config/config.json"), r#"{"plugins":{"off":{"enabled":false}}}"#).unwrap();
+
+        let inherited_manifest = home.join("shared-skills.json");
+        let global_manifest = home.join(".gemini/config/skills.json");
+        // Cyclic inherit back to global_manifest must terminate cleanly.
+        std::fs::write(
+            &inherited_manifest,
+            serde_json::json!({
+                "inherits": [{"path": global_manifest.display().to_string()}],
+                "entries": [{"path": inherited.display().to_string()}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            &global_manifest,
+            serde_json::json!({
+                "inherits": [{"path": inherited_manifest.display().to_string(), "include_only": ["linter", "lint-.*"]}],
+                "entries": [
+                    {"path": shared.display().to_string(), "exclude": ["experimental-.*"]},
+                    {"path": "~/tilde-skills"}
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            cwd.join(".agents/skills.json"),
+            r#"{"entries":null,"inherits":[{"path":"workspace-skills.json","include_only":null}]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            cwd.join("workspace-skills.json"),
+            r#"{"inherits":null,"entries":[{"path":"tools/skills/deploy/SKILL.md","exclude":null},{"path":"tools/skills/internal/SKILL.md","exclude":["internal"]}]}"#,
+        )
+        .unwrap();
+
+        let env = BTreeMap::from([("HOME".into(), home.display().to_string())]);
+        let found = super::list(&cwd, ProviderKind::Antigravity, &env).await.unwrap();
+        let names: Vec<&str> = found.iter().map(|s| s.name.as_str()).collect();
+        // `lint-.*` and `experimental-.*` are literal strings, not regexes: `lint-draft` is not
+        // included and `experimental-draft` is not excluded.
+        assert_eq!(names, ["demo-skill", "deploy", "experimental-draft", "linter", "yagni"]);
     }
 }

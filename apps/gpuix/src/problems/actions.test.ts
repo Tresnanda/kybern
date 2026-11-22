@@ -24,6 +24,15 @@ describe('problem actions', () => {
     expect(runs).toBe(1)
   })
 
+  test('choose_model opens the composer model picker, and is absent without one', () => {
+    let opens = 0
+    expect(resolveAction(action('choose_model', { provider: 'antigravity' }), {})).toBeNull()
+    const button = resolveAction(action('choose_model', { provider: 'antigravity' }), { chooseModel: () => { opens++ } }, 'pick-model')
+    expect(button).toMatchObject({ label: 'Label for choose_model', testId: 'pick-model' })
+    button!.onClick()
+    expect(opens).toBe(1)
+  })
+
   test('copying needs something to copy', () => {
     expect(resolveAction(action('copy_details'), {})).toBeNull()
     expect(resolveAction(action('copy_detail'), { detail: 'run gh: program not found' })).not.toBeNull()

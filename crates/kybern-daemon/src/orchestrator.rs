@@ -653,7 +653,7 @@ struct Inner {
     /// Compactions planned for idle threads ("Compact idle threads: Before the cache expires").
     idle_compactions: idle_compaction::IdleCompactions,
     older_sweeps: older::OlderSweeps,
-    /// Turns moving to a new session (a lost conversation, a rejected login), so Stop ends them (`resend.rs`).
+    /// Turns moving to a new session (a lost conversation, a rejected login, a poisoned Antigravity signature), so Stop ends them (`resend.rs`).
     resends: resend::Resends,
 }
 
@@ -4340,12 +4340,20 @@ impl Orchestrator {
         let mut t = self.inner.store.thread_get(thread_id)?.unwrap_or(thread);
         let driver_supports_fork = self.inner.drivers.get(t.provider.kind).is_some_and(|d| d.supports_fork());
         let anchors = |c: &Checkpoint| TurnAnchors { turn_id: c.provider_turn_id.clone(), previous_end: c.provider_turn_end.clone() };
-        let conversation_rewound = if idx == 0 || t.provider_session_id.is_none() {
+        let conversation_rewound = if idx == 0 {
             t.provider_session_id = None;
+            self.save_account_binding(&t)?;
+            self.set_rewind_handoff(thread_id, turn_id)?;
+            true
+        } else if t.provider_session_id.is_none() {
+            self.set_rewind_handoff(thread_id, turn_id)?;
             true
         } else if driver_supports_fork && (c.provider_turn_id.is_some() || all[idx - 1].provider_turn_end.is_some()) {
             let point = RewindPoint { drop_from: anchors(&c), keep_through: Some(anchors(&all[idx - 1])) };
             self.inner.pending_rewinds.lock().await.insert(thread_id, point);
+            true
+        } else if t.provider.kind == ProviderKind::Antigravity {
+            self.prepare_antigravity_rewind(&mut t, turn_id)?;
             true
         } else {
             false
@@ -5795,10 +5803,17 @@ impl Orchestrator {
                 // conversation this session resumed: continue on a fresh one. The resend is registered while
                 // `live.turn` is held, so a Stop waiting for it finds the resend, and carried out after it is
                 // released: it takes `sessions`, which `force_interrupt` takes first.
-                let resend = (turn.internal.is_none() && !retiring)
+                let resend = turn
+                    .internal
+                    .is_none()
                     .then(|| {
-                        self.plan_login_recovery(thread_id, live, turn.id, &error)
-                            .or_else(|| self.plan_missing_conversation(thread_id, live, turn.id, &error, false))
+                        (!retiring)
+                            .then(|| {
+                                self.plan_login_recovery(thread_id, live, turn.id, &error)
+                                    .or_else(|| self.plan_missing_conversation(thread_id, live, turn.id, &error, false))
+                            })
+                            .flatten()
+                            .or_else(|| self.plan_antigravity_signature(thread_id, live, turn.id, retiring, &error, problem.as_ref()))
                     })
                     .flatten();
                 if let Some(plan) = resend {

@@ -2,7 +2,8 @@
 //!
 //! Recoveries end a session in the middle of a turn and send the same message to a new one: Claude Code lost
 //! the conversation ([`ResendReason::MissingConversation`], `claude_sessions.rs`), a lent login was rejected
-//! ([`ResendReason::RejectedLogin`], `login_borrow.rs`). Between the two sessions there is no live turn to
+//! ([`ResendReason::RejectedLogin`], `login_borrow.rs`), or Antigravity hit a poisoned thinking signature
+//! ([`ResendReason::AntigravitySignature`], `antigravity_rules.rs`). Between the two sessions there is no live turn to
 //! interrupt, so the turn's end belongs to whoever claims it first:
 //!
 //! * the resend, right before the new session gets the message ([`ResendOutcome::Sent`]); from then on the
@@ -25,6 +26,8 @@ pub(super) enum ResendReason {
     MissingConversation,
     /// The login another machine lent was rejected; a fresh one is borrowed first.
     RejectedLogin,
+    /// Antigravity's saved conversation has an invalid thinking signature; retrying on a fresh seeded conversation.
+    AntigravitySignature,
 }
 
 /// Who owns the turn's end.
@@ -70,6 +73,11 @@ impl ResendEntry {
 
     pub(super) fn is_pending(&self) -> bool {
         self.outcome() == ResendOutcome::Pending
+    }
+
+    #[cfg(test)]
+    pub(super) fn subscribe(&self) -> watch::Receiver<ResendOutcome> {
+        self.outcome.subscribe()
     }
 }
 
