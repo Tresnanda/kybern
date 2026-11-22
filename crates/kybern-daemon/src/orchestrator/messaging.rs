@@ -400,6 +400,24 @@ impl Orchestrator {
         }
     }
 
+    /// A steer that returned as taken (`Steered`) reverted to a follow-up. A thread
+    /// message it carried is queued again and owes no answer from the turn it was
+    /// steered into; the turn that starts with it takes the question instead.
+    pub(super) fn messaging_steer_reverted(&self, thread_id: ThreadId, turn_id: TurnId, message_id: MessageId) {
+        {
+            let mut consumed = self.inner.messaging.consumed.lock().unwrap_or_else(|error| error.into_inner());
+            if let Some(entries) = consumed.get_mut(&thread_id) {
+                entries.retain(|entry| *entry != (turn_id, message_id));
+                if entries.is_empty() {
+                    consumed.remove(&thread_id);
+                }
+            }
+        }
+        if let Err(error) = self.message_transition(message_id, &[ThreadMessageState::Steered], ThreadMessageState::Queued) {
+            tracing::warn!(%message_id, %error, "could not mark a reverted steered thread message queued");
+        }
+    }
+
     // ---- state changes ----
 
     /// Move a message to `to` while it is still in one of `from`, and announce the
@@ -506,14 +524,15 @@ impl Orchestrator {
             Ok(Some(record)) if record.to_thread_id == thread_id => record,
             _ => return,
         };
-        if matches!(record.state, ThreadMessageState::Queued | ThreadMessageState::Held)
-            && let Err(error) =
-                self.message_transition(record.id, &[ThreadMessageState::Queued, ThreadMessageState::Held], ThreadMessageState::Delivered)
+        // A steer that reverted to a follow-up can still read `Steered` here.
+        let waiting = [ThreadMessageState::Queued, ThreadMessageState::Held, ThreadMessageState::Steered];
+        if waiting.contains(&record.state)
+            && let Err(error) = self.message_transition(record.id, &waiting, ThreadMessageState::Delivered)
         {
             tracing::warn!(%message_id, %error, "could not mark a thread message delivered");
         }
         if record.purpose == ThreadMessagePurpose::Question
-            && matches!(record.state, ThreadMessageState::Queued | ThreadMessageState::Delivered | ThreadMessageState::Held)
+            && (waiting.contains(&record.state) || record.state == ThreadMessageState::Delivered)
         {
             self.messaging_remember_consumed(thread_id, turn_id, record.id);
         }

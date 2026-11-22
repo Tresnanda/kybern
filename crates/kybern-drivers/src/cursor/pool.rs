@@ -436,8 +436,12 @@ async fn serve(
                     let id=value["session"].as_str().map(str::to_owned).or_else(||(slots.len()==1).then(||slots.keys().next().unwrap().clone()));
                     if let Some(id)=id && let Some(slot)=slots.get_mut(&id) {
                             let events=slot.stream.handle(&value);
-                            if let Some(outcome) = slot.stream.take_outcome() {
-                                slot.delivery.lock().unwrap_or_else(|poison| poison.into_inner()).apply_outcome(outcome);
+                            {
+                                let mut delivery = slot.delivery.lock().unwrap_or_else(|poison| poison.into_inner());
+                                delivery.record_settled_steers(&events);
+                                if let Some(outcome) = slot.stream.take_outcome() {
+                                    delivery.apply_outcome(outcome);
+                                }
                             }
                             if !deliver(slot,events) {
                                 slots.remove(&id);

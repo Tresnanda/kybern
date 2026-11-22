@@ -17,7 +17,7 @@ pub use runtime::{
     setup_error, sign_out,
 };
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -206,7 +206,14 @@ struct DeliveryState {
     /// Raw user prompts from consecutive stopped runs that never saved a checkpoint.
     interrupted_prompts: Vec<String>,
     in_flight: Option<InFlightPrompt>,
+    /// Recent `steer_settled` outcomes, recorded as the host reports them so a
+    /// session torn down mid-turn can resolve steers whose events are still
+    /// buffered for the daemon. Bounded; read once by `take_settled_steer`.
+    settled_steers: VecDeque<(String, crate::SteerOutcome)>,
 }
+
+/// How many settled steer outcomes a session remembers.
+const SETTLED_STEERS_KEPT: usize = 32;
 
 struct InFlightPrompt {
     guide: Option<String>,
@@ -217,7 +224,18 @@ struct InFlightPrompt {
 
 impl DeliveryState {
     fn new(guide: Option<String>) -> Self {
-        Self { guide, guide_delivered: false, interrupted_prompts: Vec::new(), in_flight: None }
+        Self { guide, guide_delivered: false, interrupted_prompts: Vec::new(), in_flight: None, settled_steers: VecDeque::new() }
+    }
+
+    fn record_settled_steers(&mut self, events: &[DriverEvent]) {
+        for event in events {
+            if let DriverEvent::SteerSettled { steer_id, outcome } = event {
+                if self.settled_steers.len() == SETTLED_STEERS_KEPT {
+                    self.settled_steers.pop_front();
+                }
+                self.settled_steers.push_back((steer_id.clone(), *outcome));
+            }
+        }
     }
 
     fn prepare(&mut self, text: &str) -> String {
@@ -391,6 +409,11 @@ impl AgentSession for Session {
     }
     fn take_pending_steer(&self, message_id: &str) -> bool {
         self.pending_steers.lock().unwrap_or_else(|poison| poison.into_inner()).remove(message_id)
+    }
+    fn take_settled_steer(&self, message_id: &str) -> Option<crate::SteerOutcome> {
+        let mut delivery = self.delivery.lock().unwrap_or_else(|poison| poison.into_inner());
+        let index = delivery.settled_steers.iter().position(|(id, _)| id == message_id)?;
+        delivery.settled_steers.remove(index).map(|(_, outcome)| outcome)
     }
     async fn compact(&self) -> Result<()> {
         self.send_message(&uuid::Uuid::new_v4().to_string(), &UserMessage::text("/compress")).await
@@ -893,6 +916,12 @@ for line in sys.stdin:
             .expect("expected SteerSettled(RevertToFollowup)");
         let pos_done = observed.iter().position(|e| matches!(e, DriverEvent::TurnCompleted { .. })).expect("expected TurnCompleted");
         assert!(pos_deliv < pos_rev && pos_rev < pos_done);
+        // The session also remembers each settled outcome once, for a daemon that
+        // tears the session down before it reads the buffered events.
+        assert_eq!(spawned.session.take_settled_steer("s-deliv"), Some(crate::SteerOutcome::Delivered));
+        assert_eq!(spawned.session.take_settled_steer("s-deliv"), None, "settled outcome is consumed once");
+        assert_eq!(spawned.session.take_settled_steer("s-rev"), Some(crate::SteerOutcome::RevertToFollowup));
+        assert_eq!(spawned.session.take_settled_steer("s1"), None, "a steer that never pended has no settled outcome");
         spawned.session.close().await.unwrap();
 
         let requests: Vec<Value> = std::fs::read_to_string(log).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect();

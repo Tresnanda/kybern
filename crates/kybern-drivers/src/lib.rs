@@ -578,6 +578,13 @@ pub trait AgentSession: Send + Sync {
     fn take_pending_steer(&self, _message_id: &str) -> bool {
         false
     }
+    /// The outcome a pending steer settled with, once the driver has produced its
+    /// `DriverEvent::SteerSettled` (which may still be buffered for the event
+    /// consumer). Lets a session torn down mid-turn resolve its pending steers
+    /// without waiting for the event stream. Consumes the record.
+    fn take_settled_steer(&self, _message_id: &str) -> Option<SteerOutcome> {
+        None
+    }
 }
 
 pub struct SpawnedSession {
