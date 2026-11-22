@@ -994,19 +994,27 @@ struct ControlAnswer {
 /// the exit reports itself.
 async fn watch_startup(session: Arc<ClaudeSession>, initialized: ControlAnswer, quiet: std::time::Duration) {
     let ControlAnswer { id, mut answer } = initialized;
-    let mut seen = session.child.output_lines();
-    loop {
-        if tokio::time::timeout(quiet, &mut answer).await.is_ok() {
-            return;
-        }
-        let written = session.child.output_lines();
-        if written == seen {
-            break;
-        }
-        seen = written;
+    if answered_while_writing(&mut answer, quiet, || session.child.output_lines()).await {
+        return;
     }
     session.pending_control.lock().await.remove(&id);
     session.startup_stalled(quiet).await;
+}
+
+/// Wait for `answer` as long as `written` (a count of lines that only grows) moved in each `quiet` window.
+/// Returns whether the answer came; `false` once a whole window passed with nothing written.
+async fn answered_while_writing<T>(answer: &mut oneshot::Receiver<T>, quiet: std::time::Duration, written: impl Fn() -> u64) -> bool {
+    let mut seen = written();
+    loop {
+        if tokio::time::timeout(quiet, &mut *answer).await.is_ok() {
+            return true;
+        }
+        let now = written();
+        if now == seen {
+            return false;
+        }
+        seen = now;
+    }
 }
 
 /// Launch calls remembered for their role; older ones are forgotten first.
@@ -3860,23 +3868,33 @@ mod harness_gap_tests {
     }
 
     /// A slow start that keeps writing (MCP servers connecting, with `MCP_CONNECTION_NONBLOCKING=0`) is not a
-    /// stall: only a whole quiet window without an answer fails the turn.
-    #[cfg(unix)]
-    #[tokio::test]
+    /// stall: only a whole quiet window without an answer fails the turn. On paused time, so the gaps are exact.
+    #[tokio::test(start_paused = true)]
     async fn a_start_that_keeps_writing_is_waited_for() {
-        let mut slow = Command::new("sh");
-        slow.args(["-c", "i=0; while [ $i -lt 10 ]; do echo 'connecting MCP server' >&2; sleep 0.05; i=$((i+1)); done; cat > /dev/null"]);
-        let child = Arc::new(NdjsonChild::spawn(slow).unwrap());
-        let (session, mut rx) = session_over(child.clone());
-        let initialized = session.send_control_watched("initialize", json!({})).await.unwrap();
-        let reader = session.clone();
-        tokio::spawn(async move { reader.read_loop().await });
-        let started = std::time::Instant::now();
-        tokio::spawn(watch_startup(session.clone(), initialized, std::time::Duration::from_millis(200)));
-        let DriverEvent::TurnFailed { .. } = next_event(&mut rx).await else { panic!("a start that went quiet still fails") };
-        // Ten lines 50 ms apart keep it alive for about half a second; only the quiet window after them ends it.
-        assert!(started.elapsed() >= std::time::Duration::from_millis(500), "stopped while it was still writing: {:?}", started.elapsed());
-        assert!(child.output_lines() >= 10);
+        let written = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let lines = || written.load(std::sync::atomic::Ordering::SeqCst);
+        let quiet = std::time::Duration::from_millis(200);
+        // Ten lines 50 ms apart (MCP servers connecting), then nothing.
+        let writer = written.clone();
+        tokio::spawn(async move {
+            for _ in 0..10 {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                writer.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+        let (_never, mut answer) = oneshot::channel::<()>();
+        let started = tokio::time::Instant::now();
+        assert!(!answered_while_writing(&mut answer, quiet, lines).await, "a start that went quiet still fails");
+        assert_eq!(lines(), 10, "stopped while it was still writing");
+        // The last line came at 500 ms: only a whole quiet window after it ends the wait.
+        assert!(started.elapsed() >= std::time::Duration::from_millis(500) + quiet, "{:?}", started.elapsed());
+
+        // An answer ends the wait at once, writing or not.
+        let (reply, mut answer) = oneshot::channel();
+        reply.send(()).unwrap();
+        let started = tokio::time::Instant::now();
+        assert!(answered_while_writing(&mut answer, quiet, lines).await);
+        assert_eq!(started.elapsed(), std::time::Duration::ZERO);
     }
 
     /// A signal (the OOM killer, a crash) names itself and keeps what Claude Code said before it died.
