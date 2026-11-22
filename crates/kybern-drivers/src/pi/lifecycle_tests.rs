@@ -625,7 +625,7 @@ async fn tools_called_through_another_tool_nest_under_their_caller() {
 
 #[tokio::test]
 async fn a_prompt_waits_for_compaction_that_started_after_the_last_turn() {
-    let mut harness = Harness::new(Flavor::Pi);
+    let harness = Harness::new(Flavor::Pi);
     harness.session.handle_frame(json!({ "type": "compaction_start", "reason": "threshold" })).await;
     let handle = harness.handle.clone();
     let sending = tokio::spawn(async move { handle.send_message("m1", &text_message("hello")).await });
@@ -643,7 +643,7 @@ async fn a_prompt_waits_for_compaction_that_started_after_the_last_turn() {
 
 #[tokio::test]
 async fn a_prompt_rejected_by_compaction_is_sent_again_when_it_ends() {
-    let mut harness = Harness::new(Flavor::Pi);
+    let harness = Harness::new(Flavor::Pi);
     let handle = harness.handle.clone();
     let sending = tokio::spawn(async move { handle.send_message("m1", &text_message("hello")).await });
     let first = harness.wire("prompt").await;
