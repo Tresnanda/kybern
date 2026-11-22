@@ -708,6 +708,31 @@ struct LiveSession {
     /// A Cursor process told to send Kybern's instructions block with its first
     /// prompt; once a turn completes, its conversation is recorded as having it.
     instructions_unconfirmed: AtomicBool,
+    /// Pending and serialized mid-turn steers for this session.
+    steers: SteerTracker,
+}
+
+#[derive(Default)]
+pub(super) struct SteerTracker {
+    /// Serializes concurrent steer submissions/retries without holding
+    /// `LiveSession::turn` while the driver awaits a steer.
+    gate: Mutex<()>,
+    /// Steers currently being submitted or awaiting `DriverEvent::SteerSettled`.
+    pending: std::sync::Mutex<HashMap<MessageId, PendingSteer>>,
+}
+
+struct PendingSteer {
+    turn_id: TurnId,
+    message: methods::QueuedMessage,
+    emit_message_steered: bool,
+    state: PendingSteerState,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PendingSteerState {
+    Submitting,
+    Pending,
+    AlreadyHandled(kybern_drivers::SteerOutcome),
 }
 
 struct DaemonApproval {
@@ -2566,34 +2591,137 @@ impl Orchestrator {
             .get(&params.thread_id)
             .cloned()
             .ok_or_else(|| anyhow!("The agent is still starting. Try steering again in a moment, or queue this message."))?;
-        let turn = live.turn.lock().await;
+        let _steer_gate = live.steers.gate.lock().await;
         if let Some(result) = receipt()? {
             return Ok(result);
         }
-        // A handoff turn is Kybern's own, and a refresh that began meanwhile
-        // (checked again under the turn lock) refuses steering.
-        let active = turn
-            .as_ref()
-            .filter(|turn| !turn.completed && turn.internal.is_none())
-            .ok_or_else(|| anyhow!("This turn has ended. Send your message to start the next turn."))?;
-        anyhow::ensure!(!self.is_rotating(params.thread_id), rotation::ROTATING_STEER_ERROR);
-        live.touch();
-        let active_id = active.id;
-        match live.session.steer(&params.id.to_string(), &self.provider_message_for(&thread, &params.message, &live)).await {
+        if let Some(result) = self.pending_steer_receipt(&live, &params)? {
+            return Ok(result);
+        }
+        let active_id = {
+            let turn = live.turn.lock().await;
+            // A handoff turn is Kybern's own, and a refresh that began meanwhile
+            // (checked again under the turn lock) refuses steering.
+            let active = turn
+                .as_ref()
+                .filter(|turn| !turn.completed && turn.internal.is_none())
+                .ok_or_else(|| anyhow!("This turn has ended. Send your message to start the next turn."))?;
+            anyhow::ensure!(!self.is_rotating(params.thread_id), rotation::ROTATING_STEER_ERROR);
+            live.touch();
+            active.id
+        };
+        let provider_message = self.provider_message_for(&thread, &params.message, &live);
+        let steer_id = params.id.to_string();
+        live.steers.pending.lock().unwrap_or_else(|poison| poison.into_inner()).insert(
+            params.id,
+            PendingSteer { turn_id: active_id, message: params.clone(), emit_message_steered: true, state: PendingSteerState::Submitting },
+        );
+        match live.session.steer(&steer_id, &provider_message).await {
             Ok(()) => {
-                self.emit(
-                    params.thread_id,
-                    Some(active_id),
-                    EventPayload::MessageSteered { message_id: params.id, message: params.message },
-                )?;
-                Ok(methods::ThreadsSendResult { turn_id: active_id, message_id: params.id, queued: false })
+                if live.session.take_pending_steer(&steer_id) {
+                    let mut pending = live.steers.pending.lock().unwrap_or_else(|poison| poison.into_inner());
+                    match pending.get_mut(&params.id).map(|entry| entry.state) {
+                        Some(PendingSteerState::AlreadyHandled(outcome)) => {
+                            pending.remove(&params.id);
+                            let queued = outcome == kybern_drivers::SteerOutcome::RevertToFollowup;
+                            Ok(methods::ThreadsSendResult {
+                                turn_id: if queued { Uuid::nil() } else { active_id },
+                                message_id: params.id,
+                                queued,
+                            })
+                        }
+                        Some(PendingSteerState::Submitting | PendingSteerState::Pending) => {
+                            if let Some(entry) = pending.get_mut(&params.id) {
+                                entry.state = PendingSteerState::Pending;
+                            }
+                            Ok(methods::ThreadsSendResult { turn_id: active_id, message_id: params.id, queued: false })
+                        }
+                        None => Ok(methods::ThreadsSendResult { turn_id: active_id, message_id: params.id, queued: false }),
+                    }
+                } else {
+                    let removed = live.steers.pending.lock().unwrap_or_else(|poison| poison.into_inner()).remove(&params.id);
+                    if !matches!(removed.map(|entry| entry.state), Some(PendingSteerState::AlreadyHandled(_))) {
+                        self.emit(
+                            params.thread_id,
+                            Some(active_id),
+                            EventPayload::MessageSteered { message_id: params.id, message: params.message },
+                        )?;
+                    }
+                    Ok(methods::ThreadsSendResult { turn_id: active_id, message_id: params.id, queued: false })
+                }
             }
             Err(kybern_drivers::DriverError::SteerFallback) if source == SteerSource::Client => {
-                drop(turn);
+                live.steers.pending.lock().unwrap_or_else(|poison| poison.into_inner()).remove(&params.id);
                 self.fallback_steer_to_followup(params).await
             }
-            Err(error) => Err(error.into()),
+            Err(error) => {
+                live.steers.pending.lock().unwrap_or_else(|poison| poison.into_inner()).remove(&params.id);
+                Err(error.into())
+            }
         }
+    }
+
+    fn pending_steer_receipt(&self, live: &LiveSession, params: &methods::QueuedMessage) -> Result<Option<methods::ThreadsSendResult>> {
+        let pending = live.steers.pending.lock().unwrap_or_else(|poison| poison.into_inner());
+        let Some(entry) = pending.get(&params.id) else {
+            return Ok(None);
+        };
+        if entry.message.thread_id != params.thread_id
+            || serde_json::to_value(self.stored_shape(&entry.message.message)?)?
+                != serde_json::to_value(self.stored_shape(&params.message)?)?
+        {
+            return Err(anyhow!("Message id already belongs to another request."));
+        }
+        Ok(Some(methods::ThreadsSendResult { turn_id: entry.turn_id, message_id: params.id, queued: false }))
+    }
+
+    fn settle_pending_steer(
+        &self,
+        thread_id: ThreadId,
+        live: &Arc<LiveSession>,
+        steer_id: &str,
+        outcome: kybern_drivers::SteerOutcome,
+    ) -> Result<()> {
+        let Ok(message_id) = Uuid::parse_str(steer_id) else {
+            return Ok(());
+        };
+        let entry = {
+            let mut pending = live.steers.pending.lock().unwrap_or_else(|poison| poison.into_inner());
+            let Some(existing) = pending.get_mut(&message_id) else {
+                return Ok(());
+            };
+            match existing.state {
+                PendingSteerState::Pending => {
+                    pending.remove(&message_id).map(|entry| (entry.turn_id, entry.message, entry.emit_message_steered))
+                }
+                PendingSteerState::Submitting => {
+                    existing.state = PendingSteerState::AlreadyHandled(outcome);
+                    Some((existing.turn_id, existing.message.clone(), existing.emit_message_steered))
+                }
+                PendingSteerState::AlreadyHandled(_) => None,
+            }
+        };
+        let Some((turn_id, queued, emit_message_steered)) = entry else {
+            return Ok(());
+        };
+        match outcome {
+            kybern_drivers::SteerOutcome::Delivered => {
+                if emit_message_steered && self.inner.store.steering_receipt(queued.id)?.is_none() {
+                    self.emit(thread_id, Some(turn_id), EventPayload::MessageSteered { message_id: queued.id, message: queued.message })?;
+                }
+            }
+            kybern_drivers::SteerOutcome::RevertToFollowup => {
+                if !live.stop_cleanup.load(Ordering::Relaxed)
+                    && self.inner.store.steering_receipt(queued.id)?.is_none()
+                    && self.inner.store.queue_receipt(queued.id)?.is_none()
+                    && self.inner.store.turn_started_receipt(queued.id)?.is_none()
+                    && let Err(error) = self.enqueue(queued)
+                {
+                    tracing::warn!(%thread_id, %error, "reverted pending steer could not be queued as a follow-up");
+                }
+            }
+        }
+        Ok(())
     }
 
     /// One daemon-owned worker consumes accepted follow-ups, independently of clients.
@@ -3148,29 +3276,65 @@ impl Orchestrator {
                 .get(&params.thread_id)
                 .cloned()
                 .ok_or_else(|| anyhow!("The agent is starting. Submit your answer again in a moment."))?;
-            let turn = live.turn.lock().await;
-            // A handoff turn is Kybern's own: an answer never steers into it.
-            let active = turn
-                .as_ref()
-                .filter(|turn| !turn.completed && turn.internal.is_none())
-                .ok_or_else(|| anyhow!("The turn just ended. Submit your answer again to continue the conversation."))?;
-            anyhow::ensure!(!self.is_rotating(params.thread_id), rotation::ROTATING_STEER_ERROR);
-            live.touch();
-            let active_id = active.id;
-            match live.session.steer(&message_id.to_string(), &self.provider_message_for(&thread, &message, &live)).await {
-                Ok(()) => Some(active_id),
+            let _steer_gate = live.steers.gate.lock().await;
+            let active_id = {
+                let turn = live.turn.lock().await;
+                // A handoff turn is Kybern's own: an answer never steers into it.
+                let active = turn
+                    .as_ref()
+                    .filter(|turn| !turn.completed && turn.internal.is_none())
+                    .ok_or_else(|| anyhow!("The turn just ended. Submit your answer again to continue the conversation."))?;
+                anyhow::ensure!(!self.is_rotating(params.thread_id), rotation::ROTATING_STEER_ERROR);
+                live.touch();
+                active.id
+            };
+            let provider_message = self.provider_message_for(&thread, &message, &live);
+            let steer_id = message_id.to_string();
+            let queued = methods::QueuedMessage { id: message_id, thread_id: params.thread_id, message: message.clone() };
+            live.steers.pending.lock().unwrap_or_else(|poison| poison.into_inner()).insert(
+                message_id,
+                PendingSteer {
+                    turn_id: active_id,
+                    message: queued.clone(),
+                    emit_message_steered: false,
+                    state: PendingSteerState::Submitting,
+                },
+            );
+            match live.session.steer(&steer_id, &provider_message).await {
+                Ok(()) => {
+                    if live.session.take_pending_steer(&steer_id) {
+                        let mut pending = live.steers.pending.lock().unwrap_or_else(|poison| poison.into_inner());
+                        match pending.get_mut(&message_id).map(|entry| entry.state) {
+                            Some(PendingSteerState::AlreadyHandled(kybern_drivers::SteerOutcome::RevertToFollowup)) => {
+                                pending.remove(&message_id);
+                                None
+                            }
+                            Some(PendingSteerState::AlreadyHandled(kybern_drivers::SteerOutcome::Delivered)) => {
+                                pending.remove(&message_id);
+                                Some(active_id)
+                            }
+                            Some(PendingSteerState::Submitting | PendingSteerState::Pending) => {
+                                if let Some(entry) = pending.get_mut(&message_id) {
+                                    entry.state = PendingSteerState::Pending;
+                                }
+                                Some(active_id)
+                            }
+                            None => Some(active_id),
+                        }
+                    } else {
+                        live.steers.pending.lock().unwrap_or_else(|poison| poison.into_inner()).remove(&message_id);
+                        Some(active_id)
+                    }
+                }
                 Err(kybern_drivers::DriverError::SteerFallback) => {
-                    drop(turn);
-                    let fallback = self
-                        .fallback_steer_to_followup(methods::QueuedMessage {
-                            id: message_id,
-                            thread_id: params.thread_id,
-                            message: message.clone(),
-                        })
-                        .await?;
+                    live.steers.pending.lock().unwrap_or_else(|poison| poison.into_inner()).remove(&message_id);
+                    let fallback = self.fallback_steer_to_followup(queued).await?;
                     (!fallback.queued).then_some(fallback.turn_id)
                 }
-                Err(error) => return Err(error.into()),
+                Err(error) => {
+                    live.steers.pending.lock().unwrap_or_else(|poison| poison.into_inner()).remove(&message_id);
+                    return Err(error.into());
+                }
             }
         } else {
             // Queued during a context refresh: the answer has no turn until it starts one.
@@ -4142,6 +4306,7 @@ impl Orchestrator {
             lead_settings: Mutex::new(None),
             context_usage: std::sync::Mutex::new(None),
             instructions_unconfirmed: AtomicBool::new(instructions_unconfirmed),
+            steers: SteerTracker::default(),
         });
         self.inner.store.meta_set_many(&[
             (&format!("live_fingerprint:{}", thread.id), &self.environment_fingerprint(thread)?),
@@ -4734,6 +4899,10 @@ impl Orchestrator {
         if live.stop_cleanup.load(Ordering::Relaxed) && !retiring {
             return Ok(());
         }
+        if let DriverEvent::SteerSettled { steer_id, outcome } = &ev {
+            self.settle_pending_steer(thread_id, live, steer_id, *outcome)?;
+            return Ok(());
+        }
         let Some(ev) = self.subagent_take_event(thread_id, ev)? else { return Ok(()) };
         let starts_response = match &ev {
             DriverEvent::ResponseStarted => true,
@@ -4832,7 +5001,9 @@ impl Orchestrator {
             );
         }
         match ev {
-            DriverEvent::SubagentMessageDelivered { .. } => unreachable!("handled before root turn bookkeeping"),
+            DriverEvent::SubagentMessageDelivered { .. } | DriverEvent::SteerSettled { .. } => {
+                unreachable!("handled before root turn bookkeeping")
+            }
             // Consumed by `subagent_take_event` before this point.
             DriverEvent::SubagentPrompt { .. } | DriverEvent::SubagentOnly { .. } => {}
             DriverEvent::ResponseStarted => {}
@@ -5407,6 +5578,7 @@ impl Orchestrator {
                 self.emit(thread_id, turn_id, EventPayload::ProviderNotice { level, text, data, problem })?;
             }
             DriverEvent::Exited { code, error } => {
+                live.steers.pending.lock().unwrap_or_else(|poison| poison.into_inner()).clear();
                 // A conversation Claude Code no longer has is taken over when the pump ends (a fresh session,
                 // or the turn's failure); its exit is no row of its own.
                 if let Some(error) = error.filter(|error| !live.is_released() && !self.is_missing_conversation(thread_id, error)) {
@@ -5804,7 +5976,7 @@ mod tests {
     use std::time::{Duration, Instant, SystemTime};
 
     use super::{
-        ActiveTurn, LiveSession, Orchestrator, SessionActivityTime, generic_runtime_task, generic_runtime_task_for_provider,
+        ActiveTurn, LiveSession, Orchestrator, SessionActivityTime, SteerTracker, generic_runtime_task, generic_runtime_task_for_provider,
         output_indicates_running,
     };
     use crate::config::Paths;
@@ -5831,6 +6003,11 @@ mod tests {
         broken_close: bool,
         reject_permission: bool,
         steer_fallback: bool,
+        steer_pending: bool,
+        pending_steers: std::sync::Mutex<HashSet<String>>,
+        send_notify: Option<Arc<tokio::sync::Notify>>,
+        steer_entered: Option<Arc<tokio::sync::Notify>>,
+        steer_release: Option<Arc<tokio::sync::Notify>>,
         stopped_tasks: Arc<Mutex<Vec<String>>>,
         /// What the session was told to do with each permission request.
         permission_responses: Arc<Mutex<Vec<ApprovalDecision>>>,
@@ -5853,15 +6030,33 @@ mod tests {
 
         async fn send_message(&self, _message_id: &str, message: &UserMessage) -> kybern_drivers::Result<()> {
             self.messages.lock().await.push(message.clone());
+            if let Some(notify) = &self.send_notify {
+                notify.notify_one();
+            }
             Ok(())
         }
 
-        async fn steer(&self, _message_id: &str, message: &UserMessage) -> kybern_drivers::Result<()> {
+        async fn steer(&self, message_id: &str, message: &UserMessage) -> kybern_drivers::Result<()> {
+            if let Some(entered) = &self.steer_entered {
+                entered.notify_one();
+            }
+            if let Some(release) = &self.steer_release {
+                release.notified().await;
+            }
             if self.steer_fallback {
                 return Err(kybern_drivers::DriverError::SteerFallback);
             }
+            if self.steer_pending {
+                self.pending_steers.lock().unwrap().insert(message_id.to_string());
+                self.messages.lock().await.push(message.clone());
+                return Ok(());
+            }
             self.messages.lock().await.push(message.clone());
             Ok(())
+        }
+
+        fn take_pending_steer(&self, message_id: &str) -> bool {
+            self.pending_steers.lock().unwrap().remove(message_id)
         }
 
         async fn interrupt(&self) -> kybern_drivers::Result<()> {
@@ -6405,6 +6600,7 @@ mod tests {
             lead_settings: Mutex::new(None),
             context_usage: std::sync::Mutex::new(None),
             instructions_unconfirmed: AtomicBool::new(false),
+            steers: SteerTracker::default(),
         });
         orchestrator
             .handle_driver_event(
@@ -6791,6 +6987,7 @@ mod tests {
                 lead_settings: Mutex::new(None),
                 context_usage: std::sync::Mutex::new(None),
                 instructions_unconfirmed: AtomicBool::new(false),
+                steers: SteerTracker::default(),
             });
             self.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
             (live, closes, messages)
@@ -6827,6 +7024,7 @@ mod tests {
                 lead_settings: Mutex::new(None),
                 context_usage: std::sync::Mutex::new(None),
                 instructions_unconfirmed: AtomicBool::new(false),
+                steers: SteerTracker::default(),
             });
             self.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
             self.orchestrator.send(thread.id, UserMessage::text("inspect workspace")).await.unwrap();
@@ -8274,6 +8472,7 @@ mod tests {
             lead_settings: Mutex::new(None),
             context_usage: std::sync::Mutex::new(None),
             instructions_unconfirmed: AtomicBool::new(false),
+            steers: SteerTracker::default(),
         });
         fixture.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
 
@@ -8359,6 +8558,7 @@ mod tests {
             lead_settings: Mutex::new(None),
             context_usage: std::sync::Mutex::new(None),
             instructions_unconfirmed: AtomicBool::new(false),
+            steers: SteerTracker::default(),
         });
         fixture.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
 
@@ -8402,6 +8602,195 @@ mod tests {
         .await
         .unwrap();
         assert!(messages.lock().await[1].plain_text().contains("Answer: Yes"));
+    }
+
+    #[tokio::test]
+    async fn pending_steer_delivers_once_on_late_complete_delivered_and_queues_nothing() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let send_notify = Arc::new(tokio::sync::Notify::new());
+        let live = fixture
+            .active_session(
+                &thread,
+                TestSession {
+                    messages: messages.clone(),
+                    steer_pending: true,
+                    send_notify: Some(send_notify.clone()),
+                    ..Default::default()
+                },
+            )
+            .await;
+        // Wait for the initial send_message call using the event notify (no sleeps).
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while messages.lock().await.is_empty() {
+                send_notify.notified().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let prompt = methods::QueuedMessage { id: Uuid::now_v7(), thread_id: thread.id, message: UserMessage::text("Check edge case") };
+        let accepted = fixture.orchestrator.steer(prompt.clone()).await.unwrap();
+        assert!(!accepted.queued);
+        assert_eq!(accepted.message_id, prompt.id);
+
+        // Retrying while pending is idempotent and does not submit to the driver a second time.
+        let retry = fixture.orchestrator.steer(prompt.clone()).await.unwrap();
+        assert_eq!(retry.turn_id, accepted.turn_id);
+        assert_eq!(messages.lock().await.len(), 2, "initial send + one steer call");
+        assert!(fixture.store.queue_list(Some(thread.id)).unwrap().is_empty());
+        assert!(fixture.store.steering_receipt(prompt.id).unwrap().is_none());
+
+        // Late complete_delivered records MessageSteered once and queues nothing.
+        fixture
+            .orchestrator
+            .handle_driver_event(
+                thread.id,
+                &live,
+                DriverEvent::SteerSettled { steer_id: prompt.id.to_string(), outcome: kybern_drivers::SteerOutcome::Delivered },
+            )
+            .await
+            .unwrap();
+        let events = fixture.store.events_for_thread(thread.id).unwrap();
+        let steered: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(&e.payload, EventPayload::MessageSteered { message_id, .. } if *message_id == prompt.id))
+            .collect();
+        assert_eq!(steered.len(), 1);
+        assert!(fixture.store.queue_list(Some(thread.id)).unwrap().is_empty());
+
+        // Completing the turn and draining queues sends nothing further.
+        fixture.orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Completed)).await.unwrap();
+        fixture.orchestrator.drain_queues().await.unwrap();
+        assert_eq!(messages.lock().await.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn pending_steer_queues_once_on_late_revert_to_followup_and_delivers_next_turn() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let send_notify = Arc::new(tokio::sync::Notify::new());
+        let live = fixture
+            .active_session(
+                &thread,
+                TestSession {
+                    messages: messages.clone(),
+                    steer_pending: true,
+                    send_notify: Some(send_notify.clone()),
+                    ..Default::default()
+                },
+            )
+            .await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while messages.lock().await.is_empty() {
+                send_notify.notified().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let prompt = methods::QueuedMessage { id: Uuid::now_v7(), thread_id: thread.id, message: UserMessage::text("Run tests next") };
+        let accepted = fixture.orchestrator.steer(prompt.clone()).await.unwrap();
+        assert!(!accepted.queued);
+
+        // Host emits SteerSettled(RevertToFollowup) before run_completed.
+        fixture
+            .orchestrator
+            .handle_driver_event(
+                thread.id,
+                &live,
+                DriverEvent::SteerSettled { steer_id: prompt.id.to_string(), outcome: kybern_drivers::SteerOutcome::RevertToFollowup },
+            )
+            .await
+            .unwrap();
+        assert!(fixture.store.steering_receipt(prompt.id).unwrap().is_none(), "reverted steer must not record MessageSteered");
+        let queue = fixture.store.queue_list(Some(thread.id)).unwrap();
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].id, prompt.id);
+
+        // Turn completes; drain_queues delivers the follow-up once on the next turn.
+        fixture.orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Completed)).await.unwrap();
+        fixture.orchestrator.drain_queues().await.unwrap();
+        live.turn_ready.notified().await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while messages.lock().await.len() < 3 {
+                send_notify.notified().await;
+            }
+        })
+        .await
+        .unwrap();
+        let recorded = messages.lock().await;
+        assert_eq!(recorded.len(), 3, "initial send + pending steer + single follow-up send");
+        assert_eq!(recorded[2].plain_text(), "Run tests next");
+        assert!(fixture.store.queue_list(Some(thread.id)).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn slow_steer_does_not_hold_turn_lock_or_duplicate_early_settlement() {
+        let fixture = Fixture::new();
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let steer_entered = Arc::new(tokio::sync::Notify::new());
+        let steer_release = Arc::new(tokio::sync::Notify::new());
+        let live = fixture
+            .active_session(
+                &thread,
+                TestSession {
+                    messages: messages.clone(),
+                    steer_pending: true,
+                    steer_entered: Some(steer_entered.clone()),
+                    steer_release: Some(steer_release.clone()),
+                    ..Default::default()
+                },
+            )
+            .await;
+
+        let prompt = methods::QueuedMessage { id: Uuid::now_v7(), thread_id: thread.id, message: UserMessage::text("While streaming") };
+        let orchestrator = fixture.orchestrator.clone();
+        let entered = steer_entered.notified();
+        let steer_task = tokio::spawn({
+            let prompt = prompt.clone();
+            async move { orchestrator.steer(prompt).await }
+        });
+        tokio::time::timeout(Duration::from_secs(2), entered).await.unwrap();
+
+        // While steer() is blocked inside the driver, live.turn is NOT held: streaming events land immediately.
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            fixture.orchestrator.handle_driver_event(
+                thread.id,
+                &live,
+                DriverEvent::TextDelta { message_id: "m-stream".into(), origin: EventOrigin::Root, delta: "streaming live".into() },
+            ),
+        )
+        .await
+        .expect("streaming must not block on an in-flight steer")
+        .unwrap();
+
+        // Even if SteerSettled arrives before steer() finishes returning, it records MessageSteered once.
+        fixture
+            .orchestrator
+            .handle_driver_event(
+                thread.id,
+                &live,
+                DriverEvent::SteerSettled { steer_id: prompt.id.to_string(), outcome: kybern_drivers::SteerOutcome::Delivered },
+            )
+            .await
+            .unwrap();
+        steer_release.notify_one();
+        let result = tokio::time::timeout(Duration::from_secs(2), steer_task).await.unwrap().unwrap().unwrap();
+        assert!(!result.queued);
+
+        let events = fixture.store.events_for_thread(thread.id).unwrap();
+        assert!(events.iter().any(|e| matches!(&e.payload, EventPayload::AssistantTextDelta { delta, .. } if delta == "streaming live")));
+        let steered = events
+            .iter()
+            .filter(|e| matches!(&e.payload, EventPayload::MessageSteered { message_id, .. } if *message_id == prompt.id))
+            .count();
+        assert_eq!(steered, 1, "early SteerSettled + returning steer() must record MessageSteered once");
+        assert!(fixture.store.queue_list(Some(thread.id)).unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -9693,6 +10082,7 @@ for line in sys.stdin:
             lead_settings: Mutex::new(None),
             context_usage: std::sync::Mutex::new(None),
             instructions_unconfirmed: AtomicBool::new(false),
+            steers: SteerTracker::default(),
         });
         fixture.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
         fixture.orchestrator.send(thread.id, UserMessage::text("delegate")).await.unwrap();

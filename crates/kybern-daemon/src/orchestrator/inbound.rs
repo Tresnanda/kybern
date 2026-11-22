@@ -740,6 +740,7 @@ impl Orchestrator {
             lead_settings: AsyncMutex::new(None),
             context_usage: std::sync::Mutex::new(None),
             instructions_unconfirmed: std::sync::atomic::AtomicBool::new(false),
+            steers: super::SteerTracker::default(),
         });
         let message = UserMessage::text(format!("Tool calls from {from_name} · {}", display_title(&thread.title)));
         self.emit(thread.id, Some(turn_id), EventPayload::TurnStarted { message_id: Uuid::now_v7(), message })?;
