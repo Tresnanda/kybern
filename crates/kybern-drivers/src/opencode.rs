@@ -1010,7 +1010,7 @@ pub(super) fn unruled_child_notice(mode: PermissionMode, stopped: bool) -> Drive
     let (level, text) = if stopped {
         (NoticeLevel::Warning, format!("Stopped a subagent that couldn't switch to {label}. Ask the agent to run it again."))
     } else {
-        (NoticeLevel::Error, format!("A subagent couldn't switch to {label} and couldn't be stopped. Stop it before it asks for anything."))
+        (NoticeLevel::Error, format!("A subagent couldn't switch to {label} and is still running. Stop it from its task row."))
     };
     DriverEvent::Notice { level, text, data: None }
 }
@@ -1348,6 +1348,13 @@ impl OpencodeSession {
                     queue.push(id.to_string());
                 }
             }
+        }
+        if found.len() >= MAX_LISTED_CHILDREN {
+            tracing::warn!(
+                root,
+                limit = MAX_LISTED_CHILDREN,
+                "an OpenCode thread lists more subagents than are rewritten at once; the rest are written when they resume"
+            );
         }
         Ok(found)
     }
@@ -2463,7 +2470,7 @@ impl AgentSession for Handle {
     /// the subagents, which is read first: a subagent nobody can find would keep
     /// an older mode. A subagent that cannot be updated does not undo the change:
     /// the thread really is in the new mode, so the call succeeds and the
-    /// subagent is stopped, with a notice that names it.
+    /// subagent is stopped, with a notice.
     async fn set_permission_mode(&self, mode: PermissionMode) -> Result<()> {
         let s = &self.0;
         let session_id = s.state.lock().await.session_id.clone().ok_or_else(|| DriverError::Protocol("no opencode session".into()))?;

@@ -596,7 +596,7 @@ async fn a_subagent_that_can_neither_be_updated_nor_stopped_is_an_error() {
     session.state.lock().await.children.insert("ses_kid".into(), ChildRuntime { task_id: "opencode:ses_kid".into(), ..Default::default() });
     session.rewrite_child_rules(Vec::new()).await;
     let found = notices(&drain(&mut rx));
-    assert!(matches!(found.as_slice(), [(NoticeLevel::Error, text)] if text.contains("couldn't be stopped")), "{found:?}");
+    assert!(matches!(found.as_slice(), [(NoticeLevel::Error, text)] if text.contains("is still running")), "{found:?}");
     assert!(!session.state.lock().await.children["ses_kid"].terminal);
 }
 

@@ -755,9 +755,9 @@ async fn a_subagent_that_can_neither_be_updated_nor_stopped_is_an_error() {
     session.rewrite_child_rules(Vec::new()).await;
     let events = drain(&mut rx);
     assert!(
-        events.iter().any(
-            |event| matches!(event, DriverEvent::Notice { level: NoticeLevel::Error, text, .. } if text.contains("couldn't be stopped"))
-        ),
+        events
+            .iter()
+            .any(|event| matches!(event, DriverEvent::Notice { level: NoticeLevel::Error, text, .. } if text.contains("is still running"))),
         "{events:?}"
     );
     assert!(!session.state.lock().await.children["ses_kid"].terminal);
@@ -832,7 +832,7 @@ async fn a_finished_subagent_is_rewritten_when_the_mode_changes_not_when_it_resu
 #[tokio::test]
 async fn subagents_the_driver_never_saw_are_found_on_the_server_and_rewritten_at_a_mode_change() {
     let mock = Mock::start(|method, path, _| match (method, path) {
-        ("GET", "/api/session") => Reply::Json(200, json!({"data": [{"id": "ses_old"}, {"id": "ses_older"}], "cursor": {"next": null}})),
+        ("GET", "/api/session") => Reply::Json(200, json!({"data": [{"id": "ses_old", "parentID": "ses_root"}, {"id": "ses_older", "parentID": "ses_root"}], "cursor": {"next": null}})),
         _ => Reply::Json(200, json!({})),
     })
     .await;
@@ -846,6 +846,31 @@ async fn subagents_the_driver_never_saw_are_found_on_the_server_and_rewritten_at
     }
     let listing = mock.seen.lock().unwrap().iter().find(|seen| seen.method == "GET" && seen.path == "/api/session").cloned().unwrap();
     assert!(listing.query.contains("parentID=ses_root"), "{}", listing.query);
+}
+
+/// A server that ignored the `parentID` filter would list every session in the
+/// shared database; only this thread's subagents may get its rules.
+#[tokio::test]
+async fn a_listing_that_ignores_the_parent_filter_touches_only_this_threads_subagents() {
+    let mock = Mock::start(|method, path, _| match (method, path) {
+        ("GET", "/api/session") => Reply::Json(
+            200,
+            json!({"data": [
+                {"id": "ses_kid", "parentID": "ses_root"},
+                {"id": "ses_other_thread", "parentID": null},
+                {"id": "ses_other_kid", "parentID": "ses_other_thread"}
+            ], "cursor": {"next": null}}),
+        ),
+        _ => Reply::Json(200, json!({})),
+    })
+    .await;
+    let (session, _rx) = session(&mock.base);
+    let handle = Handle(session.clone(), std::sync::Mutex::new(None), None);
+    handle.set_permission_mode(PermissionMode::FullAccess).await.unwrap();
+    assert_eq!(mock.requests("PATCH", "/api/session/ses_kid").len(), 1);
+    for id in ["ses_other_thread", "ses_other_kid"] {
+        assert!(mock.requests("PATCH", &format!("/api/session/{id}")).is_empty(), "{id} was given this thread's rules");
+    }
 }
 
 #[tokio::test]
@@ -1132,7 +1157,7 @@ async fn a_resumed_threads_subagents_are_rewritten_before_it_runs() {
     let dir = temp.path().to_path_buf();
     let mock = Mock::start(|method, path, _| match (method, path) {
         ("GET", "/api/event") => Reply::Stream(vec![frame(json!({"type": "server.connected", "data": {}}))]),
-        ("GET", "/api/session") => Reply::Json(200, json!({"data": [{"id": "ses_kid"}], "cursor": {"next": null}})),
+        ("GET", "/api/session") => Reply::Json(200, json!({"data": [{"id": "ses_kid", "parentID": "ses_old"}], "cursor": {"next": null}})),
         _ => Reply::Json(200, json!({"data": {"id": "ses_old"}})),
     })
     .await;
@@ -1152,10 +1177,12 @@ async fn a_resumed_threads_subagents_are_rewritten_before_it_runs() {
 /// is followed.
 #[tokio::test]
 async fn the_subagent_listing_follows_full_pages_only() {
-    let full: Vec<Value> = (0..LIST_PAGE).map(|i| json!({"id": format!("ses_{i}")})).collect();
+    let full: Vec<Value> = (0..LIST_PAGE).map(|i| json!({"id": format!("ses_{i}"), "parentID": "ses_root"})).collect();
     let mock = Mock::start(move |method, path, nth| match (method, path, nth) {
         ("GET", "/api/session", 0) => Reply::Json(200, json!({"data": full, "cursor": {"next": "c2"}})),
-        ("GET", "/api/session", 1) => Reply::Json(200, json!({"data": [{"id": "ses_last"}], "cursor": {"next": "c3"}})),
+        ("GET", "/api/session", 1) => {
+            Reply::Json(200, json!({"data": [{"id": "ses_last", "parentID": "ses_root"}], "cursor": {"next": "c3"}}))
+        }
         _ => Reply::Json(200, json!({"data": [], "cursor": {"next": "c4"}})),
     })
     .await;

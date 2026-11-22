@@ -1321,7 +1321,12 @@ impl OpencodeSession {
                 }
                 let page = self.server_call(Method::GET, &path, None, CHILD_RULES_TIMEOUT).await?;
                 let items = page["data"].as_array().map(Vec::as_slice).unwrap_or_default();
-                for id in items.iter().filter_map(|info| info["id"].as_str()) {
+                // Only sessions that name this parent: a build that ignored the
+                // filter would otherwise hand back every session in the shared
+                // database, other threads' and the user's own, and this thread's
+                // rules would be written into all of them.
+                let children = items.iter().filter(|info| info["parentID"].as_str() == Some(parent.as_str()));
+                for id in children.filter_map(|info| info["id"].as_str()) {
                     if id != root && !found.iter().any(|known| known == id) && found.len() < MAX_LISTED_CHILDREN {
                         found.push(id.to_string());
                         queue.push(id.to_string());
@@ -1332,6 +1337,13 @@ impl OpencodeSession {
                     break;
                 }
             }
+        }
+        if found.len() >= MAX_LISTED_CHILDREN {
+            tracing::warn!(
+                root,
+                limit = MAX_LISTED_CHILDREN,
+                "an OpenCode thread lists more subagents than are rewritten at once; the rest are written when they resume"
+            );
         }
         Ok(found)
     }
