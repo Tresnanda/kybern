@@ -8,16 +8,38 @@ use kybern_protocol::ProviderKind;
 use crate::{DriverError, Result};
 
 pub fn resolve(kind: ProviderKind, override_path: Option<&PathBuf>) -> Result<PathBuf> {
+    resolve_with_home(kind, override_path, user_home().as_deref())
+}
+
+fn resolve_with_home(kind: ProviderKind, override_path: Option<&PathBuf>, home: Option<&Path>) -> Result<PathBuf> {
     if let Some(p) = override_path {
-        if p.is_file() {
-            return Ok(p.clone());
+        let expanded = expand_tilde(p, home);
+        if expanded.is_file() {
+            return Ok(expanded);
         }
-        return Err(DriverError::BinaryNotFound(p.display().to_string()));
+        return Err(DriverError::BinaryNotFound(expanded.display().to_string()));
     }
     which::which(kind.default_binary())
         .ok()
         .or_else(|| installed_location(kind))
         .ok_or_else(|| DriverError::BinaryNotFound(kind.default_binary().to_string()))
+}
+
+fn user_home() -> Option<PathBuf> {
+    std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).filter(|value| !value.is_empty()).map(PathBuf::from)
+}
+
+/// Expand a leading `~`, `~/…`, or `~\…` against `home`. Leaves `~other/…` untouched.
+pub(crate) fn expand_tilde(path: &Path, home: Option<&Path>) -> PathBuf {
+    let Some(home) = home else { return path.to_path_buf() };
+    let Some(text) = path.to_str() else { return path.to_path_buf() };
+    if text == "~" {
+        return home.to_path_buf();
+    }
+    if let Some(rest) = text.strip_prefix("~/").or_else(|| text.strip_prefix("~\\")) {
+        return home.join(rest);
+    }
+    path.to_path_buf()
 }
 
 /// Where a harness's own installer puts its binary when that folder is not on
@@ -327,5 +349,18 @@ mod tests {
         assert_eq!(shim_target(NPM_NODE, dir.path(), Some(Path::new("node"))), None, "missing target");
         assert_eq!(shim_target("@echo off\r\npython C:\\tools\\x.py %*\r\n", dir.path(), Some(Path::new("node"))), None);
         assert_eq!(shim_target("", dir.path(), None), None);
+    }
+
+    #[test]
+    fn resolve_expands_leading_tilde_against_home() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = file(home.path(), &[".local", "bin", "agy"]);
+        assert_eq!(resolve_with_home(ProviderKind::Antigravity, Some(&PathBuf::from("~/.local/bin/agy")), Some(home.path())).unwrap(), bin);
+        assert_eq!(expand_tilde(Path::new("~"), Some(home.path())), home.path());
+        assert_eq!(expand_tilde(Path::new(r"~\bin\agy.exe"), Some(home.path())), home.path().join(r"bin\agy.exe"));
+        // `~other/...` is a username reference, not the current user's home: leave it alone.
+        assert_eq!(expand_tilde(Path::new("~other/bin/agy"), Some(home.path())), PathBuf::from("~other/bin/agy"));
+        let missing = resolve_with_home(ProviderKind::Antigravity, Some(&PathBuf::from("~/missing/agy")), Some(home.path())).unwrap_err();
+        assert!(matches!(missing, DriverError::BinaryNotFound(ref path) if path == &home.path().join("missing/agy").display().to_string()));
     }
 }
