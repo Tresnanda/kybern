@@ -76,7 +76,28 @@ pub(crate) struct AgyAcp {
     hidden: std::sync::Mutex<HashSet<String>>,
     /// The last prompt answered `refusal`, agy's word for an exhausted quota (T3 Code).
     refused: AtomicBool,
+    /// The prompt now open, from [`AcpFlavor::prompt_mark`] to [`AcpFlavor::prompt_outcome`].
+    prompt: std::sync::Mutex<Option<OpenPrompt>>,
+    /// Held text of a prompt that succeeded, for [`AcpFlavor::released_text`].
+    released: std::sync::Mutex<String>,
 }
+
+/// What Kybern keeps of an open prompt to tell agy's failures from its answer.
+struct OpenPrompt {
+    session_id: String,
+    /// The conversation's last step before the prompt.
+    mark: i64,
+    /// The conversation's database, open for the prompt's chunks once it exists.
+    db: Option<rusqlite::Connection>,
+    /// A warning-shaped chunk (`⚠ …`) agy hasn't recorded an error step for: shown once the turn
+    /// succeeds or more text follows, never next to the failure it may turn out to be.
+    held: String,
+    /// The text of chunks withheld as a failure's words, for the failure's detail.
+    failure_text: String,
+}
+
+/// The most of a withheld failure's text kept for its detail.
+const FAILURE_TEXT_BYTES: usize = 16_384;
 
 impl AgyAcp {
     pub(crate) fn new(home: Option<PathBuf>, bridge: Option<&NativeToolBridge>) -> Result<Self> {
@@ -93,7 +114,38 @@ impl AgyAcp {
             failed_to_start: Arc::new(AtomicBool::new(false)),
             hidden: std::sync::Mutex::new(HashSet::new()),
             refused: AtomicBool::new(false),
+            prompt: std::sync::Mutex::new(None),
+            released: std::sync::Mutex::new(String::new()),
         })
+    }
+
+    fn lock_prompt(&self) -> std::sync::MutexGuard<'_, Option<OpenPrompt>> {
+        self.prompt.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// On ACP agy reports a failure as chat text and `end_turn`, recording an error step first (seen on
+    /// agy 1.5.14: the step is in the database when the chunk arrives). That text is the failure's, which
+    /// [`AcpFlavor::prompt_outcome`] shows as a problem: the chunk is withheld so it isn't shown twice.
+    /// A `⚠` chunk with no error step yet is held until the turn's end decides. Returns the chunk's text
+    /// to send in its place (`Some("")` withholds it).
+    fn screen_chunk(&self, session_id: &str, text: &str) -> Option<String> {
+        let mut open = self.lock_prompt();
+        let prompt = open.as_mut().filter(|prompt| prompt.session_id == session_id)?;
+        if prompt.db.is_none() {
+            prompt.db = self.conversation_db(session_id).filter(|db| db.exists()).and_then(|db| open_read_only(&db));
+        }
+        if prompt.db.as_ref().is_some_and(|db| newest_is_error(db, prompt.mark)) {
+            let held = std::mem::take(&mut prompt.held);
+            push_bounded(&mut prompt.failure_text, &held);
+            push_bounded(&mut prompt.failure_text, text);
+            return Some(String::new());
+        }
+        if text.trim_start().starts_with('\u{26a0}') {
+            prompt.held.push_str(text);
+            return Some(String::new());
+        }
+        // More text after a held warning: it was part of the answer.
+        (!prompt.held.is_empty()).then(|| std::mem::take(&mut prompt.held) + text)
     }
 
     /// This conversation's own database, when its id is a plain one.
@@ -204,7 +256,24 @@ impl AcpFlavor for AgyAcp {
     }
 
     fn rewrite_incoming(&self, message: &mut Value) {
+        if message.get("method").and_then(Value::as_str) == Some("session/update")
+            && message.pointer("/params/update/sessionUpdate").and_then(Value::as_str) == Some("agent_message_chunk")
+            && let Some(text) = message.pointer("/params/update/content/text").and_then(Value::as_str)
+            && let Some(session_id) = message.pointer("/params/sessionId").and_then(Value::as_str)
+            && let Some(replacement) = self.screen_chunk(session_id, text)
+        {
+            match message.pointer_mut("/params/update") {
+                Some(update) if replacement.is_empty() => *update = json!({ "sessionUpdate": "session_info_update" }),
+                Some(update) => update["content"]["text"] = json!(replacement),
+                None => {}
+            }
+        }
         rewrite(message, &self.hidden, &self.refused);
+    }
+
+    fn released_text(&self) -> Option<String> {
+        let held = std::mem::take(&mut *self.released.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
+        (!held.is_empty()).then_some(held)
     }
 
     fn turn_usage(&self, meta: Option<&Meta>) -> (Usage, Option<f64>) {
@@ -260,31 +329,48 @@ impl AcpFlavor for AgyAcp {
 
     fn prompt_mark(&self, session_id: &str) -> Option<i64> {
         self.refused.store(false, Ordering::SeqCst);
+        *self.lock_prompt() = None;
         let db = self.conversation_db(session_id)?;
         // A conversation without its database yet starts from nothing.
-        if !db.exists() {
-            return Some(-1);
-        }
-        last_step_index(&db)
+        let mark = if db.exists() { last_step_index(&db)? } else { -1 };
+        let prompt = OpenPrompt { session_id: session_id.into(), mark, db: None, held: String::new(), failure_text: String::new() };
+        *self.lock_prompt() = Some(prompt);
+        Some(mark)
     }
 
     fn prompt_outcome(&self, session_id: &str, mark: Option<i64>, event: DriverEvent) -> DriverEvent {
+        let refused = self.refused.swap(false, Ordering::SeqCst);
         if !matches!(event, DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. }) {
+            // Stopped or failed: what was held goes with it.
+            *self.lock_prompt() = None;
             return event;
         }
         let step = mark.and_then(|mark| self.conversation_db(session_id).and_then(|db| steps_after(&db, mark)));
-        let refused = self.refused.swap(false, Ordering::SeqCst);
-        match step {
-            Some(StepsAfter { error: Some(text), reached_model }) => failed(&text, reached_model),
-            _ if refused => {
-                let detail = "session/prompt answered stopReason \"refusal\" (QUOTA_EXHAUSTED)";
+        let outcome = match step {
+            Some(StepsAfter { error: Some(text), reached_model, .. }) => failed(&text, reached_model),
+            step if refused => {
+                // The reset time rides in agy's quota error: its error step, else the words it sent.
+                let words = self.lock_prompt().as_mut().map(|prompt| prompt.failure_text.clone() + &prompt.held).unwrap_or_default();
+                let detail = step
+                    .and_then(|step| step.last_error)
+                    .or_else(|| (!words.trim().is_empty()).then(|| words.trim().to_string()))
+                    .unwrap_or_else(|| "session/prompt answered stopReason \"refusal\" (QUOTA_EXHAUSTED)".into());
                 DriverEvent::TurnFailed {
                     error: "You have reached your Antigravity quota for this period.".into(),
-                    problem: Some(crate::failure::rate_limited_problem(ProviderKind::Antigravity, detail)),
+                    problem: Some(crate::failure::rate_limited_problem(ProviderKind::Antigravity, &detail)),
                 }
             }
             _ => event,
+        };
+        // A failure's held words are its own; a success shows them (`released_text`). Replies agy starts
+        // by itself after this are no prompt's: nothing screens them.
+        let open = self.lock_prompt().take();
+        if matches!(outcome, DriverEvent::TurnCompleted { .. })
+            && let Some(open) = open
+        {
+            *self.released.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = open.held;
         }
+        outcome
     }
 }
 
@@ -618,6 +704,8 @@ pub(crate) struct StepsAfter {
     pub(crate) error: Option<String>,
     /// The model answered within this prompt.
     pub(crate) reached_model: bool,
+    /// The text of the last error step within this prompt, wherever it is.
+    pub(crate) last_error: Option<String>,
 }
 
 /// The steps after `mark`: whether the last one is an error (and its text), and whether the model answered.
@@ -636,7 +724,34 @@ pub(crate) fn steps_after(db: &Path, mark: i64) -> Option<StepsAfter> {
         })
         .is_ok();
     let error = (step_type == ERROR_STEP).then(|| payload_text(&payload.unwrap_or_default()));
-    Some(StepsAfter { error, reached_model })
+    let last_error = match &error {
+        Some(error) => Some(error.clone()),
+        None => conn
+            .query_row(
+                "SELECT substr(step_payload, 1, ?1) FROM steps WHERE idx > ?2 AND step_type = ?3 ORDER BY idx DESC LIMIT 1",
+                rusqlite::params![ERROR_PAYLOAD_BYTES, mark, ERROR_STEP],
+                |row| row.get::<_, Option<Vec<u8>>>(0),
+            )
+            .ok()
+            .map(|payload| payload_text(&payload.unwrap_or_default())),
+    };
+    Some(StepsAfter { error, reached_model, last_error })
+}
+
+/// Whether the newest step after `mark` is an error step.
+fn newest_is_error(conn: &rusqlite::Connection, mark: i64) -> bool {
+    conn.query_row("SELECT step_type FROM steps WHERE idx > ?1 ORDER BY idx DESC LIMIT 1", [mark], |row| row.get::<_, i64>(0))
+        .is_ok_and(|step_type| step_type == ERROR_STEP)
+}
+
+/// `text` added to `into`, which keeps at most [`FAILURE_TEXT_BYTES`].
+fn push_bounded(into: &mut String, text: &str) {
+    let room = FAILURE_TEXT_BYTES.saturating_sub(into.len());
+    let mut end = room.min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    into.push_str(&text[..end]);
 }
 
 /// An error step's payload (protobuf) as the text it carries: control bytes and invalid UTF-8 become spaces.

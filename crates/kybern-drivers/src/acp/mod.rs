@@ -214,6 +214,11 @@ pub(crate) trait AcpFlavor: Send + Sync + Sized + 'static {
     fn prompt_outcome(&self, _session_id: &str, _mark: Option<i64>, event: DriverEvent) -> DriverEvent {
         event
     }
+    /// Text the flavor held back from the prompt that just ended (see [`AcpFlavor::rewrite_incoming`]),
+    /// shown at the end of its turn. Read right after [`AcpFlavor::prompt_outcome`].
+    fn released_text(&self) -> Option<String> {
+        None
+    }
     /// A permission request that is really the agent's question to the user.
     fn permission_question(&self, _request: &RequestPermissionRequest) -> Option<Box<dyn ExtensionAsk>> {
         None
@@ -434,6 +439,7 @@ impl Shared {
         let mut activity = self.lock_activity();
         activity.cards = activity.cards.saturating_sub(1);
         activity.last_progress = tokio::time::Instant::now();
+        activity.last_heard = activity.last_progress;
     }
 
     /// The turn ended: the agent no longer waits for any open card.
@@ -704,6 +710,7 @@ impl<F: AcpFlavor> Connection<F> {
                 {
                     let mut activity = shared.lock_activity();
                     activity.last_progress = tokio::time::Instant::now();
+                    activity.last_heard = activity.last_progress;
                     match &n.update {
                         SessionUpdate::ToolCall(call) if !matches!(call.status, ToolCallStatus::Completed | ToolCallStatus::Failed) => {
                             activity.tools.insert(call.tool_call_id.to_string(), flavor.tool_outlives_prompt(call));
@@ -988,6 +995,9 @@ impl<F: AcpFlavor> Connection<F> {
                         let mut activity = shared.lock_activity();
                         activity.turn_open = false;
                         activity.background = false;
+                        // A tool whose completion never came (a stopped or failed turn, a missed update)
+                        // must not hold or keep busy the turns after this one.
+                        activity.tools.clear();
                     }
                     shared.withdraw_all().await;
                     let _ = shared.events.send(event).await;
@@ -1087,6 +1097,10 @@ impl<F: AcpFlavor> Connection<F> {
                             )
                             .await;
                             let event = flavor.prompt_outcome(&session_id.0, mark, settled.event);
+                            if let Some(delta) = flavor.released_text() {
+                                let message_id = messages.lock().await.current();
+                                let _ = shared.events.send(DriverEvent::TextDelta { message_id, origin: EventOrigin::Root, delta }).await;
+                            }
                             turn_ended(event).await;
                             if settled.close {
                                 break;

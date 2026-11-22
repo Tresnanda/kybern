@@ -62,6 +62,10 @@ impl Timings {
 pub(crate) const HOLD_QUIET: Duration = Duration::from_secs(3);
 /// How long a reply the agent opened by itself may stay quiet without closing before the turn ends anyway.
 pub(crate) const OPEN_REPLY_QUIET: Duration = Duration::from_secs(120);
+/// How long a completed prompt is held for work that outlives it while the agent says nothing at all: a
+/// completion that never comes must not hold the turn (and the messages queued behind it) for good. The
+/// agent's later reply to the work is then a turn of its own.
+pub(crate) const OUTLIVING_QUIET: Duration = Duration::from_secs(30 * 60);
 /// How often a held or watched turn looks at what the agent is doing.
 const WATCH_TICK: Duration = Duration::from_millis(250);
 /// A tick this much later than asked means the host slept: that is not the agent's silence.
@@ -80,8 +84,10 @@ pub(crate) struct Activity {
     pub(crate) reply_open: bool,
     /// Cards waiting for the user.
     pub(crate) cards: usize,
-    /// The agent's last update.
+    /// The agent's last update, or the last moment waiting on a tool or a card counted as progress.
     pub(crate) last_progress: tokio::time::Instant,
+    /// The agent's last update or answered card: only the agent moves this.
+    pub(crate) last_heard: tokio::time::Instant,
 }
 
 impl Activity {
@@ -93,6 +99,7 @@ impl Activity {
             reply_open: false,
             cards: 0,
             last_progress: tokio::time::Instant::now(),
+            last_heard: tokio::time::Instant::now(),
         }
     }
 
@@ -107,8 +114,11 @@ impl Activity {
 
     /// A held turn can end: nothing outlives it, nobody is asked, and its last reply closed (or never closes).
     fn released(&self, now: tokio::time::Instant) -> bool {
-        if self.outliving() || self.cards > 0 {
+        if self.cards > 0 {
             return false;
+        }
+        if self.outliving() {
+            return now.saturating_duration_since(self.last_heard) >= OUTLIVING_QUIET;
         }
         let quiet = now.saturating_duration_since(self.last_progress);
         if self.reply_open { quiet >= OPEN_REPLY_QUIET } else { quiet >= HOLD_QUIET }
@@ -299,8 +309,12 @@ pub(crate) async fn settle_watched<'a, C: Completion>(
                 let Some(watch) = watch.as_ref() else { continue };
                 let mut activity = watch.lock();
                 // A late tick is the host waking from sleep, not the agent's silence.
-                if now.saturating_duration_since(last_tick) > WATCH_TICK + HOST_SLEEP_TOLERANCE || activity.busy() {
+                let slept = now.saturating_duration_since(last_tick) > WATCH_TICK + HOST_SLEEP_TOLERANCE;
+                if slept || activity.busy() {
                     activity.last_progress = now;
+                }
+                if slept {
+                    activity.last_heard = now;
                 }
                 last_tick = now;
                 if let Some(event) = held.as_ref() {
@@ -574,6 +588,35 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn a_command_whose_end_never_comes_holds_its_prompt_only_while_agy_is_heard_from() {
+        let (_completions_tx, mut completions) = mpsc::unbounded_channel::<std::convert::Infallible>();
+        let (_commands_tx, mut commands) = mpsc::channel::<SessionCommand>(4);
+        let activity = std::sync::Mutex::new(Activity::new());
+        activity.lock().unwrap().tools.insert("c1".into(), true);
+        let started = std::time::Instant::now();
+        let wait = settle_watched(
+            async { completed(7) },
+            "p",
+            started,
+            &mut completions,
+            &mut commands,
+            CANCEL_GRACE,
+            || {},
+            watch(&activity, None, None),
+        );
+        let mut wait = std::pin::pin!(wait);
+        assert!(tokio::time::timeout(OUTLIVING_QUIET / 2, &mut wait).await.is_err(), "held while the command may still run");
+        // agy says something (its command's output, say): the hold starts over.
+        activity.lock().unwrap().last_heard = tokio::time::Instant::now();
+        assert!(tokio::time::timeout(OUTLIVING_QUIET - Duration::from_secs(60), &mut wait).await.is_err());
+        // Then nothing, and the command's end never comes: the turn ends anyway.
+        let settled = tokio::time::timeout(Duration::from_secs(120), &mut wait).await.expect("a missed completion can't hold the turn");
+        assert!(
+            matches!(settled.event, DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, ref usage, .. } if usage.input_tokens == 7)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn a_reply_that_never_closes_still_ends_and_stop_ends_a_held_turn() {
         let (_completions_tx, mut completions) = mpsc::unbounded_channel::<std::convert::Infallible>();
         let (commands_tx, mut commands) = mpsc::channel::<SessionCommand>(4);
@@ -649,8 +692,16 @@ mod tests {
         let mut wait = std::pin::pin!(wait);
         assert!(tokio::time::timeout(Duration::from_secs(300), &mut wait).await.is_err(), "a card waiting for the user is not silence");
         {
+            // The user answered; agy runs a long command that prints nothing.
             let mut state = activity.lock().unwrap();
             state.cards = 0;
+            state.tools.insert("c1".into(), false);
+            state.last_progress = tokio::time::Instant::now();
+        }
+        assert!(tokio::time::timeout(Duration::from_secs(300), &mut wait).await.is_err(), "a running tool is not silence");
+        {
+            let mut state = activity.lock().unwrap();
+            state.tools.clear();
             state.last_progress = tokio::time::Instant::now();
         }
         // The host sleeps for longer than the limit: one late tick, not silence.

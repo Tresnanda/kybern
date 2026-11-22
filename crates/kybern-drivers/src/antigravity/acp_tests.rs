@@ -137,7 +137,10 @@ fn steps_after_the_mark_tell_an_error_and_whether_the_model_answered() {
     let late = steps_after(&db, 2).unwrap();
     assert!(late.reached_model && late.error.is_some());
     conn.execute("INSERT INTO steps VALUES (5, 15, x'00')", []).unwrap();
-    assert_eq!(steps_after(&db, 4), Some(StepsAfter { error: None, reached_model: true }));
+    let last = Some("NOT_FOUND (code 404): gone".to_string());
+    assert_eq!(steps_after(&db, 4), Some(StepsAfter { error: None, reached_model: true, last_error: None }));
+    // An error that isn't the last step still counts for what it says (a quota's reset time).
+    assert_eq!(steps_after(&db, 2).map(|steps| (steps.error.is_some(), steps.last_error)), Some((false, last)));
 }
 
 /// A stand-in for `agy`: `--version` and `models` answer at once, `acp` serves ACP, and anything else is
@@ -166,7 +169,7 @@ if args[:1] != ["acp"]:
 starts = os.path.join(log_dir, "acp_starts")
 count = int(open(starts).read()) if os.path.exists(starts) else 0
 open(starts, "w").write(str(count + 1))
-if os.environ.get("FAKE_AGY_SESSION_FAILS") and count >= 1:
+if os.environ.get("FAKE_AGY_ACP_FAILS") or (os.environ.get("FAKE_AGY_SESSION_FAILS") and count >= 1):
     sys.stderr.write("agy: the ACP server could not start\n"); sys.exit(4)
 log = open(os.path.join(log_dir, "received.jsonl"), "a")
 def send(msg):
@@ -268,18 +271,40 @@ def prompt(mid, sid, text):
         chunk(sid, "answered")
         update(sid, {"sessionUpdate": "usage_update", "used": 10, "size": 100})
         answer(mid)
-        time.sleep(0.5)
+        # Replies by itself once the test has seen the first turn end.
+        wake = os.path.join(log_dir, "wake")
+        while not os.path.exists(wake):
+            time.sleep(0.02)
         chunk(sid, "woke up")
         update(sid, {"sessionUpdate": "usage_update", "used": 20, "size": 100})
         return
-    elif text == "slow":
+    elif text in ("slow", "slow_missed"):
         tool(sid, "c6", "run_command", "execute", "sleep 30", {"CommandLine": "sleep 30"})
         while True:
             msg = read()
             if msg.get("method") == "session/cancel":
-                done(sid, "c6", "run_command", {}, status="failed")
+                # `slow_missed` never reports the command's end.
+                if text == "slow":
+                    done(sid, "c6", "run_command", {}, status="failed")
                 answer(mid, "cancelled"); return
             handle(msg)
+    elif text == "late_error":
+        # The warning first, its error step after it.
+        chunk(sid, "\n\u26a0 the model call failed\n")
+        steps(sid, [(15, b"\x00"), (17, b"\x0a\x12UNAVAILABLE (code 503): The service is currently unavailable.\x10")])
+    elif text == "warn_then_answer":
+        steps(sid, [(14, b"\x00"), (15, b"\x00")])
+        chunk(sid, "\u26a0 Careful: ")
+        chunk(sid, "the file is large.")
+    elif text == "warn_only":
+        steps(sid, [(14, b"\x00"), (15, b"\x00")])
+        chunk(sid, "\u26a0 nothing to change")
+    elif text == "refusal_text":
+        chunk(sid, "\n\u26a0 Quota exhausted. quotaResetTimeStamp:2099-01-02T03:04:00Z reason:QUOTA_EXHAUSTED\n")
+        answer(mid, "refusal"); return
+    elif text == "refusal_step":
+        steps(sid, [(17, b"\x0a\x12RESOURCE_EXHAUSTED quotaResetTimeStamp:2099-05-06T07:08:00Z\x10"), (14, b"\x00")])
+        answer(mid, "refusal"); return
     elif text in ("error404_early", "error404_late", "signature"):
         if text == "error404_early":
             rows = [(17, b"\x0a\x12NOT_FOUND (code 404): Requested entity was not found.\x10")]
@@ -732,6 +757,8 @@ mod session {
         let crate::SpawnedSession { session, events: mut rx } = spawn(&driver, fake.config(PermissionMode::FullAccess, &[])).await.unwrap();
         let first = send(&*session, &mut rx, "background").await;
         assert_eq!(texts(&first), "answered");
+        // agy replies by itself once the first turn has ended.
+        std::fs::write(fake.root.path().join("wake"), "").unwrap();
         let woke = turn(&*session, &mut rx, &ApprovalDecision::AllowOnce).await;
         assert!(matches!(woke[0], DriverEvent::ResponseStarted), "{woke:?}");
         assert_eq!(texts(&woke), "woke up");
@@ -796,6 +823,7 @@ mod session {
         let crate::SpawnedSession { session, events: mut rx } = spawn(&driver, fake.config(PermissionMode::FullAccess, &[])).await.unwrap();
         // A 404 before the model answered: the model can't be used.
         let early = send(&*session, &mut rx, "error404_early").await;
+        assert_eq!(texts(&early), "", "the error's own text shows once, as the failure: {early:?}");
         let problem = failure(end(&early));
         assert_eq!(problem.kind, ProblemKind::NotFound);
         assert_eq!(problem.action.as_ref().map(|action| action.id.as_str()), Some("choose_model"));
@@ -817,6 +845,128 @@ mod session {
         // And a clean turn is clean again.
         assert!(matches!(end(&send(&*session, &mut rx, "hello").await), DriverEvent::TurnCompleted { .. }));
         session.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_error_agy_reports_as_text_shows_once_and_a_warning_that_isnt_one_still_shows() {
+        let fake = Fake::new();
+        let driver = AntigravityDriver::default();
+        let crate::SpawnedSession { session, events: mut rx } = spawn(&driver, fake.config(PermissionMode::FullAccess, &[])).await.unwrap();
+        // The error step before its text (as agy 1.5.14 records it), and after it.
+        for scenario in ["error404_late", "late_error"] {
+            let events = send(&*session, &mut rx, scenario).await;
+            assert!(matches!(end(&events), DriverEvent::TurnFailed { .. }), "{scenario}: {events:?}");
+            assert_eq!(texts(&events), "", "{scenario}: no assistant text next to the failure");
+        }
+        // A warning-shaped answer is the answer: shown in its place, or at the turn's end.
+        assert_eq!(texts(&send(&*session, &mut rx, "warn_then_answer").await), "\u{26a0} Careful: the file is large.");
+        let only = send(&*session, &mut rx, "warn_only").await;
+        assert_eq!(texts(&only), "\u{26a0} nothing to change");
+        assert!(matches!(end(&only), DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. }), "{only:?}");
+        assert_eq!(texts(&send(&*session, &mut rx, "hello").await), "new answer");
+        session.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_exhausted_quota_says_when_it_resets() {
+        let fake = Fake::new();
+        let driver = AntigravityDriver::default();
+        let crate::SpawnedSession { session, events: mut rx } = spawn(&driver, fake.config(PermissionMode::FullAccess, &[])).await.unwrap();
+        // From the words agy sends with its refusal, or from the error step it recorded before others.
+        for (scenario, reset) in [("refusal_text", "2099-01-02 03:04 UTC"), ("refusal_step", "2099-05-06 07:08 UTC")] {
+            let events = send(&*session, &mut rx, scenario).await;
+            let problem = failure(end(&events));
+            assert_eq!((problem.kind, problem.subject.as_deref()), (ProblemKind::Permission, Some("rate_limit")), "{scenario}");
+            let hint = problem.hint.as_deref().unwrap_or_default();
+            assert!(hint.starts_with(&format!("Your limit resets at {reset}.")), "{scenario}: {hint}");
+            assert_eq!(texts(&events), "", "{scenario}");
+        }
+        session.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_command_whose_end_never_came_does_not_hold_the_next_turn() {
+        let fake = Fake::new();
+        let driver = AntigravityDriver::default();
+        let crate::SpawnedSession { session, events: mut rx } = spawn(&driver, fake.config(PermissionMode::FullAccess, &[])).await.unwrap();
+        session.send_message("m1", &UserMessage::text("slow_missed")).await.unwrap();
+        loop {
+            let event = tokio::time::timeout(Duration::from_secs(30), rx.recv()).await.unwrap().unwrap();
+            if matches!(event, DriverEvent::ToolStarted(_)) {
+                break;
+            }
+        }
+        session.interrupt().await.unwrap();
+        let stopped = turn(&*session, &mut rx, &ApprovalDecision::AllowOnce).await;
+        assert!(matches!(end(&stopped), DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, .. }), "{stopped:?}");
+        // agy never said the command ended; the next turn still ends with its answer.
+        let next = send(&*session, &mut rx, "hello").await;
+        assert_eq!(texts(&next), "new answer");
+        assert!(matches!(end(&next), DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. }));
+        session.close().await.unwrap();
+    }
+
+    fn acp_starts(fake: &Fake) -> usize {
+        std::fs::read_to_string(fake.root.path().join("acp_starts")).map_or(0, |count| count.trim().parse().unwrap())
+    }
+
+    fn refusal(driver: &AntigravityDriver, mode: PermissionMode) -> Option<kybern_protocol::rpc::Problem> {
+        driver.permission_mode_refusal(mode).map(|error| crate::failure::classify_error(ProviderKind::Antigravity, &error).unwrap())
+    }
+
+    #[tokio::test]
+    async fn a_failed_acp_check_is_retried_for_a_mode_only_acp_runs_and_for_a_new_agy_version() {
+        let fake = Fake::new();
+        let driver = AntigravityDriver::default();
+        // Before any check (a daemon that just started), the session's start decides.
+        assert!(refusal(&driver, PermissionMode::Supervised).is_none());
+        let broken = [("FAKE_AGY_ACP_FAILS", "1")];
+        let crate::SpawnedSession { session, mut events } = spawn(&driver, fake.config(PermissionMode::FullAccess, &broken)).await.unwrap();
+        assert_eq!(texts(&send(&*session, &mut events, "hello").await), "from print");
+        let problem = refusal(&driver, PermissionMode::Supervised).expect("refused for now");
+        assert_eq!(problem.title.as_deref(), Some("Antigravity couldn't start in this permission mode"));
+        assert_eq!(problem.action.as_ref().map(|action| action.id.as_str()), Some("retry"));
+        assert!(refusal(&driver, PermissionMode::FullAccess).is_none());
+
+        // Working again at the same version: Full access stays on `-p` for a while without checking again…
+        let checks = acp_starts(&fake);
+        let crate::SpawnedSession { session, mut events } = spawn(&driver, fake.config(PermissionMode::FullAccess, &[])).await.unwrap();
+        assert_eq!(texts(&send(&*session, &mut events, "hello").await), "from print");
+        assert_eq!(acp_starts(&fake), checks, "the failure holds for a while");
+        // …but a mode only ACP runs checks again at once.
+        let crate::SpawnedSession { session, mut events } = spawn(&driver, fake.config(PermissionMode::Supervised, &[])).await.unwrap();
+        assert_eq!(texts(&send(&*session, &mut events, "hello").await), "new answer");
+        assert!(refusal(&driver, PermissionMode::Supervised).is_none());
+        session.close().await.unwrap();
+
+        // A launcher that doesn't change on disk when agy updates: the new version is checked again.
+        let fake = Fake::new();
+        let driver = AntigravityDriver::default();
+        let crate::SpawnedSession { session, mut events } = spawn(&driver, fake.config(PermissionMode::FullAccess, &broken)).await.unwrap();
+        assert_eq!(texts(&send(&*session, &mut events, "hello").await), "from print");
+        std::fs::write(fake.root.path().join("version"), "1.5.15").unwrap();
+        let crate::SpawnedSession { session, mut events } = spawn(&driver, fake.config(PermissionMode::FullAccess, &[])).await.unwrap();
+        assert_eq!(texts(&send(&*session, &mut events, "hello").await), "new answer");
+        session.close().await.unwrap();
+
+        // An agy that's too old: update it.
+        std::fs::write(fake.root.path().join("version"), "1.4.12").unwrap();
+        let context = ProbeContext {
+            binary: Some(fake.binary.clone()),
+            cwd: None,
+            env: fake.config(PermissionMode::FullAccess, &[]).env.into_iter().collect(),
+        };
+        driver.probe_with_context(&context).await;
+        let problem = refusal(&driver, PermissionMode::AcceptEdits).expect("refused");
+        assert_eq!(
+            (problem.kind, problem.action.as_ref().map(|action| action.id.as_str())),
+            (ProblemKind::UpdateNeeded, Some("update_agent"))
+        );
+        let Err(error) = spawn(&driver, fake.config(PermissionMode::AcceptEdits, &[])).await else { panic!("too old") };
+        assert_eq!(
+            crate::failure::classify_error(ProviderKind::Antigravity, &error).unwrap().title.as_deref(),
+            Some("Update Antigravity to use this permission mode")
+        );
     }
 
     #[tokio::test]
