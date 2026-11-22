@@ -510,7 +510,16 @@ async fn the_notice_for_unread_steers_quotes_what_the_user_sent() {
     steer_with(&harness, text_message("already read")).await;
     steer_with(&harness, text_message("use tabs\nnot spaces")).await;
     // A skill: Pi's copy of this one holds the whole skill file; the user's holds the command.
-    steer_with(&harness, UserMessage { parts: vec![ContentPart::Skill { name: "review".into(), path: "/home/me/.pi/skills/review/SKILL.md".into() }, ContentPart::Text { text: "the diff".into() }] }).await;
+    steer_with(
+        &harness,
+        UserMessage {
+            parts: vec![
+                ContentPart::Skill { name: "review".into(), path: "/home/me/.pi/skills/review/SKILL.md".into() },
+                ContentPart::Text { text: "the diff".into() },
+            ],
+        },
+    )
+    .await;
     steer_with(&harness, UserMessage { parts: vec![ContentPart::Image { media_type: "image/png".into(), data: "AAAA".into() }] }).await;
 
     harness.handle.interrupt().await.unwrap();
@@ -518,7 +527,7 @@ async fn the_notice_for_unread_steers_quotes_what_the_user_sent() {
     harness.wire("abort_retry").await;
     harness.wire("abort").await;
     // Pi had read the first steer; its answer holds the expanded text of the other three.
-    let expanded = "<skill name=\"review\" location=\"/home/me/.pi/skills/review/SKILL.md\">\n".repeat(1) + &"x".repeat(5000);
+    let expanded = "<skill name=\"review\" location=\"/home/me/.pi/skills/review/SKILL.md\">\n".to_string() + &"x".repeat(5000);
     harness.reply(&clear, json!({ "steering": ["use tabs\nnot spaces", expanded, ""], "followUp": [] })).await;
 
     let DriverEvent::Notice { level, text, data } = harness.next_event().await else { panic!("expected a notice") };
@@ -545,7 +554,9 @@ fn the_notice_is_capped_and_counts_what_it_cannot_quote() {
     assert_eq!(data.unwrap()["clearedQueue"].as_array().unwrap().len(), MAX_CLEARED_MESSAGES);
     assert!(cleared_queue_notice(&json!({ "steering": [], "followUp": [] }), &steered).is_none());
     // Steers from before the driver started keeping its own copy are counted, not invented.
-    let DriverEvent::Notice { text, .. } = cleared_queue_notice(&json!({ "steering": ["a", "b"] }), &[]).unwrap() else { panic!("expected a notice") };
+    let DriverEvent::Notice { text, .. } = cleared_queue_notice(&json!({ "steering": ["a", "b"] }), &[]).unwrap() else {
+        panic!("expected a notice")
+    };
     assert!(text.contains("not read 2 queued messages") && text.ends_with("…and 2 more"), "{text}");
 }
 
@@ -733,17 +744,18 @@ async fn a_prompt_rejected_by_compaction_is_sent_again_when_it_ends() {
 }
 
 #[tokio::test]
-async fn compaction_that_begins_between_the_wait_and_the_prompt_does_not_fail_the_turn() {
-    // The compaction_start lands after the wait found Pi idle and before the turn began.
-    // begin_turn used to forget it, so the wait after Pi's rejection ended at once.
+async fn compaction_that_begins_between_the_wait_and_the_prompt_is_not_forgotten() {
+    // The compaction_start lands after the wait found Pi idle and before the turn begins.
+    // begin_turn used to reset the flag, so the wait after Pi's rejection ended at once and
+    // the prompt failed.
     let harness = Harness::new(Flavor::Pi);
     let admitted_at = harness.session.admission_revision().await;
-    harness.session.begin_turn(false, admitted_at).await.unwrap().unwrap();
     harness.session.handle_frame(json!({ "type": "compaction_start", "reason": "threshold" })).await;
-    assert!(harness.session.state.lock().await.compacting);
+    harness.session.begin_turn(false, admitted_at).await.unwrap().unwrap();
+    assert!(harness.session.state.lock().await.compacting, "the compaction that began is gone");
+
     let deadline = tokio::time::Instant::now() + DEADLINE;
     assert!(harness.session.compaction_blocks(admitted_at, deadline).await);
-
     let session = harness.session.clone();
     let waiting = tokio::spawn(async move { session.wait_for_compaction_end(admitted_at, deadline).await });
     harness.session.handle_frame(json!({ "type": "compaction_end" })).await;
@@ -803,7 +815,9 @@ async fn a_steer_and_stop_are_not_blocked_by_a_prompt_waiting_for_compaction() {
     wait_for_hold(&harness.session, PromptHold::Waiting).await;
 
     // The orchestrator awaits the steer while holding the lock Stop needs first.
-    let steer = tokio::time::timeout(DEADLINE, harness.handle.steer("s1", &text_message("also this"))).await.expect("steer queued behind the held prompt");
+    let steer = tokio::time::timeout(DEADLINE, harness.handle.steer("s1", &text_message("also this")))
+        .await
+        .expect("steer queued behind the held prompt");
     assert!(steer.is_err(), "a steer has no running turn to join");
     // Commands that are not about the prompt are not held up either: Pi decides.
     let handle = harness.handle.clone();
@@ -826,7 +840,7 @@ async fn a_steer_and_stop_are_not_blocked_by_a_prompt_waiting_for_compaction() {
 
 #[tokio::test]
 async fn nothing_waits_behind_a_prompt_that_holds_the_gate_for_compaction() {
-    let harness = Harness::new(Flavor::Pi);
+    let mut harness = Harness::new(Flavor::Pi);
     let handle = harness.handle.clone();
     let sending = tokio::spawn(async move { handle.send_message("m1", &text_message("hello")).await });
     let first = harness.wire("prompt").await;
@@ -851,7 +865,25 @@ async fn nothing_waits_behind_a_prompt_that_holds_the_gate_for_compaction() {
         harness.wire(expected).await;
     }
     tokio::time::timeout(DEADLINE, sending).await.expect("send stayed blocked").unwrap().unwrap();
-    assert!(harness.session.child.lines.lock().await.try_recv().is_err(), "the prompt was sent again after Stop");
+    // Pi aborts the compaction too, once Stop reaches it; only then can the stopped turn settle.
+    harness.session.handle_frame(json!({ "type": "compaction_end", "aborted": true })).await;
+    // The stopped turn settles. Its idle probe is asked again after the compaction frame
+    // changed the session's activity; any other request, such as the prompt sent again, fails the test.
+    loop {
+        let request = tokio::time::timeout(DEADLINE, async { harness.session.child.lines.lock().await.recv().await })
+            .await
+            .expect("the stopped turn never settled")
+            .expect("RPC process closed");
+        match request["type"].as_str().unwrap() {
+            "get_state" => harness.reply(&request, json!({ "isStreaming": false, "isCompacting": false, "pendingMessageCount": 0 })).await,
+            "get_fork_messages" => {
+                harness.reply(&request, json!({ "messages": [] })).await;
+                break;
+            }
+            other => panic!("unexpected request after Stop: {request} ({other})"),
+        }
+    }
+    assert!(matches!(harness.next_completion().await, DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, .. }));
 }
 
 #[tokio::test]
@@ -909,7 +941,10 @@ async fn rewinding_to_a_turn_of_a_session_the_thread_left_is_refused_before_fork
         resume_session_id: Some("current".into()),
         resume_lacks_instructions: false,
         fork: true,
-        rewind: Some(RewindPoint { drop_from: TurnAnchors { turn_id: Some("entry-of-the-old-session".into()), previous_end: None }, keep_through: None }),
+        rewind: Some(RewindPoint {
+            drop_from: TurnAnchors { turn_id: Some("entry-of-the-old-session".into()), previous_end: None },
+            keep_through: None,
+        }),
         binary: None,
         env: HashMap::new(),
         compaction: Default::default(),

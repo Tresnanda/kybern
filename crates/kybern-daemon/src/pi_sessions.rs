@@ -35,7 +35,8 @@ fn load(store: &Store, thread_id: ThreadId) -> Switches {
 
 /// Remember a switch the driver announced in a notice's `data`; other notices pass.
 pub(crate) fn note_switch(store: &Store, thread_id: ThreadId, turn_id: Option<TurnId>, data: Option<&Value>) -> Result<()> {
-    let Some(from) = data.and_then(|data| data.get(SESSION_SWITCH_KEY)).and_then(|switch| switch.get("from")).and_then(Value::as_str) else {
+    let Some(from) = data.and_then(|data| data.get(SESSION_SWITCH_KEY)).and_then(|switch| switch.get("from")).and_then(Value::as_str)
+    else {
         return Ok(());
     };
     let mut switches = load(store, thread_id);

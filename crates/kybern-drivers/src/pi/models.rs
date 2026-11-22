@@ -220,7 +220,8 @@ async fn handle_extension_request(stdin: &mut ChildStdin, frame: &Value) -> std:
         .get("id")
         .and_then(Value::as_str)
         .ok_or_else(|| DriverError::Protocol(format!("Pi extension {method} request omitted its id")))?;
-    write_command(stdin, &json!({ "type": "extension_ui_response", "id": id, "cancelled": true })).await?;
+    // Pi may already be gone (it exits when the dialog cannot be answered); the dialog is the finding either way.
+    let _ = write_command(stdin, &json!({ "type": "extension_ui_response", "id": id, "cancelled": true })).await;
     let title = frame.get("title").and_then(Value::as_str).unwrap_or(method);
     Err(Failure {
         error: DriverError::Protocol(format!("Pi model discovery was cancelled because extension startup requested {method}: {title}")),

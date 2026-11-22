@@ -2207,7 +2207,9 @@ impl AgentSession for Handle {
         // The orchestrator holds the turn lock that Stop needs while this runs, so a steer
         // must not wait behind a prompt that is itself waiting for compaction.
         if self.0.state.lock().await.prompt_hold != PromptHold::None {
-            return Err(DriverError::Other(anyhow::anyhow!("Pi is compacting its context before it starts this turn. Queue the message instead.")));
+            return Err(DriverError::Other(anyhow::anyhow!(
+                "Pi is compacting its context before it starts this turn. Queue the message instead."
+            )));
         }
         let _gate = self.0.command_gate.lock().await;
         {
