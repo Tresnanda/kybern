@@ -546,7 +546,7 @@ impl PiSession {
             if let Some(entries) = session.user_entry_ids(std::time::Duration::from_secs(10)).await
                 && !entries.contains(&entry)
             {
-                return Err(DriverError::Unsupported(REWIND_ACROSS_SESSIONS.into()));
+                return Err(DriverError::Other(anyhow::anyhow!(REWIND_ACROSS_SESSIONS)));
             }
             session.call(cmd_name, json!({ "entryId": entry })).await?;
         }
@@ -1195,7 +1195,7 @@ impl PiSession {
         if self.state.lock().await.prompt_hold != PromptHold::HoldingGate {
             return None;
         }
-        Some(DriverError::Unsupported("Pi is compacting its context before it starts the turn. Try again when it finishes.".into()))
+        Some(DriverError::Other(anyhow::anyhow!("Pi is compacting its context before it starts the turn. Try again when it finishes.")))
     }
 
     async fn begin_turn(&self, manual_compacting: bool, admitted_at: u64) -> Result<Option<u64>> {
@@ -2207,9 +2207,7 @@ impl AgentSession for Handle {
         // The orchestrator holds the turn lock that Stop needs while this runs, so a steer
         // must not wait behind a prompt that is itself waiting for compaction.
         if self.0.state.lock().await.prompt_hold != PromptHold::None {
-            return Err(DriverError::Unsupported(
-                "Pi is compacting its context before it starts this turn. Queue the message instead.".into(),
-            ));
+            return Err(DriverError::Other(anyhow::anyhow!("Pi is compacting its context before it starts this turn. Queue the message instead.")));
         }
         let _gate = self.0.command_gate.lock().await;
         {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::{RewindPoint, TurnAnchors};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -834,7 +835,7 @@ async fn nothing_waits_behind_a_prompt_that_holds_the_gate_for_compaction() {
     wait_for_hold(&harness.session, PromptHold::HoldingGate).await;
 
     let refused = |result: Result<()>| match result {
-        Err(DriverError::Unsupported(text)) => assert!(text.contains("compacting"), "{text}"),
+        Err(error) => assert!(error.to_string().contains("compacting"), "{error}"),
         other => panic!("expected an immediate refusal, got {other:?}"),
     };
     let handle = harness.handle.clone();
