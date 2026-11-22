@@ -60,6 +60,7 @@ pub mod login_lend;
 pub mod login_recipes;
 pub mod models;
 mod ndjson;
+pub mod no_browser;
 pub mod omp_profile;
 pub mod opencode;
 pub mod pi;

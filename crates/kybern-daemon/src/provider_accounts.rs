@@ -501,8 +501,13 @@ pub async fn usage(state: &AppState, instance: ProviderInstance) -> Result<Provi
         }
         ProviderKind::Codex => kybern_drivers::codex::read_account_limits(cwd, context.binary.as_ref(), &context.env).await,
         ProviderKind::Cursor => kybern_drivers::cursor::usage::read_account_usage(&context.env).await.map(|usage| usage.limits),
+        // One login per machine, under the user's home: read it as the usage monitor does, so both
+        // share one set of pauses and never start `agy` twice for the same account.
         ProviderKind::Antigravity => {
-            kybern_drivers::antigravity::read_account_usage(cwd, context.binary.as_ref(), &context.env).await.ok().map(|(limits, _)| limits)
+            kybern_drivers::antigravity::read_account_usage(&crate::usage::user_home(), context.binary.as_ref(), &context.env)
+                .await
+                .ok()
+                .map(|(limits, _)| limits)
         }
         _ => None,
     };

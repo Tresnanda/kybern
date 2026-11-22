@@ -67,6 +67,15 @@ fn settle_after_turn(kind: ProviderKind) -> Duration {
     }
 }
 
+/// The folder harness logins live under, for reads of the default accounts. The usage monitor and
+/// `accounts.usage` use the same one, so they share an account's pauses and cached answers.
+pub(crate) fn user_home() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .or_else(|| directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
 #[derive(Clone)]
 pub struct UsageMonitor {
     inner: Arc<Inner>,
@@ -660,8 +669,7 @@ impl UsageMonitor {
         let provider = crate::settings::provider_settings(&settings, kind, None);
         let binary: Option<PathBuf> = provider.binary.clone().map(Into::into);
         // cwd only needs to be a real directory; account auth lives under $HOME.
-        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
-        self.read_with(kind, binary, &home, &provider.env).await
+        self.read_with(kind, binary, &user_home(), &provider.env).await
     }
 
     async fn read_with(
@@ -693,9 +701,9 @@ impl UsageMonitor {
                 .flatten()
                 .map(|usage| (usage.limits, usage.plan))
                 .ok_or_else(|| unavailable("Cursor reported no usage")),
-            // The token `agy` already refreshed, else `agy /usage` (which renews it); no plan from the
-            // second, so `apply_read` keeps the last one.
-            // 20 s: the HTTP reads, then `agy /usage` (2-3 s) when the token is unusable or the summary has no Gemini group.
+            // The token `agy` keeps, renewed by `agy models` when it has expired; `agy /usage` only when no
+            // token can be read (no plan from it, so `apply_read` keeps the last one).
+            // 20 s: `agy models` (1-2 s), the HTTP reads, and `agy /usage` (2-3 s) as the last resort.
             ProviderKind::Antigravity => {
                 tokio::time::timeout(Duration::from_secs(20), kybern_drivers::antigravity::read_account_usage(home, binary.as_ref(), env))
                     .await

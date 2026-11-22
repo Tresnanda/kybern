@@ -17,10 +17,10 @@ mod stream;
 pub(crate) mod tools;
 mod usage;
 
-pub use login::{StoredLogin, parse_login, read_login};
+pub use login::{LoginRead, StoredLogin, parse_login, read_login, read_login_state};
 pub use usage::{
-    ANTIGRAVITY_USER_AGENT_PREFIX, QuotaBucket, QuotaReading, merge_buckets, parse_load_code_assist, parse_quota_summary, plan_name,
-    read_account_usage, to_limits,
+    ANTIGRAVITY_USER_AGENT_PREFIX, QuotaBucket, QuotaReading, forget_sign_in_waits, merge_buckets, parse_load_code_assist,
+    parse_quota_summary, plan_name, read_account_usage, to_limits,
 };
 
 use std::collections::BTreeMap;
@@ -108,6 +108,7 @@ impl AntigravityDriver {
         }
         let mut command = Command::new(binary).no_window();
         command.arg("models").envs(&context.env).stdin(std::process::Stdio::null());
+        crate::no_browser::quiet(&mut command, &context.env);
         if let Some(cwd) = context.cwd.as_deref().filter(|cwd| cwd.is_dir()) {
             command.current_dir(cwd);
         }
@@ -180,6 +181,7 @@ impl AntigravityDriver {
 pub async fn signed_in_by_models(binary: &Path, context: &ProbeContext) -> bool {
     let mut command = Command::new(binary).no_window();
     command.arg("models").envs(&context.env).stdin(std::process::Stdio::null());
+    crate::no_browser::quiet(&mut command, &context.env);
     match tokio::time::timeout(MODELS_TIMEOUT, crate::process_tree::output(&mut command)).await {
         Ok(Ok(output)) if output.status.success() => !parse_models(&String::from_utf8_lossy(&output.stdout)).is_empty(),
         _ => false,

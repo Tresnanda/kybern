@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.25.7
+
+<!-- kybern-release-title: Antigravity limits without surprise sign-in tabs -->
+<!-- kybern-release-summary: Checking Antigravity's limits no longer opens Google sign-in tabs or says you're signed out when you aren't, and the limits now load straight from Google on every platform. -->
+
+- Checking Antigravity's limits no longer opens Google sign-in tabs in your browser. When Antigravity's saved sign-in couldn't be renewed, every check could open another tab.
+- Antigravity's limits no longer say you're signed out while `agy` is signed in. That caption now appears only when `agy` itself says it has no sign-in.
+- An expired Antigravity sign-in is renewed quietly before the limits are read, so they keep updating without starting a turn.
+- On Linux and Windows, Kybern reads Antigravity's sign-in from the system keyring, as it already did on macOS. Limits load faster there and show your plan.
+- On macOS, if the keychain refuses Kybern, Kybern asks it again at most once an hour instead of on every check.
+
 ## 0.25.6
 
 <!-- kybern-release-title: 0.25.5 for Windows -->
