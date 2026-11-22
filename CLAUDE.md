@@ -34,8 +34,9 @@ task-created targets, native DerivedData, dependency installs, and scratch data
 before finishing; keep deliverables and required validation evidence. This
 cleanup is part of the task, not an optional follow-up.
 
-Check for active processes/open files first. Preserve running binaries, source
-changes, worktrees, chat history, backups, simulator app data, signing assets,
+Check for active processes/open files first. Remove this task's finished
+worktrees and their branches; keep other tasks' worktrees. Preserve running
+binaries, source changes, chat history, backups, simulator app data, signing assets,
 release archives, and the user's iPadOS 27.0 device support. Do not share the
 running app's build directory across checkouts or thin Time Machine snapshots
 as routine cleanup. Report actual free space and explain large retained outputs.
