@@ -1,0 +1,50 @@
+# Makes sure a release has the files updates read, after `announce`.
+#
+# Daemons update from dist-manifest.json (crates/kybern-daemon/src/self_update.rs), the desktop app from latest.json
+# (latest-dev.json for a dev release). host uploads dist-manifest.json as the `artifacts-dist-manifest` artifact and
+# downloads `artifacts-*` a moment later to build the release; that listing can miss the artifact it just uploaded,
+# and v0.25.2 and v0.26.0 shipped without it while the run passed (issue #370). This job attaches it from the
+# artifact when it is missing, then fails when any of the files is still absent.
+name: Release assets
+
+on:
+  workflow_call:
+    inputs:
+      # dist's plan; unused, dist passes it to every custom job.
+      plan:
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  check:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Attach a missing dist-manifest.json, then check the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          assets() { gh release view "$TAG" --json assets --jq '.assets[].name'; }
+          if ! assets | grep -qx dist-manifest.json; then
+            echo "::warning::$TAG was published without dist-manifest.json; attaching host's copy"
+            mkdir -p manifest
+            gh run download "$GITHUB_RUN_ID" --name artifacts-dist-manifest --dir manifest
+            jq -e --arg tag "$TAG" '.announcement_tag == $tag' manifest/dist-manifest.json >/dev/null \
+              || { echo "::error::host's dist-manifest.json names another tag"; exit 1; }
+            gh release upload "$TAG" manifest/dist-manifest.json
+          fi
+          names="$(assets)"
+          missing=0
+          for file in dist-manifest.json sha256.sum; do
+            grep -qx "$file" <<< "$names" || { echo "::error::$TAG is missing $file"; missing=1; }
+          done
+          grep -qxE 'latest(-dev)?\.json' <<< "$names" || { echo "::error::$TAG is missing latest.json"; missing=1; }
+          exit $missing
