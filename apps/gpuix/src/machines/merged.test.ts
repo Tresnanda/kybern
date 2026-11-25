@@ -150,3 +150,20 @@ test('a child nests under its parent on another machine, whichever machine runs 
     ['c-mac', 'parent', 'p-mac', undefined],
   ])
 })
+
+test('a group whose folder is gone on the other machine stays in its row, and the row lists that copy as gone', () => {
+  // The other machine's daemon keeps the last identity of each missing repository, so its group still merges.
+  const repos = [{ root_commit: 'api' }, { root_commit: 'web' }]
+  const members = (status: 'ok' | 'missing') => [{ path: 'api', name: 'api', status }, { path: 'web', name: 'web', status }]
+  const localProjects = [project('g-mac', 'group', null, { kind: 'group', repos, members: members('ok') } as Partial<Project>)]
+  const remoteProjects = [project('g-vps', 'group', null, { kind: 'group', repos, members: members('missing') } as Partial<Project>)]
+  const v = view({ projects: localProjects, threads: [] }, { projects: remoteProjects, threads: [] })
+  const lists = new ListMerger().merge({ view: v, localProjects, spaceOfForeign: space })
+  expect(lists.projects.map((p) => p.id)).toEqual(['g-mac'])
+  expect(lists.goneOf.get('g-mac')).toEqual([{ machineId: 'vps', projectId: 'g-vps' }])
+
+  // With every repository there, nothing is listed as gone.
+  const healthy = [project('g-vps', 'group', null, { kind: 'group', repos, members: members('ok') } as Partial<Project>)]
+  const fine = new ListMerger().merge({ view: view({ projects: localProjects, threads: [] }, { projects: healthy, threads: [] }), localProjects, spaceOfForeign: space })
+  expect(fine.goneOf.size).toBe(0)
+})

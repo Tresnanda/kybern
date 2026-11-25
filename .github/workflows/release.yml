@@ -339,3 +339,15 @@ jobs:
     secrets: inherit
     permissions:
       "contents": "write"
+
+  custom-release-assets:
+    needs:
+      - plan
+      - announce
+    uses: ./.github/workflows/release-assets.yml
+    with:
+      plan: ${{ needs.plan.outputs.val }}
+    secrets: inherit
+    permissions:
+      "actions": "read"
+      "contents": "write"

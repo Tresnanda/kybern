@@ -37,6 +37,7 @@ import {
   MessageRow,
   MoreRow,
   NoThreadsRow,
+  GoneCopyRow,
   OlderRow,
   ArchivedRow,
   ProjectHeader,
@@ -47,7 +48,7 @@ import {
   ThreadRow,
   useAddProject,
 } from './sidebar/rows.tsx'
-import { getState, loadMoreThreads, machinesOfProject, prefetchVisible, useApp, type StateThread } from './state.ts'
+import { getState, goneCopiesOf, loadMoreThreads, machinesOfProject, prefetchVisible, useApp, type StateThread } from './state.ts'
 import { machineHub, useMachines } from './machines/index.ts'
 import { useCurrentSpace, useCurrentSpaceId } from './spaces/current.ts'
 import { inSpace } from '../../../packages/kybern-client/src/spaces.ts'
@@ -103,6 +104,7 @@ export function Sidebar() {
         expanded,
         nav: { children, activity, unread, dismissed, filter, attentionFilter, projectOrder, composerDrafts, attentionDismissals, olderOpen },
         archivedCounts,
+        goneCopies: goneCopiesOf,
         now: Date.now(),
         space: { id: space?.id ?? null, name: space && spaceCount >= 2 ? space.name : null, count: spaceCount },
       }),
@@ -267,6 +269,8 @@ function renderRow(
       )
     case 'create-coordinator':
       return <CreateCoordinatorRow key={row.key} project={row.project} />
+    case 'gone-copy':
+      return <GoneCopyRow key={row.key} project={row.project} copy={row.copy} />
     case 'thread':
       return (
         <ThreadRow

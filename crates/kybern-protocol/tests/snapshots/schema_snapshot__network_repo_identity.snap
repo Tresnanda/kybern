@@ -23,6 +23,13 @@ expression: schema_for!(ProjectRepoIdentity)
       "items": {
         "$ref": "#/$defs/RepoIdentity"
       }
+    },
+    "members": {
+      "description": "A group's last identity of each member, by member path: a member whose folder is missing keeps\nits identity, so the group still matches the same group on other machines.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/RepoIdentity"
+      }
     }
   },
   "$defs": {

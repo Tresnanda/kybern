@@ -199,6 +199,15 @@ impl Store {
         })
     }
 
+    /// A project's cached repository identity as stored, with a group's identity per member.
+    pub fn project_repo_identity(&self, id: ProjectId) -> Result<Option<ProjectRepoIdentity>> {
+        self.with(|c| {
+            let json: Option<Option<String>> =
+                c.query_row("SELECT repo_identity FROM projects WHERE id = ?1", [id.to_string()], |r| r.get(0)).optional()?;
+            Ok(json.flatten().map(|json| serde_json::from_str(&json)).transpose()?)
+        })
+    }
+
     // ---- device tokens ----
 
     /// Tie a token to the client device it was issued to and, for a token another machine asked
@@ -499,6 +508,7 @@ mod tests {
                 ..Default::default()
             }),
             repos: vec![RepoIdentity { root_commit: Some("abc".into()), ..Default::default() }],
+            ..Default::default()
         };
         assert!(store.project_set_repo_identity(project.id, Some(&identity)).unwrap());
         assert!(!store.project_set_repo_identity(project.id, Some(&identity)).unwrap(), "an identical refresh is quiet");

@@ -3898,6 +3898,8 @@ export interface GroupWork { repos: GroupRepo[]; members: GroupMemberWork[] }
 export interface ProjectRepoIdentity {
   repo?: RepoIdentity | null;
   repos?: RepoIdentity[];
+  /** A group's last identity of each member, by member path, kept while a member's folder is missing. */
+  members?: Record<string, RepoIdentity>;
 }
 
 export interface MachineDescriptor {

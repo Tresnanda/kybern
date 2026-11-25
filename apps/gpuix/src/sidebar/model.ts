@@ -6,6 +6,7 @@
 // Recents (free chats). Inactive threads sit in each project's collapsed Older
 // group (`packages/kybern-client/src/older.ts`), and a project with archived
 // threads ends with its Archived row.
+import type { GoneCopy } from '../machines/merged.ts'
 import { orderProjects, threadMatchesFilter } from '@/state/sidebarOrganize'
 import { nestedThreadRows } from '../../../../packages/kybern-client/src/threadRows.ts'
 import { isChildThread, visibleSubagentThreads } from '../../../../packages/kybern-client/src/subagents.ts'
@@ -44,6 +45,8 @@ export type Row =
       canMoveDown: boolean
     }
   | { kind: 'create-coordinator'; key: string; project: Project }
+  /** A machine's copy of the project whose folder is gone there: add it again or remove it. */
+  | { kind: 'gone-copy'; key: string; project: Project; copy: GoneCopy }
   | {
       kind: 'thread'
       key: string
@@ -126,6 +129,8 @@ export interface SidebarInput {
   > & Partial<Pick<NavState, 'pending' | 'olderOpen'>>
   /** Archived threads per project; a project with some ends with an Archived row. */
   archivedCounts?: Record<string, number>
+  /** Copies of a project whose folder is gone on their machine (`machines/merged.ts`). */
+  goneCopies?: (projectId: string) => readonly GoneCopy[]
   now: number
   /** The active space; null when the daemon has no spaces. `name` is set only with two or more spaces. */
   space?: { id: string | null; name: string | null; count: number }
@@ -255,6 +260,7 @@ export function buildRows(input: SidebarInput): Row[] {
         nested = nestedThreadRows([...list, ...recentChildren], input.expanded, input.selectedId ?? undefined, defaultOpen)
       }
 
+      if (!shown) for (const copy of input.goneCopies?.(project.id) ?? []) rows.push({ kind: 'gone-copy', key: `${project.id}:gone:${copy.machineId}`, project, copy })
       if (!coordinator && !shown) rows.push({ kind: 'create-coordinator', key: `${project.id}:coordinator`, project })
       const topRows = nested.filter((row) => !isChildThread(row.thread)).length
       const showAll = !!input.showAll[project.id] || !!shown

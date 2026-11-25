@@ -31,9 +31,11 @@ allow-dirty = ["ci"]
 # The desktop bundles need every target's archive, and host waits for them.
 global-artifacts-jobs = ["./desktop"]
 # A dev release's latest-dev.json goes to the rolling `dev-feed` release once
-# the release exists (.github/workflows/dev-feed.yml).
-post-announce-jobs = ["./dev-feed"]
-github-custom-job-permissions = { "release-ci" = { actions = "read", contents = "read" }, "desktop" = { contents = "read" }, "dev-feed" = { contents = "write" } }
+# the release exists (.github/workflows/dev-feed.yml). release-assets adds a
+# dist-manifest.json that host's artifact download missed and fails when the
+# release lacks a file updates read (.github/workflows/release-assets.yml).
+post-announce-jobs = ["./dev-feed", "./release-assets"]
+github-custom-job-permissions = { "release-ci" = { actions = "read", contents = "read" }, "desktop" = { contents = "read" }, "dev-feed" = { contents = "write" }, "release-assets" = { actions = "read", contents = "write" } }
 # Default every package to "do not distribute"; crates/kybern opts back in with
 # `dist = true` in its own dist.toml.
 # (The `packages = [...]` allow-list is not honoured by dist 0.32 for Cargo workspaces.)

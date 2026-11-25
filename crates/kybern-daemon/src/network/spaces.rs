@@ -988,7 +988,7 @@ mod tests {
                 coordinator: None,
             };
             self.state.store.project_insert(&p).unwrap();
-            let identity = ProjectRepoIdentity { repo: p.repo.clone(), repos: p.repos.clone() };
+            let identity = ProjectRepoIdentity { repo: p.repo.clone(), repos: p.repos.clone(), ..Default::default() };
             self.state.store.project_set_repo_identity(p.id, Some(&identity)).unwrap();
             p
         }
@@ -1425,7 +1425,7 @@ mod tests {
         );
         let identity = ProjectRepoIdentity {
             repo: Some(RepoIdentity { root_commit: Some("r".into()), remote: Some("host/refreshed".into()), ..Default::default() }),
-            repos: vec![],
+            ..Default::default()
         };
         c.state.store.project_set_repo_identity(clone.id, Some(&identity)).unwrap();
         reconcile(&c.state).await;
