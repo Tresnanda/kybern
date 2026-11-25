@@ -300,6 +300,9 @@ jobs:
         run: |
           # Remove the granular manifests
           rm -f artifacts/*-dist-manifest.json
+          # Daemons update from this file. Copy it from the step that wrote it: the download above can
+          # miss an artifact uploaded a moment earlier (v0.26.0 shipped without it, issue #370).
+          cp dist-manifest.json artifacts/dist-manifest.json
       - name: Create GitHub Release
         env:
           PRERELEASE_FLAG: "${{ fromJson(steps.host.outputs.manifest).announcement_is_prerelease && '--prerelease' || '' }}"
@@ -311,6 +314,23 @@ jobs:
           echo "$ANNOUNCEMENT_BODY" > $RUNNER_TEMP/notes.txt
 
           gh release create "${{ needs.plan.outputs.tag }}" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
+      - name: Check the release has what updates read
+        run: |
+          # Daemons update from dist-manifest.json, the desktop app from latest.json (latest-dev.json for a
+          # dev release). v0.25.2 and v0.26.0 shipped without dist-manifest.json and the job still passed.
+          assets=$(gh release view "${{ needs.plan.outputs.tag }}" --json assets --jq '.assets[].name')
+          missing=0
+          for file in dist-manifest.json sha256.sum; do
+            if ! grep -qx "$file" <<< "$assets"; then
+              echo "::error::The release is missing $file"
+              missing=1
+            fi
+          done
+          if ! grep -qxE 'latest(-dev)?\.json' <<< "$assets"; then
+            echo "::error::The release is missing latest.json"
+            missing=1
+          fi
+          exit $missing
 
   announce:
     needs:

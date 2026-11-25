@@ -39,6 +39,7 @@ export function rowHeight(row: Row): number | null {
       return 42
     case 'message':
     case 'empty-space':
+    case 'gone-copy':
       return null
   }
 }

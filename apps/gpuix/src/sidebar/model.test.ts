@@ -124,3 +124,21 @@ describe('the Older group and the Archived row', () => {
     expect(keys(buildRows(input([thread('a')], { archivedCounts: {} })))).toEqual(['a'])
   })
 })
+
+describe('a copy of a project whose folder is gone on another machine', () => {
+  const project = { id: 'p', name: 'p', path: '/p', is_git: false, brief_in_all_threads: false, space_id: null } as unknown as Project
+  const nav = { children: {}, activity: {}, unread: {}, dismissed: {}, filter: DEFAULT_FILTER, attentionFilter: false, projectOrder: [] as string[], composerDrafts: {}, attentionDismissals: {} }
+  const copy = { machineId: 'vps', projectId: 'p-vps' }
+  const rows = (collapsed: Record<string, boolean>) =>
+    buildRows({ projects: [project], threads: [], selectedId: null, draft: null, collapsed, showAll: {}, expanded: {}, nav, now: 0, goneCopies: (id) => (id === 'p' ? [copy] : []) })
+
+  test('is a line under the open project, before Create coordinator', () => {
+    const kinds = rows({}).map((row) => row.kind)
+    expect(kinds).toEqual(['label', 'project', 'gone-copy', 'create-coordinator', 'no-threads'])
+    expect(rows({}).find((row) => row.kind === 'gone-copy')).toMatchObject({ key: 'p:gone:vps', copy })
+  })
+
+  test('is hidden with the project collapsed', () => {
+    expect(rows({ p: true }).some((row) => row.kind === 'gone-copy')).toBe(false)
+  })
+})

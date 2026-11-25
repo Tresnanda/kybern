@@ -4,7 +4,7 @@ import { machineHub } from './machines/index.ts'
 import { OfflineError } from '../../../packages/kybern-client/src/machineClient.ts'
 import { machineNameOf } from './problems/describe.ts'
 import { openOwner } from './machines/openOwner.ts'
-import { ListMerger, byPinnedThenNewest, type StateThread } from './machines/merged.ts'
+import { ListMerger, byPinnedThenNewest, type GoneCopy, type StateThread } from './machines/merged.ts'
 import { scopedKey } from '../../../packages/kybern-client/src/machineMerge.ts'
 import { createGpuixSocket } from './machines/socket.ts'
 import { startupMark, traceThreadClick, traceThreadContent } from './perf/startup.ts'
@@ -560,6 +560,10 @@ let foreignIds = new Set<string>()
 let machinesOf = new Map<string, MachineId[]>()
 /** The machines that have a checkout of a listed project (empty with one machine). */
 export const machinesOfProject = (projectId: string): readonly MachineId[] => machinesOf.get(projectId) ?? []
+/** Copies of listed projects whose folder is gone on their machine (empty with one machine). */
+let goneOf = new Map<string, GoneCopy[]>()
+const NO_GONE: readonly GoneCopy[] = []
+export const goneCopiesOf = (projectId: string): readonly GoneCopy[] => goneOf.get(projectId) ?? NO_GONE
 /** The space another machine's projects are listed in; `spaces/` registers it (the default space). */
 let foreignSpace: () => string | null = () => null
 export function setForeignSpace(resolve: () => string | null) { foreignSpace = resolve }
@@ -601,13 +605,14 @@ function composeListsOnly(localProjects: readonly Project[], localThreads: reado
   const hub = machineHub()
   // Until the daemon answered and the machine is known, nothing can be told apart from another machine's: the local lists stand alone.
   if (hub.machineCount <= 1 || !hub.localMachineId) {
-    if (foreignIds.size) { foreignIds = new Set(); machinesOf = new Map() }
+    if (foreignIds.size) { foreignIds = new Set(); machinesOf = new Map(); goneOf = new Map() }
     return { projects: localProjects as Project[], threads: localThreads as StateThread[], children: [] }
   }
   hub.ingestPrimaryNow()
   const merged = merger.merge({ view: hub.view(), localProjects, spaceOfForeign: foreignSpace, children: remoteChildStore.get() })
   foreignIds = new Set(merged.projects.slice(localProjects.length).map(p => p.id))
   machinesOf = merged.machinesOf
+  goneOf = merged.goneOf
   const threads = merged.threads.length ? [...localThreads, ...merged.threads].sort(byPinnedThenNewest) : localThreads as StateThread[]
   const children = originChildren.list.length ? [...merged.children, ...originChildren.list] : merged.children
   const nested = underParents(children, threads, hub.localMachineId!)

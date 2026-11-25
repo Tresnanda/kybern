@@ -204,13 +204,17 @@ impl GroupWork {
 /// What `projects.repo_identity` stores for a project.
 // N1: the design says a group project has "the sorted list" of its members' identities and
 // §4.4 adds one column, so both shapes are one JSON value. A single project has `repo` and no
-// `repos`; a group has `repos` (sorted) and `repo` for its primary member.
+// `repos`; a group has `repos` (sorted), `repo` for its primary member and `members` by path.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ProjectRepoIdentity {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<RepoIdentity>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub repos: Vec<RepoIdentity>,
+    /// A group's last identity of each member, by member path: a member whose folder is missing keeps
+    /// its identity, so the group still matches the same group on other machines.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub members: std::collections::BTreeMap<String, RepoIdentity>,
 }
 
 // ---- membership operations (§2.3) ----

@@ -15,6 +15,10 @@ import { addGroup, addRepository } from '../groups/add.ts'
 import { useGroupsSupported } from '../groups/store.ts'
 import { GROUP_COPY, groupRowLabel, isGroupProject } from '../../../../packages/kybern-client/src/groups.ts'
 import { RepoBadge } from '../groups/RepoBadge.tsx'
+import { ProblemRow } from '../kit/Problem.tsx'
+import { MachineSetupSheet } from '../provision/MachineSetupSheet.tsx'
+import { goneCopyCopy } from './goneCopy.ts'
+import type { GoneCopy } from '../machines/merged.ts'
 // Thread panel rows (`views/Sidebar.tsx`, `views/subagents/SubagentSidebarRow.tsx`,
 // `lib/kit/sidebarRowStyles.ts`). Rows are 28px with an 8px radius, 14px text,
 // `--sidebar-accent` on hover and `--sidebar-accent-active` when selected.
@@ -30,7 +34,7 @@ import { SUBAGENT_SIDEBAR_HOLD_MS, subagentThreadPhase, type SubagentPhase } fro
 import { FREE_CHAT_PROJECT_ID, type Project, type Thread, type ThreadActivityState } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
 import { MatrixLoader } from '../MatrixLoader.tsx'
-import { archiveThread, removeProject, renameProject, updateThread } from '../nav/actions.ts'
+import { archiveThread, removeProject, removeProjectCopy, renameProject, updateThread } from '../nav/actions.ts'
 import { N } from '../nav/glyphs.ts'
 import { newThread, openThread } from '../nav/history.ts'
 import { ContextMenu, Menu, MenuItem, MenuLabel, MenuSeparator, muted, Tip } from '../nav/overlay.tsx'
@@ -910,6 +914,40 @@ export const CreateCoordinatorRow = memo(function CreateCoordinatorRow({ project
           Create coordinator
         </Label>
       </div>
+    </div>
+  )
+})
+
+/** A machine's copy of the project whose folder is gone there (every repository deleted): add it again, or remove it. */
+export const GoneCopyRow = memo(function GoneCopyRow({ project, copy }: { project: Project; copy: GoneCopy }) {
+  const hub = machineHub()
+  const words = goneCopyCopy({ machineName: hub.set.displayName(copy.machineId) ?? copy.machineId, isLocal: copy.machineId === hub.localMachineId })
+  const [setup, setSetup] = useState(false)
+  const [removing, setRemoving] = useState(false)
+  const remove = () => {
+    setRemoving(true)
+    void removeProjectCopy(copy.projectId, copy.machineId)
+      .catch((e) => toastProblem(e, { action: 'remove the project', projectId: copy.projectId }))
+      .finally(() => setRemoving(false))
+  }
+  return (
+    <div style={{ paddingTop: 4, paddingBottom: 4, ...INSET }}>
+      <ProblemRow
+        tone="warning"
+        testId={`gone-copy-${copy.machineId}-${copy.projectId}`}
+        title={words.title}
+        body={words.body}
+        primary={{ label: words.addAgain, onClick: () => setSetup(true) }}
+        secondary={{ label: words.remove, onClick: remove, busy: removing }}
+      />
+      {setup && (
+        <MachineSetupSheet
+          projectId={project.id}
+          targetId={copy.machineId}
+          close={() => setSetup(false)}
+          onReady={() => hub.refreshMachineLists(copy.machineId)}
+        />
+      )}
     </div>
   )
 })

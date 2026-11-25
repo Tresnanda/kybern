@@ -15,7 +15,7 @@
 // machine leaves every other row the same object.
 import { logicalSpace, prepareSpacePlacements } from '../../../../packages/kybern-client/src/spacePlacements.ts'
 import { isChildThread, isInboundThread, isRemoteChildThread } from '../../../../packages/kybern-client/src/subagents.ts'
-import { scopedKey, type MachineThread, type MergedThread } from '../../../../packages/kybern-client/src/machineMerge.ts'
+import { scopedKey, type LogicalProject, type MachineThread, type MergedThread } from '../../../../packages/kybern-client/src/machineMerge.ts'
 import type { MergedView } from '../../../../packages/kybern-client/src/machines.ts'
 import { FREE_CHAT_PROJECT_ID, isFreeChatProject, type MachineId, type Project, type Thread } from '../../../../packages/kybern-client/src/types.ts'
 
@@ -42,7 +42,20 @@ export interface MergedLists {
   children: StateThread[]
   /** Machines that have a checkout of a listed project, by the listed project's id. */
   machinesOf: Map<string, MachineId[]>
+  /** Copies of a listed project whose folder is gone on their machine, by the listed project's id. */
+  goneOf: Map<string, GoneCopy[]>
 }
+
+/** A machine's copy of a group project whose repositories are all missing on disk: its folder is gone. */
+export interface GoneCopy {
+  machineId: MachineId
+  /** That machine's own project id. */
+  projectId: string
+}
+
+/** Whether a project's folder is gone: a group whose every repository is missing. */
+export const folderGone = (project: Project) =>
+  project.kind === 'group' && (project.members?.length ?? 0) > 0 && project.members!.every((member) => member.status !== 'ok')
 
 export interface MergeInput {
   view: MergedView
@@ -64,6 +77,11 @@ export class ListMerger {
     const defaultSpace = input.spaceOfForeign()
     const localIds = new Set(localProjects.map((project) => project.id))
     const machinesOf = new Map<string, MachineId[]>()
+    const goneOf = new Map<string, GoneCopy[]>()
+    const noteGone = (listed: string, instances: LogicalProject['instances']) => {
+      const gone = instances.filter((instance) => folderGone(instance.project)).map((instance) => ({ machineId: instance.machineId, projectId: instance.project.id }))
+      if (gone.length) goneOf.set(listed, gone)
+    }
     const shown = new Map<string, string>()   // logical key -> listed project id
     const projects: Project[] = [...localProjects]
     const remoteOnly: Project[] = []
@@ -72,6 +90,7 @@ export class ListMerger {
       if (here) {
         shown.set(logical.key, here.project.id)
         machinesOf.set(here.project.id, logical.instances.map((instance) => instance.machineId))
+        noteGone(here.project.id, logical.instances)
         continue
       }
       // Free chat is every machine's; a remote one is listed with the local "Chats".
@@ -86,6 +105,7 @@ export class ListMerger {
       remoteOnly.push(entry.project)
       shown.set(logical.key, primary.id)
       machinesOf.set(primary.id, logical.instances.map((instance) => instance.machineId))
+      noteGone(primary.id, logical.instances)
     }
     projects.push(...remoteOnly)
     const threads: StateThread[] = []
@@ -113,7 +133,7 @@ export class ListMerger {
         }
       }
     }
-    return { projects, threads, children, machinesOf }
+    return { projects, threads, children, machinesOf, goneOf }
   }
 
   private remap(merged: MergedThread, projectId: string): StateThread {

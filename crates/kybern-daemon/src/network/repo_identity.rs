@@ -10,6 +10,7 @@
 //!   now and then. The root commit never changes for a checkout, so a refresh keeps the cached one
 //!   and only asks git for the remote, which is one `git config` call.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -64,25 +65,35 @@ pub async fn compute(project: &Project, cached: Option<&ProjectRepoIdentity>) ->
             Some(path) if project.is_git => identity_for(path, known).await,
             _ => RepoIdentity::default(),
         };
-        return ProjectRepoIdentity { repo: Some(identity).filter(|identity| !identity.is_empty()), repos: Vec::new() };
+        return ProjectRepoIdentity { repo: Some(identity).filter(|identity| !identity.is_empty()), ..Default::default() };
     }
-    // A group has no single cached root commit to reuse, so every member is read again.
+    // A group has no single cached root commit to reuse, so every member is read again. A member that
+    // can't be read (its folder is gone) keeps the identity it had, so the group still matches the same
+    // group on the other machines instead of turning into a project of its own.
     let mut members = Vec::new();
-    for path in &paths {
-        let identity = identity_for(path, None).await;
+    let mut known = BTreeMap::new();
+    for (member, path) in project.members.iter().zip(&paths) {
+        let read = identity_for(path, None).await;
+        let identity =
+            if read.is_empty() { cached.and_then(|cached| cached.members.get(&member.path)).cloned().unwrap_or_default() } else { read };
         if !identity.is_empty() {
+            known.insert(member.path.clone(), identity.clone());
             members.push(identity);
         }
     }
     let primary = members.first().cloned();
     members.sort();
     members.dedup();
-    ProjectRepoIdentity { repo: primary, repos: members }
+    ProjectRepoIdentity { repo: primary, repos: members, members: known }
 }
 
 /// Read one project's identity and store it. Returns whether the stored value changed.
 pub async fn refresh(store: &Store, project: &Project) -> bool {
-    let cached = ProjectRepoIdentity { repo: project.repo.clone(), repos: project.repos.clone() };
+    let cached = store.project_repo_identity(project.id).ok().flatten().unwrap_or_else(|| ProjectRepoIdentity {
+        repo: project.repo.clone(),
+        repos: project.repos.clone(),
+        ..Default::default()
+    });
     let cached = Some(&cached).filter(|cached| cached.repo.is_some() || !cached.repos.is_empty());
     let Ok(identity) = tokio::time::timeout(GIT_BUDGET, compute(project, cached)).await else {
         tracing::debug!(project = %project.id, "reading the repository identity took too long; leaving it for the next pass");
@@ -271,6 +282,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_group_whose_folder_is_gone_keeps_the_identity_of_its_members() {
+        let dir = TempDir::new("repoid");
+        let folder = dir.path().join("group");
+        std::fs::create_dir_all(&folder).unwrap();
+        repo(&folder, "api", "api", Some("https://github.com/acme/api.git"));
+        repo(&folder, "web", "web", Some("https://github.com/acme/web.git"));
+        let members = ["api", "web"]
+            .iter()
+            .map(|name| ProjectMember { path: (*name).into(), name: (*name).into(), status: MemberStatus::Ok })
+            .collect();
+        let store = Store::open_in_memory().unwrap();
+        let group = project(&folder, ProjectKind::Group, members);
+        store.project_insert(&group).unwrap();
+        let group = store.project_get(group.id).unwrap().unwrap();
+        assert!(refresh(&store, &group).await);
+        let before = store.project_get(group.id).unwrap().unwrap();
+        assert_eq!(before.repos.len(), 2);
+
+        // One member deleted, then the whole folder: the group still names both repositories, so it keeps
+        // matching the same group on other machines.
+        std::fs::remove_dir_all(folder.join("web")).unwrap();
+        assert!(!refresh(&store, &before).await, "a missing member changes nothing");
+        std::fs::remove_dir_all(&folder).unwrap();
+        assert!(!refresh(&store, &before).await, "a missing folder changes nothing");
+        let after = store.project_get(group.id).unwrap().unwrap();
+        assert_eq!((after.repo.clone(), after.repos.clone()), (before.repo.clone(), before.repos.clone()));
+
+        // A member taken out of the group takes its identity with it.
+        let mut fewer = after.clone();
+        fewer.members.retain(|m| m.path == "api");
+        assert!(refresh(&store, &fewer).await);
+        let stored = store.project_repo_identity(group.id).unwrap().unwrap();
+        assert_eq!(stored.repos.len(), 1);
+        assert_eq!(stored.members.keys().collect::<Vec<_>>(), ["api"]);
+    }
+
+    #[tokio::test]
     async fn a_refresh_keeps_the_cached_root_commit_and_picks_up_a_changed_remote() {
         let dir = TempDir::new("repoid");
         let a = repo(dir.path(), "a", "one", Some("https://github.com/acme/thing.git"));
@@ -278,7 +326,7 @@ mod tests {
         let first = compute(&p, None).await;
         git(&a, &["remote", "set-url", "origin", "https://github.com/acme/renamed.git"]);
         p.repo = first.repo.clone();
-        let cached = ProjectRepoIdentity { repo: p.repo.clone(), repos: vec![] };
+        let cached = ProjectRepoIdentity { repo: p.repo.clone(), ..Default::default() };
         let second = compute(&p, Some(&cached)).await;
         assert_eq!(second.repo.as_ref().unwrap().root_commit, first.repo.as_ref().unwrap().root_commit);
         assert_eq!(second.repo.unwrap().remote.as_deref(), Some("github.com/acme/renamed"));

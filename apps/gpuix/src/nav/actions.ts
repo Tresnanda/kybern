@@ -3,7 +3,8 @@
 // subscription confirms them.
 import { errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
 import { seedFromGet } from '../../../../packages/kybern-client/src/transcript.ts'
-import type { ProviderInstance, SavedSession, Thread, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
+import type { MachineId, ProviderInstance, SavedSession, Thread, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
+import { machineHub } from '../machines/index.ts'
 import { getState, projectClient, refreshLists, selectDraft, selectThread, set, threadClient, type StateThread } from '../state.ts'
 import { markArchived, markUnarchived } from './live.ts'
 import { toast } from '../shell/toasts.tsx'
@@ -175,5 +176,14 @@ export async function renameProject(projectId: string, name: string) {
 
 export async function removeProject(projectId: string) {
   await rpc({ project: projectId }).call('projects.remove', { project_id: projectId })
+  await refreshLists()
+}
+
+/** Remove one machine's copy of a project (its folder is gone there); the other machines keep theirs. */
+export async function removeProjectCopy(projectId: string, machineId: MachineId) {
+  const client = projectClient(projectId, machineId)
+  if (!client) throw new Error('Not connected to kybernd')
+  await client.call('projects.remove', { project_id: projectId })
+  await machineHub().refreshMachineLists(machineId)
   await refreshLists()
 }
