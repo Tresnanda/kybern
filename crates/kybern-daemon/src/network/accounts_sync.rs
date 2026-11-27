@@ -70,6 +70,40 @@ pub struct MachineHoldings {
     /// Its default of each harness from before the migration.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub premigration: BTreeMap<ProviderKind, String>,
+    /// The harnesses installed there. `None` from a daemon that doesn't say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed: Option<Vec<ProviderKind>>,
+    /// The harnesses it has threads for. `None` from a daemon that doesn't say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threads: Option<Vec<ProviderKind>>,
+}
+
+impl MachineHoldings {
+    /// Whether the harness is installed there. A daemon that doesn't say listed a terminal login only for
+    /// a harness whose status it could read.
+    pub fn has_installed(&self, kind: ProviderKind) -> bool {
+        match &self.installed {
+            Some(installed) => installed.contains(&kind),
+            None => self.accounts.iter().any(|holding| holding.terminal && holding.kind == kind),
+        }
+    }
+}
+
+/// The harnesses installed on this machine, by its own settings (a custom binary counts).
+fn installed_here(state: &AppState) -> Vec<ProviderKind> {
+    let settings = state.settings.get();
+    ProviderKind::ALL
+        .into_iter()
+        .filter(|kind| {
+            let provider = crate::settings::provider_settings(&settings, *kind, None);
+            let binary = provider.binary.map(std::path::PathBuf::from);
+            if *kind == ProviderKind::Cursor {
+                kybern_drivers::cursor::installed(&kybern_drivers::ProbeContext { binary: None, cwd: None, env: provider.env })
+            } else {
+                kybern_drivers::binary::resolve(*kind, binary.as_ref()).is_ok()
+            }
+        })
+        .collect()
 }
 
 // ---- entities ----
@@ -202,7 +236,12 @@ pub fn own_holdings(state: &AppState) -> MachineHoldings {
 
 /// Record what this machine holds, from a full account list. The next sync pass sends it.
 pub fn publish_holdings(state: &AppState, accounts: &[AccountSummary]) {
-    let mut holdings = MachineHoldings { premigration: crate::accounts_shared::premigration(&state.store), ..Default::default() };
+    let mut holdings = MachineHoldings {
+        premigration: crate::accounts_shared::premigration(&state.store),
+        installed: Some(installed_here(state)),
+        threads: state.store.thread_provider_kinds().ok(),
+        ..Default::default()
+    };
     for summary in accounts {
         // A harness that isn't installed has nothing to say about its terminal login.
         if summary.terminal && summary.status == AccountStatus::Unknown {
@@ -431,6 +470,28 @@ pub(crate) fn merge_now(state: &AppState, incoming: &[OpEnvelope]) -> anyhow::Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn holdings_say_which_harnesses_are_installed_here() {
+        let root = std::env::temp_dir().join(format!("kybern-holdings-{}", uuid::Uuid::now_v7()));
+        let paths = crate::config::Paths::resolve(Some(root.join("data"))).unwrap();
+        let state = AppState::initialize(&paths).unwrap();
+        let binary = root.join("claude-stand-in");
+        std::fs::write(&binary, b"").unwrap();
+        let mut settings = state.settings.get();
+        settings.providers.entry(ProviderKind::ClaudeCode).or_default().binary = Some(binary.to_string_lossy().into_owned());
+        settings.providers.entry(ProviderKind::Codex).or_default().binary = Some(root.join("missing").to_string_lossy().into_owned());
+        state.settings.set(settings).unwrap();
+        publish_holdings(&state, &[]);
+        let holdings = own_holdings(&state);
+        assert!(holdings.has_installed(ProviderKind::ClaudeCode));
+        assert!(!holdings.has_installed(ProviderKind::Codex), "the binary its settings name isn't there");
+        assert_eq!(holdings.threads, Some(Vec::new()));
+        // An older daemon says nothing: other machines read its terminal logins instead.
+        let older: MachineHoldings = serde_json::from_str(r#"{"accounts":[]}"#).unwrap();
+        assert!(older.installed.is_none() && older.threads.is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn every_shared_value_round_trips_through_its_registers() {

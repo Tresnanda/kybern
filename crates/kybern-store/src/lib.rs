@@ -730,6 +730,15 @@ impl Store {
         })
     }
 
+    /// The harnesses this machine has threads for, archived ones included.
+    pub fn thread_provider_kinds(&self) -> Result<Vec<ProviderKind>> {
+        self.with(|c| {
+            let mut st = c.prepare("SELECT DISTINCT provider_kind FROM threads ORDER BY provider_kind")?;
+            let kinds = st.query_map([], |row| row.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+            Ok(kinds.iter().filter_map(|kind| kind.parse().ok()).collect())
+        })
+    }
+
     /// Threads whose row or activity changed after `since` (`threads.change_seq`, see the list-cursor migration),
     /// archived ones included, plus every delegating ancestor of a changed delegated child: its
     /// `active_children` and `pending_child_request` may have changed with it. Uses the `threads_change` index.
@@ -3807,6 +3816,22 @@ mod orchestration_tests {
             delegation,
             members: Vec::new(),
         }
+    }
+
+    #[test]
+    fn the_harnesses_with_threads_are_listed_once_each() {
+        let store = Store::open_in_memory().unwrap();
+        assert!(store.thread_provider_kinds().unwrap().is_empty());
+        let project = project(&store);
+        let claude = ProviderInstance::default_for(ProviderKind::ClaudeCode);
+        for thread in [
+            thread(&project, None, None),
+            thread(&project, None, None),
+            Thread { provider: claude, status: ThreadStatus::Archived, ..thread(&project, None, None) },
+        ] {
+            store.thread_upsert(&thread).unwrap();
+        }
+        assert_eq!(store.thread_provider_kinds().unwrap(), vec![ProviderKind::ClaudeCode, ProviderKind::Codex]);
     }
 
     fn delegation(parent: ThreadId, status: DelegationStatus) -> DelegationInfo {

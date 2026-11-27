@@ -10,6 +10,11 @@ use super::harness::*;
 fn add_account(node: &Node, id: &str, name: &str, email: &str, default: bool) {
     let mut settings = node.state.settings.get();
     let claude = settings.providers.entry(ProviderKind::ClaudeCode).or_default();
+    // Claude Code counts as installed (offers ask only about installed harnesses), and is never run: an
+    // empty file that isn't executable.
+    let binary = node.state.settings.dir().join("claude-stand-in");
+    std::fs::write(&binary, b"").unwrap();
+    claude.binary = Some(binary.to_string_lossy().into_owned());
     claude.accounts.insert(
         id.into(),
         ProviderAccount {
