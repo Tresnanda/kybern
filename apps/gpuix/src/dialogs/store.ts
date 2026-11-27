@@ -20,8 +20,6 @@ type Dialog =
   | { kind: 'account'; provider?: ProviderKind; instance?: string; named?: boolean; items?: import('../accounts/queue.ts').SignInItem[] }
   /** Review the redacted GitHub issue for a failure before it opens in the browser (`problems/report.ts`). */
   | { kind: 'report'; draft: ProblemReport }
-  /** The one-time Antigravity sign-in notice; `proceed` starts the sign-in once it is accepted. */
-  | { kind: 'antigravity-notice'; proceed: () => void }
 let dialog: Dialog | null = null
 const listeners = new Set<() => void>()
 export type WorkspaceDialog = NonNullable<typeof dialog>

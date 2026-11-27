@@ -10,7 +10,6 @@ import { PROVIDER_NAMES } from '../shared/lib/providerUsage.ts'
 import { refreshAccounts } from '../usage/accounts.ts'
 import { signOutTerminalLogin, supportsShared, writeShared } from './adapter.ts'
 import { TERMINAL_SIGN_IN_KINDS, type Offer } from './offers.ts'
-import { requestAntigravitySignIn } from '../antigravity/notice.ts'
 import { existingFor, planOnMachine, planSetup, type SignInItem } from './queue.ts'
 import { adoptSettings, clientOf, lendableOn, prefsChanged, primaryId, readMachine, refreshAllAccounts, type UnifiedView } from './store.ts'
 import { standings, type UnifiedAccount } from './unified.ts'
@@ -145,11 +144,10 @@ export const signInOn = (account: UnifiedAccount, machine: { machineId: MachineI
 export const canSignInTerminal = (kind: ProviderKind, features: readonly string[]) =>
   kind === 'antigravity' || (supportsShared(features) && TERMINAL_SIGN_IN_KINDS.includes(kind))
 
-/** Sign the terminal login in on each of these machines, one after another (after Google's notice for Antigravity). */
+/** Sign the terminal login in on each of these machines, one after another. */
 export function signInTerminals(kind: ProviderKind, machines: readonly { machineId: MachineId; machine: string }[]) {
   const items = machines.map(({ machineId, machine }): SignInItem => ({ id: `${machineId}:${kind}:default`, machineId, machine, kind, method: 'sign_in', ...(kind === 'antigravity' ? { ownLogin: true } : { instance: 'default' }) }))
-  if (kind === 'antigravity') requestAntigravitySignIn(() => signIn(items))
-  else signIn(items)
+  signIn(items)
 }
 
 /** "Sign in here instead": stop borrowing, then sign this machine in itself. */
