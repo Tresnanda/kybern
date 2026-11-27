@@ -31,7 +31,7 @@ test('offers to sign that machine in, saying what it uses meanwhile', () => {
   mounted = h
   h.render(<ThemeProvider><Watch /><MachineChip chip={chip} account={shared} view={view} actions={{ signOut: () => {}, signOutTerminal: () => {} }} /></ThemeProvider>)
   const id = h.find(`chip-${shared.id}-fedora`)!
-  expect(h.text()).toContain('fedora · Uses Personal')
+  expect(h.text()).toContain('fedora · Not signed in')
   expect(h.props(id)['aria-label']).toBe('Sign in on fedora')
   h.fire(id, { eventType: 'click' })
   expect(opened.at(-1)).toMatchObject({ kind: 'account', items: [{ machineId: 'fedora', kind: 'claude-code', email: 'w@x.com' }] })

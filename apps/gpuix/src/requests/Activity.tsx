@@ -16,7 +16,7 @@ import { activeEnvironment } from '../shell/environment.ts'
 import { machineOfThreadId, requireThreadClient, threadClient, useApp, type StateThread } from '../state.ts'
 import { loadTarget, useComposer } from '../composer/store.ts'
 import { useAccountsView } from '../accounts/store.ts'
-import { accountAway } from '../accounts/limit.ts'
+import { accountAway, daemonSaysUnavailable } from '../accounts/limit.ts'
 import { AccountAwayCard, LimitRecovery } from './AccountCards.tsx'
 import { Para, muted } from '../transcript/kit.tsx'
 import { Button } from '../kit/Button.tsx'
@@ -56,7 +56,8 @@ export function useRequestActivity(threadId: string | null) {
     const off = onLiveEvent(update)
     return () => { alive = false; off() }
   }, [threadId])
-  const machineId = thread?.id === threadId ? (thread as { machineId?: string }).machineId : undefined
+  // The open thread object of another machine's thread may not carry its machine: the hub knows it.
+  const machineId = threadId ? (thread?.id === threadId ? (thread as { machineId?: string }).machineId : undefined) ?? machineOfThreadId(threadId) : undefined
   useEffect(() => { if (threadId) void loadTarget(threadId, machineId) }, [threadId, machineId, thread?.status])
   const children = useMemo(() => {
     const merged = new Map(loadedChildren.filter(c => c.parent_thread_id === threadId).map(c => [c.id, c]))
@@ -71,7 +72,9 @@ export function useRequestActivity(threadId: string | null) {
   // Between turns, a thread whose account isn't usable on its machine asks what to do; it never switches on its own.
   const accounts = useAccountsView()
   const own = thread && thread.id === threadId && !thread.subagent && !turnRunning && !target?.quota_limited ? thread : null
-  const away = own ? accountAway(accounts.machines, accounts.groups, machineId ?? accounts.primaryId, target?.target.provider ?? own.provider, target?.account_unavailable) : null
+  const awayMachine = machineId ?? accounts.primaryId
+  const awayFeatures = accounts.machines.find((m) => m.machineId === awayMachine)?.features
+  const away = own ? accountAway(accounts.machines, accounts.groups, awayMachine, target?.target.provider ?? own.provider, daemonSaysUnavailable(target, awayFeatures)) : null
   return { held, setHeld, helpers, strip, active, target, thread, away, visible: !!(held.length || helpers.length || strip || active.length || target?.pending_permission_mode || target?.quota_limited || away) }
 }
 

@@ -12,7 +12,7 @@ import { loadTarget, useComposer } from '../composer/store.ts'
 import { showDialog } from '../dialogs/store.ts'
 import { toastProblem } from '../problems/toast.ts'
 import { activeEnvironment } from '../shell/environment.ts'
-import { threadClient, type StateThread } from '../state.ts'
+import { machineOfThreadId, threadClient, type StateThread } from '../state.ts'
 import { Para } from '../transcript/kit.tsx'
 import { useTheme } from '../ui.tsx'
 import { AccountMarkStack } from '../usage/AccountMark.tsx'
@@ -35,7 +35,7 @@ function AccountCard({ testId, title, children }: { testId: string; title: strin
 /** The thread's machine, as the cards name it. */
 function useThreadMachine(thread: StateThread) {
   const view = useAccountsEverywhere()
-  const machineId = thread.machineId ?? view.primaryId
+  const machineId = thread.machineId ?? machineOfThreadId(thread.id) ?? view.primaryId
   const machine = view.machines.find((m) => m.machineId === machineId)
   // Its accounts' limits decide what is preselected.
   useEffect(() => { if (machineId === view.primaryId) askAccountLimits(); else void readMachine(machineId) }, [machineId])

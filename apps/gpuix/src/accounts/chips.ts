@@ -60,7 +60,10 @@ function label(machine: string, state: ChipState, standing: MachineStanding | un
   return `${machine} · ${state === 'borrowed' ? rest.replace(/^From/, 'from') : rest}`
 }
 
-const unfollowedLabel = (machine: string, unfollowed: Unfollowed, several: boolean) => `${several ? `${machine} · ` : ''}Uses ${unfollowed.uses}`
+// "fedora · Uses Personal" when it runs another account it has; "fedora · Not signed in" when it has no login for this
+// one ("Uses Terminal login" read as if all was well).
+const unfollowedLabel = (machine: string, unfollowed: Unfollowed, several: boolean) =>
+  `${several ? `${machine} · ` : ''}${unfollowed.hasAccount ? `Uses ${unfollowed.uses}` : 'Not signed in'}`
 
 export function chipsFor(account: UnifiedAccount, machines: readonly MachineAccounts[], sharing?: string | null): AccountChip[] {
   const several = machines.length > 1

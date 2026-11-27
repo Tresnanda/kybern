@@ -2,6 +2,7 @@
 // another account on its own: these are the choices behind the one tap. Pure.
 import { CLI_INSTANCE, withoutSignIn } from '../shared/lib/accounts.ts'
 import type { ProviderInstance } from '../../../../packages/kybern-client/src/types.ts'
+import { ACCOUNTS_SHARED_FEATURE } from '../../../../packages/kybern-client/src/types.ts'
 import { accountAt, isUsable, leftOf, suggestAccount, type HarnessGroup, type MachineAccounts, type UnifiedAccount } from './unified.ts'
 
 export interface SwitchChoice {
@@ -69,6 +70,17 @@ function listedAway(machines: readonly MachineAccounts[], machineId: string, pro
  * one the machine's account list decides: null while it hasn't answered, for agents without a sign-in, and for a
  * terminal login whose state is unknown.
  */
+/**
+ * What the thread's daemon says about its account. A 0.27+ daemon (shared accounts) always answers and leaves
+ * `account_unavailable` out when it is false, so a missing field is "usable"; only an older daemon's silence makes the
+ * card read the account lists instead.
+ */
+export function daemonSaysUnavailable(target: { account_unavailable?: boolean } | null | undefined, features: readonly string[] | undefined): boolean | undefined {
+  if (!target) return undefined
+  if (target.account_unavailable !== undefined) return target.account_unavailable
+  return features?.includes(ACCOUNTS_SHARED_FEATURE) ? false : undefined
+}
+
 export function accountAway(machines: readonly MachineAccounts[], groups: readonly HarnessGroup[], machineId: string, provider: ProviderInstance, unavailable?: boolean): AccountAway | null {
   if (withoutSignIn(provider.kind)) return null
   const instance = provider.instance || CLI_INSTANCE
