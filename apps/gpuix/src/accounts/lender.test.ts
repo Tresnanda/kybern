@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import type { AccountBroker, AccountSummary, LendableAccount, LoginBrokerStatus, MachineCard } from '../../../../packages/kybern-client/src/types.ts'
 import { describeProblem } from '../../../../packages/kybern-client/src/problems.ts'
-import { borrow, defaultMessage, defaultTakers, discardBorrow, setupItems, stopBorrowing } from './actions.ts'
-import { lenderVerdict, setSharing, sharingFrom } from './adapter.ts'
-import { chipsFor, sharingAction } from './chips.ts'
+import { borrow, defaultMessage, defaultTakers, discardBorrow, lenderSource, setupItems, stopBorrowing } from './actions.ts'
+import { lenderOptions, lendersByKind, lenderVerdict, setSharing, sharingFrom, supportsPerKind } from './adapter.ts'
+import { chipsFor } from './chips.ts'
 import type { Offer } from './offers.ts'
-import { planSetup, signInHereAction, type SignInItem } from './queue.ts'
+import { planSetup, planSignIn, signInHereAction, type SignInItem } from './queue.ts'
 import type { UnifiedView } from './store.ts'
 import { unifyAccounts, type MachineAccounts } from './unified.ts'
 import { machine, summary } from './unified.test.ts'
@@ -64,8 +64,7 @@ describe('borrowing during set-up', () => {
   })
 })
 
-describe('a machine’s menu', () => {
-  const machines = [fresh(), vps()]
+describe('choosing who lends', () => {
   test('chooses and clears without signing the previous machine out, saying when the offer chose', async () => {
     const calls: unknown[] = []
     const client = { call: async (method: string, params: unknown) => { calls.push([method, params]) } } as unknown as Parameters<typeof setSharing>[0]
@@ -78,16 +77,19 @@ describe('a machine’s menu', () => {
       ['login.broker.set', { machine_id: 'vps', sign_out_old: false, via: 'always_on' }],
     ])
   })
-  test('offers sharing on a machine that can, and stopping on the one that shares', () => {
-    expect(sharingAction(machines[1]!, machines, null)).toBe('share')
-    expect(sharingAction(machines[1]!, machines, 'new')).toBe('share')
-    expect(sharingAction(machines[1]!, machines, 'vps')).toBe('stop')
-  })
-  test('offers nothing offline, on an older daemon, through an older window or on a lone machine', () => {
-    expect(sharingAction(vps({ online: false }), machines, 'vps')).toBeNull()
-    expect(sharingAction(vps({ features: [] }), machines, null)).toBeNull()
-    expect(sharingAction(machines[1]!, [fresh({ features: [] }), vps()], null)).toBeNull()
-    expect(sharingAction(machines[0]!, [machines[0]!], null)).toBeNull()
+  test('sets or clears one agent’s lender with `provider`', async () => {
+    const calls: unknown[] = []
+    const client = { call: async (method: string, params: unknown) => { calls.push([method, params]) } } as unknown as Parameters<typeof setSharing>[0]
+    await setSharing(client, 'vps', undefined, 'codex')
+    await setSharing(client, null, undefined, 'claude-code')
+    expect(calls).toEqual([
+      ['login.broker.set', { machine_id: 'vps', sign_out_old: false, provider: 'codex' }],
+      // Stopping one agent reads who lends the others first (sharing.test.ts covers the pinning).
+      ['login.broker.status', {}],
+      ['login.broker.set', { machine_id: null, sign_out_old: false, provider: 'claude-code' }],
+    ])
+    expect(supportsPerKind(['login.broker.per_kind.v1'])).toBe(true)
+    expect(supportsPerKind(['login.broker.v1'])).toBe(false)
   })
   test('marks the sharing machine only on the sign-ins it lends', () => {
     const all = [fresh({ accounts: [account('claude-code', 'm1', 'w@x.com')] }), vps()]
@@ -232,5 +234,48 @@ describe('the “now the default” toast', () => {
   test('claims nothing when none could yet', () => {
     expect(defaultMessage('Work', 'Claude Code', [], { later: ['SatyaMas', 'fedora'] }, 3)).toBe('Work is saved as the default for Claude Code. SatyaMas and fedora follow when they’re back.')
     expect(defaultMessage('Work', 'Claude Code', ['MacBook'], { kept: ['SatyaMas'] }, 2)).toBe('Work is now the default for Claude Code on MacBook. SatyaMas keeps its default until it’s back.')
+  })
+})
+
+describe('a lender per agent', () => {
+  const fedora = { machine_id: 'fedora', name: 'fedora', online_ratio_7d: 1 }
+  const perKind = (map: Record<string, unknown>) => ({ ...status({ usable_for_new: true }), lenders_by_kind: map }) as unknown as LoginBrokerStatus
+  test('reads each agent’s lender; an agent missing from the map has none; an older daemon sends no map', () => {
+    const map = lendersByKind(perKind({
+      'claude-code': { machine_id: 'fedora', name: 'fedora', chosen: 'manual', usable_for_new: true },
+      codex: { machine_id: 'vps', name: 'kdi-vps', usable_for_new: false, reason: 'kdi-vps is often offline.' },
+    }), [...members(0.2), fedora])!
+    expect(map['claude-code']).toEqual({ machineId: 'fedora', machine: 'fedora', usable: true })
+    expect(map.codex).toEqual({ machineId: 'vps', machine: 'kdi-vps', usable: false, reason: 'kdi-vps is often offline.' })
+    expect(map.omp).toBeUndefined()
+    expect(lendersByKind(status({ usable_for_new: true }), members(1))).toBeNull()
+  })
+  test('lists the machines that can lend, with why one can’t', () => {
+    const lenders = [
+      { machine_id: 'vps', name: 'kdi-vps', is_self: false, online: true, supported: true, is_lender: true, can_share: true },
+      { machine_id: 'old', name: 'old', is_self: false, online: true, supported: false, is_lender: false, can_share: false },
+      { machine_id: 'away', name: 'SatyaMas', is_self: false, online: false, supported: true, is_lender: false, can_share: false, reason: 'SatyaMas is offline. Bring it online first.' },
+    ]
+    expect(lenderOptions({ ...status(), lenders } as LoginBrokerStatus)).toEqual([
+      { machineId: 'vps', name: 'kdi-vps', canShare: true },
+      { machineId: 'away', name: 'SatyaMas', canShare: false, reason: 'SatyaMas is offline. Bring it online first.' },
+    ])
+    expect(lenderOptions(status())).toBeNull()
+  })
+  test('Set up and Sign in borrow each agent from its own lender', () => {
+    const machines = [fresh(), vps()]
+    const groups = unifyAccounts(machines)
+    const lending = { machineId: 'vps', machine: 'kdi-vps', usable: true }
+    // Claude Code comes from kdi-vps; nobody lends Codex.
+    const view = { machines, groups, sharing: null, lenders: { 'claude-code': lending } } as unknown as UnifiedView
+    const accounts = groups.flatMap((group) => group.accounts)
+    expect(planSetup(accounts, { machineId: 'new', name: 'laptop' }, lenderSource(view)).map((item) => `${item.kind}:${item.method}`)).toEqual(['claude-code:borrow', 'codex:sign_in', 'cursor:sign_in'])
+    const codex = accounts.find((a) => a.kind === 'codex')!
+    const claude = accounts.find((a) => a.kind === 'claude-code')!
+    expect(planSignIn(codex, { machineId: 'new', name: 'laptop' }, lenderSource(view)).method).toBe('sign_in')
+    expect(planSignIn(claude, { machineId: 'new', name: 'laptop' }, lenderSource(view))).toMatchObject({ method: 'borrow', lender: { machine: 'kdi-vps', account: 'a1' } })
+    // A daemon with one lender for every agent: it lends both.
+    const one = { machines, groups, sharing: lending, lenders: null } as unknown as UnifiedView
+    expect(planSignIn(codex, { machineId: 'new', name: 'laptop' }, lenderSource(one)).method).toBe('borrow')
   })
 })

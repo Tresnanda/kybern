@@ -45,8 +45,8 @@ pub struct Inputs {
     pub machines: Vec<Machine>,
     pub holdings: BTreeMap<MachineId, MachineHoldings>,
     pub shared: AccountsShared,
-    /// The machine that already lends its sign-ins, if any.
-    pub lender: Option<MachineId>,
+    /// The machine that already lends each agent's sign-in (its own lender, else the default), if any.
+    pub lenders: BTreeMap<ProviderKind, MachineId>,
     /// Migration clashes that are over, by offer id ([`settling`]).
     pub settled: BTreeSet<String>,
 }
@@ -147,13 +147,16 @@ pub fn compute(inputs: &Inputs) -> Vec<AccountOffer> {
     };
     let known: Vec<&Machine> = inputs.machines.iter().filter(|machine| inputs.holdings.contains_key(&machine.id)).collect();
 
-    // Always on: a reliably online machine with lendable accounts that others lack.
+    // Always on: a reliably online machine with lendable accounts that others lack, of agents it doesn't lend already.
     for machine in &known {
-        if inputs.lender.as_deref() == Some(machine.id.as_str()) || machine.online_ratio.is_none_or(|ratio| ratio < ALWAYS_ON_RATIO) {
+        if machine.online_ratio.is_none_or(|ratio| ratio < ALWAYS_ON_RATIO) {
             continue;
         }
-        let lendable: BTreeSet<String> =
-            own_keys(&inputs.holdings[&machine.id]).into_iter().filter(|key| kind_of(key).is_some_and(broker_supports)).collect();
+        let lends = |kind: ProviderKind| inputs.lenders.get(&kind).is_some_and(|lender| *lender == machine.id);
+        let lendable: BTreeSet<String> = own_keys(&inputs.holdings[&machine.id])
+            .into_iter()
+            .filter(|key| kind_of(key).is_some_and(|kind| broker_supports(kind) && !lends(kind)))
+            .collect();
         let mut keys = BTreeSet::new();
         let mut borrowers = Vec::new();
         for other in known.iter().filter(|other| other.id != machine.id) {
@@ -300,7 +303,11 @@ fn inputs(state: &AppState) -> Inputs {
         machines,
         holdings: crate::network::accounts_sync::all_holdings(state),
         shared: state.settings.get().accounts_shared,
-        lender: state.orchestrator.login_broker().and_then(|broker| broker.broker_id()),
+        lenders: state
+            .orchestrator
+            .login_broker()
+            .map(|broker| kybern_protocol::LENDABLE_KINDS.into_iter().filter_map(|kind| Some((kind, broker.lender_for(kind)?))).collect())
+            .unwrap_or_default(),
         settled: state.store.meta_get(SETTLED).ok().flatten().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default(),
     }
 }
@@ -322,8 +329,10 @@ pub fn offers(state: &AppState) -> AccountsOffersResult {
         }
     }
     // A legacy lender that isn't always on is reported as not usable for new setups, with the reason.
-    let lender = state.orchestrator.login_broker().and_then(|broker| broker.lender_status());
-    AccountsOffersResult { offers: compute(&inputs), lender }
+    let broker = state.orchestrator.login_broker();
+    let lender = broker.and_then(|broker| broker.lender_status());
+    let lenders_by_kind = broker.map(|broker| broker.lenders_by_kind()).unwrap_or_default();
+    AccountsOffersResult { offers: compute(&inputs), lender, lenders_by_kind }
 }
 
 #[cfg(test)]
@@ -375,7 +384,7 @@ mod tests {
                 defaults: [(ProviderKind::ClaudeCode, "claude-code:work@example.com".to_string())].into(),
                 ..Default::default()
             },
-            lender: None,
+            lenders: BTreeMap::new(),
             settled: BTreeSet::new(),
         }
     }
@@ -402,8 +411,16 @@ mod tests {
         assert!(offers.iter().all(|offer| offer.dismissed.is_none()));
         // A machine already lending gets no always-on offer.
         let mut lent = network();
-        lent.lender = Some("vps".into());
+        lent.lenders = kybern_protocol::LENDABLE_KINDS.into_iter().map(|kind| (kind, "vps".to_string())).collect();
         assert!(find(&compute(&lent), "always_on:vps").is_none());
+        // Lending only Codex (its own lender), the VPS is still offered for Claude.
+        let mut codex_only = network();
+        codex_only.lenders = [(ProviderKind::Codex, "vps".to_string())].into();
+        assert_eq!(find(&compute(&codex_only), "always_on:vps").unwrap().keys, vec!["claude-code:work@example.com"]);
+        // Lending Claude for its agent, nothing else of the VPS is lendable: no offer.
+        let mut claude = network();
+        claude.lenders = [(ProviderKind::ClaudeCode, "vps".to_string())].into();
+        assert!(find(&compute(&claude), "always_on:vps").is_none());
     }
 
     #[test]

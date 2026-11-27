@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { AccountSummary, ProviderKind, ProviderLimits, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
 import { chipsFor, usableMachines } from './chips.ts'
-import { accountAway, switchChoices } from './limit.ts'
+import { accountAway, daemonSaysUnavailable, switchChoices } from './limit.ts'
 import { accountKey, isOutdatedMachine, leftOf, limitsOn, otherAccountName, outdatedMachineLabel, outdatedMachines, railEntries, standings, suggestAccount, unifyAccounts, type MachineAccounts, type UnifiedAccount } from './unified.ts'
 
 const NOW = Date.parse('2026-11-27T10:00:00Z')
@@ -195,17 +195,17 @@ describe('a machine that isn’t on the shared default', () => {
   test('is one warning chip in the default’s row, naming the account it uses instead', () => {
     const machines = [mac, fedora()]
     expect(warned(machines).map((a) => [a.name, a.unfollowed])).toEqual([['Work', [{ machineId: 'fedora', uses: 'Personal', hasAccount: false }]]])
-    expect(chipsOf(machines).map((c) => [c.label, c.state, c.unfollowed?.hasAccount])).toEqual([['MacBook', 'signed_in', undefined], ['fedora · Uses Personal', 'add', false]])
+    expect(chipsOf(machines).map((c) => [c.label, c.state, c.unfollowed?.hasAccount])).toEqual([['MacBook', 'signed_in', undefined], ['fedora · Not signed in', 'add', false]])
     // The row of the account it does use is as ever.
     expect(chipsOf(machines, 'Personal').map((c) => c.label)).toEqual(['MacBook', 'fedora'])
   })
 
-  test('uses the shared name of that account, or says it is the terminal login', () => {
+  test('names the account it uses by its shared name, and says plainly when it has no login for the default', () => {
     const renamed = { ...shared, profiles: { 'claude-code:p@x.com': { name: 'Side' } } }
-    expect(chipsOf([mac, fedora()], 'Work', renamed)[1]!.label).toBe('fedora · Uses Side')
+    expect(chipsOf([mac, fedora({ unfollowed: unfollowed('p', true) })], 'Work', renamed)[1]!.label).toBe('fedora · Uses Side')
     // A signed-out terminal login has no row of its own.
     const terminal = fedora({ unfollowed: unfollowed('default') }, [summary('claude-code', 'default', { status: 'signed_out' })])
-    expect(chipsOf([mac, terminal])[1]!.label).toBe('fedora · Uses Terminal login')
+    expect(chipsOf([mac, terminal])[1]!.label).toBe('fedora · Not signed in')
   })
 
   test('keeps the login it has there when it runs another by choice', () => {
@@ -330,5 +330,26 @@ describe('the limit card’s choices', () => {
     // The daemon's answer wins over the list, either way.
     expect(accountAway(machines, groups, 'fedora', { kind: 'claude-code', instance: 'b' }, true)?.name).toBe('Side')
     expect(accountAway(out, unifyAccounts(out), 'fedora', { kind: 'claude-code', instance: 'b' }, false)).toBeNull()
+  })
+})
+
+describe('a thread on another machine', () => {
+  test('a 0.27+ daemon that leaves account_unavailable out means the account is usable', () => {
+    const current = ['accounts.shared.v1']
+    expect(daemonSaysUnavailable({}, current)).toBe(false)
+    expect(daemonSaysUnavailable({ account_unavailable: true }, current)).toBe(true)
+    // An older daemon's silence leaves it to the account lists; no target yet says nothing.
+    expect(daemonSaysUnavailable({}, ['login.broker.v1'])).toBeUndefined()
+    expect(daemonSaysUnavailable(null, current)).toBeUndefined()
+  })
+  test('its account is not judged by this computer\'s list when the daemon says it is fine', () => {
+    // The thread's account exists only on fedora; this Mac lists other Codex accounts.
+    const mac = machine('mac', 'MacBook', [summary('codex', 'default', { identity: { email: 'm@x.com' } })], { isLocal: true, features: ['accounts.shared.v1'] })
+    const fedora = machine('fedora', 'fedora', [summary('codex', 'f1', { identity: { email: 'm@x.com' } })], { features: ['accounts.shared.v1'] })
+    const groups = unifyAccounts([mac, fedora])
+    const provider = { kind: 'codex' as const, instance: 'f1' }
+    expect(accountAway([mac, fedora], groups, 'fedora', provider, daemonSaysUnavailable({}, fedora.features))).toBeNull()
+    // Judged against the wrong machine's list (the 0.27.2 bug) it looked missing.
+    expect(accountAway([mac, fedora], groups, 'mac', provider, undefined)).not.toBeNull()
   })
 })

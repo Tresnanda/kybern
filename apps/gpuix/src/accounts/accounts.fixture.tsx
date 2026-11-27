@@ -1,5 +1,6 @@
-// "Accounts across machines" on three made-up machines: the real app (`main.tsx`) against a loopback fixture daemon per
-// machine, with a thread at its usage limit. Run by `accounts.shots.ts`; every file and credential stays in its scratch
+// "Accounts across machines" on made-up machines: the real app (`main.tsx`) against a loopback fixture daemon per
+// machine, with a thread at its usage limit. fedora lends Claude Code and kdi-vps Codex (`login.broker.per_kind.v1`),
+// studio is offline and pi-box runs a Kybern too old to list accounts. Run by `accounts.shots.ts`; every file and credential stays in its scratch
 // directory. `ACCOUNTS_DEMO_OFFER=clash` opens on the changed-default card instead of the new-machine one, and
 // `ACCOUNTS_DEMO_AWAY=1` shows the thread with its account unavailable instead of at its limit, and
 // `ACCOUNTS_DEMO_DELEGATED=1` a turn that delegated to agents on the default and on another account.
@@ -16,10 +17,13 @@ for (const key of ['KYBERN_DATA_DIR', 'KYBERN_CLIENT_CONFIG_DIR', 'KYBERN_GPUIX_
 
 const AWAY = process.env.ACCOUNTS_DEMO_AWAY === '1'
 const DELEGATED = process.env.ACCOUNTS_DEMO_DELEGATED === '1'
-const ids = ['mac', 'fedora', 'satya'] as const
+const ids = ['mac', 'fedora', 'satya', 'vps', 'studio', 'old'] as const
 type Id = typeof ids[number]
-const NAMES: Record<Id, string> = { mac: 'MacBook Pro', fedora: 'fedora', satya: 'SatyaMas' }
-const FEATURES = ['network.v1', 'login.broker.v1', 'accounts.shared.v1', 'accounts.login.handoff.v1', 'accounts.write.v1', 'antigravity.accounts.v1']
+const NAMES: Record<Id, string> = { mac: 'MacBook Pro', fedora: 'fedora', satya: 'SatyaMas', vps: 'kdi-vps', studio: 'studio', old: 'pi-box' }
+const FEATURES = ['network.v1', 'login.broker.v1', 'login.broker.choice.v1', 'login.broker.per_kind.v1', 'accounts.shared.v1', 'accounts.login.handoff.v1', 'accounts.write.v1', 'antigravity.accounts.v1']
+/** pi-box: a Kybern from before accounts could be listed. */
+const OLD_FEATURES = ['network.v1']
+const featuresOf = (id: Id) => (id === 'old' ? OLD_FEATURES : FEATURES)
 const now = Date.now()
 const at = new Date(now).toISOString()
 const ago = (minutes: number) => new Date(now - minutes * 60_000).toISOString()
@@ -27,8 +31,8 @@ const reset = (minutes: number) => Math.round(now / 1000 + minutes * 60)
 
 const keys = ids.map(() => generateKeyPairSync('ed25519'))
 const cards = ids.map((machine_id, i): MachineCard => ({
-  machine_id, name: NAMES[machine_id], os: machine_id === 'mac' ? 'darwin' : machine_id === 'fedora' ? 'linux' : 'windows',
-  is_self: machine_id === 'mac', status: 'online', features: FEATURES, online_ratio_7d: machine_id === 'fedora' ? 0.99 : 0.4,
+  machine_id, name: NAMES[machine_id], os: machine_id === 'mac' ? 'darwin' : machine_id === 'satya' ? 'windows' : 'linux',
+  is_self: machine_id === 'mac', status: machine_id === 'studio' ? 'offline' : 'online', features: featuresOf(machine_id), online_ratio_7d: machine_id === 'fedora' ? 0.99 : 0.4,
   signing_key: keys[i]!.publicKey.export({ type: 'spki', format: 'der' }).subarray(-32).toString('base64'),
 } as MachineCard))
 
@@ -56,6 +60,12 @@ const accounts: Record<Id, AccountSummary[]> = {
     account('claude-code', 'b1', 'Work', 'sam@acme.example', { identity: { email: 'sam@acme.example' }, color: 'blue', broker: { machine_id: 'fedora', machine_name: 'fedora', broker_account: 'w2', state: 'borrowing' } }),
     account('codex', 'default', 'CLI account', null, { is_default: true }),
   ],
+  // kdi-vps lends Codex; nothing of Claude Code is signed in there.
+  vps: [
+    account('codex', 'default', 'CLI account', 'sam@hey.example', { identity: { email: 'sam@hey.example', plan: 'Plus' }, is_default: true }),
+  ],
+  studio: [],
+  old: [],
 }
 
 const limits = (provider: ProviderKind, five: number, week: number, instance?: string, updated = ago(1)): ProviderLimits => ({
@@ -70,7 +80,7 @@ const usage = (id: Id) => {
 
 const provider = (kind: ProviderKind, display_name: string, available: boolean): ProviderStatus => ({ kind, display_name, available, supported_permission_modes: ['supervised', 'full-access'], supports_fork: true, supports_model_switch: true, models: [{ id: 'default', display_name: 'Default', is_default: true }, { id: 'claude-opus-5-5', display_name: 'Claude Opus 5.5' }], instances: ['default'] })
 const providers = (id: Id) => [
-  provider('claude-code', 'Claude Code', true), provider('codex', 'Codex', true), provider('antigravity', 'Antigravity', id === 'mac'), provider('cursor', 'Cursor', false),
+  provider('claude-code', 'Claude Code', true), provider('codex', 'Codex', true), provider('antigravity', 'Antigravity', id === 'mac'), provider('cursor', 'Cursor', false), provider('omp', 'omp', false),
 ]
 
 // ── Settings and offers ──────────────────────────────────────────────────────
@@ -137,6 +147,8 @@ const network = (id: Id): NetworkStatus => ({ enabled: true, configured: true, r
 const server = Bun.serve<{ id: Id }>({ port: 0, hostname: '127.0.0.1', fetch(req, s) {
   const url = new URL(req.url)
   const id = (url.pathname.split('/')[1] || 'mac') as Id
+  // studio is away: nothing answers there.
+  if (id === 'studio') return new Response('Offline', { status: 503 })
   if (url.pathname.endsWith('/ws') && s.upgrade(req, { data: { id } })) return
   const index = ids.indexOf(id)
   if (index >= 0 && url.pathname.endsWith('/.well-known/kybern/machine')) {
@@ -151,7 +163,7 @@ const server = Bun.serve<{ id: Id }>({ port: 0, hostname: '127.0.0.1', fetch(req
     const id = ws.data.id
     const mac = id === 'mac'
     const handlers: Record<string, () => unknown> = {
-      'daemon.info': () => ({ protocol_version: PROTOCOL_VERSION, environment_id: id, machine_id: id, hostname: NAMES[id], version: '0.27.0', os: cards.find((c) => c.machine_id === id)!.os, arch: 'arm64', data_dir: '/fixture', scopes: [], started_at: at, features: FEATURES }),
+      'daemon.info': () => ({ protocol_version: PROTOCOL_VERSION, environment_id: id, machine_id: id, hostname: NAMES[id], version: id === 'old' ? '0.20.0' : '0.27.3', os: cards.find((c) => c.machine_id === id)!.os, arch: 'arm64', data_dir: '/fixture', scopes: [], started_at: at, features: featuresOf(id) }),
       'projects.list': () => ({ projects: mac ? [project] : [] }),
       'threads.list': () => ({ threads: request.params.parent_thread_id ? (mac ? childrenOn(id) : []) : mac ? [thread] : childrenOn(id) }),
       'threads.get': () => ({ thread, transcript: shownTranscript(), pending_approvals: [], next_before_seq: null }),
@@ -174,18 +186,27 @@ const server = Bun.serve<{ id: Id }>({ port: 0, hostname: '127.0.0.1', fetch(req
       'providers.accounts.catalog': () => providers(id)[0],
       'usage.limits': () => usage(id),
       'accounts.offers': () => ({ offers: offers() }),
-      'login.broker.status': () => ({ broker: { machine_id: 'fedora', name: 'fedora' }, is_broker: false, providers: [], loans: [] }),
+      'login.broker.status': () => brokerStatus(),
+      'login.broker.set': () => { const { provider: kind, machine_id } = request.params; if (kind) lending[kind as 'codex'] = machine_id ?? null; return { status: brokerStatus(), rebound: [], offline: [], old_signed_out: [] } },
       // A sign-in on another machine that waits for this computer to catch the redirect.
       'providers.accounts.login.start': () => ({ id: `login-${id}`, kind: request.params.kind, mode: request.params.mode, phase: 'waiting', url: 'https://claude.ai/oauth/authorize?fixture', ...(mac ? {} : { handoff: { port: 54321, path: '/callback' } }), expires_at: new Date(now + 600_000).toISOString() }),
       'providers.accounts.login.get': () => ({ id: request.params.id, kind: 'claude-code', mode: 'browser', phase: 'waiting', url: 'https://claude.ai/oauth/authorize?fixture', handoff: { port: 54321, path: '/callback' }, expires_at: new Date(now + 600_000).toISOString() }),
       'providers.accounts.login.cancel': () => ({ id: request.params.id, kind: 'claude-code', mode: 'browser', phase: 'canceled', expires_at: at }),
     }
-    const handler = handlers[request.method]
+    const handler = id === 'old' && request.method === 'providers.accounts.list' ? undefined : handlers[request.method]
     ws.send(JSON.stringify(handler
       ? { jsonrpc: '2.0', id: request.id, result: handler() }
       : { jsonrpc: '2.0', id: request.id, error: { code: -32601, message: 'method not found' } }))
   },
 } })
+// Who lends each agent: fedora Claude Code, kdi-vps Codex (it is often away, so new machines sign in themselves).
+const lending: Record<'claude-code' | 'codex' | 'omp', string | null> = { 'claude-code': 'fedora', codex: 'vps', omp: null }
+const brokerStatus = () => ({
+  broker: { machine_id: 'fedora', name: 'fedora' }, is_broker: false, providers: [], loans: [],
+  lender: { machine_id: 'fedora', name: 'fedora', chosen: 'manual', usable_for_new: true },
+  lenders: (['mac', 'fedora', 'vps', 'studio'] as Id[]).map((m) => ({ machine_id: m, name: NAMES[m], is_self: m === 'mac', online: m !== 'studio', supported: m !== 'studio', is_lender: Object.values(lending).includes(m), can_share: m !== 'studio', ...(m === 'studio' ? { reason: 'studio is offline. Bring it online first.' } : {}) })),
+  lenders_by_kind: Object.fromEntries(Object.entries(lending).filter(([, m]) => m).map(([kind, m]) => [kind, { machine_id: m, name: NAMES[m as Id], chosen: 'manual', usable_for_new: m !== 'vps', ...(m === 'vps' ? { reason: 'kdi-vps is often offline, so new machines sign in themselves.' } : {}) }])),
+})
 const route = (id: string) => ({ kind: 'direct_advertised' as const, url: `http://127.0.0.1:${server.port}/${id}` })
 
 const config = process.env.KYBERN_CLIENT_CONFIG_DIR!

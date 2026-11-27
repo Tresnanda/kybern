@@ -3176,6 +3176,9 @@ export interface AccountOfferClash { kind: ProviderKind; machine_id: MachineId; 
 export interface AccountsOffersResult {
   offers: AccountOffer[];
   lender?: LenderStatus;
+  /** The effective lender per lendable agent (its own lender, else `lender`). Absent before 0.27.3
+   * (`LOGIN_BROKER_PER_KIND_FEATURE`): use `lender` for every agent then. */
+  lenders_by_kind?: Partial<Record<ProviderKind, LenderStatus>>;
 }
 /** One offer card (`accounts.offers`). Dismissed ones are returned too, so the Accounts page can list them. */
 export interface AccountOffer {
@@ -5271,7 +5274,7 @@ export interface Methods {
   "peer.login.push": [PeerLoginPushParams, Empty];
   "peer.login.release": [{ loan_id: string }, Empty];
   "peer.login.status": [Empty, PeerLoginStatus];
-  "peer.login.release_all": [{ sign_out?: boolean }, { released: number; signed_out: ProviderKind[] }];
+  "peer.login.release_all": [{ sign_out?: boolean; providers?: ProviderKind[] }, { released: number; signed_out: ProviderKind[] }];
   "peer.login.usage": [{ provider: ProviderKind; account?: string }, UsageLimitsResult];
   "peer.secrets.put": [{ name: string; sealed: string }, Empty];
   "login.broker.status": [Empty, LoginBrokerStatus];
@@ -5363,10 +5366,17 @@ export interface LoginBrokerStatus {
   lender?: LenderStatus;
   /** Every member, and whether "Share this machine's sign-ins" can pick it. Absent before 0.27.2. */
   lenders?: LenderCandidate[];
+  /** The effective lender per lendable agent (`claude-code`, `codex`, `omp`): the agent's own lender when one is set
+   * with `login.broker.set { provider }`, else the default in `lender`. Absent before 0.27.3
+   * (`LOGIN_BROKER_PER_KIND_FEATURE`): use `lender` for every agent then. */
+  lenders_by_kind?: Partial<Record<ProviderKind, LenderStatus>>;
 }
 /** `login.broker.status` / `accounts.offers` carry `lender` and `lenders`, `login.broker.set` takes `via`, and a failed
  * borrow carries a `login_borrow` problem with a `sign_in_here` action. */
 export const LOGIN_BROKER_CHOICE_FEATURE = "login.broker.choice.v1";
+/** A lender per agent (0.27.3): `login.broker.set` takes `provider`, `login.broker.status` and `accounts.offers` carry
+ * `lenders_by_kind`. */
+export const LOGIN_BROKER_PER_KIND_FEATURE = "login.broker.per_kind.v1";
 /** How the lender was chosen: by hand, or by accepting the `always_on` offer. */
 export type LenderVia = "manual" | "always_on";
 /**
@@ -5411,6 +5421,9 @@ export interface LoginBrokerSetParams {
   sign_out_old?: boolean;
   /** How the lender was chosen; absent means "manual". Setting the current lender again records the choice. */
   via?: LenderVia;
+  /** Set the lender of this agent only (0.27.3+, `LOGIN_BROKER_PER_KIND_FEATURE`): `claude-code`, `codex` or `omp`.
+   * With `machine_id: null` the agent's own lender is removed and it follows the default again. Absent: the default. */
+  provider?: ProviderKind;
 }
 export interface LoginBrokerSetResult {
   status: LoginBrokerStatus;
@@ -5444,6 +5457,10 @@ export interface PeerLoginStatus {
   borrowed_from: MachineId[];
   /** Borrowed loans with a turn running on them now (the lender defers a refresh ahead of expiry). */
   busy_loans?: string[];
+  /** The effective lender per lendable agent (0.27.3+). */
+  lenders_by_kind?: Partial<Record<ProviderKind, MachineId>>;
+  /** The machines this one borrows each agent from (0.27.3+). */
+  borrowed_from_by_kind?: Partial<Record<ProviderKind, MachineId[]>>;
 }
 export interface SecretsPushParams {
   name: string;

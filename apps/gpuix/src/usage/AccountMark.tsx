@@ -41,12 +41,12 @@ export function AccountMarkStack({ kind, color, size = 14 }: { kind: ProviderKin
 }
 
 /** A rounded tile tinted with the account colour, with the agent mark in its centre. */
-export function AccountAvatar({ kind, color, instance, size = 28 }: { kind: ProviderKind; color?: string | null; instance?: string | null; size?: 20 | 28 | 32 }) {
+export function AccountAvatar({ kind, color, instance, size = 28 }: { kind: ProviderKind; color?: string | null; instance?: string | null; size?: 20 | 28 | 32 | 40 }) {
   const t = useTheme()
   const cli = isCliInstance(instance)
   const tint = cli ? null : accountColor(t, color, 0.14)
   const edge = cli ? null : accountColor(t, color, 0.4)
-  return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: size, height: size, flexShrink: 0, borderRadius: size === 20 ? 6 : 8, borderWidth: 1, borderColor: edge ?? t.border, backgroundColor: tint ?? t.buttonSecondary, pointerEvents: 'none' }}><ProviderMark kind={kind} size={Math.round(size * 0.5)} /></div>
+  return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: size, height: size, flexShrink: 0, borderRadius: size === 20 ? 6 : size === 40 ? 10 : 8, borderWidth: 1, borderColor: edge ?? t.border, backgroundColor: tint ?? t.buttonSecondary, pointerEvents: 'none' }}><ProviderMark kind={kind} size={Math.round(size * 0.5)} /></div>
 }
 
 const R = 10.25

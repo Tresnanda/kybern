@@ -869,6 +869,10 @@ pub struct AccountsOffersResult {
     /// and show `reason`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lender: Option<LenderStatus>,
+    /// The effective lender per lendable harness (an agent's own lender, else the default). Absent from daemons
+    /// before 0.27.3 (`login.broker.per_kind.v1`): use `lender` for every agent then.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub lenders_by_kind: std::collections::BTreeMap<ProviderKind, LenderStatus>,
 }
 method!(AccountsOffers, "accounts.offers", Some(Scope::OrchestrationRead), Empty, AccountsOffersResult);
 method!(AccountsRemove, "providers.accounts.remove", Some(Scope::AccountsWrite), ProviderInstance, Empty);

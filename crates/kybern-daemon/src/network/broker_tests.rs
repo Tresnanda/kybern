@@ -678,7 +678,7 @@ async fn moving_the_broker_reissues_to_the_members_before_the_old_one_signs_out(
     // The new broker has to be signed in: an empty one is refused, with what to do.
     let refused = client(&l.a)
         .await
-        .call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id: Some(l.b.id()), sign_out_old: true, via: None })
+        .call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id: Some(l.b.id()), sign_out_old: true, via: None, provider: None })
         .await
         .unwrap_err();
     assert!(format!("{refused:?}").contains("Sign in on pc first"), "{refused:?}");
@@ -686,7 +686,7 @@ async fn moving_the_broker_reissues_to_the_members_before_the_old_one_signs_out(
     // Every online member re-borrows from the Mac; the VPS signs out after that.
     let result = client(&l.a)
         .await
-        .call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id: Some(l.a.id()), sign_out_old: true, via: None })
+        .call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id: Some(l.a.id()), sign_out_old: true, via: None, provider: None })
         .await
         .unwrap();
     assert!(result.rebound.contains(&l.b.id()), "{result:?}");
@@ -1078,7 +1078,7 @@ async fn a_legacy_lender_that_isnt_always_on_takes_no_new_accounts_but_keeps_the
     // Picking the same machine again by hand makes it deliberate: new accounts may borrow from it now.
     let result = client(&l.a)
         .await
-        .call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id: Some(l.c.id()), sign_out_old: false, via: None })
+        .call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id: Some(l.c.id()), sign_out_old: false, via: None, provider: None })
         .await
         .unwrap();
     assert_eq!(result.status.lender.as_ref().map(|lender| (lender.chosen, lender.usable_for_new)), Some((Some(LenderVia::Manual), true)));
@@ -1094,7 +1094,12 @@ async fn a_legacy_lender_that_isnt_always_on_takes_no_new_accounts_but_keeps_the
     // The always-on offer is recorded as such.
     let result = client(&l.a)
         .await
-        .call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id: Some(l.c.id()), sign_out_old: false, via: Some(LenderVia::AlwaysOn) })
+        .call::<LoginBrokerSet>(LoginBrokerSetParams {
+            machine_id: Some(l.c.id()),
+            sign_out_old: false,
+            via: Some(LenderVia::AlwaysOn),
+            provider: None,
+        })
         .await
         .unwrap();
     assert_eq!(result.status.lender.and_then(|lender| lender.chosen), Some(LenderVia::AlwaysOn));
@@ -1253,7 +1258,7 @@ async fn moving_the_lender_keeps_each_account_on_its_own_email_and_never_another
     let other = claude_account(&l.a, "Other", "other@example.com", "mac-other-0", &mac_state);
     client(&l.a)
         .await
-        .call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id: Some(l.a.id()), sign_out_old: false, via: None })
+        .call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id: Some(l.a.id()), sign_out_old: false, via: None, provider: None })
         .await
         .unwrap();
     let broker = l.broker(&l.b);
@@ -1310,7 +1315,7 @@ async fn the_machine_that_becomes_the_lender_stops_borrowing_itself() {
     let mine = claude_account(&l.b, "Mine", "broker@example.com", "pc-0", &l.b.root.join("fake-claude"));
     client(&l.a)
         .await
-        .call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id: Some(l.b.id()), sign_out_old: false, via: None })
+        .call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id: Some(l.b.id()), sign_out_old: false, via: None, provider: None })
         .await
         .unwrap();
     let broker = l.broker(&l.b);
@@ -1594,7 +1599,7 @@ async fn sharing_a_machines_sign_ins_again_turns_its_logins_back_on() {
     // "Share this machine's sign-ins" for the VPS, picked again on the Mac.
     client(&l.a)
         .await
-        .call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id: Some(l.c.id()), sign_out_old: false, via: None })
+        .call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id: Some(l.c.id()), sign_out_old: false, via: None, provider: None })
         .await
         .unwrap();
     eventually("the VPS lets its sign-ins be used again", WAIT, || {
@@ -1602,4 +1607,202 @@ async fn sharing_a_machines_sign_ins_again_turns_its_logins_back_on() {
     })
     .await;
     l.broker(&l.b).bind(&l.b.state, bind(fresh.clone())).await.unwrap();
+}
+
+// ---- a lender per agent (0.27.3) ----
+
+/// A `codex` whose `login status` succeeds and whose `logout` removes the account's login; it logs what it ran.
+const FAKE_CODEX_OK: &str = r#"#!/bin/sh
+echo "$*" >> "$FAKE_CODEX_LOG"
+if [ "$1" = "logout" ]; then rm -f "$CODEX_HOME/auth.json"; fi
+exit 0
+"#;
+
+/// A ChatGPT login of `email` whose access token carries `marker`.
+fn codex_login_of(email: &str, marker: &str) -> (String, serde_json::Value) {
+    let access = codex_jwt(json!({"exp": chrono::Utc::now().timestamp() + 240 * 3600, "marker": marker}));
+    let id = codex_jwt(json!({"email": email, "https://api.openai.com/auth": {"chatgpt_plan_type": "pro"}}));
+    (
+        access.clone(),
+        json!({"auth_mode": "chatgpt", "tokens": {"id_token": id, "access_token": access, "refresh_token": "cx-refresh-SECRET", "account_id": "acct-9"}}),
+    )
+}
+
+/// A Codex account on `node` signed in with `auth`.
+fn codex_account(node: &Node, name: &str, auth: Option<&serde_json::Value>) -> String {
+    let account = crate::provider_accounts::create(
+        &node.state,
+        AccountsCreateParams { kind: ProviderKind::Codex, name: name.into(), directory: None },
+    )
+    .unwrap();
+    if let Some(auth) = auth {
+        let dir = PathBuf::from(node.state.settings.get().providers[&ProviderKind::Codex].accounts[&account.instance].directory.clone());
+        std::fs::write(dir.join("auth.json"), auth.to_string()).unwrap();
+    }
+    account.instance
+}
+
+fn borrowed_from(node: &Node, kind: ProviderKind) -> Vec<String> {
+    node.state
+        .store
+        .loans_open(kybern_store::LoanRole::Borrower)
+        .unwrap()
+        .into_iter()
+        .filter(|loan| loan.provider == kind)
+        .map(|loan| loan.peer)
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn each_agent_borrows_from_its_own_lender_and_falls_back_to_the_default() {
+    let Some(l) = lending().await else { return };
+    let codex = l.cluster.dir.path().join("bin").join("codex-ok");
+    kybern_protocol::process::write_executable(&codex, FAKE_CODEX_OK).unwrap();
+    for node in [&l.a, &l.b, &l.c] {
+        let mut settings = node.state.settings.get();
+        let provider = settings.providers.entry(ProviderKind::Codex).or_default();
+        provider.binary = Some(codex.to_string_lossy().into_owned());
+        provider.env.insert("FAKE_CODEX_LOG".into(), node.root.join("codex-calls").to_string_lossy().into_owned());
+        node.state.settings.set(settings).unwrap();
+    }
+    // The VPS lends everything: Claude (from `lending`) and Codex, to the PC and, for Codex, to the Mac.
+    let (_, vps_login) = codex_login_of("codex@example.com", "vps-codex");
+    let (vps_codex, _, pc_codex, bound) = codex_pair(&l, Some(vps_login)).await;
+    bound.unwrap();
+    let mac_borrowing = codex_account(&l.a, "Via VPS", None);
+    l.broker(&l.a)
+        .bind(
+            &l.a.state,
+            LoginBrokerBindParams {
+                provider: ProviderKind::Codex,
+                instance: mac_borrowing.clone(),
+                broker_account: Some(vps_codex.clone()),
+            },
+        )
+        .await
+        .unwrap();
+    let (thread, _) = l.thread().await;
+    l.send(thread, "on the vps").await;
+    eventually("first turn", WAIT, || l.turns(thread, "turn_completed") == 1).await;
+    assert_eq!(borrowed_from(&l.b, ProviderKind::Codex), vec![l.c.id()]);
+    assert_eq!(borrowed_from(&l.a, ProviderKind::Codex), vec![l.c.id()]);
+
+    // Only the agents that can be lent take a lender of their own.
+    let at_a = client(&l.a).await;
+    let refused = at_a
+        .call::<LoginBrokerSet>(LoginBrokerSetParams {
+            machine_id: Some(l.a.id()),
+            sign_out_old: false,
+            via: None,
+            provider: Some(ProviderKind::Cursor),
+        })
+        .await
+        .unwrap_err();
+    assert!(refused.to_string().contains("Claude Code, Codex or omp"), "{refused}");
+
+    // The Mac has its own login of the same Codex account and lends Codex; the VPS still lends everything else.
+    let (mac_access, mac_login) = codex_login_of("codex@example.com", "mac-codex");
+    let mac_codex = codex_account(&l.a, "Mine", Some(&mac_login));
+    let moved = at_a
+        .call::<LoginBrokerSet>(LoginBrokerSetParams {
+            machine_id: Some(l.a.id()),
+            sign_out_old: false,
+            via: None,
+            provider: Some(ProviderKind::Codex),
+        })
+        .await
+        .unwrap();
+    assert_eq!(moved.status.lender.as_ref().map(|lender| lender.machine_id.clone()), Some(l.c.id()), "the default stays");
+    assert_eq!(moved.status.lenders_by_kind[&ProviderKind::Codex].machine_id, l.a.id());
+    assert_eq!(moved.status.lenders_by_kind[&ProviderKind::Codex].chosen, Some(LenderVia::Manual));
+    assert_eq!(moved.status.lenders_by_kind[&ProviderKind::ClaudeCode].machine_id, l.c.id());
+    assert_eq!(moved.status.lenders_by_kind[&ProviderKind::Omp].machine_id, l.c.id());
+    assert!(moved.old_signed_out.is_empty(), "nothing is signed out unless asked");
+    let pc = l.broker(&l.b);
+    eventually("the PC's Codex borrows from the Mac, on the same email", WAIT, || {
+        pc.binding(ProviderKind::Codex, &pc_codex).as_deref() == Some(mac_codex.as_str())
+            && borrowed_from(&l.b, ProviderKind::Codex) == vec![l.a.id()]
+    })
+    .await;
+    assert_eq!(borrowed_from(&l.b, ProviderKind::ClaudeCode), vec![l.c.id()], "Claude stays on the VPS");
+    match pc.acquire(ProviderKind::Codex, &pc_codex, &mac_codex).await.unwrap().current().await.unwrap() {
+        BorrowedLogin::Codex { access_token, .. } => assert_eq!(access_token, mac_access),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(pc.account_view(ProviderKind::Codex, &pc_codex).unwrap().machine_id, l.a.id());
+    assert_eq!(pc.account_view(ProviderKind::ClaudeCode, &l.local_account).unwrap().machine_id, l.c.id());
+    // The Mac lends Codex now, so it stops borrowing Codex from the VPS.
+    let mac = l.broker(&l.a);
+    eventually("the Mac stops borrowing Codex", WAIT, || {
+        mac.binding(ProviderKind::Codex, &mac_borrowing).is_none() && borrowed_from(&l.a, ProviderKind::Codex).is_empty()
+    })
+    .await;
+    // Claude still runs on the VPS' token.
+    l.send(thread, "still on the vps").await;
+    eventually("second turn", WAIT, || l.turns(thread, "turn_completed") == 2).await;
+    // Every machine sees the same lenders.
+    for node in [&l.a, &l.b, &l.c] {
+        let broker = l.broker(node);
+        eventually("the agent's lender reaches everyone", WAIT, || broker.lender_for(ProviderKind::Codex) == Some(l.a.id())).await;
+        assert_eq!(broker.lender_for(ProviderKind::ClaudeCode), Some(l.c.id()));
+    }
+    // The PC's own status names the Mac for Codex.
+    let status = client(&l.b).await.call::<LoginBrokerStatusMethod>(Empty {}).await.unwrap();
+    assert_eq!(status.lenders_by_kind[&ProviderKind::Codex].name, "mac");
+
+    // The Mac refuses: the sentences and the problem name the Mac, and Claude still borrows from the VPS.
+    set_logins(&l.a, false, &l.b).await;
+    let error = pc.renew(ProviderKind::Codex, &pc_codex, &mac_codex).await.unwrap_err();
+    assert!(error.starts_with("mac doesn't let other machines use its sign-ins"), "{error}");
+    pc.renew(ProviderKind::ClaudeCode, &l.local_account, &l.broker_account).await.unwrap();
+    let another = codex_account(&l.b, "Another", None);
+    let refused = pc
+        .bind(
+            &l.b.state,
+            LoginBrokerBindParams { provider: ProviderKind::Codex, instance: another, broker_account: Some(mac_codex.clone()) },
+        )
+        .await
+        .unwrap_err();
+    let problem = refused.problem().unwrap();
+    assert_eq!(problem.title.as_deref(), Some("Couldn't use mac's sign-in"));
+    assert_eq!(problem.subject.as_deref(), Some(LOGIN_BORROW_SUBJECT));
+    set_logins(&l.a, true, &l.b).await;
+
+    // Codex follows the default again: the PC borrows it from the VPS, by email.
+    let cleared = at_a
+        .call::<LoginBrokerSet>(LoginBrokerSetParams {
+            machine_id: None,
+            sign_out_old: false,
+            via: None,
+            provider: Some(ProviderKind::Codex),
+        })
+        .await
+        .unwrap();
+    assert_eq!(cleared.status.lenders_by_kind[&ProviderKind::Codex].machine_id, l.c.id());
+    eventually("the PC's Codex is back on the VPS", WAIT, || {
+        pc.binding(ProviderKind::Codex, &pc_codex).as_deref() == Some(vps_codex.as_str())
+            && borrowed_from(&l.b, ProviderKind::Codex) == vec![l.c.id()]
+    })
+    .await;
+    assert!(
+        l.c.membership().projection().register(&lender_register(ProviderKind::Codex)).is_some_and(|register| register.value == json!("")),
+        "cleared, not removed: older daemons read the default"
+    );
+
+    // Moving Codex to the Mac again and signing the old lender out signs the VPS out of Codex only.
+    let again = at_a
+        .call::<LoginBrokerSet>(LoginBrokerSetParams {
+            machine_id: Some(l.a.id()),
+            sign_out_old: true,
+            via: None,
+            provider: Some(ProviderKind::Codex),
+        })
+        .await
+        .unwrap();
+    assert_eq!(again.old_signed_out, vec![ProviderKind::Codex], "{:?}", again.note);
+    let calls = std::fs::read_to_string(l.c.root.join("codex-calls")).unwrap_or_default();
+    assert!(calls.lines().any(|line| line == "logout"), "{calls}");
+    assert!(!events_of(&l.broker_state).iter().any(|event| event.starts_with("logout")), "Claude was signed out on the VPS");
+    pc.renew(ProviderKind::ClaudeCode, &l.local_account, &l.broker_account).await.unwrap();
+    eventually("the PC's Codex borrows from the Mac again", WAIT, || borrowed_from(&l.b, ProviderKind::Codex) == vec![l.a.id()]).await;
 }

@@ -348,6 +348,8 @@ async fn serve() -> Result<()> {
     tracing::info!(%addr, data_dir = %paths.root.display(), "kybernd listening");
     std::fs::write(paths.root.join("daemon.listen"), addr.to_string())?;
     std::fs::write(&paths.port_file, addr.port().to_string())?;
+    // Which process the two files name: a daemon restarted on the same port writes the same port.
+    std::fs::write(paths.root.join(ENDPOINT_OWNER_FILE), std::process::id().to_string())?;
 
     state.exposure.attach(app.clone()).await;
     if state.settings.get().access.tailscale
@@ -536,10 +538,28 @@ fn nvm_default_bin(nvm: &std::path::Path) -> Option<std::path::PathBuf> {
 /// this daemon. A newer daemon may have taken over the data directory; deleting
 /// its files would strand every client and make the desktop spawn yet another.
 fn release_endpoint_files(paths: &config::Paths, addr: SocketAddr) {
-    let listen = paths.root.join("daemon.listen");
-    for (path, expected) in [(&paths.port_file, addr.port().to_string()), (&listen, addr.to_string())] {
-        if std::fs::read_to_string(path).is_ok_and(|contents| owns_endpoint_file(&contents, &expected)) {
-            let _ = std::fs::remove_file(path);
+    release_endpoint_files_of(&paths.root, &paths.port_file, addr, std::process::id());
+}
+
+/// The file naming the process that wrote `daemon.port` and `daemon.listen`.
+const ENDPOINT_OWNER_FILE: &str = "daemon.pid";
+
+/// A desktop restarts its daemon on the same port, so the port alone can't tell the files apart: the old daemon,
+/// still exiting, used to delete the new one's (the CLI then couldn't find it). The owner file decides; without one
+/// (written by an older daemon) the port and address still do.
+fn release_endpoint_files_of(root: &std::path::Path, port_file: &std::path::Path, addr: SocketAddr, pid: u32) {
+    let owner = root.join(ENDPOINT_OWNER_FILE);
+    match std::fs::read_to_string(&owner).ok().map(|text| text.trim().to_string()) {
+        Some(named) if !named.is_empty() && named != pid.to_string() => return,
+        Some(_) => {
+            let _ = std::fs::remove_file(&owner);
+        }
+        None => {}
+    }
+    let listen = root.join("daemon.listen");
+    for (path, expected) in [(port_file.to_path_buf(), addr.port().to_string()), (listen, addr.to_string())] {
+        if std::fs::read_to_string(&path).is_ok_and(|contents| owns_endpoint_file(&contents, &expected)) {
+            let _ = std::fs::remove_file(&path);
         }
     }
 }
@@ -583,6 +603,32 @@ mod tests {
         assert!(!login_item_may_listen(true, desktop_listen_port(0, true, &unsaved).unwrap()));
         std::fs::write(root.join("desktop.port"), "broken").unwrap();
         assert!(desktop_listen_port(0, true, &root).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_daemon_exiting_after_its_successor_took_the_same_port_leaves_its_files() {
+        let root = std::env::temp_dir().join(format!("kybern-endpoints-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let port_file = root.join("daemon.port");
+        let addr: std::net::SocketAddr = "127.0.0.1:59930".parse().unwrap();
+        let write = |pid: u32| {
+            std::fs::write(&port_file, "59930").unwrap();
+            std::fs::write(root.join("daemon.listen"), "127.0.0.1:59930").unwrap();
+            std::fs::write(root.join(super::ENDPOINT_OWNER_FILE), pid.to_string()).unwrap();
+        };
+        // The new daemon (pid 2) wrote its files on the same port; the old one (pid 1) exits afterwards.
+        write(2);
+        super::release_endpoint_files_of(&root, &port_file, addr, 1);
+        assert!(port_file.exists() && root.join("daemon.listen").exists(), "the successor's files stay");
+        // The daemon the files name removes them.
+        super::release_endpoint_files_of(&root, &port_file, addr, 2);
+        assert!(!port_file.exists() && !root.join("daemon.listen").exists() && !root.join(super::ENDPOINT_OWNER_FILE).exists());
+        // Files from an older daemon without an owner file: the port and address decide, as before.
+        std::fs::write(&port_file, "59930").unwrap();
+        std::fs::write(root.join("daemon.listen"), "127.0.0.1:59930").unwrap();
+        super::release_endpoint_files_of(&root, &port_file, addr, 3);
+        assert!(!port_file.exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 
