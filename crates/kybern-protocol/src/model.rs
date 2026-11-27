@@ -2784,6 +2784,61 @@ pub struct Settings {
     pub compaction: CompactionSettings,
     /// How long a thread goes without a turn before it moves to its project's Older group.
     pub older_after: OlderAfter,
+    /// Account names, colours, defaults and switching shared by every machine.
+    pub accounts_shared: AccountsShared,
+}
+
+/// Account preferences that belong to the account, not the machine (`<kind>:<email>` keys,
+/// email lowercase). Each daemon maps a key to its local instance by email.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct AccountsShared {
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub profiles: BTreeMap<String, AccountProfile>,
+    /// The default account per harness for every machine.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub defaults: BTreeMap<ProviderKind, String>,
+    /// Per-project choices keyed by repository identity.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub projects: BTreeMap<String, BTreeMap<ProviderKind, String>>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub offers: BTreeMap<String, AccountOfferState>,
+}
+
+impl AccountsShared {
+    /// The key an account has across machines: `<kind>:<email>`, lowercase.
+    pub fn key(kind: ProviderKind, email: &str) -> String {
+        format!("{}:{}", kind.as_str(), email.trim().to_lowercase())
+    }
+
+    /// Whether the account with this email is marked "Only when I choose".
+    pub fn manual_only(&self, kind: ProviderKind, email: Option<&str>) -> bool {
+        email.is_some_and(|email| self.profiles.get(&Self::key(kind, email)).is_some_and(|profile| profile.manual_only))
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct AccountProfile {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// "Only when I choose": never suggested or switched to automatically.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub manual_only: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct AccountOfferState {
+    pub state: AccountOfferChoice,
+    #[serde(default)]
+    pub fingerprint: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountOfferChoice {
+    Later,
+    Never,
 }
 
 /// "Move inactive threads to Older": how long a top-level thread goes without a turn before the daemon moves it to
@@ -3186,6 +3241,7 @@ impl Default for Settings {
             network: NetworkSettings::default(),
             compaction: CompactionSettings::default(),
             older_after: OlderAfter::default(),
+            accounts_shared: AccountsShared::default(),
         }
     }
 }

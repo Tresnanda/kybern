@@ -705,6 +705,23 @@ pub struct ThreadTargetState {
     /// The latest settled turn was interrupted by a confirmed account limit.
     #[serde(default)]
     pub quota_limited: bool,
+    /// The resolved account is not usable on this machine: it is not set up here, signed out,
+    /// or borrowed from a machine that does not answer. Sends fail until the person picks
+    /// another account (`suggested_account`, one tap) or signs this one in.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub account_unavailable: bool,
+    /// While `quota_limited` or `account_unavailable`: the account (an instance of the thread's
+    /// harness on this machine) with the most limit left in the window that ran out. Skips
+    /// accounts that are not usable here, marked "Only when I choose", or at 90% or more of their
+    /// weekly limit. Only ever offered; Kybern does not switch by itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_account: Option<String>,
+    /// The thread waits for its own account's limit to reset and continues on it at this time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_until: Option<chrono::DateTime<chrono::Utc>>,
+    /// The account the wait continues on: always the thread's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_account: Option<ProviderInstance>,
 }
 method!(ThreadsTargetGet, "threads.target.get", Some(Scope::OrchestrationRead), ThreadsInterruptParams, ThreadTargetState);
 method!(ThreadsTargetSet, "threads.target.set", Some(Scope::OrchestrationOperate), ThreadTargetParams, ThreadTargetState);
@@ -712,7 +729,9 @@ method!(ThreadsPermissionsApply, "threads.permissions.apply", Some(Scope::Orches
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsSwitchContinueParams {
     pub thread_id: ThreadId,
-    pub provider: ProviderInstance,
+    /// Omit to continue on `ThreadTargetState::suggested_account`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<ProviderInstance>,
     /// Idempotent continuation request. Retrying cannot send a second prompt.
     pub message_id: MessageId,
 }

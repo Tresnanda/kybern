@@ -256,13 +256,14 @@ enum Cmd {
         #[arg(long)]
         inherit: bool,
     },
-    /// Continue an interrupted usage-limited task on an explicitly selected account.
+    /// Continue an interrupted usage-limited task on another account. Without
+    /// `--provider`/`--account` it uses the suggested account (most limit left).
     SwitchContinue {
         thread: ThreadId,
-        #[arg(long)]
-        provider: ProviderKind,
-        #[arg(long)]
-        account: String,
+        #[arg(long, requires = "account")]
+        provider: Option<ProviderKind>,
+        #[arg(long, requires = "provider")]
+        account: Option<String>,
         #[arg(long)]
         message_id: Option<MessageId>,
     },
@@ -1908,7 +1909,7 @@ pub async fn run() -> Result<()> {
                     &client
                         .call::<ThreadsSwitchContinue>(ThreadsSwitchContinueParams {
                             thread_id: thread,
-                            provider: ProviderInstance { kind: provider, instance: account },
+                            provider: provider.zip(account).map(|(kind, instance)| ProviderInstance { kind, instance }),
                             message_id: message_id.unwrap_or_else(uuid::Uuid::now_v7)
                         })
                         .await?

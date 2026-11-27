@@ -222,7 +222,7 @@ async fn dispatch_part_3(state: &AppState, ctx: &ConnectionCtx, method: &str, sl
         }
         ThreadsTargetGet::NAME => {
             let p: ThreadsInterruptParams = parse(params)?;
-            ok(state.orchestrator.thread_target(p.thread_id).map_err(bad)?)
+            ok(state.orchestrator.thread_target_fresh(p.thread_id).await.map_err(bad)?)
         }
         ThreadsTargetSet::NAME => ok(state.orchestrator.set_thread_target(parse(params)?).await.map_err(bad)?),
         ThreadsPermissionsApply::NAME => {

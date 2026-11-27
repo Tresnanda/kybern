@@ -344,6 +344,16 @@ impl Store {
         })
     }
 
+    /// Every non-empty meta entry under a literal prefix, by key.
+    pub fn meta_list_prefix(&self, prefix: &str) -> Result<Vec<(String, String)>> {
+        self.with(|c| {
+            let mut statement =
+                c.prepare("SELECT key, value FROM meta WHERE substr(key, 1, length(?1)) = ?1 AND value != '' ORDER BY key")?;
+            let rows = statement.query_map([prefix], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+    }
+
     pub fn meta_get(&self, key: &str) -> Result<Option<String>> {
         self.with(|c| Ok(c.query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0)).optional()?))
     }

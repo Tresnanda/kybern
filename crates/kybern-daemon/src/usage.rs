@@ -470,6 +470,65 @@ impl UsageMonitor {
         due
     }
 
+    /// The limits of these accounts of one harness, by instance, for choosing where a
+    /// limited thread continues. Values older than the freshness window are read first,
+    /// bounded by [`WAIT`]; an account that could not be read keeps its last values.
+    /// Windows whose reset passed read as unused, as clients see them.
+    pub async fn candidate_limits(&self, kind: ProviderKind, instances: &[String]) -> BTreeMap<String, Vec<UsageLimit>> {
+        if !LIVE.contains(&kind) {
+            return BTreeMap::new();
+        }
+        self.sync_accounts();
+        self.seed();
+        let default = {
+            let settings = self.inner.settings.get();
+            crate::provider_accounts::resolve(&settings.providers.get(&kind).cloned().unwrap_or_default(), None, None)
+        };
+        let (global_due, accounts_due) = {
+            let state = self.lock();
+            let stale = |entry: Option<&Entry>| entry.and_then(|entry| entry.attempted).is_none_or(|at| at.elapsed() >= fresh_for(kind));
+            let global_due = instances.contains(&default) && stale(state.providers.get(&kind));
+            let accounts_due = instances
+                .iter()
+                .filter(|instance| **instance != default && stale(state.accounts.get(&(kind, (*instance).clone()))))
+                .map(|instance| (kind, instance.clone()))
+                .collect::<Vec<_>>();
+            (global_due, accounts_due)
+        };
+        let _ = tokio::time::timeout(WAIT, async {
+            let global = async {
+                if global_due {
+                    self.refresh(kind, fresh_for(kind)).await;
+                }
+            };
+            let accounts = futures::future::join_all(accounts_due.into_iter().map(|key| self.refresh_account(key, fresh_for(kind))));
+            futures::future::join(global, accounts).await
+        })
+        .await;
+        self.cached_limits(kind, instances)
+    }
+
+    /// [`Self::candidate_limits`] from the cache alone, without reading anything.
+    pub fn cached_limits(&self, kind: ProviderKind, instances: &[String]) -> BTreeMap<String, Vec<UsageLimit>> {
+        let default = {
+            let settings = self.inner.settings.get();
+            crate::provider_accounts::resolve(&settings.providers.get(&kind).cloned().unwrap_or_default(), None, None)
+        };
+        let state = self.lock();
+        let now = Utc::now().timestamp();
+        instances
+            .iter()
+            .filter_map(|instance| {
+                let entry = if *instance == default {
+                    state.providers.get(&kind).filter(|entry| !entry.limits.is_empty()).or(state.accounts.get(&(kind, instance.clone())))
+                } else {
+                    state.accounts.get(&(kind, instance.clone()))
+                }?;
+                Some((instance.clone(), entry_limits(kind, None, entry, now).limits))
+            })
+            .collect()
+    }
+
     /// Forget one account's cached limits (signed out, removed, or signed in again).
     pub fn forget_account(&self, kind: ProviderKind, instance: &str) {
         self.seed();

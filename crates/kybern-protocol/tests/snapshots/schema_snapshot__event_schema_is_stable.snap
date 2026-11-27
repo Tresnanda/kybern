@@ -984,6 +984,99 @@ expression: schema_for!(ThreadEvent)
       ]
     },
     {
+      "description": "The person moved the thread to another account of the same harness: its limit\nran out (`limit`, `threads.switch_continue`) or its account is not usable on this\nmachine (`unavailable`, `threads.target.set`). Kybern never switches by itself\n(provider terms). Undo is a normal `threads.target.set` back to `from`.",
+      "type": "object",
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/ProviderInstance"
+        },
+        "to": {
+          "$ref": "#/$defs/ProviderInstance"
+        },
+        "reason": {
+          "$ref": "#/$defs/AccountSwitchReason"
+        },
+        "text": {
+          "description": "The line clients show, with the account names.",
+          "type": "string",
+          "default": ""
+        },
+        "kind": {
+          "type": "string",
+          "const": "account_switched"
+        }
+      },
+      "required": [
+        "kind",
+        "from",
+        "to",
+        "reason"
+      ]
+    },
+    {
+      "description": "The thread's own account is out of limit: the thread continues on it by itself at\n`until` (its reset, plus a small margin), unless the person switches account first.\nCancelled with `threads.interrupt` or a new message.",
+      "type": "object",
+      "properties": {
+        "until": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "account": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderInstance"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "text": {
+          "type": "string",
+          "default": ""
+        },
+        "kind": {
+          "type": "string",
+          "const": "account_wait"
+        }
+      },
+      "required": [
+        "kind",
+        "until"
+      ]
+    },
+    {
+      "description": "A wait from `AccountWait` ended: cancelled (Stop, or a new message), or\nthe limit reset and the thread continues now.",
+      "type": "object",
+      "properties": {
+        "account": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderInstance"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cancelled": {
+          "type": "boolean"
+        },
+        "text": {
+          "type": "string",
+          "default": ""
+        },
+        "kind": {
+          "type": "string",
+          "const": "account_wait_ended"
+        }
+      },
+      "required": [
+        "kind",
+        "cancelled"
+      ]
+    },
+    {
       "type": "object",
       "properties": {
         "usage": {
@@ -3807,6 +3900,21 @@ expression: schema_for!(ThreadEvent)
       "required": [
         "name",
         "description"
+      ]
+    },
+    "AccountSwitchReason": {
+      "description": "Why a thread moved to another account.",
+      "oneOf": [
+        {
+          "description": "The account ran out of its 5-hour or weekly limit.",
+          "type": "string",
+          "const": "limit"
+        },
+        {
+          "description": "The account is not signed in on this machine, or the machine it borrows from is unreachable.",
+          "type": "string",
+          "const": "unavailable"
+        }
       ]
     },
     "ProviderUsage": {

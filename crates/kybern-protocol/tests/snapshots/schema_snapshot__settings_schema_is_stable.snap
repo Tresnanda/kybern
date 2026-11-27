@@ -242,6 +242,11 @@ expression: schema_for!(Settings)
       "description": "How long a thread goes without a turn before it moves to its project's Older group.",
       "$ref": "#/$defs/OlderAfter",
       "default": "seven_days"
+    },
+    "accounts_shared": {
+      "description": "Account names, colours, defaults and switching shared by every machine.",
+      "$ref": "#/$defs/AccountsShared",
+      "default": {}
     }
   },
   "$defs": {
@@ -808,6 +813,132 @@ expression: schema_for!(Settings)
         "three_days",
         "seven_days",
         "thirty_days"
+      ]
+    },
+    "AccountsShared": {
+      "description": "Account preferences that belong to the account, not the machine (`<kind>:<email>` keys,\nemail lowercase). Each daemon maps a key to its local instance by email.",
+      "type": "object",
+      "properties": {
+        "profiles": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/AccountProfile"
+          }
+        },
+        "defaults": {
+          "description": "The default account per harness for every machine.",
+          "type": "object",
+          "properties": {
+            "antigravity": {
+              "type": "string"
+            },
+            "claude-code": {
+              "type": "string"
+            },
+            "codex": {
+              "type": "string"
+            },
+            "cursor": {
+              "type": "string"
+            },
+            "grok-build": {
+              "type": "string"
+            },
+            "omp": {
+              "type": "string"
+            },
+            "opencode": {
+              "type": "string"
+            },
+            "pi": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "projects": {
+          "description": "Per-project choices keyed by repository identity.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "antigravity": {
+                "type": "string"
+              },
+              "claude-code": {
+                "type": "string"
+              },
+              "codex": {
+                "type": "string"
+              },
+              "cursor": {
+                "type": "string"
+              },
+              "grok-build": {
+                "type": "string"
+              },
+              "omp": {
+                "type": "string"
+              },
+              "opencode": {
+                "type": "string"
+              },
+              "pi": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "offers": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/AccountOfferState"
+          }
+        }
+      }
+    },
+    "AccountProfile": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "color": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "manual_only": {
+          "description": "\"Only when I choose\": never suggested or switched to automatically.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "AccountOfferState": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/AccountOfferChoice"
+        },
+        "fingerprint": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "required": [
+        "state"
+      ]
+    },
+    "AccountOfferChoice": {
+      "type": "string",
+      "enum": [
+        "later",
+        "never"
       ]
     }
   }

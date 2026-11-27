@@ -98,6 +98,12 @@ fn build_environment(settings: &ProviderSettings, kind: ProviderKind, instance: 
         }
         ProviderKind::Codex => {
             env.insert("CODEX_HOME".into(), account.directory.clone());
+            // Conversations live in Codex's databases as well as its session files: every account
+            // opens the terminal login's, so a thread resumes natively after a switch. The login stays
+            // in this account's `auth.json` (`provider_assets`).
+            if let Some(sqlite) = crate::provider_assets::codex_shared_sqlite_home(settings) {
+                env.entry("CODEX_SQLITE_HOME".into()).or_insert_with(|| sqlite.to_string_lossy().into_owned());
+            }
         }
         ProviderKind::Cursor => {
             env.insert("KYBERN_CURSOR_AUTH_FILE".into(), path("auth.json"));
@@ -472,11 +478,48 @@ pub async fn remove(state: &AppState, instance: ProviderInstance) -> Result<()> 
     state.settings.set(next)?;
     state.orchestrator.clear_account_overrides(&instance)?;
     if managed {
-        let _ = std::fs::remove_dir_all(&account.directory);
+        remove_account_folder(instance.kind, Path::new(&account.directory));
     }
     forget_account_caches(state, &instance);
     state.provider_catalogs.invalidate().await;
     Ok(())
+}
+
+/// Links a removed Codex account keeps: Codex's shared database records each conversation's
+/// file by the path it was written through (`<account>/sessions/…`), so those paths keep
+/// resolving for the other accounts after this one is gone.
+const CODEX_KEPT_LINKS: [&str; 2] = ["sessions", "archived_sessions"];
+
+/// Delete a Kybern-created account folder. Conversations are never in it (they are linked to the
+/// shared store, and removing a link leaves its target); a Codex folder keeps its conversation links.
+fn remove_account_folder(kind: ProviderKind, directory: &Path) {
+    let keep = |name: &std::ffi::OsStr, metadata: &std::fs::Metadata| {
+        kind == ProviderKind::Codex && metadata.file_type().is_symlink() && CODEX_KEPT_LINKS.iter().any(|kept| name == *kept)
+    };
+    let Ok(entries) = std::fs::read_dir(directory) else { return };
+    let mut kept = false;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else { continue };
+        if keep(&entry.file_name(), &metadata) {
+            kept = true;
+            continue;
+        }
+        let removed = if metadata.file_type().is_symlink() {
+            // A file link, a directory symlink or (Windows) a junction: only the link goes.
+            std::fs::remove_file(&path).or_else(|_| std::fs::remove_dir(&path))
+        } else if metadata.is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+        if let Err(error) = removed {
+            tracing::warn!(path = %path.display(), %error, "could not remove part of a removed account's folder");
+        }
+    }
+    if !kept {
+        let _ = std::fs::remove_dir(directory);
+    }
 }
 
 pub async fn catalog(state: &AppState, params: AccountsCatalogParams) -> Result<ProviderStatus> {
@@ -811,6 +854,30 @@ exit 2
         assert!(outside.join("keep").exists(), "an existing folder stays");
         assert!(fixture.state.settings.get().providers[&ProviderKind::ClaudeCode].accounts.is_empty());
         assert!(remove(&fixture.state, claude("outside")).await.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn removing_an_account_folder_never_touches_shared_conversations() {
+        let root = std::env::temp_dir().join(format!("kybern-remove-test-{}", uuid::Uuid::now_v7()));
+        let shared = root.join("shared");
+        std::fs::create_dir_all(shared.join("sessions/2026")).unwrap();
+        std::fs::write(shared.join("sessions/2026/rollout.jsonl"), "conversation").unwrap();
+        std::fs::create_dir_all(shared.join("projects/-repo")).unwrap();
+        std::fs::write(shared.join("projects/-repo/session.jsonl"), "claude conversation").unwrap();
+        for (kind, name, link) in [(ProviderKind::Codex, "codex", "sessions"), (ProviderKind::ClaudeCode, "claude", "projects")] {
+            let account = root.join(name);
+            std::fs::create_dir_all(account.join("cache")).unwrap();
+            std::fs::write(account.join("auth.json"), "secret").unwrap();
+            std::os::unix::fs::symlink(shared.join(link), account.join(link)).unwrap();
+            remove_account_folder(kind, &account);
+            assert!(!account.join("auth.json").exists() && !account.join("cache").exists(), "{kind}");
+        }
+        // Codex keeps the link its database recorded paths through; Claude's folder is gone.
+        assert_eq!(std::fs::read_to_string(root.join("codex/sessions/2026/rollout.jsonl")).unwrap(), "conversation");
+        assert!(!root.join("claude").exists());
+        assert_eq!(std::fs::read_to_string(shared.join("projects/-repo/session.jsonl")).unwrap(), "claude conversation");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

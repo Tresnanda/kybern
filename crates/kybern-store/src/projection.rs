@@ -741,6 +741,22 @@ fn apply_transcript_event(
                     out.push(TranscriptEntry::Notice { turn_id, seq: ev.seq, level: NoticeLevel::Info, text: text.clone(), at: ev.at, data: None, problem: None });
                 }
             }
+            // Account switches and waits happen between turns: they belong to the last one.
+            EventPayload::AccountSwitched { from, to, reason, text } => {
+                let Some(turn_id) = turn_id.or(last_turn_id_value) else { continue };
+                let data = serde_json::json!({ "kind": "account_switched", "from": from, "to": to, "reason": reason });
+                out.push(TranscriptEntry::Notice { turn_id, seq: ev.seq, level: NoticeLevel::Info, text: text.clone(), at: ev.at, data: Some(data), problem: None });
+            }
+            EventPayload::AccountWait { until, account, text } => {
+                let Some(turn_id) = turn_id.or(last_turn_id_value) else { continue };
+                let data = serde_json::json!({ "kind": "account_wait", "until": until, "account": account });
+                out.push(TranscriptEntry::Notice { turn_id, seq: ev.seq, level: NoticeLevel::Info, text: text.clone(), at: ev.at, data: Some(data), problem: None });
+            }
+            EventPayload::AccountWaitEnded { account, cancelled, text } => {
+                let Some(turn_id) = turn_id.or(last_turn_id_value) else { continue };
+                let data = serde_json::json!({ "kind": "account_wait_ended", "account": account, "cancelled": cancelled });
+                out.push(TranscriptEntry::Notice { turn_id, seq: ev.seq, level: NoticeLevel::Info, text: text.clone(), at: ev.at, data: Some(data), problem: None });
+            }
             EventPayload::ProviderNotice { level, text, data, problem } => {
                 // A fork or move notice is written to an idle source thread, between turns: it belongs to the last one.
                 let fork = data
@@ -2302,5 +2318,61 @@ mod rotation_tests {
                 .collect();
             assert_eq!(signature, expected[name], "{name}");
         }
+    }
+}
+
+#[cfg(test)]
+mod account_switch_tests {
+    use super::*;
+
+    fn event(seq: EventSeq, turn_id: Option<TurnId>, payload: EventPayload) -> ThreadEvent {
+        ThreadEvent { seq, thread_id: ThreadId::nil(), turn_id, at: chrono::Utc::now(), payload }
+    }
+
+    #[test]
+    fn switches_and_waits_are_notices_under_the_last_turn_with_their_fields() {
+        let turn = TurnId::from_u128(9);
+        let personal = ProviderInstance { kind: ProviderKind::Codex, instance: "default".into() };
+        let work = ProviderInstance { kind: ProviderKind::Codex, instance: "work".into() };
+        let until = chrono::Utc::now() + chrono::Duration::hours(2);
+        let events = vec![
+            event(1, Some(turn), EventPayload::TurnStarted { message_id: uuid::Uuid::nil(), message: UserMessage::text("task") }),
+            event(2, Some(turn), EventPayload::TurnFailed { error: "You've hit your usage limit".into(), problem: None }),
+            event(
+                3,
+                None,
+                EventPayload::AccountSwitched {
+                    from: personal.clone(),
+                    to: work.clone(),
+                    reason: AccountSwitchReason::Limit,
+                    text: "Continuing on Work".into(),
+                },
+            ),
+            event(4, None, EventPayload::AccountWait { until, account: Some(work.clone()), text: "Waiting".into() }),
+            event(5, None, EventPayload::AccountWaitEnded { account: Some(work.clone()), cancelled: true, text: "Stopped waiting".into() }),
+        ];
+        let notices = project_transcript(&events)
+            .into_iter()
+            .filter_map(|entry| match entry {
+                TranscriptEntry::Notice { turn_id, text, data, .. } => Some((turn_id, text, data.unwrap())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(notices.len(), 3);
+        assert!(notices.iter().all(|(id, _, _)| *id == turn));
+        assert_eq!(notices[0].1, "Continuing on Work");
+        assert_eq!(notices[0].2["kind"], "account_switched");
+        assert_eq!(notices[0].2["reason"], "limit");
+        assert_eq!(notices[0].2["from"]["instance"], "default");
+        assert_eq!(notices[0].2["to"]["instance"], "work");
+        assert_eq!(notices[1].2["kind"], "account_wait");
+        assert_eq!(notices[1].2["account"]["instance"], "work");
+        assert!(notices[1].2["until"].is_string());
+        assert_eq!(notices[2].2["kind"], "account_wait_ended");
+        assert_eq!(notices[2].2["cancelled"], true);
+        // The wire shape clients read.
+        let wire = serde_json::to_value(&events[2]).unwrap();
+        assert_eq!(wire["kind"], "account_switched");
+        assert_eq!(wire["to"]["instance"], "work");
     }
 }

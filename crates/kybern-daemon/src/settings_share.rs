@@ -90,6 +90,7 @@ classify!(SETTINGS_FIELDS, every_settings_field_is_classified, Settings, {
     network => PerMachine,
     compaction => Shared,
     older_after => Shared,
+    accounts_shared => Shared,
 });
 
 classify!(PROVIDER_FIELDS, every_provider_field_is_classified, ProviderSettings, {
