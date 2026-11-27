@@ -31,7 +31,7 @@ import { load, save } from './persist.ts'
 import { PrListRow } from './list/PrListRow.tsx'
 import { ProjectFilter } from './list/ProjectFilter.tsx'
 import { RepoChips } from './list/RepoChips.tsx'
-import { ALL_PROJECTS, groupRows, hasPullRequests, inScope, isGroup, memberName, readRepoMemory, rememberRepos, scopeTargets, type Row, type Scope } from './list/model.ts'
+import { ALL_PROJECTS, groupRows, hasPullRequests, inScope, isGroup, memberName, mixedRepos, readRepoMemory, rememberRepos, scopeTargets, type Row, type Scope } from './list/model.ts'
 import { PartialProblem, PrLoading, Problem } from './PrStates.tsx'
 import { SwapOnChange } from '../motion/kit.tsx'
 import { isPrimaryNotAltGr } from '../platform/keys.ts'
@@ -128,6 +128,7 @@ function PullRequestsList() {
   }, [data, deferredQuery, scope])
   const groups = useMemo(() => groupRows(matching), [matching])
   const flat = useMemo(() => groups.flatMap(g => g.rows), [groups])
+  const showRepo = useMemo(() => mixedRepos(flat), [flat])
   // Open pull requests per project and repository, for the filter menu; only what the loaded scope covers is known.
   const counts = useMemo(() => {
     const m = new Map<string, number>()
@@ -158,13 +159,13 @@ function PullRequestsList() {
           <div style={{ flexGrow: 1, minWidth: 0 }}><SearchField ref={search} size="sm" label="Search pull requests" testId="pr-search" value={query} placeholder="Search" onChange={setQuery} width="100%" onKeyDown={e => { if (e.key === 'down' && flat[0]) { setFocus(keyFor(flat[0])); } }} /></div>
         </div>
       </div>
-      <virtual-list {...PR_SCROLL_LAYOUT} testId="pr-list" estimatedItemHeight={72} style={{ flexGrow: 1, minHeight: 0 }}>
+      <virtual-list {...PR_SCROLL_LAYOUT} testId="pr-list" estimatedItemHeight={54} style={{ flexGrow: 1, minHeight: 0 }}>
         {failure ? <div key="gh-error" style={{ padding: 20 }}><Problem error={failure.error} projectId={failure.projectId} refresh={() => refresh(n => n + 1)} /></div> : !data ? <div key="loading" style={{ padding: 24 }}><PrLoading label="Loading pull requests…" kind="list" rows={5} /></div> : <>
           {data.errors.length > 0 && <div key="errors" style={{ padding: 12 }}><PartialProblem failures={data.errors} anyLoaded={data.rows.length > 0} refresh={() => refresh(n => n + 1)} /></div>}
           {flat.length === 0 && <div key="empty" style={{ ...column, gap: 10, padding: 24, paddingTop: 64 }}><Label color={t.text} size={16} weight={500}>{!targets.length ? 'No GitHub projects' : query.trim() ? `No results for “${query.trim()}”` : `No ${stateWord}pull requests`}</Label><Label color={t.textSecondary} size={13}>{!targets.length ? 'Add a project with a GitHub remote to review its pull requests here.' : query.trim() ? '' : `Pull requests from ${scope.project ? targets[0]?.name : 'your GitHub projects'} appear here.`}</Label>{query.trim() && <Button size="sm" style={{ alignSelf: 'flex-start' }} onClick={() => setQuery('')}>Clear search</Button>}</div>}
           {groups.flatMap(group => [
-            ...(group.label ? [<div key={`group-${group.group ?? 'done'}`} testId={`pr-group-${group.group ?? 'done'}`} style={{ ...row, gap: 6, height: 30, paddingLeft: 16, paddingRight: 8, paddingTop: 8 }}><Label color={t.textSecondary} size={12} lineHeight={16} weight={500}>{group.label}</Label><Label color={t.textTertiary} size={12} lineHeight={16}>{String(group.rows.length)}</Label></div>] : []),
-            ...group.rows.map(r => <PrListRow key={keyFor(r)} item={r} selected={!!selection && refOf(selection.project.id, selection.number, selection.repo) === keyFor(r)} focused={focus === keyFor(r)} onOpen={() => open(r)} onOpenInTab={() => openPullTab(targetOf(r.project,r.pr))} onFocus={() => setFocus(keyFor(r))} onKey={key => {
+            ...(group.label ? [<div key={`group-${group.group ?? 'done'}`} testId={`pr-group-${group.group ?? 'done'}`} style={{ ...row, gap: 6, paddingLeft: 18, paddingRight: 8, paddingTop: 14, paddingBottom: 4 }}><Label color={t.text} size={13} lineHeight={18} weight={600}>{group.label}</Label><Label color={t.textTertiary} size={13} lineHeight={18}>{String(group.rows.length)}</Label></div>] : []),
+            ...group.rows.map(r => <PrListRow key={keyFor(r)} item={r} showRepo={showRepo} selected={!!selection && refOf(selection.project.id, selection.number, selection.repo) === keyFor(r)} focused={focus === keyFor(r)} onOpen={() => open(r)} onOpenInTab={() => openPullTab(targetOf(r.project,r.pr))} onFocus={() => setFocus(keyFor(r))} onKey={key => {
               const at = flat.findIndex(x => keyFor(x) === keyFor(r))
               const next = key === 'down' ? Math.min(flat.length - 1, at + 1) : key === 'up' ? Math.max(0, at - 1) : key === 'home' ? 0 : key === 'end' ? flat.length - 1 : -1
               if (next >= 0) setFocus(keyFor(flat[next]!))

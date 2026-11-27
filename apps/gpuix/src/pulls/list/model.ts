@@ -20,6 +20,12 @@ export const isGroup = (p: Project) => p.kind === 'group'
 export const listableMembers = (p: Project) => (p.members ?? []).filter(m => m.status === 'ok')
 export const memberName = (project: Project, repo: string | undefined) => repo ? project.members?.find(m => m.path === repo)?.name ?? repo : undefined
 
+/** Whether the rows come from more than one repository; a list of one repository doesn't name it on every row. */
+export function mixedRepos(rows: readonly Row[]): boolean {
+  const first = rows[0]
+  return !!first && rows.some(r => r.project.id !== first.project.id || (r.pr.repo ?? '') !== (first.pr.repo ?? ''))
+}
+
 /** Projects whose pull requests the scope loads. */
 export function scopeTargets(projects: readonly Project[], scope: Scope): Project[] {
   return projects.filter(p => hasPullRequests(p) && (!scope.project || p.id === scope.project))
