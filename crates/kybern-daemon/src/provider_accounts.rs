@@ -300,6 +300,14 @@ fn summarize(
     {
         identity = Some(AccountIdentity { email: account.email.clone(), plan: account.plan.clone(), organization: None });
     }
+    // A signed-out terminal login (or a Claude login read without running it, #107) still shows the email
+    // it was last seen with, so it stays on its account's row.
+    if instance == "default"
+        && identity.as_ref().is_none_or(|identity| identity.email.is_none())
+        && let Some(email) = crate::accounts_shared::terminal_email(&state.store, kind)
+    {
+        identity.get_or_insert_with(AccountIdentity::default).email = Some(email);
+    }
     let named = account.is_some();
     let key = identity
         .as_ref()
@@ -462,7 +470,6 @@ async fn sign_out_terminal(state: &AppState, kind: ProviderKind) -> Result<Accou
     );
     harness_sign_out(state, &instance).await.map_err(|error| anyhow!("Couldn't sign the terminal login out. {error}"))?;
     state.orchestrator.mark_account_signed_out(&instance, true)?;
-    crate::accounts_shared::remember_terminal_email(&state.store, kind, None);
     forget_account_caches(state, &instance);
     state.provider_catalogs.invalidate().await;
     let mut summary = summary_for(state, kind, "default", true).await;

@@ -54,6 +54,12 @@ expression: scopes
   - "access:write"
 - - providers.accounts.login.finish
   - "access:write"
+- - providers.accounts.login.handoff
+  - "access:write"
+- - peer.accounts.login.peek
+  - "machine:logins"
+- - peer.accounts.login.callback
+  - "machine:logins"
 - - providers.accounts.update
   - "orchestration:operate"
 - - providers.accounts.sign_out

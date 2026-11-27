@@ -120,6 +120,9 @@ fn main() {
     method::<AccountsLoginInput>(&mut methods);
     method::<AccountsLoginCancel>(&mut methods);
     method::<AccountsLoginFinish>(&mut methods);
+    method::<AccountsLoginHandoff>(&mut methods);
+    method::<PeerAccountsLoginPeek>(&mut methods);
+    method::<PeerAccountsLoginCallback>(&mut methods);
     method::<AccountsUpdate>(&mut methods);
     method::<AccountsSignOut>(&mut methods);
     method::<AccountsOffers>(&mut methods);

@@ -30,6 +30,7 @@ mod integrations;
 mod lead_git;
 mod link_icon;
 mod link_metadata;
+mod login_handoff;
 mod login_service;
 mod maintenance;
 mod native_tools_mcp;

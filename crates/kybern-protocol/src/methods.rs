@@ -641,6 +641,65 @@ pub struct AccountLogin {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     pub expires_at: chrono::DateTime<chrono::Utc>,
+    /// Set while the harness (Claude Code or Codex, browser mode) waits for its loopback redirect, so the
+    /// machine with the browser can catch it for this one (`providers.accounts.login.handoff`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<LoginHandoff>,
+}
+
+/// The loopback address a harness's sign-in redirects to on its own machine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct LoginHandoff {
+    pub port: u16,
+    /// The redirect's path (`/callback`, `/auth/callback`).
+    pub path: String,
+}
+
+/// `providers.accounts.login.handoff`, sent to the daemon on the computer with the browser: catch the
+/// sign-in redirect of `login_id`, which runs on `machine_id`, and hand it to that machine.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AccountLoginHandoffParams {
+    pub machine_id: crate::MachineId,
+    pub login_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AccountLoginHandoffResult {
+    /// The https sign-in page to open in this computer's browser.
+    pub url: String,
+    /// The redirect is caught until then.
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// `peer.accounts.login.peek`: what the machine with the browser needs to catch a sign-in's redirect.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerLoginPeekParams {
+    pub login_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerLoginPeek {
+    pub url: String,
+    pub handoff: LoginHandoff,
+    /// The OAuth `state` of the page, checked before a redirect is forwarded.
+    pub state: String,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// `peer.accounts.login.callback`: the redirect the browser made, path and query only.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerLoginCallbackParams {
+    pub login_id: String,
+    pub path_and_query: String,
+}
+
+/// What the harness answered the replayed redirect with.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerLoginCallbackResult {
+    pub status: u16,
+    /// An https page the harness sends the browser on to (its "signed in" page).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -667,6 +726,21 @@ method!(AccountsLoginGet, "providers.accounts.login.get", Some(Scope::Orchestrat
 method!(AccountsLoginInput, "providers.accounts.login.input", Some(Scope::AccessWrite), AccountLoginInputParams, AccountLogin);
 method!(AccountsLoginCancel, "providers.accounts.login.cancel", Some(Scope::AccessWrite), AccountLoginIdParams, AccountLogin);
 method!(AccountsLoginFinish, "providers.accounts.login.finish", Some(Scope::AccessWrite), AccountLoginFinishParams, ProviderInstance);
+method!(
+    AccountsLoginHandoff,
+    "providers.accounts.login.handoff",
+    Some(Scope::AccessWrite),
+    AccountLoginHandoffParams,
+    AccountLoginHandoffResult
+);
+method!(PeerAccountsLoginPeek, "peer.accounts.login.peek", Some(Scope::MachineLogins), PeerLoginPeekParams, PeerLoginPeek);
+method!(
+    PeerAccountsLoginCallback,
+    "peer.accounts.login.callback",
+    Some(Scope::MachineLogins),
+    PeerLoginCallbackParams,
+    PeerLoginCallbackResult
+);
 /// Sent to every client that may read orchestration state whenever a sign-in changes phase. Params are an `AccountLogin`.
 pub const ACCOUNTS_LOGIN_CHANGED_NOTIFICATION: &str = "providers.accounts.login.changed";
 
@@ -5413,6 +5487,9 @@ registry!(
     AccountsLoginInput,
     AccountsLoginCancel,
     AccountsLoginFinish,
+    AccountsLoginHandoff,
+    PeerAccountsLoginPeek,
+    PeerAccountsLoginCallback,
     AccountsUpdate,
     AccountsSignOut,
     AccountsOffers,

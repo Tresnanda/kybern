@@ -215,6 +215,7 @@ async fn dispatch_part_3(state: &AppState, ctx: &ConnectionCtx, method: &str, sl
             ok(state.account_logins.cancel(state, &p.id).await.map_err(bad)?)
         }
         AccountsLoginFinish::NAME => ok(state.account_logins.finish(state, parse(params)?).await.map_err(bad)?),
+        AccountsLoginHandoff::NAME => ok(crate::login_handoff::start(state, parse(params)?).await?),
         AccountsUpdate::NAME => ok(crate::provider_accounts::update(state, parse(params)?).await.map_err(bad)?),
         AccountsSignOut::NAME => ok(crate::provider_accounts::sign_out(state, parse(params)?).await.map_err(bad)?),
         AccountsOffers::NAME => ok(crate::accounts_offers::offers(state)),

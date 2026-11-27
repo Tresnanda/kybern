@@ -367,6 +367,7 @@ impl AccountLogins {
             previous_email: None,
             error: None,
             expires_at: Utc::now() + chrono::Duration::from_std(LOGIN_TIMEOUT).unwrap_or_default(),
+            handoff: None,
         };
         let (cancel, canceled) = oneshot::channel();
         let writer = writer_for(&attempt);
@@ -575,6 +576,26 @@ impl AccountLogins {
         Ok(instance)
     }
 
+    // ---- handing the redirect over from another machine ----
+
+    /// `peer.accounts.login.peek`: the page and redirect of a sign-in that waits for its loopback redirect.
+    pub fn peek(&self, id: &str) -> Result<PeerLoginPeek> {
+        let login = self.get(id)?;
+        ensure!(login.phase == AccountLoginPhase::Waiting, "This sign-in isn't waiting for the browser. Start again.");
+        let url = login.url.ok_or_else(|| anyhow!("This sign-in has no page to open yet."))?;
+        let (handoff, state) = crate::login_handoff::loopback_redirect(&url)
+            .ok_or_else(|| anyhow!("This sign-in doesn't come back to its machine. Use a code instead."))?;
+        Ok(PeerLoginPeek { url, handoff, state, expires_at: login.expires_at })
+    }
+
+    /// `peer.accounts.login.callback`: replay the browser's redirect to the harness waiting on this machine.
+    /// Only a redirect to the harness's own path with the page's own `state` is replayed.
+    pub async fn callback(&self, id: &str, path_and_query: &str) -> Result<PeerLoginCallbackResult> {
+        let peek = self.peek(id)?;
+        crate::login_handoff::check_redirect(&peek.handoff, &peek.state, path_and_query)?;
+        crate::login_handoff::replay(peek.handoff.port, path_and_query).await
+    }
+
     // ---- the driver ----
 
     async fn drive(&self, state: AppState, id: String, spec: Spec, first: Attempt, mut canceled: oneshot::Receiver<()>) {
@@ -732,8 +753,14 @@ impl AccountLogins {
             return;
         }
         let device_ready = spec.mode != AccountLoginMode::DeviceCode || (url.is_some() && user_code.is_some());
+        // Claude Code and Codex wait for a loopback redirect: another machine's browser can hand it over.
+        let handoff = (spec.mode == AccountLoginMode::Browser && matches!(spec.kind, ProviderKind::ClaudeCode | ProviderKind::Codex))
+            .then(|| url.as_deref().and_then(crate::login_handoff::loopback_redirect))
+            .flatten()
+            .map(|(handoff, _)| handoff);
         self.update(id, |login| {
             if matches!(login.public.phase, AccountLoginPhase::Starting | AccountLoginPhase::Waiting) && device_ready {
+                login.public.handoff = handoff;
                 login.public.url = url;
                 login.public.user_code = user_code;
                 login.public.phase = AccountLoginPhase::Waiting;
@@ -1022,6 +1049,7 @@ fn spawn_attempt(state: &AppState, spec: &Spec, visible_terminal: bool) -> Resul
 /// its progress, never the sign-in page, the one-time code or the terminal.
 pub fn for_observer(mut login: AccountLogin) -> AccountLogin {
     login.url = None;
+    login.handoff = None;
     login.user_code = None;
     login.terminal = None;
     login
@@ -1588,7 +1616,25 @@ exit 2
         assert_eq!(summary.status, AccountStatus::SignedOut);
         assert!(summary.terminal);
         assert!(!terminal.join(".signed-in").exists());
-        assert_eq!(crate::accounts_shared::terminal_email(&state.store, ProviderKind::ClaudeCode), None);
+        // Signed out, it still names the account it was, so it stays on that account's row.
+        assert_eq!(summary.key.as_deref(), Some("claude-code:shell@arunika.co"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_browser_login_offers_its_loopback_redirect_to_another_machine() {
+        let fixture = fixture();
+        let state = &fixture.state;
+        let login = state.account_logins.start(state, params(ProviderKind::ClaudeCode, AccountLoginMode::Browser)).await.unwrap();
+        // The fake Claude's page comes back to http://localhost:1/cb with state S.
+        assert_eq!(login.handoff, Some(LoginHandoff { port: 1, path: "/cb".into() }));
+        assert!(for_observer(login.clone()).handoff.is_none());
+        let peek = state.account_logins.peek(&login.id).unwrap();
+        assert_eq!((peek.state.as_str(), peek.handoff.port), ("S", 1));
+        let wrong = state.account_logins.callback(&login.id, "/cb?code=c&state=other").await.unwrap_err();
+        assert!(wrong.to_string().contains("another sign-in"), "{wrong}");
+        assert!(state.account_logins.callback(&login.id, "/elsewhere?state=S").await.is_err());
+        state.account_logins.cancel(state, &login.id).await.unwrap();
+        assert!(state.account_logins.peek(&login.id).is_err(), "an ended login has nothing to hand over");
     }
 
     #[tokio::test(flavor = "multi_thread")]

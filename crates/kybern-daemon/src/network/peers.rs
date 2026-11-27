@@ -853,6 +853,17 @@ pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, para
     match method {
         PeerPreferencesSync::NAME => ok(super::preferences::serve(state, parse(params)?).await?),
         PeerAccountsSync::NAME => ok(super::accounts_sync::serve(state, parse(params)?).await?),
+        // Authorize-only sign-in: the machine with the browser reads the page and hands the redirect back.
+        PeerAccountsLoginPeek::NAME => {
+            let request: PeerLoginPeekParams = parse(params)?;
+            ok(state.account_logins.peek(&request.login_id).map_err(|error| RpcError::invalid_params(error.to_string()))?)
+        }
+        PeerAccountsLoginCallback::NAME => {
+            let request: PeerLoginCallbackParams = parse(params)?;
+            tracing::info!(target: SESSION_TARGET, machine = %link.machine_id, "a member handed back a sign-in redirect");
+            let answer = state.account_logins.callback(&request.login_id, &request.path_and_query).await;
+            ok(answer.map_err(|error| RpcError::invalid_params(error.to_string()))?)
+        }
         PeerGroupsSync::NAME => ok(super::group_sync::serve(state, parse(params)?).await?),
         PeerGroupBundle::NAME => ok(super::group_sync::serve_bundle(state, &link.machine_id, parse(params)?).await?),
         PeerItemEdit::NAME => super::item_edits::serve(state, &link.machine_id, parse(params)?),

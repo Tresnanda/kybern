@@ -1017,6 +1017,14 @@ enum AccountsCmd {
     /// Offers about accounts across machines: always-on machines, machines missing accounts, signed-out
     /// terminal logins and defaults the first run changed.
     Offers,
+    /// Catch the browser sign-in of a login running on another machine here and print the page to open.
+    Handoff {
+        /// The machine the login runs on (its id).
+        #[arg(long)]
+        machine: String,
+        /// The login's id (from `accounts login` on that machine).
+        login: String,
+    },
     Remove {
         #[arg(long)]
         provider: ProviderKind,
@@ -1821,6 +1829,11 @@ pub async fn run() -> Result<()> {
             AccountsCmd::Offers => {
                 let offers = client.call::<AccountsOffers>(Empty {}).await?;
                 println!("{}", serde_json::to_string_pretty(&offers)?);
+            }
+            AccountsCmd::Handoff { machine, login } => {
+                let handoff =
+                    client.call::<AccountsLoginHandoff>(AccountLoginHandoffParams { machine_id: machine, login_id: login }).await?;
+                println!("{}", serde_json::to_string_pretty(&handoff)?);
             }
             AccountsCmd::Remove { provider, account } => {
                 client.call::<AccountsRemove>(ProviderInstance { kind: provider, instance: account }).await?;

@@ -542,6 +542,10 @@ mod tests {
             title_provider: Some(ProviderKind::Codex),
             preview_allowed_folders: vec!["/tmp".into()],
             coordinator_mcp_servers: [(ProviderKind::Omp, vec!["memory".into()])].into(),
+            accounts_shared: AccountsShared {
+                defaults: [(ProviderKind::Codex, "codex:me@example.com".to_string())].into(),
+                ..Default::default()
+            },
             ..Settings::default()
         };
         let mut provider = ProviderSettings::default();
