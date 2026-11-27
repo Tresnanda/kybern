@@ -178,7 +178,7 @@ describe('sign-ins, targets and the lender', () => {
 
   // The lender lane adds `lender.usable_for_new` and `lender.reason` to `login.broker.status`, read into
   // `Sharing.usable` (`adapter.ts` `sharingFrom`). Un-skip at integration.
-  test.skip('“Set up” never borrows from a lender the daemon says is not usable for new setups', async () => {
+  test('“Set up” never borrows from a lender the daemon says is not usable for new setups', async () => {
     const { setupItems } = await import('./actions.ts')
     const machines = network()
     const offer = offers().find((o) => o.kind === 'new_machine')!

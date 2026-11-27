@@ -925,7 +925,6 @@ async fn week_of(observer: &Node, machine: &Node, byte: &str, ratio: impl Fn(f32
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "needs the lender lane (0b325d869 + its daemon side): passes on origin/fix/claude-terminal-email at 207b5db9f"]
 async fn a_legacy_lender_that_is_not_always_on_is_not_used_for_new_setups() {
     let Some(cluster) = Cluster::new(&[NodeSpec::owner("a"), NodeSpec::owner("b"), NodeSpec::owner("c")]) else { return };
     let a = cluster.start("a", true).await;
@@ -957,7 +956,6 @@ async fn a_legacy_lender_that_is_not_always_on_is_not_used_for_new_setups() {
 // ---- 8. one-click update keeps machines in step (the update lane's contract) ----
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "needs the update lane (b02f1f83b): passes on origin/fix/claude-terminal-email at 207b5db9f"]
 async fn a_following_machine_updates_despite_a_stuck_queue_and_auto_update_off() {
     let Some(cluster) = Cluster::new(&[NodeSpec::owner("a"), NodeSpec::owner("b")]) else { return };
     let a = cluster.start("a", true).await;
