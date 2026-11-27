@@ -283,6 +283,14 @@ pub fn all_holdings(state: &AppState) -> BTreeMap<MachineId, MachineHoldings> {
     out
 }
 
+/// [`lender_key`] from the registers in `store` alone, for code without the daemon state (the orchestrator).
+pub fn holding_key(store: &kybern_store::Store, machine: &str, kind: ProviderKind, instance: &str) -> Option<String> {
+    let all: Registers = serde_json::from_str(&store.meta_get(KEY).ok()??).ok()?;
+    let e = all.get(&format!("holdings:{machine}")).filter(|e| e.signer == machine)?;
+    let holdings = serde_json::from_value::<MachineHoldings>(parse(e).ok()?.value).ok()?;
+    holdings.accounts.into_iter().find(|holding| holding.kind == kind && holding.instance == instance)?.key
+}
+
 /// The key of a lender's account (`broker_account` on `machine`), from its holdings.
 pub fn lender_key(state: &AppState, machine: &str, kind: ProviderKind, instance: &str) -> Option<String> {
     all_holdings(state).get(machine)?.accounts.iter().find(|holding| holding.kind == kind && holding.instance == instance)?.key.clone()
@@ -345,7 +353,9 @@ fn merge(state: &AppState, mut all: Registers, incoming: &[OpEnvelope]) -> anyho
     anyhow::ensure!(incoming.len() <= MAX_REGISTERS, "Too many account registers");
     let m = state.network.membership().ok_or_else(|| anyhow::anyhow!("No network"))?;
     let projection_now = m.projection();
-    for e in incoming {
+    // One register that doesn't verify (a removed signer, another network, a damaged body) is skipped and
+    // logged; the others are still taken, so one bad entry never stops the sync for good (#19).
+    let check = |e: &OpEnvelope| -> anyhow::Result<SpaceField> {
         anyhow::ensure!(e.body.len() <= MAX_BODY && e.id == ops::op_id(&e.body), "Invalid account register hash or size");
         let f = parse(e)?;
         anyhow::ensure!(f.field == FIELD && f.lamport < i64::MAX as u64, "Invalid account register field");
@@ -355,6 +365,16 @@ fn merge(state: &AppState, mut all: Registers, incoming: &[OpEnvelope]) -> anyho
         );
         let signer = projection_now.entry(&e.signer).ok_or_else(|| anyhow::anyhow!("Account register signer is not a member"))?;
         keys::verify_signature(&signer.descriptor.signing_key, &spaces::input(&e.body), &B64.decode(&e.signature)?)?;
+        Ok(f)
+    };
+    for e in incoming {
+        let f = match check(e) {
+            Ok(f) => f,
+            Err(error) => {
+                tracing::warn!(target: super::TARGET, signer = %e.signer, %error, "skipped an account register that doesn't verify");
+                continue;
+            }
+        };
         // A register this version does not understand is skipped, so a newer machine can add kinds.
         if !valid(&f.entity, &f.value, &e.signer) {
             continue;

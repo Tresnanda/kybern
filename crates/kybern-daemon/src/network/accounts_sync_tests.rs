@@ -154,3 +154,41 @@ async fn a_machine_cannot_sign_another_machines_holdings() {
     let registers = b.state.store.meta_get("network.accounts.v1").unwrap().unwrap_or_default();
     assert!(!registers.contains("evil"), "a forged holdings register is dropped");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn one_register_that_doesnt_verify_is_skipped_and_the_rest_are_taken() {
+    let Some(cluster) = Cluster::new(&[NodeSpec::owner("a"), NodeSpec::owner("b")]) else { return };
+    let a = cluster.start("a", true).await;
+    let b = cluster.start("b", true).await;
+    cluster.form(&a, &[&b], JoinVia::Auto).await;
+    eventually("linked", WAIT, || linked(&a, &b)).await;
+    let good = super::spaces::seal(
+        a.membership(),
+        5,
+        "profile:claude-code:work@example.com".into(),
+        "account",
+        serde_json::json!({"name": "Work", "color": "teal"}),
+    )
+    .unwrap();
+    // A damaged register (its id no longer matches its body), ahead of the good one.
+    let mut damaged = super::spaces::seal(
+        a.membership(),
+        6,
+        "profile:claude-code:other@example.com".into(),
+        "account",
+        serde_json::json!({"name": "Other"}),
+    )
+    .unwrap();
+    damaged.id = "0".repeat(64);
+    let params = PeerSpacesSyncParams { digest: String::new(), ids: vec![], fields: vec![damaged, good] };
+    super::accounts_sync::serve(&b.state, params).await.expect("one bad register doesn't fail the pass");
+    let shared = b.state.settings.get().accounts_shared;
+    assert_eq!(shared.profiles["claude-code:work@example.com"].name, "Work");
+    assert!(!shared.profiles.contains_key("claude-code:other@example.com"));
+
+    // Leaving the network forgets the registers and their baseline.
+    assert!(b.state.store.meta_get("network.accounts.v1").unwrap().is_some());
+    b.state.network.forget_network_state();
+    assert!(b.state.store.meta_get("network.accounts.v1").unwrap().is_none());
+    assert!(b.state.store.meta_get("network.accounts.base.v1").unwrap().is_none());
+}

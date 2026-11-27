@@ -176,6 +176,21 @@ impl Orchestrator {
             .and_then(|settings| settings.accounts.get(&provider.instance))
             .and_then(|account| account.email.clone())
             .or_else(|| self.cached_probe(provider).and_then(|probe| probe.email))
+            // The terminal login's email from its last probe, and a borrowed account's lender account: "Only
+            // when I choose" holds for them too, even when no recent probe here said who they are (#20).
+            .or_else(|| {
+                (provider.instance == "default").then(|| crate::accounts_shared::terminal_email(&self.inner.store, provider.kind)).flatten()
+            })
+            .or_else(|| self.borrowed_email(provider))
+    }
+
+    /// The email of the lender's account a borrowed account signs in through, from the lender's holdings.
+    fn borrowed_email(&self, provider: &ProviderInstance) -> Option<String> {
+        let broker = self.login_broker()?;
+        let account = broker.binding(provider.kind, &provider.instance)?;
+        let machine = broker.broker_id()?;
+        let key = crate::network::accounts_sync::holding_key(&self.inner.store, &machine, provider.kind, &account)?;
+        crate::accounts_shared::parse_key(&key).map(|(_, email)| email.to_string())
     }
 
     /// The name a person knows the account by.
@@ -545,7 +560,8 @@ impl Orchestrator {
         let raw = settings.providers.get(&provider.kind).cloned().unwrap_or_default();
         let project = self.inner.store.project_get(thread.project_id)?.ok_or_else(|| anyhow!("Project not found."))?;
         let override_id = self.inner.store.meta_get(&format!("account_override:{}", thread.id))?.filter(|s| !s.is_empty());
-        provider.instance = crate::provider_accounts::resolve(&raw, Some(&project.path), override_id.as_deref());
+        let chosen = override_id.or_else(|| Self::account_it_ran_on(thread, &provider, &raw));
+        provider.instance = crate::provider_accounts::resolve(&raw, Some(&project.path), chosen.as_deref());
         Ok(provider)
     }
 

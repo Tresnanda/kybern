@@ -263,3 +263,26 @@ async fn accounts_sharing_codex_history_resume_the_same_native_session() {
     let env = fixture.orchestrator.account_environment(&thread).unwrap();
     assert_eq!(std::path::Path::new(&env["CODEX_SQLITE_HOME"]), fixture.root.join("home/.codex"));
 }
+
+#[tokio::test]
+async fn only_when_i_choose_holds_for_the_terminal_login_too() {
+    let fixture = Fixture::new();
+    let thread = codex_accounts(&fixture);
+    // The thread runs on Work, which is out; the terminal login has the most room.
+    let mut on_work = thread.clone();
+    on_work.provider = codex("work");
+    fixture.store.thread_upsert(&on_work).unwrap();
+    set_limits(&fixture, "work", vec![five_hours(100.0, 3600), weekly(20.0)]);
+    set_limits(&fixture, "default", vec![five_hours(10.0, 3600), weekly(10.0)]);
+    set_limits(&fixture, "spare", vec![five_hours(60.0, 3600), weekly(10.0)]);
+    assert_eq!(fixture.orchestrator.thread_target(thread.id).unwrap().suggested_account.as_deref(), Some("default"));
+    // No recent probe here says who the terminal login is; its last known email does.
+    crate::accounts_shared::remember_terminal_email(&fixture.store, ProviderKind::Codex, Some("shell@example.com"));
+    let mut settings = fixture.orchestrator.inner.settings.get();
+    settings.accounts_shared.profiles.insert(
+        AccountsShared::key(ProviderKind::Codex, "shell@example.com"),
+        AccountProfile { name: "Shell".into(), color: None, manual_only: true },
+    );
+    fixture.orchestrator.inner.settings.set(settings).unwrap();
+    assert_eq!(fixture.orchestrator.thread_target(thread.id).unwrap().suggested_account.as_deref(), Some("spare"));
+}

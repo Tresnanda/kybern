@@ -99,6 +99,9 @@ impl Network {
             let _ = self.store.meta_delete_prefix("network.list_cache.");
         }
         let _ = self.store.meta_delete_prefix("network.preferences.");
+        // The accounts sync's registers and baseline too, so another network never receives this one's
+        // registers, and a rejoin imports this machine's accounts afresh (#19).
+        let _ = self.store.meta_delete_prefix("network.accounts.");
         self.peers.close_all();
         for grant in self.grants.held() {
             self.grants.revoke(grant.id);
