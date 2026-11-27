@@ -98,10 +98,14 @@ async fn two_machines_end_with_one_set_of_accounts_and_edits_travel() {
         .await;
     assert!(a.state.settings.get().accounts_shared.offers.contains_key("new_machine:x"));
 
-    // The default chosen on a reaches b, mapped to b's own login.
+    // The default chosen on a reaches b, mapped to b's own login, even when a pass that read a's settings
+    // just before the choice ends after it.
     let mut settings = a.state.settings.get();
     settings.accounts_shared.defaults.insert(ProviderKind::ClaudeCode, "claude-code:work@example.com".into());
+    super::accounts_sync::observe_now(&a.state).unwrap();
     a.state.settings.set(settings).unwrap();
+    super::accounts_sync::merge_now(&a.state, &[]).unwrap();
+    assert_eq!(a.state.settings.get().accounts_shared.defaults[&ProviderKind::ClaudeCode], "claude-code:work@example.com");
     sync_both(&a, &b).await;
     eventually("b follows the default", WAIT, || {
         b.state.settings.get().providers[&ProviderKind::ClaudeCode].default_account.as_deref() == Some("x9")

@@ -336,14 +336,34 @@ pub fn migrate_now(state: &AppState) -> Result<()> {
         return Ok(());
     }
     let terminal = terminal_emails(Some(&state.store));
-    let settings = state.settings.get();
     let snapshot: BTreeMap<ProviderKind, String> =
         state.store.meta_get(SNAPSHOT)?.and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
+    let repos = project_repo_keys(Some(&state.store));
+    // Built from the settings as saved at the write, so a default another machine shared meanwhile stays.
+    let mut premigration: BTreeMap<ProviderKind, String> = BTreeMap::new();
+    state.settings.update(|settings| {
+        let (next, found) = migrated(settings, &terminal, &snapshot, &repos);
+        premigration = found;
+        (next != *settings).then_some((next, ()))
+    })?;
+    state.store.meta_set(PREMIGRATION, &serde_json::to_string(&premigration)?)?;
+    state.store.meta_set(MIGRATED, &chrono::Utc::now().to_rfc3339())?;
+    let _ = state.store.meta_delete_prefix(SNAPSHOT);
+    Ok(())
+}
+
+/// `settings` with this machine's accounts merged into the shared values, and its own defaults as keys.
+fn migrated(
+    settings: &Settings,
+    terminal: &TerminalEmails,
+    snapshot: &BTreeMap<ProviderKind, String>,
+    repos: &BTreeMap<String, String>,
+) -> (Settings, BTreeMap<ProviderKind, String>) {
     let mut next = settings.clone();
     let mut premigration: BTreeMap<ProviderKind, String> = BTreeMap::new();
     for kind in ProviderKind::ALL.into_iter().filter(|kind| has_identity(*kind)) {
-        let own = snapshot.get(&kind).cloned().unwrap_or_else(|| local_default(&settings, kind));
-        if let Some(key_text) = key_of_instance(&settings, &terminal, kind, &own) {
+        let own = snapshot.get(&kind).cloned().unwrap_or_else(|| local_default(settings, kind));
+        if let Some(key_text) = key_of_instance(settings, terminal, kind, &own) {
             premigration.insert(kind, key_text.clone());
             next.accounts_shared.defaults.entry(kind).or_insert(key_text);
         }
@@ -360,24 +380,17 @@ pub fn migrate_now(state: &AppState) -> Result<()> {
             });
         }
     }
-    let repos = project_repo_keys(Some(&state.store));
     for kind in ProviderKind::ALL.into_iter().filter(|kind| has_identity(*kind)) {
         let Some(provider) = settings.providers.get(&kind) else { continue };
         for (path, instance) in &provider.project_accounts {
-            let (Some(repo), Some(key_text)) = (repos.get(path), key_of_instance(&settings, &terminal, kind, instance)) else { continue };
+            let (Some(repo), Some(key_text)) = (repos.get(path), key_of_instance(settings, terminal, kind, instance)) else { continue };
             if next.accounts_shared.projects.len() >= MAX_PROJECTS && !next.accounts_shared.projects.contains_key(repo) {
                 continue;
             }
             next.accounts_shared.projects.entry(repo.clone()).or_default().entry(kind).or_insert(key_text);
         }
     }
-    if next != settings {
-        state.settings.set(next)?;
-    }
-    state.store.meta_set(PREMIGRATION, &serde_json::to_string(&premigration)?)?;
-    state.store.meta_set(MIGRATED, &chrono::Utc::now().to_rfc3339())?;
-    let _ = state.store.meta_delete_prefix(SNAPSHOT);
-    Ok(())
+    (next, premigration)
 }
 
 /// Wait after start, so the migration's probes never compete with the daemon's startup work.
