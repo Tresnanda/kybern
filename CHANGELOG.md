@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.27.1
+
+<!-- kybern-release-title: Fix for a crash on start -->
+<!-- kybern-release-summary: Kybern 0.27.0 could stop at "Uncaught runtime errors" when it opened, if a machine's terminal login was signed out. -->
+
+- Fixed a crash when Kybern opened ("undefined is not an object (evaluating 'offer.keys.includes')"). It happened when a machine's terminal login was signed out, or when your default account changed on the first run with shared accounts.
+
 ## 0.27.0
 
 <!-- kybern-release-title: Your accounts, on every machine -->

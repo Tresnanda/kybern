@@ -126,3 +126,16 @@ describe('sign-in queue', () => {
     expect(mismatch({}, { identity: { email: 'me@x.com' } })).toBeNull()
   })
 })
+
+describe('offers from a daemon', () => {
+  test('an offer the daemon sent without keys or machines (a signed-out terminal login) plans nothing instead of crashing', async () => {
+    const { setupItems } = await import('./actions.ts')
+    const { fetchDaemonOffers } = await import('./adapter.ts')
+    const view = { groups: unifyAccounts([mac()]), machines: [mac()], sharing: null } as unknown as Parameters<typeof setupItems>[0]
+    const sent = { id: 'terminal_login:fedora:claude-code', kind: 'terminal_login', fingerprint: 'f', machine_id: 'fedora', machine_name: 'fedora', provider: 'claude-code' }
+    expect(() => setupItems(view, sent as unknown as Offer)).not.toThrow()
+    const client = { info: { features: [ACCOUNTS_SHARED_FEATURE] }, call: async () => ({ offers: [sent] }) }
+    const offers = await fetchDaemonOffers(client as never)
+    expect(offers?.map((offer) => [offer.keys, offer.machines])).toEqual([[[], []]])
+  })
+})

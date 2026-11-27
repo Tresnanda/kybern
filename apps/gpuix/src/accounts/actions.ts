@@ -189,7 +189,7 @@ export async function answerOffer(offer: Offer, state: 'later' | 'never') {
 
 /** The steps "Set up" runs for a new machine: what it is missing, borrowed where possible. */
 export function setupItems(view: UnifiedView, offer: Offer): SignInItem[] {
-  const accounts = view.groups.flatMap((group) => group.accounts).filter((account) => account.key && offer.keys.includes(account.key))
+  const accounts = view.groups.flatMap((group) => group.accounts).filter((account) => account.key && (offer.keys ?? []).includes(account.key))
   const sharing = view.sharing && { ...view.sharing, lendable: lendableOn(view.groups, view.sharing.machineId) }
   return planSetup(accounts, { machineId: offer.machine_id, name: offer.machine_name }, sharing)
 }

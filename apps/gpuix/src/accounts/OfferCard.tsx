@@ -28,7 +28,7 @@ const nameOf = (view: UnifiedView) => (key: string) => view.groups.flatMap((g) =
 /** The accounts an offer is about, as marks and names: what would change, without a sentence about it. */
 function OfferAccounts({ offer, view }: { offer: Offer; view: UnifiedView }) {
   const t = useTheme()
-  const accounts = view.groups.flatMap((g) => g.accounts).filter((a) => a.key && offer.keys.includes(a.key))
+  const accounts = view.groups.flatMap((g) => g.accounts).filter((a) => a.key && (offer.keys ?? []).includes(a.key))
   if (!accounts.length) return null
   const shown = accounts.slice(0, 3)
   const fill = t.variant === 'dark' ? 'rgba(252, 252, 252, 0.06)' : 'rgba(13, 13, 13, 0.05)'
