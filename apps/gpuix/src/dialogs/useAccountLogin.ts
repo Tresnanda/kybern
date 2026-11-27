@@ -156,7 +156,10 @@ export function useAccountLogin(machine?: KybernClient | null, { openPage = true
     closedRef.current = true
     const current = loginRef.current
     if (legacyTerminal) await client.call('terminals.close', { terminal_id: legacyTerminal.id }).catch(() => {})
-    if (current && current.phase !== 'canceled' && !(current.phase === 'signed_in' && current.instance)) await client.call('providers.accounts.login.cancel', { id: current.id }).catch(() => {})
+    // A sign-in again that is done needs no cancel, unless it ended on someone else or an account already added: the
+    // daemon holds the old identity until Keep, so Cancel must tell it to sign that login out again.
+    const settled = current?.phase === 'signed_in' && !!current.instance && !current.previous_email && !current.duplicate_of
+    if (current && current.phase !== 'canceled' && !settled) await client.call('providers.accounts.login.cancel', { id: current.id }).catch(() => {})
   }, [legacyTerminal, client])
 
   const restart = useCallback(async (patch: Partial<AccountLoginStartParams>) => {

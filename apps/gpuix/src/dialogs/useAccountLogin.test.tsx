@@ -117,3 +117,18 @@ describe('a pasted code', () => {
     expect(run.api().wrongCodes).toBe(1)
   })
 })
+
+describe('cancel', () => {
+  test('a sign-in again that ended on someone else is cancelled, so the old account stays', async () => {
+    const other = login({ phase: 'signed_in', instance: 'a1', previous_email: 'me@x.com', identity: { email: 'other@x.com' } })
+    const run = await follow({ 'providers.accounts.login.start': () => other, 'providers.accounts.login.get': () => other })
+    await run.api().cancel()
+    expect(run.calls).toContain('providers.accounts.login.cancel')
+  })
+  test('a finished sign-in again of the same account needs no cancel', async () => {
+    const same = login({ phase: 'signed_in', instance: 'a1', identity: { email: 'me@x.com' } })
+    const run = await follow({ 'providers.accounts.login.start': () => same, 'providers.accounts.login.get': () => same })
+    await run.api().cancel()
+    expect(run.calls).not.toContain('providers.accounts.login.cancel')
+  })
+})
