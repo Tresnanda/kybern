@@ -5,7 +5,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
 import type { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
-import { ACCOUNTS_SHARED_FEATURE, LOGIN_HANDOFF_FEATURE, type AccountOffer, type AccountsShared, type LoginBrokerStatus, type LoginHandoffParams, type MachineCard, type MachineId, type ProviderKind, type Settings } from '../../../../packages/kybern-client/src/types.ts'
+import { ACCOUNTS_SHARED_FEATURE, LOGIN_HANDOFF_FEATURE, type AccountOffer, type AccountsShared, type LoginBrokerSetParams, type LoginBrokerStatus, type LoginHandoffParams, type MachineCard, type MachineId, type ProviderKind, type Settings } from '../../../../packages/kybern-client/src/types.ts'
 import { errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
 import { configDir } from '../environments/registry.ts'
 import { setSettings } from '../settings/store.ts'
@@ -54,14 +54,19 @@ export interface Sharing {
   reason?: string
 }
 
-type LenderFields = { usable_for_new?: unknown; reason?: unknown }
-
-/** `usable_for_new` and `reason` of `login.broker.status`, on the lender or beside it. A daemon before 0.27.2 says neither. */
+/** `lender.usable_for_new` and `lender.reason` of `login.broker.status` (0.27.2, `login.broker.choice.v1`). Older daemons
+ *  send no `lender`. */
 export function lenderVerdict(status: LoginBrokerStatus | null | undefined): { usableForNew?: boolean; reason?: string } {
-  const whole = status as (LenderFields & { broker?: LenderFields | null }) | null | undefined
-  const said = [whole?.broker, whole].find((fields) => typeof fields?.usable_for_new === 'boolean')
-  if (!said) return {}
-  return { usableForNew: said.usable_for_new as boolean, ...(typeof said.reason === 'string' && said.reason ? { reason: said.reason } : {}) }
+  const lender = (status as { lender?: { usable_for_new?: unknown; reason?: unknown } | null } | null | undefined)?.lender
+  if (typeof lender?.usable_for_new !== 'boolean') return {}
+  return { usableForNew: lender.usable_for_new, ...(typeof lender.reason === 'string' && lender.reason ? { reason: lender.reason } : {}) }
+}
+
+/** Choose the sharing machine, or clear it with null. Neither signs the previous one out of its own accounts. `via` says
+ *  the always-on offer chose it; without it the daemon records a choice by hand (0.27.2; older daemons ignore it). */
+export function setSharing(client: KybernClient, machineId: MachineId | null, via?: 'always_on') {
+  const params: LoginBrokerSetParams & { via?: 'always_on' } = { machine_id: machineId, sign_out_old: false, ...(via ? { via } : {}) }
+  return client.call('login.broker.set', params)
 }
 
 /** The sharing machine from `login.broker.status` and the members of `network.status`; null when nobody shares. */

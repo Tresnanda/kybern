@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { AccountBroker, AccountSummary, LendableAccount, LoginBrokerStatus, MachineCard } from '../../../../packages/kybern-client/src/types.ts'
 import { describeProblem } from '../../../../packages/kybern-client/src/problems.ts'
 import { borrow, setupItems, stopBorrowing } from './actions.ts'
-import { lenderVerdict, sharingFrom } from './adapter.ts'
+import { lenderVerdict, setSharing, sharingFrom } from './adapter.ts'
 import { chipsFor, sharingAction } from './chips.ts'
 import type { Offer } from './offers.ts'
 import { planSetup, signInHereAction, type SignInItem } from './queue.ts'
@@ -20,12 +20,12 @@ const lendable: LendableAccount[] = [
   { provider: 'codex', account: 'c1', name: 'Codex', email: 'c@x.com' },
   { provider: 'cursor', account: 'u1', name: 'Cursor', email: 'u@x.com' },
 ]
-/** `login.broker.status`; `fields` are what a 0.27.2 daemon adds to the lender. */
-const status = (fields: Record<string, unknown> = {}) => ({ broker: { machine_id: 'vps', name: 'kdi-vps', reachable: true, ...fields }, is_broker: false, providers: [], loans: [] }) as LoginBrokerStatus
+/** `login.broker.status`; `verdict` is the `lender` a 0.27.2 daemon adds, absent on older ones. */
+const status = (verdict?: Record<string, unknown>) => ({ broker: { machine_id: 'vps', name: 'kdi-vps', reachable: true }, ...(verdict ? { lender: { machine_id: 'vps', name: 'kdi-vps', ...verdict } } : {}), is_broker: false, providers: [], loans: [] }) as LoginBrokerStatus
 const members = (ratio?: number | null) => [{ machine_id: 'vps', name: 'kdi-vps', online_ratio_7d: ratio }] as MachineCard[]
 
-const methods = (fields: Record<string, unknown>, ratio?: number | null) => {
-  const sharing = sharingFrom(status(fields), members(ratio))!
+const methods = (verdict: Record<string, unknown> | undefined, ratio?: number | null) => {
+  const sharing = sharingFrom(status(verdict), members(ratio))!
   const accounts = unifyAccounts([fresh(), vps()]).flatMap((group) => group.accounts)
   return planSetup(accounts, { machineId: 'new', name: 'laptop' }, { ...sharing, lendable }).map((item) => `${item.kind}:${item.method}`)
 }
@@ -42,19 +42,18 @@ describe('borrowing during set-up', () => {
     expect(sharingFrom(status({ usable_for_new: false, reason: 'It sleeps.' }), members(0.99))).toEqual({ machineId: 'vps', machine: 'kdi-vps', usable: false, reason: 'It sleeps.' })
   })
   test('on an older daemon never borrows from a sharing machine that is not always on', () => {
-    expect(methods({}, 0.4)).toEqual(OWN)
-    expect(methods({}, null)).toEqual(OWN)
-    expect(methods({})).toEqual(OWN)
+    expect(methods(undefined, 0.4)).toEqual(OWN)
+    expect(methods(undefined, null)).toEqual(OWN)
+    expect(methods(undefined)).toEqual(OWN)
   })
   test('on an older daemon borrows from an always-on machine', () => {
-    expect(methods({}, 0.97)).toEqual(BORROWED)
-    expect(methods({}, 0.9)).toEqual(BORROWED)
+    expect(methods(undefined, 0.97)).toEqual(BORROWED)
+    expect(methods(undefined, 0.9)).toEqual(BORROWED)
   })
-  test('reads the verdict beside the lender too, and nothing from an older daemon', () => {
-    expect(lenderVerdict({ ...status(), usable_for_new: false, reason: 'It sleeps.' } as LoginBrokerStatus)).toEqual({ usableForNew: false, reason: 'It sleeps.' })
+  test('reads the daemon’s verdict, nothing from an older daemon, and no sharing machine without one', () => {
     expect(lenderVerdict(status({ usable_for_new: true, reason: null }))).toEqual({ usableForNew: true })
     expect(lenderVerdict(status())).toEqual({})
-    expect(sharingFrom({ is_broker: false, providers: [], loans: [] }, members(1))).toBeNull()
+    expect(sharingFrom({ is_broker: false, providers: [], loans: [] } as unknown as LoginBrokerStatus, members(1))).toBeNull()
   })
   test('“Set up” follows the same rule', () => {
     const machines = [fresh(), vps()]
@@ -67,6 +66,18 @@ describe('borrowing during set-up', () => {
 
 describe('a machine’s menu', () => {
   const machines = [fresh(), vps()]
+  test('chooses and clears without signing the previous machine out, saying when the offer chose', async () => {
+    const calls: unknown[] = []
+    const client = { call: async (method: string, params: unknown) => { calls.push([method, params]) } } as unknown as Parameters<typeof setSharing>[0]
+    await setSharing(client, 'vps')
+    await setSharing(client, null)
+    await setSharing(client, 'vps', 'always_on')
+    expect(calls).toEqual([
+      ['login.broker.set', { machine_id: 'vps', sign_out_old: false }],
+      ['login.broker.set', { machine_id: null, sign_out_old: false }],
+      ['login.broker.set', { machine_id: 'vps', sign_out_old: false, via: 'always_on' }],
+    ])
+  })
   test('offers sharing on a machine that can, and stopping on the one that shares', () => {
     expect(sharingAction(machines[1]!, machines, null)).toBe('share')
     expect(sharingAction(machines[1]!, machines, 'new')).toBe('share')
@@ -95,7 +106,7 @@ describe('a failed borrow', () => {
     }
   })
   test('takes the daemon’s own words for it', () => {
-    const error = Object.assign(new Error('refused'), { data: { problem: { kind: 'permission', action: { id: 'sign_in_here', label: 'Sign in on kdi-box instead', params: { machine_id: 'new' } } } } })
+    const error = Object.assign(new Error('refused'), { data: { problem: { kind: 'permission', subject: 'login_borrow', hint: 'kdi-vps is offline.', action: { id: 'sign_in_here', label: 'Sign in on kdi-box instead', params: { machine_id: 'new', provider: 'claude-code' } } } } })
     expect(signInHereAction(error, view(error), 'laptop').label).toBe('Sign in on kdi-box instead')
   })
 

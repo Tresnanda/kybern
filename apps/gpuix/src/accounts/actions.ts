@@ -8,7 +8,7 @@ import { toast } from '../shell/toasts.tsx'
 import { getClient } from '../state.ts'
 import { PROVIDER_NAMES } from '../shared/lib/providerUsage.ts'
 import { refreshAccounts } from '../usage/accounts.ts'
-import { signOutTerminalLogin, supportsShared, writeShared } from './adapter.ts'
+import { setSharing, signOutTerminalLogin, supportsShared, writeShared } from './adapter.ts'
 import { TERMINAL_SIGN_IN_KINDS, type Offer } from './offers.ts'
 import { requestAntigravitySignIn } from '../antigravity/notice.ts'
 import { existingFor, planOnMachine, planSetup, type SignInItem } from './queue.ts'
@@ -179,12 +179,11 @@ export async function signInInstead(account: UnifiedAccount, machine: { machineI
   }
 }
 
-export async function shareSignIns(machineId: MachineId | null, name: string) {
+export async function shareSignIns(machineId: MachineId | null, name: string, via?: 'always_on') {
   try {
     const client = getClient()
     if (!client) throw new Error('Not connected to kybernd')
-    // Choosing or clearing the sharing machine never signs the previous one out of its own accounts.
-    await client.call('login.broker.set', { machine_id: machineId, sign_out_old: false })
+    await setSharing(client, machineId, via)
     await refreshAllAccounts()
     toast.success(machineId ? `Your machines can use ${name}’s sign-ins` : `${name} stopped sharing its sign-ins`)
     return true
@@ -213,7 +212,7 @@ export function setupItems(view: UnifiedView, offer: Offer): SignInItem[] {
 export async function acceptOffer(view: UnifiedView, offer: Offer, answer: 'accept' | 'change' = 'accept'): Promise<void> {
   switch (offer.kind) {
     case 'new_machine': signIn(setupItems(view, offer)); return
-    case 'always_on': await shareSignIns(offer.machine_id, offer.machine_name); return
+    case 'always_on': await shareSignIns(offer.machine_id, offer.machine_name, 'always_on'); return
     case 'terminal_login':
       if (offer.provider) signIn([{ id: `${offer.machine_id}:${offer.provider}:default`, machineId: offer.machine_id, machine: offer.machine_name, kind: offer.provider, method: 'sign_in', instance: 'default' }])
       return
