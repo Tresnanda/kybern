@@ -190,18 +190,19 @@ pub fn merge_account_fields(current: &Settings, base: &Settings, mut client: Set
     for kind in kinds {
         let now = current.providers.get(&kind).unwrap_or(&empty);
         let was = base.providers.get(&kind).unwrap_or(&empty);
-        let mut theirs = client.providers.get(&kind).cloned().unwrap_or_else(|| now.clone());
+        // A harness the client's document doesn't have (set up since it read the settings) keeps its settings.
+        let sent = client.providers.get(&kind);
+        let mut theirs = sent.cloned().unwrap_or_else(|| now.clone());
         let accounts = merge_map(&now.accounts, &was.accounts, &theirs.accounts);
         let projects = merge_map(&now.project_accounts, &was.project_accounts, &theirs.project_accounts);
         let default =
             if theirs.default_account != was.default_account { theirs.default_account.clone() } else { now.default_account.clone() };
-        if accounts == theirs.accounts && projects == theirs.project_accounts && default == theirs.default_account {
-            continue;
-        }
         theirs.accounts = accounts;
         theirs.project_accounts = projects;
         theirs.default_account = default;
-        client.providers.insert(kind, theirs);
+        if sent != Some(&theirs) && (sent.is_some() || theirs != empty) {
+            client.providers.insert(kind, theirs);
+        }
     }
     client
 }
@@ -368,6 +369,11 @@ mod replace_tests {
                     .unwrap()
                     .accounts
                     .insert("n1".into(), account("New", "new@example.com", &dir));
+                next.providers
+                    .entry(ProviderKind::Codex)
+                    .or_default()
+                    .accounts
+                    .insert("c1".into(), account("Codex", "c@example.com", &dir));
                 Some((next, ()))
             })
             .unwrap();
@@ -383,6 +389,7 @@ mod replace_tests {
         assert_eq!(claude.default_account.as_deref(), Some("w1"));
         assert_eq!(claude.accounts["w1"].name, "Office");
         assert!(claude.accounts.contains_key("n1"), "an account added meanwhile stays");
+        assert!(saved.providers[&ProviderKind::Codex].accounts.contains_key("c1"), "so does a harness set up meanwhile");
 
         // What the client did change is the client's: here, Personal is the default again and New is removed.
         let base = store.get();
