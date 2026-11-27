@@ -3,7 +3,7 @@
 // signed in on two machines is one row, read once. No React and no GPUIX: tests load it directly.
 import { CLI_ACCOUNT_NAME, CLI_INSTANCE, isCliInstance, withoutSignIn } from '../shared/lib/accounts.ts'
 import { bindingLimit, limitUsed } from '../shared/lib/providerUsage.ts'
-import type { AccountSummary, AccountsShared, ProviderInstance, ProviderKind, ProviderLimits, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
+import { ACCOUNTS_SHARED_FEATURE, type AccountSummary, type AccountsShared, type ProviderInstance, type ProviderKind, type ProviderLimits, type ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
 
 /** What one machine told us about its accounts. */
 export interface MachineAccounts {
@@ -121,6 +121,24 @@ const installedOn = (machine: MachineAccounts, kind: ProviderKind) => {
 /** This machine first, then the others in the order given. */
 const ordered = (machines: readonly MachineAccounts[]) => [...machines.filter((m) => m.isLocal), ...machines.filter((m) => !m.isLocal)]
 
+/** Whether a machine's daemon is too old to send account keys (must update Kybern rather than show anonymous logins). */
+export function isOutdatedMachine(machine: Pick<MachineAccounts, 'online' | 'state' | 'features' | 'accounts'>): boolean {
+  if (machine.state === 'legacy') return true
+  if (!machine.online || machine.state !== 'ready') return false
+  if (machine.features.length > 0 && !machine.features.includes(ACCOUNTS_SHARED_FEATURE)) {
+    return machine.accounts.length > 0 && !machine.accounts.some((account) => !!keyOf(account))
+  }
+  return false
+}
+
+/** Online machines whose daemon is too old to send account keys, this machine first. */
+export function outdatedMachines(machines: readonly MachineAccounts[]): MachineAccounts[] {
+  return ordered(machines).filter((machine) => machine.online && isOutdatedMachine(machine))
+}
+
+/** Row label for a machine whose daemon is too old to send account keys. */
+export const outdatedMachineLabel = (name: string) => `${name} · Update Kybern`
+
 interface Draft {
   id: string
   key: string | null
@@ -157,6 +175,7 @@ export function unifyAccounts(machines: readonly MachineAccounts[], options: Uni
   const signedOut: (SignedOutTerminal & { kind: ProviderKind })[] = []
   const local = machines.find((machine) => machine.isLocal)?.machineId
   for (const machine of ordered(machines)) {
+    if (isOutdatedMachine(machine)) continue
     for (const account of machine.accounts) {
       const { kind, instance } = account.provider
       const terminal = account.terminal ?? isCliInstance(instance)

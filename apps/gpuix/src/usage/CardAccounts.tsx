@@ -15,7 +15,10 @@ import { readMachine, useAccountsEverywhere, type UnifiedView } from '../account
 import { chipsFor, usableMachines } from '../accounts/chips.ts'
 import { makeDefault, signIn } from '../accounts/actions.ts'
 import { planOnMachine } from '../accounts/queue.ts'
-import { leftOf, type UnifiedAccount } from '../accounts/unified.ts'
+import { isUpdating } from '../../../../packages/kybern-client/src/updateRun.ts'
+import { retryMachineUpdate, useUpdateRun } from '../machines/network.ts'
+import { toastProblem } from '../problems/toast.ts'
+import { leftOf, outdatedMachineLabel, outdatedMachines, type UnifiedAccount } from '../accounts/unified.ts'
 
 /** The card's accounts of an agent: those with an identity or a name, and any login that can be used. */
 export function cardAccounts(view: UnifiedView, kind: ProviderKind): UnifiedAccount[] {
@@ -39,6 +42,8 @@ export function CardAccounts({ kind }: { kind: ProviderKind }) {
   const t = useTheme()
   const view = useAccountsEverywhere()
   const accounts = cardAccounts(view, kind)
+  const outdated = outdatedMachines(view.machines)
+  const updateRun = useUpdateRun()
   const [changed, setChanged] = useState(false)
   const changedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => () => clearTimeout(changedTimer.current), [])
@@ -50,11 +55,21 @@ export function CardAccounts({ kind }: { kind: ProviderKind }) {
     clearTimeout(changedTimer.current)
     changedTimer.current = setTimeout(() => setChanged(false), 2000)
   }
-  if (accounts.length < 2 && view.machines.length < 2) return null
+  if (accounts.length < 2 && view.machines.length < 2 && outdated.length === 0) return null
   return <>
-    <div testId={`rail-accounts-${kind}`} role="radiogroup" aria-label={`Default ${name} account`} style={{ display: 'flex', flexDirection: 'column', gap: 1, marginLeft: -6, marginRight: -6 }}>
+    {accounts.length > 0 && <div testId={`rail-accounts-${kind}`} role="radiogroup" aria-label={`Default ${name} account`} style={{ display: 'flex', flexDirection: 'column', gap: 1, marginLeft: -6, marginRight: -6 }}>
       {accounts.map((account) => <CardAccountRow key={account.id} account={account} view={view} onChoose={() => void choose(account)} />)}
-    </div>
+    </div>}
+    {outdated.length > 0 && <div testId={`rail-accounts-outdated-${kind}`} style={{ display: 'flex', flexDirection: 'column', gap: 1, marginLeft: -6, marginRight: -6 }}>
+      {outdated.map((machine) => {
+        const row = updateRun[machine.machineId]
+        const updating = !!row && isUpdating(row)
+        return <div key={machine.machineId} testId={`rail-account-outdated-${machine.machineId}`} style={{ display: 'flex', alignItems: 'center', gap: 10, paddingLeft: 6, paddingRight: 6, paddingTop: 6, paddingBottom: 6, borderRadius: 8 }}>
+          <Label color={t.textSecondary} size={13} lineHeight={19.5} truncate style={{ flexGrow: 1, flexShrink: 1, minWidth: 0 }}>{outdatedMachineLabel(machine.name)}</Label>
+          <Button testId={`rail-account-update-${machine.machineId}`} size="sm" busy={updating} disabled={updating} onClick={() => void retryMachineUpdate(machine.machineId).catch((error) => toastProblem(error, { action: `update ${machine.name}`, machine: machine.name }))}>Update</Button>
+        </div>
+      })}
+    </div>}
     {changed && <div role="status" style={{ display: 'flex' }}><Label color={t.textSecondary} size={13} lineHeight={19.5}>Default changed</Label></div>}
   </>
 }

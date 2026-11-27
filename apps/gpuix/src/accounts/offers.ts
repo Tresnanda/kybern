@@ -3,7 +3,7 @@
 // reported. Either way the answers ("Not now", "Never") live in `accounts_shared.offers`. Pure: tests load it directly.
 import { PROVIDER_NAMES } from '../shared/lib/providerUsage.ts'
 import { ACCOUNTS_SHARED_FEATURE, type AccountOffer, type AccountOfferState, type MachineId, type ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
-import { isUsable, standings, type HarnessGroup, type MachineAccounts, type UnifiedAccount } from './unified.ts'
+import { isOutdatedMachine, isUsable, standings, type HarnessGroup, type MachineAccounts, type UnifiedAccount } from './unified.ts'
 
 export type Offer = AccountOffer
 
@@ -41,7 +41,7 @@ export interface OfferContext {
   sharing: MachineId | null
 }
 
-const ready = (machine: MachineAccounts) => machine.online && machine.state === 'ready'
+const ready = (machine: MachineAccounts) => machine.online && machine.state === 'ready' && !isOutdatedMachine(machine)
 const identityAccounts = (groups: readonly HarnessGroup[]) => groups.flatMap((group) => group.accounts.filter((account) => account.key && OFFER_KINDS.includes(account.kind)))
 const sorted = (values: Iterable<string>) => [...values].sort()
 

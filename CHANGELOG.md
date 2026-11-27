@@ -2,10 +2,14 @@
 
 ## 0.27.2
 
-<!-- kybern-release-title: Your terminal's Claude account is recognised -->
-<!-- kybern-release-summary: On a Mac, Kybern now knows which account your terminal's Claude Code uses, so it stops offering to set up an account the Mac already has. -->
+<!-- kybern-release-title: Your terminal's Claude account is recognised, and machines stay up to date -->
+<!-- kybern-release-summary: On a Mac, Kybern now knows which account your terminal's Claude Code uses, and machines no longer get stuck on an old version when "Keep all machines on the same version" is on. -->
 
 - Kybern now reads which account your terminal's Claude Code is signed in to on a Mac, and when its login is about to renew. Before, it showed "email unavailable", so the Accounts page treated it as a different account and offered to set up an account the Mac already had.
+- **Keep all machines on the same version** now updates a machine once it is idle even when its own "Update the daemon automatically" setting is off.
+- Fixed two bugs that could leave a machine looking busy forever and block automatic updates: a queued message sent to a read-only forwarded tool-call thread is now dropped and reported to its sender instead of retrying every minute, and idle forwarded tool-call sessions no longer count as running agents.
+- **Updates** in **Settings → Machines** no longer shows results from days earlier, uses each machine's live version, treats a desktop-managed machine on the newest version as up to date, and marks a machine that is already running the target (or a newer) version as updated instead of failed.
+- In **Accounts** and the usage rail card, a machine running an older Kybern that cannot report account identities now shows once as **\<machine\> · Update Kybern** with an **Update** button instead of an anonymous "Terminal login" row.
 
 ## 0.27.1
 

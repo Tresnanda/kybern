@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { AccountSummary, ProviderKind, ProviderLimits, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
 import { chipsFor, usableMachines } from './chips.ts'
 import { accountAway, switchChoices } from './limit.ts'
-import { accountKey, leftOf, limitsOn, otherAccountName, railEntries, standings, suggestAccount, unifyAccounts, type MachineAccounts, type UnifiedAccount } from './unified.ts'
+import { accountKey, isOutdatedMachine, leftOf, limitsOn, otherAccountName, outdatedMachineLabel, outdatedMachines, railEntries, standings, suggestAccount, unifyAccounts, type MachineAccounts, type UnifiedAccount } from './unified.ts'
 
 const NOW = Date.parse('2026-11-27T10:00:00Z')
 
@@ -154,6 +154,31 @@ describe('unifyAccounts', () => {
     expect(accountsOf([machine('mac', 'MacBook', [summary('claude-code', 'default', { identity: { email: 'me@work.com', plan: 'Max' } })], { isLocal: true })])[0]).toMatchObject({ name: 'me@work.com', plan: 'Max' })
     expect(accountKey('codex', '  Me@X.com ')).toBe('codex:me@x.com')
     expect(accountKey('codex', '')).toBeNull()
+  })
+
+  test('outdated machines never produce an anonymous Terminal login row and list once as "<machine> · Update Kybern"', () => {
+    const machines = [
+      machine('mac', 'MacBook', [named('a1', 'Work', 'me@work.com', { key: 'claude-code:me@work.com' })], { isLocal: true, features: ['network.v1', 'accounts.shared.v1'] }),
+      // A legacy daemon (state: 'legacy') whose local fallback had an anonymous CLI account.
+      machine('old', 'OldBox', [summary('claude-code', 'default', { status: 'signed_in' })], { state: 'legacy' }),
+      // A pre-0.27 daemon that answers providers.accounts.list without accounts.shared.v1 or account keys.
+      machine('fedora', 'fedora', [summary('claude-code', 'default', { status: 'signed_in' }), summary('codex', 'default', { status: 'signed_in' })], { features: ['network.v1', 'update.progress.v1'] }),
+      // An offline legacy machine is not listed for update now.
+      machine('away', 'AwayBox', [], { online: false, state: 'legacy' }),
+    ]
+    const groups = unifyAccounts(machines)
+    const names = groups.flatMap((g) => g.accounts.map((a) => a.name))
+    expect(names).toEqual(['Work'])
+    expect(names).not.toContain('Terminal login')
+    expect(isOutdatedMachine(machines[0]!)).toBe(false)
+    expect(isOutdatedMachine(machines[1]!)).toBe(true)
+    expect(isOutdatedMachine(machines[2]!)).toBe(true)
+    expect(outdatedMachines(machines).map((m) => outdatedMachineLabel(m.name))).toEqual([
+      'OldBox · Update Kybern',
+      'fedora · Update Kybern',
+    ])
+    // Chips do not offer to add accounts onto an outdated machine either.
+    expect(chipsFor(groups[0]!.accounts[0]!, machines).map((c) => c.machineId)).toEqual(['mac'])
   })
 })
 

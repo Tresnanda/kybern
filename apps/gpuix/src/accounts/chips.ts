@@ -2,7 +2,7 @@
 // added. They answer "which account is fedora using, and does it touch my shell?" at a glance. Pure.
 import { withoutSignIn } from '../shared/lib/accounts.ts'
 import { LENDABLE_KINDS, LOGIN_SHARING_FEATURE } from './offers.ts'
-import { standings, type MachineAccounts, type MachineStanding, type UnifiedAccount } from './unified.ts'
+import { isOutdatedMachine, standings, type MachineAccounts, type MachineStanding, type UnifiedAccount } from './unified.ts'
 
 /** `terminal_out`: the account works on that machine, but its shell's own login of it is signed out. */
 export type ChipState = 'signed_in' | 'borrowed' | 'unreachable' | 'signed_out' | 'terminal_out' | 'unknown' | 'offline' | 'add'
@@ -36,7 +36,7 @@ const stateOf = (standing: MachineStanding): ChipState => {
 
 /** Whether a machine can take this account: online, able to list accounts, and with the agent installed. */
 const canAdd = (account: UnifiedAccount, machine: MachineAccounts) =>
-  machine.online && machine.state === 'ready' && machine.providers?.find((p) => p.kind === account.kind)?.available !== false
+  machine.online && machine.state === 'ready' && !isOutdatedMachine(machine) && machine.providers?.find((p) => p.kind === account.kind)?.available !== false
 
 const words: Record<ChipState, (standing: MachineStanding | undefined) => string> = {
   signed_in: (s) => (s?.terminal ? 'Terminal login' : 'Signed in'),

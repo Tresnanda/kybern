@@ -16,7 +16,7 @@ import { getClient, useApp } from '../state.ts'
 import { askAccountLimits, mergeAccountLimits, refreshAccounts, useAccountLimitEntries, useAccounts, useAccountsFeed, useAccountsLegacy, useAccountsLoaded } from '../usage/accounts.ts'
 import { featuresOf, fetchDaemonOffers, readShared, sharingFrom, supportsShared, type Sharing } from './adapter.ts'
 import { applyAnswers, computeOffers, LOGIN_SHARING_FEATURE, type Offer } from './offers.ts'
-import { unifyAccounts, type HarnessGroup, type MachineAccounts } from './unified.ts'
+import { keyOf, unifyAccounts, type HarnessGroup, type MachineAccounts } from './unified.ts'
 import type { LendableAccount } from '../../../../packages/kybern-client/src/types.ts'
 
 export interface RemoteSnapshot {
@@ -95,10 +95,12 @@ export function readMachine(machineId: MachineId, { probe = false, refresh = fal
       client.call('usage.limits', { cached: true, all_accounts: true, ...(refresh ? { refresh: true } : {}) }),
     ])
     if (accounts.status === 'rejected') { patchRemote(machineId, { state: isMethodNotFound(accounts.reason) ? 'legacy' : 'unreachable', features }); return }
+    const list = accounts.value.accounts ?? []
+    const legacy = features.length > 0 && !supportsShared(features) && !list.some((account) => !!keyOf(account))
     patchRemote(machineId, {
-      state: 'ready',
+      state: legacy ? 'legacy' : 'ready',
       features,
-      accounts: accounts.value.accounts ?? [],
+      accounts: legacy ? [] : list,
       ...(providers.status === 'fulfilled' ? { providers: providers.value.providers ?? null } : {}),
       ...(limits.status === 'fulfilled' ? { limits: mergeAccountLimits(snapshot(machineId).limits, limits.value.accounts), globalLimits: limits.value.providers ?? [] } : {}),
     })
