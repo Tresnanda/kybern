@@ -46,6 +46,13 @@ pub fn upgrade_paired_tokens(store: &Store) {
             Err(error) => tracing::warn!(target: "kybern::network", %error, "could not upgrade paired tokens"),
         }
     }
+    // Account sign-ins moved from `access:write` to `accounts:write`: every client that could operate
+    // the daemon (the bootstrap token and paired desktops and phones) signs accounts in.
+    match store.tokens_add_scope_if(Scope::AccountsWrite, Scope::OrchestrationOperate) {
+        Ok(0) => {}
+        Ok(count) => tracing::info!(target: "kybern::network", count, "added accounts:write to paired tokens"),
+        Err(error) => tracing::warn!(target: "kybern::network", %error, "could not upgrade paired tokens"),
+    }
 }
 
 const MAX_PAIRING_CODES: usize = 128;

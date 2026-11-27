@@ -721,11 +721,11 @@ pub struct AccountLoginFinishParams {
     pub make_default: bool,
 }
 // Sign-in stores credentials on the daemon machine, so paired devices can't start it.
-method!(AccountsLoginStart, "providers.accounts.login.start", Some(Scope::AccessWrite), AccountLoginStartParams, AccountLogin);
+method!(AccountsLoginStart, "providers.accounts.login.start", Some(Scope::AccountsWrite), AccountLoginStartParams, AccountLogin);
 method!(AccountsLoginGet, "providers.accounts.login.get", Some(Scope::OrchestrationRead), AccountLoginIdParams, AccountLogin);
-method!(AccountsLoginInput, "providers.accounts.login.input", Some(Scope::AccessWrite), AccountLoginInputParams, AccountLogin);
-method!(AccountsLoginCancel, "providers.accounts.login.cancel", Some(Scope::AccessWrite), AccountLoginIdParams, AccountLogin);
-method!(AccountsLoginFinish, "providers.accounts.login.finish", Some(Scope::AccessWrite), AccountLoginFinishParams, ProviderInstance);
+method!(AccountsLoginInput, "providers.accounts.login.input", Some(Scope::AccountsWrite), AccountLoginInputParams, AccountLogin);
+method!(AccountsLoginCancel, "providers.accounts.login.cancel", Some(Scope::AccountsWrite), AccountLoginIdParams, AccountLogin);
+method!(AccountsLoginFinish, "providers.accounts.login.finish", Some(Scope::AccountsWrite), AccountLoginFinishParams, ProviderInstance);
 method!(
     AccountsLoginHandoff,
     "providers.accounts.login.handoff",
@@ -768,7 +768,7 @@ impl From<ProviderInstance> for AccountsSignOutParams {
         Self { kind: instance.kind, instance: instance.instance, confirm_terminal: false }
     }
 }
-method!(AccountsSignOut, "providers.accounts.sign_out", Some(Scope::AccessWrite), AccountsSignOutParams, AccountSummary);
+method!(AccountsSignOut, "providers.accounts.sign_out", Some(Scope::AccountsWrite), AccountsSignOutParams, AccountSummary);
 
 // ---- accounts across machines: offers ----
 
@@ -831,7 +831,7 @@ pub struct AccountsOffersResult {
     pub offers: Vec<AccountOffer>,
 }
 method!(AccountsOffers, "accounts.offers", Some(Scope::OrchestrationRead), Empty, AccountsOffersResult);
-method!(AccountsRemove, "providers.accounts.remove", Some(Scope::AccessWrite), ProviderInstance, Empty);
+method!(AccountsRemove, "providers.accounts.remove", Some(Scope::AccountsWrite), ProviderInstance, Empty);
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AccountsCatalogParams {
@@ -5351,7 +5351,7 @@ method!(PeerLoginReleaseAll, "peer.login.release_all", Some(Scope::MachineLogins
 method!(PeerLoginUsage, "peer.login.usage", Some(Scope::MachineLogins), PeerLoginUsageParams, UsageLimitsResult);
 method!(PeerSecretsPut, "peer.secrets.put", Some(Scope::MachineSecrets), PeerSecretsPutParams, Empty);
 method!(LoginBrokerStatusMethod, "login.broker.status", Some(Scope::OrchestrationRead), Empty, LoginBrokerStatus);
-method!(LoginBrokerBind, "login.broker.bind", Some(Scope::AccessWrite), LoginBrokerBindParams, LoginBrokerStatus);
+method!(LoginBrokerBind, "login.broker.bind", Some(Scope::AccountsWrite), LoginBrokerBindParams, LoginBrokerStatus);
 method!(LoginBrokerSet, "login.broker.set", Some(Scope::NetworkAdmin), LoginBrokerSetParams, LoginBrokerSetResult);
 method!(SecretsPush, "secrets.push", Some(Scope::AccessWrite), SecretsPushParams, SecretsPushResult);
 // Forwarded agent tools (M2, R2; payloads in forward.rs). Files and terminals also need their own scope on the target.

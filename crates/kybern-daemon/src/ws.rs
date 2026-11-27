@@ -803,7 +803,7 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
                 match progress {
                     Ok(progress) => {
                         // A paired phone sees a card's step, never the sign-in page, code or terminal.
-                        let progress = if ctx.principal.has(Scope::AccessWrite) { progress } else { redact_progress(progress) };
+                        let progress = if ctx.principal.has(Scope::AccountsWrite) { progress } else { redact_progress(progress) };
                         let _ = ctx.out.notify(kybern_protocol::methods::REQUESTS_PROGRESS_NOTIFICATION, progress).await;
                     }
                     // Clients also read `requests.progress`, so a missed step is recovered.
@@ -820,7 +820,7 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
                 match login {
                     Ok(login) => {
                         // A paired phone sees progress, never the sign-in page or code.
-                        let login = if ctx.principal.has(Scope::AccessWrite) { login } else { crate::account_login::for_observer(login) };
+                        let login = if ctx.principal.has(Scope::AccountsWrite) { login } else { crate::account_login::for_observer(login) };
                         let _ = ctx.out.notify(kybern_protocol::methods::ACCOUNTS_LOGIN_CHANGED_NOTIFICATION, login).await;
                     }
                     // Clients also poll `providers.accounts.login.get`, so a missed phase is recovered.

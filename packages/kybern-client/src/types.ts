@@ -138,6 +138,7 @@ export type Scope =
   | "review_write"
   | "access_read"
   | "access_write"
+  | "accounts_write"
   | "network_read"
   | "network_admin"
   | MachineScope;

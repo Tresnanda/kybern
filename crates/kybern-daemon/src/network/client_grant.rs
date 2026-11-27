@@ -219,7 +219,16 @@ pub fn mint_for_peer(state: &AppState, link: &PeerLink, params: PeerClientTokenM
         .ok()
         .and_then(|bytes| bytes.try_into().ok())
         .ok_or_else(|| RpcError::internal("the requesting machine's sealing key is not valid"))?;
-    let (token, scopes) = mint_local(state, &params.device_id, &params.label, Some(&link.machine_id), &lineage)?;
+    let (token, mut scopes) = mint_local(state, &params.device_id, &params.label, Some(&link.machine_id), &lineage)?;
+    // A daemon from before `accounts:write` can't read a scope list naming it, and would lose this machine.
+    let understands = network
+        .peers
+        .status(&link.machine_id)
+        .presence
+        .is_some_and(|presence| presence.features.iter().any(|feature| feature == kybern_protocol::features::ACCOUNTS_WRITE_V1));
+    if !understands {
+        scopes.retain(|scope| *scope != Scope::AccountsWrite);
+    }
     let sealed = crate::secret_store::seal(&sealing_key, &context(&me, &link.machine_id, &params.device_id), token.as_bytes())
         .map_err(|error| RpcError::internal(format!("{error:#}")))?;
     tracing::info!(target: TARGET, machine = %link.machine_id, "minted a client token for another machine");

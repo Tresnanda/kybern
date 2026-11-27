@@ -194,7 +194,7 @@ async fn dispatch_part_2(state: &AppState, ctx: &ConnectionCtx, method: &str, sl
         AccountsLoginGet::NAME => {
             let p: AccountLoginIdParams = parse(params)?;
             let login = state.account_logins.get(&p.id).map_err(bad)?;
-            ok(if ctx.principal.has(Scope::AccessWrite) { login } else { crate::account_login::for_observer(login) })
+            ok(if ctx.principal.has(Scope::AccountsWrite) { login } else { crate::account_login::for_observer(login) })
         }
         AccountsLoginInput::NAME => {
             let p: AccountLoginInputParams = parse(params)?;
@@ -1349,12 +1349,12 @@ async fn dispatch_part_15(state: &AppState, ctx: &ConnectionCtx, method: &str, s
             let p: RequestsProgressParams = parse_or_default(params)?;
             let items = state.orchestrator.requests().list(p.thread_id);
             let items =
-                if ctx.principal.has(Scope::AccessWrite) { items } else { items.into_iter().map(crate::ws::redact_progress).collect() };
+                if ctx.principal.has(Scope::AccountsWrite) { items } else { items.into_iter().map(crate::ws::redact_progress).collect() };
             ok(RequestsProgressResult { items })
         }
         RequestsAct::NAME => {
             let p: RequestsActParams = parse(params)?;
-            let act = crate::requests::RequestAct { action: p.action, value: p.value, can_write: ctx.principal.has(Scope::AccessWrite) };
+            let act = crate::requests::RequestAct { action: p.action, value: p.value, can_write: ctx.principal.has(Scope::AccountsWrite) };
             state.orchestrator.requests().act(p.approval_id, act).map_err(bad)?;
             ok(Empty {})
         }

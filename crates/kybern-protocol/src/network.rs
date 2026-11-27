@@ -97,12 +97,15 @@ pub mod features {
     pub const ACCOUNTS_SHARED_V1: &str = "accounts.shared.v1";
     /// The peer side of accounts across machines: `peer.accounts.sync`.
     pub const ACCOUNTS_SYNC_V1: &str = "accounts.sync.v1";
+    /// Understands the `accounts:write` scope: a device token minted for this machine may carry it.
+    /// Older daemons can't parse a scope list that names it, so it is left out of theirs.
+    pub const ACCOUNTS_WRITE_V1: &str = "accounts.write.v1";
     /// Authorize-only sign-in for another machine: `providers.accounts.login.handoff` here and
     /// `peer.accounts.login.peek` / `peer.accounts.login.callback` on the machine being signed in.
     pub const ACCOUNTS_LOGIN_HANDOFF_V1: &str = "accounts.login.handoff.v1";
 
     /// Every feature the network design names, in design order.
-    pub const ALL: [&str; 34] = [
+    pub const ALL: [&str; 35] = [
         NETWORK_V1,
         SPACES_SYNC_V1,
         RELAY_V1,
@@ -137,6 +140,7 @@ pub mod features {
         REMOVAL_PROOF_V1,
         ACCOUNTS_SYNC_V1,
         ACCOUNTS_LOGIN_HANDOFF_V1,
+        ACCOUNTS_WRITE_V1,
     ];
 }
 

@@ -23,6 +23,9 @@ pub enum Scope {
     AccessRead,
     /// Create or revoke pairing links and client sessions.
     AccessWrite,
+    /// Sign this machine's provider accounts in and out, see their sign-in pages and codes, and
+    /// remove them. Paired clients carry it, so a desktop signs accounts in on every machine.
+    AccountsWrite,
     /// See the machine network: members, found machines, routes, doctor.
     NetworkRead,
     /// Change the machine network: add, remove, pause, rename, merge.
@@ -58,13 +61,14 @@ pub enum Scope {
 impl Scope {
     /// Every client scope, which is what the bootstrap token carries. The machine
     /// scopes are not in it: they belong to daemon-to-daemon grants only.
-    pub const ALL: [Scope; 8] = [
+    pub const ALL: [Scope; 9] = [
         Scope::OrchestrationRead,
         Scope::OrchestrationOperate,
         Scope::TerminalOperate,
         Scope::ReviewWrite,
         Scope::AccessRead,
         Scope::AccessWrite,
+        Scope::AccountsWrite,
         Scope::NetworkRead,
         Scope::NetworkAdmin,
     ];
@@ -72,8 +76,14 @@ impl Scope {
     /// Scopes granted to an ordinary paired client (phone, second desktop).
     // N1: the design gives `network:admin` to desktop and phone pairings too, but
     // not as part of this constant; the pairing flow (N4) adds it when it issues a token.
-    pub const CLIENT: [Scope; 5] =
-        [Scope::OrchestrationRead, Scope::OrchestrationOperate, Scope::TerminalOperate, Scope::ReviewWrite, Scope::NetworkRead];
+    pub const CLIENT: [Scope; 6] = [
+        Scope::OrchestrationRead,
+        Scope::OrchestrationOperate,
+        Scope::TerminalOperate,
+        Scope::ReviewWrite,
+        Scope::NetworkRead,
+        Scope::AccountsWrite,
+    ];
 
     /// Every machine scope a daemon-to-daemon grant can carry.
     pub const MACHINE: [Scope; 12] = [
@@ -142,6 +152,7 @@ impl Scope {
             Scope::ReviewWrite => "review:write",
             Scope::AccessRead => "access:read",
             Scope::AccessWrite => "access:write",
+            Scope::AccountsWrite => "accounts:write",
             Scope::NetworkRead => "network:read",
             Scope::NetworkAdmin => "network:admin",
             Scope::MachinePeer => "machine:peer",
@@ -170,3 +181,28 @@ impl std::fmt::Display for Scope {
 pub const AUTH_HEADER: &str = "authorization";
 /// Query parameter accepted as a fallback for clients that cannot set headers.
 pub const AUTH_QUERY_PARAM: &str = "token";
+
+#[cfg(test)]
+mod accounts_write_tests {
+    use super::Scope;
+
+    #[test]
+    fn paired_clients_sign_accounts_in_but_cannot_pair_or_expose() {
+        assert!(Scope::CLIENT.contains(&Scope::AccountsWrite));
+        assert!(!Scope::CLIENT.contains(&Scope::AccessWrite));
+        for method in [
+            "providers.accounts.login.start",
+            "providers.accounts.login.input",
+            "providers.accounts.login.cancel",
+            "providers.accounts.login.finish",
+            "providers.accounts.sign_out",
+            "providers.accounts.remove",
+            "login.broker.bind",
+        ] {
+            assert_eq!(crate::methods::scope_for(method), Some(Some(Scope::AccountsWrite)), "{method}");
+        }
+        for method in ["access.pairing.create", "access.exposure.set", "access.tokens.revoke", "daemon.shutdown"] {
+            assert_eq!(crate::methods::scope_for(method), Some(Some(Scope::AccessWrite)), "{method}");
+        }
+    }
+}

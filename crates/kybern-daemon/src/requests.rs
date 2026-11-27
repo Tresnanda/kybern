@@ -29,7 +29,7 @@ use tokio::sync::{broadcast, mpsc};
 pub struct RequestAct {
     pub action: String,
     pub value: Option<String>,
-    /// The client may change the machine's own sign-ins (`access:write`).
+    /// The client may change the machine's own sign-ins (`accounts:write`).
     pub can_write: bool,
 }
 
