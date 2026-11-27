@@ -137,7 +137,10 @@ export function startAgentToasts() {
           ? 'blocked'
           : event.kind === 'turn_completed' && event.stop_reason === 'completed'
             ? 'done'
-            : null
+            // The limit reset and a waiting thread is going again: its own line says on which account.
+            : event.kind === 'account_wait_ended' && !event.cancelled
+              ? 'resumed'
+              : null
     if (!kind || !enabled) return
     const own = getState().threads.find((t) => t.id === event.thread_id)
     // Child and subagent threads are not in the list: the desktop's `threadCanNotify`. A delegated agent's request is the exception.
@@ -167,7 +170,7 @@ export function startAgentToasts() {
       if (targets.size > 256) targets.delete(targets.keys().next().value!)
       const body = event.kind === 'turn_failed' ? failureLine(event, thread.provider.kind)
         : event.kind === 'approval_requested' ? waitingLine(event.approval, agent)
-        : event.kind === 'user_input_requested' ? questionLine(event.approval, agent) : 'Finished working'
+        : event.kind === 'user_input_requested' ? questionLine(event.approval, agent) : event.kind === 'account_wait_ended' ? event.text : 'Finished working'
       void notifications.requestPermission().then(status => {
         if (status === 'granted' && getClient() === client && enabled && !isWindowFocused()) {
           const approval = event.kind === 'approval_requested' || event.kind === 'user_input_requested' ? event.approval.id : null
@@ -195,7 +198,7 @@ export function startAgentToasts() {
     } else {
       toast(title, {
         id: `agent:${event.thread_id}:${event.seq}`,
-        description: event.kind === 'turn_failed' ? failureLine(event, thread.provider.kind) : 'Finished working',
+        description: event.kind === 'turn_failed' ? failureLine(event, thread.provider.kind) : event.kind === 'account_wait_ended' ? event.text : 'Finished working',
         duration: DONE_MS,
         action: open,
       })

@@ -1,26 +1,19 @@
-// The Add account sheet (`components/kybern/accounts/AddAccountSheet.tsx`): one dialog whose body
-// moves between steps (pick, waiting, paste, device, terminal, success, duplicate, error) as a
-// daemon-driven sign-in runs (`providers.accounts.login.*`). The common path is one browser trip:
-// pick an agent, approve in the browser, come back to a check mark, a prefilled name and a colour.
-// It also signs an existing account in again.
+// The Add account sheet: one dialog that picks an agent, a name and the machines, then runs one sign-in per machine
+// (`accounts/queue.ts`), each through that machine's own `providers.accounts.login.*` (browser, pasted code, device code or
+// a terminal). It also signs one account in again, on this computer or any other machine.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { motion } from '@gpuix/react'
 import {
-  ACCOUNT_COLORS,
-  ACCOUNT_COLOR_LABELS,
   accountDisplayName,
   accountFor,
-  initialLoginMode,
   isNameValid,
   loginHost,
+  nextFreeColor,
   remoteNote,
-  shouldFinishOnClose,
   stepFor,
   successDefaults,
   supportsBrowserLogin,
   supportsDeviceCode,
   supportsPasteCode,
-  type AccountColor,
   type SheetStep,
 } from '../shared/lib/accounts.ts'
 import { requestAntigravitySignIn } from '../antigravity/notice.ts'
@@ -28,10 +21,10 @@ import { showDialog } from './store.ts'
 import { accountPickerOptions, addsNamedAntigravityAccount, antigravityAccountsBlocked, type AccountPickerOption } from './accountPicker.ts'
 import { ANTIGRAVITY_ACCOUNTS_FEATURE } from '../../../../packages/kybern-client/src/antigravity.ts'
 import { PROVIDER_NAMES } from '../shared/lib/providerUsage.ts'
-import type { AccountLoginMode, ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
+import type { AccountLogin, AccountLoginMode, ProviderKind, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
 import { MatrixLoader } from '../MatrixLoader.tsx'
-import { DURATION, EASE, Rise } from '../motion/kit.tsx'
+import { Rise } from '../motion/kit.tsx'
 import { N } from '../nav/glyphs.ts'
 import { Dialog } from '../nav/overlay.tsx'
 import { setNav } from '../nav/store.ts'
@@ -40,26 +33,31 @@ import { toastProblem } from '../problems/toast.ts'
 import { plainSentence } from '../../../../packages/kybern-client/src/problems.ts'
 import { useNav } from '../nav/store.ts'
 import { Button } from '../kit/Button.tsx'
+import { Checkbox } from '../kit/Checkbox.tsx'
 import { IconButton } from '../kit/IconButton.tsx'
 import { TextField } from '../kit/Field.tsx'
 import { useControls } from '../kit/controls.ts'
+import { StatusChip } from '../kit/StatusChip.tsx'
 import { Chevron } from '../motion/Chevron.tsx'
 import { Switch } from '../kit/Switch.tsx'
 import { openExternal, pickFolder } from '../settings/external.ts'
 import { S } from '../settings/glyphs.ts'
 import { profileById } from '../environments/registry.ts'
 import { activeEnvironment } from '../shell/environment.ts'
-import { toast } from '../shell/toasts.tsx'
 import { copyText } from '../transcript/store.ts'
 import { Screen as TerminalScreen } from '../terminal/Terminal.tsx'
 import { getClient } from '../state.ts'
-import { ink, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
-import { FONT_MONO, FONT_UI } from '../theme.ts'
-import { AccountAvatar, accountColor } from '../usage/AccountMark.tsx'
-import { flashAccount, refreshAccounts, useAccounts, useAccountsFeed, useAccountsLegacy } from '../usage/accounts.ts'
-import { useSettings } from '../settings/store.ts'
+import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
+import { FONT_MONO } from '../theme.ts'
+import { AccountAvatar } from '../usage/AccountMark.tsx'
+import { flashAccount, refreshAccounts, useAccounts, useAccountsLegacy } from '../usage/accounts.ts'
 import { useAccountLogin } from './useAccountLogin.ts'
 import { SuccessCheck } from '../motion/SuccessCheck.tsx'
+import { advance, fallbackModeFor, isOneAccount, loginModeFor, mismatch, planAdd, resolvedItem, startQueue, type ItemResult, type QueueState, type Settled, type SignInItem } from '../accounts/queue.ts'
+import { clientOf, computerId, readMachine, refreshAllAccounts, refreshOfferInputs, useAccountsEverywhere, type UnifiedView } from '../accounts/store.ts'
+import { borrow, makeDefault } from '../accounts/actions.ts'
+import { canHandoff, featuresOf, handoffSignIn } from '../accounts/adapter.ts'
+import type { MachineAccounts } from '../accounts/unified.ts'
 
 const TERMINAL_COPY: Partial<Record<ProviderKind, string>> = {
   opencode: 'OpenCode asks for an API key. Paste it into the prompt below.',
@@ -67,195 +65,410 @@ const TERMINAL_COPY: Partial<Record<ProviderKind, string>> = {
   antigravity: 'Antigravity opens your browser to finish signing in with Google. Kybern checks the sign-in when it finishes.',
 }
 
+/** How long a waiting sign-in may take to say it waits for a redirect before a code is used instead. */
+const HANDOFF_WAIT_MS = 4000
+
 /** A named Antigravity account's terminal runs `agy acp --login`, which prints a link and reads the code back. */
 const NAMED_ANTIGRAVITY_TERMINAL_COPY = 'Open the Google link below, then paste the code from Google’s page into the terminal.'
 
-export function Account({ close, provider, instance, named = false }: { close: () => void; provider?: ProviderKind; instance?: string; named?: boolean }) {
-  const t = useTheme()
-  useAccountsFeed()
-  const providers = useNav((s) => s.providers)
+const agentName = (providers: readonly ProviderStatus[], kind: ProviderKind) => providers.find((p) => p.kind === kind)?.display_name ?? PROVIDER_NAMES[kind] ?? kind
+
+export function Account({ close, provider, instance, named = false, items }: { close: () => void; provider?: ProviderKind; instance?: string; named?: boolean; items?: SignInItem[] }) {
+  const view = useAccountsEverywhere()
+  const here = view.machines[0]!
+  // A single-account sign-in opened directly: this computer's own `agy`, Grok Build, a named Antigravity account, or an
+  // account being signed in again. None of them needs the pick step.
+  const direct = (): SignInItem[] | null => {
+    if (items?.length) return items
+    if (!provider) return null
+    const base = { machineId: here.machineId, machine: here.name, kind: provider, method: 'sign_in' as const }
+    if (instance) return [{ ...base, id: `${here.machineId}:${provider}:${instance}`, instance }]
+    if (named) return [{ ...base, id: `${here.machineId}:${provider}:new`, named: true }]
+    if (provider === 'antigravity') return [{ ...base, id: `${here.machineId}:${provider}:own`, ownLogin: true }]
+    if (provider === 'grok-build') return [{ ...base, id: `${here.machineId}:${provider}:own` }]
+    return null
+  }
+  const [queue, setQueue] = useState<SignInItem[] | null>(direct)
+  if (queue) return <QueueDialog key={queue.map((item) => item.id).join(',')} initial={queue} view={view} close={close} />
+  return <PickDialog view={view} initialKind={provider} close={close} start={setQueue} />
+}
+
+// ── Pick the agent, the name and the machines ────────────────────────────────
+
+/** Why a machine can't take a new sign-in of this agent, or null when it can. */
+export function machineBlocker(machine: MachineAccounts, kind: ProviderKind | undefined, computer: string | null): string | null {
+  if (!machine.online) return 'Offline'
+  if (machine.state === 'legacy') return 'Update needed'
+  if (!kind) return null
+  const status = machine.providers?.find((p) => p.kind === kind)
+  if (status && !status.available) return 'Not installed'
+  // A second Antigravity sign-in is a named account, which older daemons can't make.
+  if (kind === 'antigravity' && machine.machineId !== computer && !machine.isLocal && !machine.features.includes(ANTIGRAVITY_ACCOUNTS_FEATURE)) return 'Update needed'
+  return null
+}
+
+function PickDialog({ view, initialKind, close, start }: { view: UnifiedView; initialKind?: ProviderKind; close: () => void; start: (items: SignInItem[]) => void }) {
+  const primaryProviders = useNav((s) => s.providers)
   const legacy = useAccountsLegacy()
-  const [kind, setKind] = useState<ProviderKind | undefined>(provider)
-  const [folder, setFolder] = useState('')
-  const [advancedOpen, setAdvancedOpen] = useState(false)
-  const api = useAccountLogin()
-  const apiRef = useRef(api)
-  useEffect(() => { apiRef.current = api })
-  const { login, failure, starting } = api
-  // Signing in again: opened for an account, or "Sign in again to Work" from the duplicate step.
-  const reauthInstance = login?.instance ?? instance
-  const reauth = !!reauthInstance
   const allAccounts = useAccounts()
-  // Antigravity's first sign-in is this computer's own `agy` login, in a terminal, with nothing to
-  // name. Each one after it is a named account with a profile of its own, signed in with a pasted code.
-  // Grok Build has one account per machine.
-  const antigravityNamed = named || (!!reauthInstance && reauthInstance !== 'default') || (!provider && addsNamedAntigravityAccount(allAccounts, legacy))
-  const directSingle = (provider === 'antigravity' && !named && !instance) || provider === 'grok-build'
-  const single = (kind ?? provider) === 'grok-build' || ((kind ?? provider) === 'antigravity' && !antigravityNamed)
-  const accounts = useMemo(() => (kind ? allAccounts.filter((account) => account.provider.kind === kind) : allAccounts), [allAccounts, kind])
-  const { settings } = useSettings()
   const environment = activeEnvironment()
   const remote = !environment.local
-  const host = environment.name
-  const transport: 'SSH' | 'Tailscale' = remote && profileById(environment.id).ssh ? 'SSH' : 'Tailscale'
-  const agent = kind ? providers.find((p) => p.kind === kind)?.display_name ?? PROVIDER_NAMES[kind] ?? kind : ''
-  const target = kind && reauthInstance ? accountFor(accounts, kind, reauthInstance) : undefined
-  const targetName = accountDisplayName(reauthInstance, target?.name)
+  const [kind, setKind] = useState<ProviderKind | undefined>(initialKind)
+  const [folder, setFolder] = useState('')
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [name, setName] = useState('')
+  const [unticked, setUnticked] = useState<ReadonlySet<string>>(new Set())
+  const computer = computerId()
+  // An agent installed on any machine can be added; the machines list says where.
+  const providers = useMemo(() => primaryProviders.map((p) => (p.available || !view.machines.some((m) => m.providers?.some((x) => x.kind === p.kind && x.available)) ? p : { ...p, available: true })), [primaryProviders, view.machines])
+  // A daemon from before named Antigravity accounts can only sign this computer in.
+  const namedSupported = !!getClient()?.info?.features?.includes(ANTIGRAVITY_ACCOUNTS_FEATURE)
+  const blocked = antigravityAccountsBlocked(allAccounts, legacy, namedSupported, environment.name)
+  const several = view.machines.length > 1
+  const pickerOptions = useMemo(() => accountPickerOptions(providers, several ? undefined : blocked), [providers, blocked, several])
+  const selected = kind ? pickerOptions.find((p) => p.kind === kind) : undefined
+  const rows = view.machines.map((machine) => ({ machine, blocker: machineBlocker(machine, kind, computer) }))
+  const targets = rows.filter((row) => !row.blocker && !unticked.has(row.machine.machineId)).map((row) => row.machine)
+  const nameOk = !name.trim() || isNameValid(name)
+  const ready = !!selected && selected.available && !selected.disabled && (!several || targets.length > 0) && nameOk
+  const choose = (next: ProviderKind) => {
+    const option = pickerOptions.find((p) => p.kind === next)
+    if (option?.disabled) return
+    if (option && !option.available) { setNav({ settingsOpen: true }); close(); void import('../settings/SettingsScreen.tsx').then((m) => m.openSettingsTab('agents')); return }
+    setKind(next)
+  }
+  const go = () => {
+    if (!kind || !ready) return
+    const machines = several ? targets : [view.machines[0]!]
+    const items = planAdd({ kind, name, machines, computer, ...(folder.trim() ? { directory: folder.trim() } : {}) })
+    if (kind !== 'antigravity') return start(items)
+    // The first sign-in on a device shows Google's notice, then comes back here.
+    const antigravityNamed = addsNamedAntigravityAccount(allAccounts, legacy)
+    const alone = machines.length === 1 && machines[0]!.isLocal
+    requestAntigravitySignIn(() => showDialog({ kind: 'account', provider: 'antigravity', ...(alone ? (antigravityNamed ? { named: true } : {}) : { items }) }))
+  }
+  return <Dialog onClose={close} width={448} testId="add-account">
+    <PickStep providers={pickerOptions} kind={selected?.disabled ? undefined : kind} onKind={choose} folder={folder} onFolder={setFolder} advancedOpen={advancedOpen} onAdvancedOpen={setAdvancedOpen} remote={remote}>
+      {kind && kind !== 'antigravity' && <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <FieldLabel>Name</FieldLabel>
+        <TextField testId="account-name" label="Name" size="lg" placeholder="Same as the email" invalid={!nameOk} value={name} onChange={setName} width="100%" onSubmit={go} />
+        {!nameOk && <ErrorLabel>Use up to 120 characters.</ErrorLabel>}
+      </div>}
+      {kind && several && <MachineChecks rows={rows} unticked={unticked} onToggle={(id) => setUnticked((prev) => toggled(prev, id))} />}
+    </PickStep>
+    <Footer>
+      <Button size="lg" testId="account-cancel" variant="ghost" onClick={close}>Cancel</Button>
+      <Button size="lg" testId="account-start" variant="primary" disabled={!ready} onClick={go}>{kind && !several && !remote && supportsBrowserLogin(kind) ? 'Continue in browser' : 'Continue'}</Button>
+    </Footer>
+    <CloseX onClose={close} />
+  </Dialog>
+}
 
-  // Success step values, prefilled from the daemon's suggestion.
-  const usedColors = useMemo(() => accounts.map((a) => a.color), [accounts])
-  const defaults = useMemo(() => (login && login.phase === 'signed_in' ? successDefaults(login, usedColors) : null), [login, usedColors])
-  const [name, setName] = useState<string | null>(null)
-  const [color, setColor] = useState<AccountColor | null>(null)
-  const [makeDefault, setMakeDefault] = useState(false)
+const toggled = (set: ReadonlySet<string>, id: string) => { const next = new Set(set); if (next.has(id)) next.delete(id); else next.add(id); return next }
+
+export function MachineChecks({ rows, unticked, onToggle }: { rows: readonly { machine: Pick<MachineAccounts, 'machineId' | 'name'>; blocker: string | null }[]; unticked: ReadonlySet<string>; onToggle: (machineId: string) => void }) {
+  const t = useTheme()
+  return <div testId="account-machines" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+    <FieldLabel>Machines</FieldLabel>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 180, overflowY: 'scroll', marginLeft: -8, marginRight: -8 }}>
+      {rows.map(({ machine, blocker }) => {
+        const checked = !blocker && !unticked.has(machine.machineId)
+        const toggle = () => { if (!blocker) onToggle(machine.machineId) }
+        return <div key={machine.machineId} testId={`account-machine-${machine.machineId}`} role="checkbox" aria-checked={checked} aria-disabled={!!blocker || undefined} aria-label={machine.name} tabIndex={blocker ? -1 : 0} onClick={toggle} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') toggle() }}
+          style={{ display: 'flex', alignItems: 'center', gap: 10, height: 32, paddingLeft: 8, paddingRight: 8, borderRadius: 8, cursor: blocker ? 'default' : 'pointer', ...(blocker ? {} : { hover: { backgroundColor: t.hover } }) }}>
+          <Checkbox checked={checked} disabled={!!blocker} aria-label={machine.name} style={{ pointerEvents: 'none' }} />
+          <Label color={blocker ? t.textTertiary : t.text} size={14} lineHeight={21} truncate style={{ flexGrow: 1 }}>{machine.name}</Label>
+          {blocker && <Label color={t.textTertiary} size={13} lineHeight={19.5}>{blocker}</Label>}
+        </div>
+      })}
+    </div>
+  </div>
+}
+
+// ── The queue ────────────────────────────────────────────────────────────────
+
+/** Esc, the close button and the backdrop all arrive at the step on screen, which cancels or saves its sign-in. */
+type Dismiss = { current: () => void }
+
+function QueueDialog({ initial, view, close }: { initial: SignInItem[]; view: UnifiedView; close: () => void }) {
+  const [queue, setQueue] = useState(() => startQueue(initial))
+  const dismissStep = useRef<() => void>(() => {})
+  const closed = useRef(false)
+  const dismiss = () => {
+    if (closed.current) return
+    closed.current = true
+    dismissStep.current()
+    close()
+  }
+  const item = resolvedItem(queue)
+  const result = (outcome: ItemResult, settled?: Settled) => setQueue((current) => advance(current, outcome, settled))
+  // Nothing was signed in and nothing to report: leave.
+  const nothing = !item && Object.values(queue.results).every((r) => r === 'skipped')
+  useEffect(() => { if (nothing) dismiss() }, [nothing])
+  return <Dialog onClose={dismiss} width={448} testId="add-account">
+    {queue.items.length > 1 && <Progress queue={queue} />}
+    {item
+      ? <SignInStep key={item.id} item={item} view={view} multiple={queue.items.length > 1} onResult={result} dismiss={dismissStep} close={() => { closed.current = true; close() }} />
+      : !nothing && <Summary queue={queue} view={view} dismiss={dismissStep} close={dismiss} />}
+    <CloseX onClose={dismiss} />
+  </Dialog>
+}
+
+/** What each step is called in the progress strip: the machine, or the account when one machine gets several. */
+const stepName = (items: readonly SignInItem[], item: SignInItem) =>
+  items.every((other) => other.machineId === item.machineId) ? item.name ?? item.email ?? PROVIDER_NAMES[item.kind] ?? item.kind : item.machine
+
+const RESULT_WORDS: Record<ItemResult, string> = { signed_in: 'Signed in', already: 'Already signed in', borrowed: 'Signed in', skipped: 'Skipped', failed: 'Not signed in' }
+
+function Progress({ queue }: { queue: QueueState }) {
+  const t = useTheme()
+  const c = useControls()
+  return <div testId="account-progress" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingLeft: 16, paddingRight: 48, paddingTop: 14 }}>
+    {queue.items.map((item, index) => {
+      const done = queue.results[item.id]
+      const current = index === queue.index
+      const ok = done && done !== 'skipped' && done !== 'failed'
+      return <StatusChip key={item.id} testId={`account-progress-${index}`} tone={ok ? 'success' : 'neutral'}
+        lead={ok ? <Icon source={N.check} size={14} color={t.v('--success')} /> : current ? <div style={{ width: 14, height: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: c.accent }} /></div> : undefined}>
+        {stepName(queue.items, item)}
+      </StatusChip>
+    })}
+  </div>
+}
+
+function SignInStep({ item, view, multiple, onResult, dismiss, close }: { item: SignInItem; view: UnifiedView; multiple: boolean; onResult: (result: ItemResult, settled?: Settled) => void; dismiss: Dismiss; close: () => void }) {
+  const t = useTheme()
+  const providers = useNav((s) => s.providers)
+  const legacyDaemon = useAccountsLegacy()
+  const [client] = useState(() => { try { return clientOf(item.machineId) } catch { return null } })
+  const computer = computerId()
+  const machine = view.machines.find((m) => m.machineId === item.machineId)
+  const kind = item.kind
+  const remote = item.machineId !== computer
+  // "Authorize only": this computer's daemon catches the redirect for the other machine. A code is the fallback.
+  const [handoff, setHandoff] = useState(() => remote && !item.ownLogin && canHandoff(kind, computer ? featuresOf(getClient()) : null, machine?.features ?? []))
+  const api = useAccountLogin(client, { openPage: !handoff })
+  const apiRef = useRef(api)
+  useEffect(() => { apiRef.current = api })
+  const { login, failure } = api
+  const local = item.machineId === view.primaryId
+  const legacy = local && legacyDaemon
+  const environment = activeEnvironment()
+  const transport: 'SSH' | 'Tailscale' = local && !environment.local && profileById(environment.id).ssh ? 'SSH' : 'Tailscale'
+  const accounts = machine?.accounts ?? []
+  const agent = agentName(providers, kind)
+  const reauth = !!item.instance && item.instance !== 'default'
+  const antigravityNamed = kind === 'antigravity' && (!!item.named || reauth)
+  /** The agent's own login (the terminal login, this computer's `agy`, Grok Build): there is nothing to name or finish. */
+  const own = !!item.ownLogin || item.instance === 'default' || kind === 'grok-build'
+  const target = reauth ? accountFor(accounts, kind, item.instance) : undefined
+  const [method, setMethod] = useState(item.method)
+  const targetName = item.name ?? (reauth ? accountDisplayName(item.instance, target?.name) : agent)
+  const [borrowError, setBorrowError] = useState<string | null>(null)
   const [finishError, setFinishError] = useState<string | null>(null)
-  const [finishing, setFinishing] = useState(false)
+  const [otherEmail, setOtherEmail] = useState<string | null>(null)
   const [code, setCode] = useState('')
   const [codeShown, setCodeShown] = useState(false)
   // A code is single use: each refusal clears the field, like the desktop's remounted input.
   useEffect(() => { setCode('') }, [api.wrongCodes])
-  const shownName = name ?? defaults?.name ?? ''
-  const shownColor = color ?? defaults?.color ?? 'blue'
-  const namedCount = accounts.filter((a) => a.provider.instance !== 'default').length
-  const providerSettings = kind ? settings?.providers[kind] : undefined
-  const forcedDefault = namedCount === 0 && !providerSettings?.default_account
-  const defaultOn = forcedDefault || makeDefault
 
-  const step: SheetStep | null = failure ? 'error' : api.legacyTerminal ? 'terminal' : (instance || directSingle || named) && !login ? null : stepFor(login)
-  const verifying = login?.phase === 'verifying'
-  const modeFor = (k: ProviderKind): AccountLoginMode => (k === 'antigravity' && antigravityNamed ? 'paste' : initialLoginMode(k, remote))
-
-  const begin = async (patch: { mode?: AccountLoginMode } = {}) => {
-    if (!kind) return
-    const mode = patch.mode ?? modeFor(kind)
-    if (reauth && legacy) { await api.signInLegacy({ kind, instance: reauthInstance! }); return }
-    // `named` keeps a new Antigravity account apart from this computer's own login, in a terminal too.
-    const newNamed = !reauth && kind === 'antigravity' && antigravityNamed
-    await api.start({ kind, mode, ...(reauth ? { instance: reauthInstance } : {}), ...(newNamed ? { named: true } : {}), ...(!reauth && !single && folder.trim() ? { directory: folder.trim() } : {}) })
+  const startLogin = async (patch: { mode?: AccountLoginMode } = {}) => {
+    setFinishError(null); setOtherEmail(null)
+    const mode = patch.mode ?? loginModeFor(item, remote, handoff)
+    if (reauth && legacy) { await api.signInLegacy({ kind, instance: item.instance! }); return }
+    await api.start({
+      kind,
+      mode,
+      // This computer's own `agy` login has no instance: a start for Antigravity without one signs the machine in.
+      ...(item.instance && !item.ownLogin ? { instance: item.instance } : {}),
+      // `named` keeps a new Antigravity account apart from the computer's own login, in a terminal too.
+      ...(!reauth && antigravityNamed ? { named: true } : {}),
+      ...(!reauth && !own && item.directory ? { directory: item.directory } : {}),
+    })
   }
+  const startBorrow = () => { setBorrowError(null); void borrow(view, item).then(() => onResult('borrowed', { email: item.email }), (error) => setBorrowError(problemLine(error, { action: `use ${item.lender?.machine}’s sign-in` }))) }
 
-  // Signing in again (or opened directly for a single-account agent) starts straight away, with no pick step.
   const started = useRef(false)
   useEffect(() => {
-    if (!(reauth || directSingle || named) || !kind || started.current) return
+    if (started.current || !client) return
     started.current = true
-    void begin()
+    if (method === 'borrow') startBorrow()
+    else void startLogin()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-  useEffect(() => { if ((instance || directSingle || named) && provider && !kind) setKind(provider) }, [instance, provider, kind, directSingle, named])
 
-  const finish = async (): Promise<boolean> => {
-    const client = getClient()
-    if (!login || !kind || !client) return false
-    setFinishing(true)
-    setFinishError(null)
-    try {
-      const result = await client.call('providers.accounts.login.finish', { id: login.id, name: shownName.trim(), color: shownColor, make_default: defaultOn })
-      await refreshAccounts()
-      flashAccount(result.kind, result.instance)
-      toast.success(`${shownName.trim()} added`)
-      return true
-    } catch (error) {
-      // Daemon errors already say what to do next (the name check says "Enter a name…").
-      setFinishError(problemLine(error, { action: 'save the account' }))
-      return false
-    } finally {
-      setFinishing(false)
+  /** The values a finished new sign-in is saved with. */
+  const finishValues = (done: AccountLogin) => {
+    const suggested = successDefaults(done, accounts.filter((a) => a.provider.kind === kind).map((a) => a.color))
+    const name = item.name?.trim() || done.identity?.email || suggested.name
+    const color = item.color ?? suggested.color ?? nextFreeColor(accounts.map((a) => a.color))
+    // The first account a machine can use becomes its default there; otherwise the default stays as it is.
+    const first = !accounts.some((a) => a.provider.kind === kind && a.status === 'signed_in')
+    return { name, color, make_default: first }
+  }
+  // `handled`: the finished sign-in was looked at; `kept`: it is saved (or being saved), so closing leaves it.
+  const handled = useRef<string | null>(null)
+  const kept = useRef(false)
+  const save = async (finished: AccountLogin) => {
+    const values = finishValues(finished)
+    const result = await client!.call('providers.accounts.login.finish', { id: finished.id, ...values })
+    if (local) flashAccount(result.kind, result.instance)
+    return values
+  }
+  /** Read the signed-in machine again (and the offers, which the sign-in may have answered). */
+  const reread = async () => { void refreshOfferInputs(); await (local ? refreshAccounts({ probe: true }) : readMachine(item.machineId, { probe: true })) }
+  /** Nothing to save: the agent's own login, or an account signed in again. */
+  const alreadySaved = (finished: AccountLogin) => own || !!finished.instance
+  const settle = async (finished: AccountLogin) => {
+    const email = finished.identity?.email
+    if (finished.duplicate_of && !reauth) return onResult('already', { email })
+    kept.current = true
+    if (!reauth && !alreadySaved(finished)) {
+      try {
+        const values = await save(finished)
+        void reread()
+        return onResult('signed_in', { email, name: values.name, color: values.color })
+      } catch (error) {
+        kept.current = false
+        // Daemon errors already say what to do next (the name check says "Enter a name…").
+        return setFinishError(problemLine(error, { action: 'save the account' }))
+      }
     }
+    void reread()
+    onResult('signed_in', { email, name: item.name, color: item.color })
   }
 
-  // Esc, the close button and the backdrop all arrive here. A sign-in that is still running is
-  // canceled; one that already succeeded is saved, because signing in counted as consent.
-  const stateRef = useRef({ login, shownName, shownColor, defaultOn })
-  useEffect(() => { stateRef.current = { login, shownName, shownColor, defaultOn } })
-  const dismissed = useRef(false)
-  const dismiss = () => {
-    if (dismissed.current) return
-    dismissed.current = true
-    const current = stateRef.current
-    const client = getClient()
-    if (single) {
-      // This computer's own Antigravity sign-in is already saved by `agy`; there is nothing to name or finish.
-      if (current.login?.phase === 'signed_in') void refreshAccounts()
-      else void apiRef.current.cancel()
-    } else if (client && shouldFinishOnClose(current.login) && current.login && isNameValid(current.shownName)) {
-      const label = current.shownName.trim()
-      void client.call('providers.accounts.login.finish', { id: current.login.id, name: label, color: current.shownColor, make_default: current.defaultOn }).then(
-        async (result) => { await refreshAccounts(); flashAccount(result.kind, result.instance); toast.success(`${label} added`) },
-        (error) => toastProblem(error, { action: `add ${label}`, goal: `add ${label}` }),
-      )
-    } else {
-      void apiRef.current.cancel()
-      if (current.login?.phase === 'signed_in' && current.login.instance) void refreshAccounts()
-    }
-    close()
-  }
-  // Unmounting from outside (an environment switch) still cancels a running sign-in.
-  useEffect(() => () => { if (!dismissed.current) void apiRef.current.cancel() }, [])
+  useEffect(() => {
+    if (login?.phase !== 'signed_in' || handled.current === login.id) return
+    handled.current = login.id
+    // The browser was signed in to someone else: ask before saving it as this account.
+    const other = mismatch({ email: item.email ?? (reauth ? login.previous_email : undefined) }, login)
+    if (other && !(login.duplicate_of && !reauth)) setOtherEmail(other)
+    else void settle(login)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [login?.phase, login?.id])
 
   // An older daemon has no login record: its sign-in ends when the terminal's process exits.
   const legacyId = api.legacyTerminal?.id
   useEffect(() => {
-    const client = getClient()
     if (!legacyId || !client) return
-    return client.onNotification('terminal.exited', (params) => { if ((params as { terminal_id?: string }).terminal_id === legacyId) { void refreshAccounts(); dismiss() } })
+    return client.onNotification('terminal.exited', (params) => { if ((params as { terminal_id?: string }).terminal_id === legacyId) { void reread(); onResult('signed_in') } })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [legacyId])
-  const showTerminal = () => void api.restart({ mode: 'terminal' })
-  const tryAgain = () => (reauth && legacy ? begin() : api.retry())
 
-  // A daemon from before named Antigravity accounts can only sign this computer in.
-  const namedSupported = !!getClient()?.info?.features?.includes(ANTIGRAVITY_ACCOUNTS_FEATURE)
-  const blocked = antigravityAccountsBlocked(allAccounts, legacy, namedSupported, host)
-  const pickerOptions = useMemo(() => accountPickerOptions(providers, blocked), [providers, blocked])
-  const selectedOption = kind ? pickerOptions.find((p) => p.kind === kind) : undefined
-  const startPicked = () => {
-    if (kind === 'antigravity') {
-      requestAntigravitySignIn(() => showDialog({ kind: 'account', provider: 'antigravity', ...(antigravityNamed ? { named: true } : {}) }))
-      return
-    }
-    void begin()
+  // Closing cancels a running sign-in; one that already succeeded is saved, because signing in counted as consent.
+  const leaving = useRef({ login, otherEmail })
+  useEffect(() => { leaving.current = { login, otherEmail } })
+  const abandoned = useRef(false)
+  const abandon = () => {
+    if (abandoned.current || kept.current) return
+    abandoned.current = true
+    const { login: current, otherEmail: other } = leaving.current
+    const finished = current?.phase === 'signed_in' ? current : null
+    if (finished && alreadySaved(finished) && !other) return
+    if (client && finished && !alreadySaved(finished) && !finished.duplicate_of && !other && handled.current !== finished.id) {
+      void save(finished).then(reread, (error) => toastProblem(error, { action: 'save the account', goal: 'save the account' }))
+    } else void apiRef.current.cancel()
   }
+  dismiss.current = abandon
+  // Unmounting from outside (a machine going away) still cancels a running sign-in.
+  useEffect(() => () => abandon(), [])
+
+  const skip = () => { abandon(); onResult('skipped') }
+  const cancel = () => { abandon(); close() }
+  const footerLead = <><Button size="lg" testId="account-cancel" variant="ghost" onClick={cancel}>Cancel</Button>{multiple && <Button size="lg" testId="account-skip" variant="ghost" onClick={skip}>Skip</Button>}</>
+
+  // The authorize page this computer's browser has open, once "Authorize" was pressed.
+  const [authorizing, setAuthorizing] = useState<string | null>(null)
+  const [asking, setAsking] = useState(false)
+  /** Handoff off, and the same sign-in again with a code to paste or enter. */
+  const useCode = () => { setHandoff(false); setAuthorizing(null); void api.restart({ mode: fallbackModeFor(kind) }) }
+  const authorize = async () => {
+    const own = computer ? getClient() : null
+    if (!own || !login) return
+    setAsking(true)
+    try {
+      const { url } = await handoffSignIn(own, { machine_id: item.machineId, login_id: login.id })
+      setAuthorizing(url)
+      await openExternal(url)
+    } catch {
+      // The port is busy here, or the sign-in moved on: a code does the same job.
+      useCode()
+    } finally { setAsking(false) }
+  }
+  // A harness that doesn't wait for a redirect after all: don't leave "Authorize" greyed out.
+  const stalled = handoff && login?.phase === 'waiting' && !!login.url && !login.handoff
+  useEffect(() => {
+    if (!stalled) return
+    const timer = setTimeout(useCode, HANDOFF_WAIT_MS)
+    return () => clearTimeout(timer)
+  }, [stalled, login?.id])
+
+  const showTerminal = () => { setHandoff(false); void api.restart({ mode: 'terminal' }) }
+  const tryAgain = () => { handled.current = null; if (method === 'borrow') startBorrow(); else if (!login || (reauth && legacy)) void startLogin(); else void api.retry() }
+  const signInInstead = () => { setMethod('sign_in'); void startLogin() }
+
+  const step: SheetStep | null = failure ? 'error' : api.legacyTerminal ? 'terminal' : stepFor(login)
+  const verifying = login?.phase === 'verifying'
+  const onMachine = item.machineId === computerId() ? '' : ` on ${item.machine}`
 
   let body: ReactNode
-  let footer: ReactNode
-  if (step === 'pick' || (!step && !reauth && !directSingle && !named)) {
-    const ready = !!selectedOption && selectedOption.available && !selectedOption.disabled
-    // omp has no account (it runs on the providers set up inside it).
-    body = <PickStep providers={pickerOptions} kind={selectedOption?.disabled ? undefined : kind} onKind={(next) => {
-      const option = pickerOptions.find((p) => p.kind === next)
-      if (option?.disabled) return
-      if (option && !option.available) { setNav({ settingsOpen: true }); close(); void import('../settings/SettingsScreen.tsx').then((m) => m.openSettingsTab('agents')); return }
-      setKind(next)
-    }} folder={folder} onFolder={setFolder} advancedOpen={advancedOpen} onAdvancedOpen={setAdvancedOpen} remote={remote} />
-    footer = <><Button size="lg" testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button><Button size="lg" testId="account-start" variant="primary" disabled={!ready || starting} onClick={startPicked}>{kind && supportsBrowserLogin(kind) && !remote ? 'Continue in browser' : 'Continue'}</Button></>
-  } else if (step === 'waiting' && login && kind) {
+  let footer: ReactNode = footerLead
+  if (!client) {
+    body = <ErrorBody title={`${item.machine} is offline`} message="Sign in there when it is back." />
+    footer = <><Button size="lg" testId="account-cancel" variant="ghost" onClick={cancel}>Cancel</Button>{multiple && <Button size="lg" testId="account-skip" variant="primary" onClick={skip}>Skip</Button>}</>
+  } else if (method === 'borrow') {
+    body = borrowError
+      ? <ErrorBody title={`Couldn’t use ${item.lender?.machine}’s sign-in`} message={borrowError} />
+      : <Body align="center" top={20}><MatrixLoader variant="orbit" dot={3} gap={2} /><Title center>{`Using ${item.lender?.machine}’s sign-in on ${item.machine}…`}</Title></Body>
+    footer = <>{footerLead}{borrowError && <><Button size="lg" testId="account-sign-in-instead" onClick={signInInstead}>Sign in instead</Button><Button size="lg" testId="account-retry" variant="primary" onClick={tryAgain}>Try again</Button></>}</>
+  } else if (otherEmail && login) {
+    body = <Body align="center" top={16} gap={8}>
+      <AccountAvatar kind={kind} size={32} />
+      <Title center>{`${item.machine} signed in as ${otherEmail}`}</Title>
+      <Desc center>{item.email ? `This sign-in is for ${item.email}.` : `${targetName} was ${login.previous_email}.`}</Desc>
+    </Body>
+    footer = <>{footerLead}<Button size="lg" testId="account-keep" onClick={() => { setOtherEmail(null); void settle(login) }}>Keep</Button><Button size="lg" testId="account-retry" variant="primary" onClick={() => { handled.current = null; setOtherEmail(null); void api.restart({}) }}>Try again</Button></>
+  } else if (finishError) {
+    body = <ErrorBody title="Couldn’t save the account" message={finishError} />
+    footer = <>{footerLead}{login && <Button size="lg" testId="account-retry" variant="primary" onClick={() => { setFinishError(null); void settle(login) }}>Try again</Button>}</>
+  } else if (handoff && login && (step === 'waiting' || step === null)) {
+    body = <Body align="center" top={20}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}><AccountAvatar kind={kind} size={32} instance={item.instance ?? 'new'} color={item.color ?? target?.color} />{authorizing && <MatrixLoader variant="orbit" dot={3} gap={2} />}</div>
+      <Title center>{authorizing ? 'Finish signing in in your browser' : `Sign in to ${agent} on ${item.machine}`}</Title>
+      {item.email && <Desc center>{item.email}</Desc>}
+      {verifying && <Checking />}
+      {!authorizing && <Button size="lg" testId="account-authorize" variant="primary" busy={asking} disabled={asking || !login.handoff} onClick={() => void authorize()}>Authorize</Button>}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, marginTop: 4 }}>
+        {authorizing && <QuietLink testId="account-reopen" onClick={() => void openExternal(authorizing).catch((e) => toastProblem(e, { action: 'open the sign-in page' }))}>Open browser again</QuietLink>}
+        <QuietLink testId="account-code-instead" onClick={useCode}>{supportsDeviceCode(kind) ? 'Use a code instead' : 'Paste code instead'}</QuietLink>
+      </div>
+    </Body>
+  } else if (step === 'waiting' && login) {
     const url = loginHost(login.url)
     const canCode = supportsPasteCode(kind) || supportsDeviceCode(kind)
     const codeMode: AccountLoginMode = supportsDeviceCode(kind) ? 'device_code' : 'paste'
     body = <Body align="center" top={20}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}><AccountAvatar kind={kind} size={32} instance={reauthInstance} color={target?.color} /><MatrixLoader variant="orbit" dot={3} gap={2} /></div>
-      <Title center>{reauth ? `Sign in again to ${targetName}` : 'Finish signing in in your browser'}</Title>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}><AccountAvatar kind={kind} size={32} instance={item.instance ?? 'new'} color={item.color ?? target?.color} /><MatrixLoader variant="orbit" dot={3} gap={2} /></div>
+      <Title center>{reauth ? `Sign in again to ${targetName}${onMachine}` : 'Finish signing in in your browser'}</Title>
       {url && <Desc center>{`We opened ${url}. Come back here when you’re done.`}</Desc>}
       {verifying && <Checking />}
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, marginTop: 4 }}>
         {login.url && <QuietLink testId="account-reopen" onClick={() => void openExternal(login.url!).catch((e) => toastProblem(e, { action: 'open the sign-in page' }))}>Open browser again</QuietLink>}
-        {canCode && !reauth && <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Quiet>Browser on another device?</Quiet><QuietLink testId="account-code-instead" onClick={() => void api.restart({ mode: codeMode })}>{supportsDeviceCode(kind) ? 'Use a code instead' : 'Paste code instead'}</QuietLink></div>}
-        {canCode && reauth && <QuietLink testId="account-code-instead" onClick={() => void api.restart({ mode: codeMode })}>{supportsDeviceCode(kind) ? 'Use a code instead' : 'Paste code instead'}</QuietLink>}
+        {canCode && <QuietLink testId="account-code-instead" onClick={() => void api.restart({ mode: codeMode })}>{supportsDeviceCode(kind) ? 'Use a code instead' : 'Paste code instead'}</QuietLink>}
         <QuietLink testId="account-show-terminal" onClick={showTerminal}>Having trouble? Show terminal</QuietLink>
       </div>
     </Body>
-    footer = <Button size="lg" testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button>
-  } else if (step === 'paste' && login && kind) {
+  } else if (step === 'paste' && login) {
     const sending = api.codeState === 'sending' || verifying
     const submit = () => { if (code.trim() && !sending) void api.submitCode(code) }
-    body = <PasteStep login={login} remote={remote} host={host} transport={transport} wrong={api.codeState === 'wrong'} code={code} onCode={setCode} shown={codeShown} onShown={setCodeShown} onSubmit={submit} onTerminal={showTerminal} />
-    footer = <><Button size="lg" testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button><Button size="lg" testId="account-paste-submit" variant="primary" busy={sending} disabled={sending} onClick={submit}>Sign in</Button></>
-  } else if (step === 'device' && login && kind) {
+    body = <PasteStep title={multiple || remote ? `Paste ${item.machine}’s sign-in code` : 'Paste the sign-in code'} login={login} remote={remote} host={item.machine} transport={transport} wrong={api.codeState === 'wrong'} code={code} onCode={setCode} shown={codeShown} onShown={setCodeShown} onSubmit={submit} onTerminal={showTerminal} />
+    footer = <>{footerLead}<Button size="lg" testId="account-paste-submit" variant="primary" busy={sending} disabled={sending} onClick={submit}>Sign in</Button></>
+  } else if (step === 'device' && login) {
     const url = loginHost(login.url)
     body = <Body gap={12}>
-      <Title pe>Enter this code in your browser</Title>
-      {remote && <RemoteNote host={host} transport={transport} />}
+      <Title pe>{`Enter this code to sign in${onMachine}`}</Title>
+      {remote && <RemoteNote host={item.machine} transport={transport} />}
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, paddingLeft: 16, paddingRight: 16, paddingTop: 20, paddingBottom: 20, borderWidth: 1, borderColor: t.border, borderRadius: 12 }}>
         {login.user_code ? <Label color={t.text} size={30} lineHeight={30} weight={500} font={FONT_MONO}>{login.user_code}</Label> : <div style={{ width: 192, height: 32, borderRadius: 6, backgroundColor: t.buttonSecondary }} />}
         <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 8 }}>
@@ -267,80 +480,78 @@ export function Account({ close, provider, instance, named = false }: { close: (
       {verifying && <Checking />}
       <div style={{ display: 'flex', justifyContent: 'center' }}><QuietLink testId="account-show-terminal" onClick={showTerminal}>Having trouble? Show terminal</QuietLink></div>
     </Body>
-    footer = <Button size="lg" testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button>
-  } else if (step === 'terminal' && kind) {
+  } else if (step === 'terminal') {
     const info = api.legacyTerminal ?? login?.terminal
     body = <Body gap={12}>
-      <Title>Finish in the terminal</Title>
-      <Desc>{(kind === 'antigravity' && antigravityNamed ? NAMED_ANTIGRAVITY_TERMINAL_COPY : TERMINAL_COPY[kind]) ?? `Follow ${agent}’s prompts below. Kybern checks the sign-in when it finishes.`}</Desc>
-      {legacy && <Label color={t.textSecondary} size={13} lineHeight={19.5}>{`Update Kybern on ${host} to sign in from the browser.`}</Label>}
+      <Title pe>{`Finish in the terminal${onMachine}`}</Title>
+      <Desc>{(antigravityNamed ? NAMED_ANTIGRAVITY_TERMINAL_COPY : TERMINAL_COPY[kind]) ?? `Follow ${agent}’s prompts below. Kybern checks the sign-in when it finishes.`}</Desc>
+      {legacy && <Label color={t.textSecondary} size={13} lineHeight={19.5}>{`Update Kybern on ${item.machine} to sign in from the browser.`}</Label>}
       <div testId="account-terminal" style={{ display: 'flex', flexDirection: 'column', height: 256, minWidth: 0, borderWidth: 1, borderColor: t.border, borderRadius: 8, overflow: 'hidden' }}>
-        {info ? <TerminalScreen key={info.id} info={info} width={382} /> : <div style={{ flexGrow: 1, backgroundColor: t.buttonSecondary }} />}
+        {info ? <TerminalScreen key={info.id} info={info} width={382} {...(local ? {} : { machineId: item.machineId })} /> : <div style={{ flexGrow: 1, backgroundColor: t.buttonSecondary }} />}
       </div>
       {verifying && <Checking />}
     </Body>
-    footer = <Button size="lg" testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button>
-  } else if (step === 'success' && login && kind) {
-    const email = login.identity?.email
-    const meta = [[agent, login.identity?.plan].filter(Boolean).join(' '), login.identity?.organization].filter(Boolean).join(' · ')
-    const emailChanged = reauth && !!login.previous_email && !!email && login.previous_email.toLowerCase() !== email.toLowerCase()
-    body = <Body gap={16}>
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, paddingTop: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, borderRadius: 20, backgroundColor: t.v('--success') + '1f' }}><SuccessCheck testId="account-success-check" size={20} color={t.v('--success')} /></div>
-        <Title center>{email ? `Signed in as ${email}` : 'Signed in'}</Title>
-        {meta && <Desc center>{meta}</Desc>}
-        {emailChanged && <Label color={t.textSecondary} size={13} lineHeight={19.5} style={{ textAlign: 'center' }}>{`${targetName} was ${login.previous_email}. It now uses ${email}.`}</Label>}
-      </div>
-      {!reauth && !single && <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <Label color={t.text} size={14} lineHeight={21} weight={500}>Name</Label>
-          <TextField testId="account-name" label="Name" size="lg" invalid={!isNameValid(shownName)} value={shownName} onChange={(value) => setName(value)} width="100%" onSubmit={() => { if (isNameValid(shownName)) void finish().then((ok) => { if (ok) { dismissed.current = true; close() } }) }} />
-          {!isNameValid(shownName) && <Label color={t.v('--destructive')} size={13} lineHeight={19.5}>Enter a name up to 120 characters.</Label>}
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <Label color={t.text} size={14} lineHeight={21} weight={500}>Color</Label>
-          <ColorSwatches value={shownColor} onChange={setColor} />
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-          <Label color={t.text} size={14} lineHeight={21} weight={500}>{`Use as default for ${agent}`}</Label>
-          <Switch testId="account-default" aria-label={`Use as default for ${agent}`} checked={defaultOn} disabled={forcedDefault} onCheckedChange={setMakeDefault} />
-        </div>
-        {forcedDefault && <Label color={t.textSecondary} size={13} lineHeight={19.5} style={{ marginTop: -10 }}>Your first added account becomes the default. You can switch back to the CLI account in Settings › Accounts.</Label>}
-      </div>}
-      {finishError && <Label color={t.v('--destructive')} size={13} lineHeight={19.5}>{finishError}</Label>}
-    </Body>
-    footer = reauth || single
-      ? <Button size="lg" testId="account-done" variant="primary" onClick={() => { void refreshAccounts(); dismissed.current = true; close() }}>Done</Button>
-      : <Button size="lg" testId="account-finish" variant="primary" disabled={!isNameValid(shownName) || finishing} onClick={() => void finish().then((ok) => { if (ok) { dismissed.current = true; close() } })}>Add account</Button>
-  } else if (step === 'duplicate' && login && kind) {
+  } else if (step === 'duplicate' && login) {
     const existing = accountFor(accounts, kind, login.duplicate_of)
     const isCli = login.duplicate_of === 'default'
     const existingName = accountDisplayName(login.duplicate_of, existing?.name)
     body = <Body align="center" top={16} gap={8}>
       <AccountAvatar kind={kind} size={32} instance={login.duplicate_of} color={existing?.color} />
-      <Title center>{`Already added as ${existingName}`}</Title>
-      <Desc center>{isCli ? `This is the account your ${agent} CLI already uses.` : `${login.identity?.email ?? 'This email'} is ${agent}’s ${existingName} account.`}</Desc>
+      <Title center>{isCli ? `Already signed in on ${item.machine}` : `Already added as ${existingName}`}</Title>
+      <Desc center>{isCli ? `This is the account your ${agent} terminal login uses.` : `${login.identity?.email ?? 'This email'} is ${agent}’s ${existingName} account.`}</Desc>
     </Body>
-    footer = isCli
-      ? <Button size="lg" testId="account-done" variant="primary" onClick={dismiss}>Done</Button>
-      : <><Button size="lg" testId="account-done" variant="ghost" onClick={dismiss}>Done</Button><Button size="lg" testId="account-reauth" variant="primary" onClick={() => void api.restart({ instance: login.duplicate_of, directory: undefined, upstream: undefined, mode: login.mode })}>{`Sign in again to ${existingName}`}</Button></>
   } else if (step === 'error') {
-    const message = failure ?? (login?.error && plainSentence(login.error)) ?? 'Sign-in didn’t finish. Try again, or show the terminal.'
-    body = <Body align="center" top={16} gap={8}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, borderRadius: 20, backgroundColor: t.v('--destructive') + '1a' }}><Icon source={S.circleAlert} size={20} color={t.v('--destructive')} /></div>
-      <Title>Unable to sign in</Title>
-      <Desc center testId="account-error">{message}</Desc>
-    </Body>
-    footer = <><Button size="lg" testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button>{login?.mode !== 'terminal' && kind && !legacy && <Button size="lg" testId="account-show-terminal" onClick={showTerminal}>Show terminal</Button>}<Button size="lg" testId="account-retry" variant="primary" onClick={() => void tryAgain()}>Try again</Button></>
+    const message = failure ?? (login?.error && plainSentence(login.error)) ?? 'Try again, or show the terminal.'
+    body = <ErrorBody title="Unable to sign in" message={message} />
+    footer = <>{footerLead}{login?.mode !== 'terminal' && !legacy && <Button size="lg" testId="account-show-terminal" onClick={showTerminal}>Show terminal</Button>}<Button size="lg" testId="account-retry" variant="primary" onClick={tryAgain}>Try again</Button></>
   } else {
-    body = <Body><Title>{single ? `Sign in to ${agent || 'Antigravity'}` : 'Add an account'}</Title><div style={{ height: 64, marginTop: 12, borderRadius: 6, backgroundColor: t.buttonSecondary }} /></Body>
-    footer = <Button size="lg" testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button>
+    body = <Body><Title pe>{`Sign in to ${agent}${onMachine}`}</Title><div style={{ height: 64, marginTop: 12, borderRadius: 6, backgroundColor: t.buttonSecondary }} /></Body>
   }
-  return <Dialog onClose={dismiss} width={448} testId="add-account">
-    <Rise key={step ?? 'none'} kind="row">{body}</Rise>
-    {footer && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, paddingLeft: 16, paddingRight: 16, paddingTop: 12, paddingBottom: 12 }}>{footer}</div>}
-    <CloseX onClose={dismiss} />
-  </Dialog>
+  return <>
+    <Rise key={`${step ?? 'none'}:${otherEmail ?? ''}:${finishError ?? borrowError ?? ''}`} kind="row">{body}</Rise>
+    <Footer>{footer}</Footer>
+  </>
+}
+
+function Summary({ queue, view, dismiss, close }: { queue: QueueState; view: UnifiedView; dismiss: Dismiss; close: () => void }) {
+  const t = useTheme()
+  const providers = useNav((s) => s.providers)
+  const items = queue.items
+  const ok = items.filter((item) => ['signed_in', 'already', 'borrowed'].includes(queue.results[item.id] ?? ''))
+  const first = items[0]!
+  const email = queue.email ?? first.email
+  const oneAccount = isOneAccount(items) || items.every((item) => item.kind === first.kind && item.email === first.email && !!first.email)
+  const account = oneAccount && email ? view.groups.find((g) => g.kind === first.kind)?.accounts.find((a) => a.email?.toLowerCase() === email.toLowerCase()) : undefined
+  const others = view.groups.find((g) => g.kind === first.kind)?.accounts.filter((a) => a.key).length ?? 0
+  // A new account on an agent that already has others can take over as the default.
+  const offerDefault = !!account && !account.isDefault && others > 1 && !first.instance && ok.length > 0
+  const [useDefault, setUseDefault] = useState(false)
+  dismiss.current = () => {}
+  const done = () => { if (offerDefault && useDefault) void makeDefault(view, account); close() }
+  useEffect(() => { void refreshAllAccounts() }, [])
+  const agent = agentName(providers, first.kind)
+  const everyOk = ok.length === items.length
+  const title = items.length === 1
+    ? (everyOk ? (email ? `Signed in as ${email}` : `${agent} is signed in`) : `${agent} isn’t signed in on ${first.machine}`)
+    : everyOk
+      ? (items.every((i) => i.machineId === first.machineId) ? `${first.machine} is set up` : `Signed in on ${items.length} machines`)
+      : `Signed in on ${ok.length} of ${items.length}`
+  return <>
+    <Rise kind="row"><Body gap={16}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, paddingTop: 8 }}>
+        {ok.length > 0 && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, borderRadius: 20, backgroundColor: t.v('--success') + '1f' }}><SuccessCheck testId="account-success-check" size={20} color={t.v('--success')} /></div>}
+        <Title center>{title}</Title>
+      </div>
+      {items.length > 1 && !everyOk && <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {items.map((item) => <div key={item.id} testId={`account-result-${item.machineId}`} style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}><Label color={t.text} size={14} lineHeight={21} truncate>{stepName(items, item)}</Label><Label color={t.textSecondary} size={13} lineHeight={21}>{RESULT_WORDS[queue.results[item.id] ?? 'skipped']}</Label></div>)}
+      </div>}
+      {offerDefault && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <Label color={t.text} size={14} lineHeight={21} weight={500}>{`Use for new ${agent} threads`}</Label>
+        <Switch testId="account-default" aria-label={`Use for new ${agent} threads`} checked={useDefault} onCheckedChange={setUseDefault} />
+      </div>}
+    </Body></Rise>
+    <Footer><Button size="lg" testId="account-done" variant="primary" onClick={done}>Done</Button></Footer>
+  </>
 }
 
 // ── Pieces ───────────────────────────────────────────────────────────────────
@@ -349,9 +560,20 @@ export function CloseX({ onClose }: { onClose: () => void }) {
   return <IconButton testId="dialog-close" icon={N.x} label="Close" size="lg" onClick={onClose} style={{ position: 'absolute', top: 8, right: 8 }} />
 }
 
+function Footer({ children }: { children: ReactNode }) {
+  return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, paddingLeft: 16, paddingRight: 16, paddingTop: 12, paddingBottom: 12 }}>{children}</div>
+}
 /** `BODY_CLASS`: `px-4 pt-4 pb-4`, gap per step. */
 function Body({ children, gap = 12, align, top }: { children: ReactNode; gap?: number; align?: 'center'; top?: number }) {
   return <div style={{ display: 'flex', flexDirection: 'column', gap, paddingLeft: 16, paddingRight: 16, paddingTop: top ?? 16, paddingBottom: 16, ...(align ? { alignItems: 'center' } : {}) }}>{children}</div>
+}
+function ErrorBody({ title, message }: { title: string; message: string }) {
+  const t = useTheme()
+  return <Body align="center" top={16} gap={8}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, borderRadius: 20, backgroundColor: t.v('--destructive') + '1a' }}><Icon source={S.circleAlert} size={20} color={t.v('--destructive')} /></div>
+    <Title center>{title}</Title>
+    <Desc center testId="account-error">{message}</Desc>
+  </Body>
 }
 function Title({ children, center, pe }: { children: ReactNode; center?: boolean; pe?: boolean }) {
   const t = useTheme()
@@ -361,9 +583,13 @@ function Desc({ children, center, testId }: { children: ReactNode; center?: bool
   const t = useTheme()
   return <div testId={testId} style={{ display: 'flex', flexDirection: 'column', ...(center ? { alignItems: 'center' } : {}) }}><Label color={t.textSecondary} size={14} lineHeight={19.25} style={center ? { textAlign: 'center' } : {}}>{children}</Label></div>
 }
-function Quiet({ children }: { children: string }) {
+function FieldLabel({ children }: { children: string }) {
   const t = useTheme()
-  return <Label color={t.textSecondary} size={13} lineHeight={19.5}>{children}</Label>
+  return <Label color={t.text} size={14} lineHeight={21} weight={500}>{children}</Label>
+}
+function ErrorLabel({ children }: { children: string }) {
+  const t = useTheme()
+  return <Label color={t.v('--destructive')} size={13} lineHeight={19.5}>{children}</Label>
 }
 function QuietLink({ children, onClick, testId }: { children: string; onClick: () => void; testId?: string }) {
   return <Button testId={testId} variant="ghost" size="sm" onClick={onClick}>{children}</Button>
@@ -382,37 +608,16 @@ function CopyButton({ text, label }: { text: string; label: string }) {
   return <Button testId="account-copy" icon={done ? N.check : S.copy} onClick={() => { void copyText(text); setDone(true) }}>{done ? 'Copied' : label}</Button>
 }
 
-function ColorSwatches({ value, onChange }: { value: AccountColor; onChange: (color: AccountColor) => void }) {
-  const t = useTheme()
-  return <div role="radiogroup" aria-label="Color" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-    {ACCOUNT_COLORS.map((color) => {
-      const selected = color === value
-      const fill = accountColor(t, color)!
-      return <div key={color} testId={`account-color-${color}`} role="radio" aria-checked={selected} aria-label={ACCOUNT_COLOR_LABELS[color]} tabIndex={selected ? 0 : -1} onClick={() => onChange(color)}
-        onKeyDown={(e) => {
-          const step = e.key === 'right' || e.key === 'down' ? 1 : e.key === 'left' || e.key === 'up' ? -1 : 0
-          if (step) onChange(ACCOUNT_COLORS[(ACCOUNT_COLORS.indexOf(color) + step + ACCOUNT_COLORS.length) % ACCOUNT_COLORS.length]!)
-          else if (e.key === 'enter' || e.key === 'space') onChange(color)
-        }}
-        style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 14, cursor: 'pointer' }}>
-        <div style={{ width: 16, height: 16, borderRadius: 8, backgroundColor: fill, pointerEvents: 'none' }} />
-        <div style={{ position: 'absolute', left: 0, top: 0, width: 28, height: 28, borderRadius: 14, borderWidth: 2, borderColor: selected ? fill : 'transparent', pointerEvents: 'none' }} />
-      </div>
-    })}
-  </div>
-}
-
-export function PickStep(props: { providers: AccountPickerOption[]; kind: ProviderKind | undefined; onKind: (kind: ProviderKind) => void; folder: string; onFolder: (value: string) => void; advancedOpen: boolean; onAdvancedOpen: (open: boolean) => void; remote: boolean }) {
+export function PickStep(props: { providers: AccountPickerOption[]; kind: ProviderKind | undefined; onKind: (kind: ProviderKind) => void; folder: string; onFolder: (value: string) => void; advancedOpen: boolean; onAdvancedOpen: (open: boolean) => void; remote: boolean; children?: ReactNode }) {
   const t = useTheme()
   const c = useControls()
   const { providers, kind, remote } = props
   const placeholder = kind === 'claude-code' ? '~/.claude-work' : kind === 'codex' ? '~/.codex-work' : `~/.${kind ?? 'agent'}-work`
   const TILE = Math.floor((448 - 32 - 16) / 3) - 2
   return <>
-    {/* `DialogHeader`: px-4 pt-4 pb-2, so the description wraps at the same width as the desktop's. */}
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 16, paddingRight: 16, paddingTop: 16, paddingBottom: 8 }}>
+    {/* `DialogHeader`: px-4 pt-4 pb-2. */}
+    <div style={{ display: 'flex', flexDirection: 'column', paddingLeft: 16, paddingRight: 16, paddingTop: 16, paddingBottom: 8 }}>
       <Title pe>Add an account</Title>
-      <Desc>Sign in with another account. Your current sign-ins stay as they are.</Desc>
     </div>
     <Body gap={16} top={4}>
       <div testId="account-provider" role="radiogroup" aria-label="Agent" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
@@ -429,11 +634,11 @@ export function PickStep(props: { providers: AccountPickerOption[]; kind: Provid
           </div>
         })}
       </div>
+      {props.children}
       {kind && kind !== 'opencode' && kind !== 'pi' && kind !== 'antigravity' && <div style={{ display: 'flex', flexDirection: 'column' }}>
         <Button testId="account-advanced" variant="ghost" size="sm" label="Advanced" trailing={<Chevron open={props.advancedOpen} size={12} color={t.textSecondary} />} onClick={() => props.onAdvancedOpen(!props.advancedOpen)} style={{ alignSelf: 'flex-start', marginLeft: -8 }}>Advanced</Button>
         {props.advancedOpen && <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 12, paddingBottom: 4 }}>
-          <Label color={t.text} size={14} lineHeight={21} weight={500}>Folder</Label>
-          <Label color={ink(t, 0.8)} size={13} lineHeight={19.5} weight={500}>Use an existing folder</Label>
+          <Label color={ink(t, 0.8)} size={13} lineHeight={19.5} weight={500}>Use an existing folder on this machine</Label>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <div style={{ flexGrow: 1, display: 'flex', minWidth: 0 }}><TextField testId="account-folder" label="Folder" size="lg" placeholder={placeholder} value={props.folder} onChange={props.onFolder} width="100%" /></div>
             {!remote && <Button testId="account-choose-folder" size="lg" onClick={() => void pickFolder().then((picked) => { if (picked) props.onFolder(picked) })}>Choose…</Button>}
@@ -445,22 +650,19 @@ export function PickStep(props: { providers: AccountPickerOption[]; kind: Provid
   </>
 }
 
-function PasteStep({ login, remote, host, transport, wrong, code, onCode, shown, onShown, onSubmit, onTerminal }: { login: { url?: string }; remote: boolean; host: string; transport: 'SSH' | 'Tailscale'; wrong: boolean; code: string; onCode: (value: string) => void; shown: boolean; onShown: (value: boolean) => void; onSubmit: () => void; onTerminal?: () => void }) {
+function PasteStep({ title, login, remote, host, transport, wrong, code, onCode, shown, onShown, onSubmit, onTerminal }: { title: string; login: { url?: string }; remote: boolean; host: string; transport: 'SSH' | 'Tailscale'; wrong: boolean; code: string; onCode: (value: string) => void; shown: boolean; onShown: (value: boolean) => void; onSubmit: () => void; onTerminal?: () => void }) {
   const t = useTheme()
   return <Body gap={12}>
-    <Title pe>Paste the sign-in code</Title>
+    <Title pe>{title}</Title>
     {remote && <RemoteNote host={host} transport={transport} />}
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      {['Open the sign-in page and approve access.', 'Copy the code the page shows.', 'Paste it below.'].map((text, index) => <div key={text} style={{ display: 'flex', gap: 8 }}><div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, flexShrink: 0, borderRadius: 9, backgroundColor: t.buttonSecondary }}><Label color={t.text} size={12} lineHeight={12} weight={500}>{String(index + 1)}</Label></div><Label color={t.textSecondary} size={14} lineHeight={18}>{text}</Label></div>)}
-    </div>
     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
       <Button testId="account-open-page" icon={S.externalLink} disabled={!login.url} onClick={() => void openExternal(login.url!)}>Open sign-in page</Button>
       {login.url && <CopyButtonGhost text={login.url} />}
     </div>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <Label color={t.text} size={14} lineHeight={21} weight={500}>Code</Label>
+      <Label color={t.text} size={14} lineHeight={21} weight={500}>Code from the page</Label>
       <TextField testId="account-code" label="Code" size="lg" secure={!shown} autoFocus={wrong} placeholder="Paste code" value={code} onChange={onCode} onSubmit={onSubmit} invalid={wrong} mono={!!code} width="100%" trailing={<IconButton testId="account-code-toggle" icon={S.eye} label="Show code" size="sm" active={shown} onClick={() => onShown(!shown)} />} />
-      {wrong && <Label color={t.v('--destructive')} size={13} lineHeight={19.5}>That code didn’t work. Open the sign-in page again and paste the new code.</Label>}
+      {wrong && <ErrorLabel>That code didn’t work. Open the sign-in page again and paste the new code.</ErrorLabel>}
     </div>
     {onTerminal && <QuietLink testId="account-show-terminal" onClick={onTerminal}>Having trouble? Show terminal</QuietLink>}
   </Body>

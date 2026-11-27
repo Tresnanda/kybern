@@ -37,7 +37,7 @@ export const TABS = [
   ['appearance', 'Appearance', 'Make Kybern feel at home on your desktop.', N.sun, 'theme light dark system translucent glass window solid opacity blur sidebar advanced content surface reset'],
   ['notifications', 'Notifications', 'Choose when Kybern gets your attention.', N.bell, 'alerts sound permission finishes fails input'],
   ['agents', 'Agent providers', 'Manage the coding agents on your connected machine.', S.terminal, 'harness install updates claude codex cursor opencode pi omp profiles sdk delegation coordinator autonomy models compaction compact idle cache auto-compact threshold'],
-  ['accounts', 'Accounts', 'Sign in to more than one account for each agent. Threads use the default unless you pick another account in the model picker.', N.users, 'login email plan default project color work personal'],
+  ['accounts', 'Accounts', 'Your accounts on every machine. New threads use each agent’s default.', N.users, 'login sign in out email plan default project color work personal machines limit switch automatically share'],
   ['integrations', 'Integrations', 'Plugins and connectors for your agents.', S.plugin, 'tools mcp skills authentication'],
   ['skills', 'Skills', 'Your skills on every machine, in the folders each agent reads. Copy one where it’s missing; nothing copies by itself.', S.skills, 'skills skill.md claude codex agents cursor opencode pi omp copy sync machines different missing replace'],
   ['plugins', 'Plugins', 'Your agents’ plugins and marketplaces across machines. Review what they bring, then choose where to install them.', S.plugin, 'plugins packages marketplaces extensions copy sync machines missing different'],

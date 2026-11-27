@@ -57,6 +57,7 @@ import { Shimmer } from './motion.tsx'
 import { agentName } from '../requests/model.ts'
 import { TurnProblem, TurnTextProblem } from './TurnProblem.tsx'
 import { silenceNotice } from '../../../../packages/kybern-client/src/silence.ts'
+import { accountNotice } from '../../../../packages/kybern-client/src/accountNotices.ts'
 import { GROUP_TREE, HEADER_STEM, WorkRows, type RowContext } from './rows.tsx'
 import { markTreeOpen, TreeGroup, TreeLines } from '../tree/Tree.tsx'
 import { filePatch, hydrateToolOutput, loadFilePatch, reportError, revertTo, interrupt, useChildThreads, useRowState, useTurnDiff, type ToolBlock } from './store.ts'
@@ -145,8 +146,9 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
   const running = !failed && (group.running || (threadRunning && isLast && !group.end))
   const tasksByToolCall = useMemo(() => tasksOf(group.work), [group.work])
   const hierarchy = useMemo(() => buildWorkHierarchy(group.work), [group.work])
-  // A context refresh lands in the turn it followed but is its own row below the turn (`Transcript.tsx`), not part of its work.
-  const roots = useMemo(() => hierarchy.roots.filter((block) => block.kind !== 'rotation'), [hierarchy])
+  // A context refresh lands in the turn it followed but is its own row below the turn (`Transcript.tsx`), not part of its work;
+  // once the turn settles, so are its account switches and waits, with their Undo and Cancel.
+  const roots = useMemo(() => hierarchy.roots.filter((block) => block.kind !== 'rotation' && (running || block.kind !== 'notice' || !accountNotice(block.data))), [hierarchy, running])
   // Launch rows open the child thread they started; look the children up only when there are launches.
   const launches = useMemo(
     () => group.work.some((b) => (b.kind === 'tool' && (isAgentLaunchBlock(b, tasksByToolCall.get(b.call.id)) || isDelegationLaunchBlock(b))) || (b.kind === 'runtime_task' && b.task.kind === 'agent')),

@@ -2,6 +2,7 @@
 // starts it, follows it (the daemon's change notification, plus a poll every second while it is
 // live, whichever arrives first), opens the browser, takes a pasted code and cancels or finishes it.
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 import { acceptLoginUpdate } from '../shared/lib/accounts.ts'
 import { ACCOUNTS_LOGIN_CHANGED_NOTIFICATION, type AccountLogin, type AccountLoginStartParams, type ProviderInstance, type TerminalInfo } from '../../../../packages/kybern-client/src/types.ts'
 import { describe } from '../problems/describe.ts'
@@ -31,8 +32,12 @@ export interface AccountLoginApi {
   signInLegacy: (provider: ProviderInstance) => Promise<void>
 }
 
-export function useAccountLogin(): AccountLoginApi {
-  const [client] = useState(() => getClient())
+/** `machine`: the client of the machine to sign in (`accounts/store.ts` `clientOf`); the window's own machine without it.
+ *  `openPage: false` keeps a browser sign-in's page closed (an "Authorize only" handoff opens the page it is given). */
+export function useAccountLogin(machine?: KybernClient | null, { openPage = true }: { openPage?: boolean } = {}): AccountLoginApi {
+  const [client] = useState(() => (machine !== undefined ? machine : getClient()))
+  const opens = useRef(openPage)
+  opens.current = openPage
   const [login, setLogin] = useState<AccountLogin | null>(null)
   const [legacyTerminal, setLegacyTerminal] = useState<TerminalInfo | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
@@ -52,7 +57,7 @@ export function useAccountLogin(): AccountLoginApi {
     loginRef.current = next
     setLogin(next)
     // The browser has to open on this machine, so the client opens the page, not the daemon.
-    if (next.mode === 'browser' && next.url && next.phase !== 'failed' && openedRef.current !== next.id) {
+    if (opens.current && next.mode === 'browser' && next.url && next.phase !== 'failed' && openedRef.current !== next.id) {
       openedRef.current = next.id
       void openExternal(next.url).catch(() => { /* "Open browser again" is on screen */ })
     }
