@@ -84,6 +84,8 @@ describe('choosing who lends', () => {
     await setSharing(client, null, undefined, 'claude-code')
     expect(calls).toEqual([
       ['login.broker.set', { machine_id: 'vps', sign_out_old: false, provider: 'codex' }],
+      // Stopping one agent reads who lends the others first (sharing.test.ts covers the pinning).
+      ['login.broker.status', {}],
       ['login.broker.set', { machine_id: null, sign_out_old: false, provider: 'claude-code' }],
     ])
     expect(supportsPerKind(['login.broker.per_kind.v1'])).toBe(true)
