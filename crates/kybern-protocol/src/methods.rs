@@ -671,6 +671,13 @@ pub struct AccountLoginHandoffResult {
     pub expires_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// `providers.accounts.login.handoff.cancel`: stop catching a sign-in's redirect on this computer and let
+/// its port go. Nothing happens when no handoff of that sign-in is listening.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AccountLoginHandoffCancelParams {
+    pub login_id: String,
+}
+
 /// `peer.accounts.login.peek`: what the machine with the browser needs to catch a sign-in's redirect.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PeerLoginPeekParams {
@@ -732,6 +739,13 @@ method!(
     Some(Scope::AccessWrite),
     AccountLoginHandoffParams,
     AccountLoginHandoffResult
+);
+method!(
+    AccountsLoginHandoffCancel,
+    "providers.accounts.login.handoff.cancel",
+    Some(Scope::AccessWrite),
+    AccountLoginHandoffCancelParams,
+    Empty
 );
 method!(PeerAccountsLoginPeek, "peer.accounts.login.peek", Some(Scope::MachineLogins), PeerLoginPeekParams, PeerLoginPeek);
 method!(
@@ -5493,6 +5507,7 @@ registry!(
     AccountsLoginCancel,
     AccountsLoginFinish,
     AccountsLoginHandoff,
+    AccountsLoginHandoffCancel,
     PeerAccountsLoginPeek,
     PeerAccountsLoginCallback,
     AccountsUpdate,

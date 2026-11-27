@@ -3133,9 +3133,13 @@ export type AccountSwitchReason = "limit" | "unavailable";
 /** A daemon that stores and syncs `Settings.accounts_shared`, sets `AccountSummary.key` / `terminal`, answers `accounts.offers`
  * and signs a signed-out terminal login in (`providers.accounts.login.start` with instance `default`). */
 export const ACCOUNTS_SHARED_FEATURE = "accounts.shared.v1";
+/** Account sign-ins and borrows need the `accounts:write` scope; a daemon from before it asks for `access:write`. */
+export const ACCOUNTS_WRITE_FEATURE = "accounts.write.v1";
 /** "Authorize only" sign-in: both daemons need it (the one on the computer with the browser, and the one being signed in). */
 export const LOGIN_HANDOFF_FEATURE = "accounts.login.handoff.v1";
 export interface LoginHandoffParams { machine_id: MachineId; login_id: string }
+/** Stop catching a sign-in's redirect on this computer and let its port go. */
+export interface LoginHandoffCancelParams { login_id: string }
 /** `url`: the authorize page to open in this computer's browser; the callback is forwarded to the other machine. */
 export interface LoginHandoffResult { url: string; expires_at: DateTime }
 /** Name, colour and "Only when I choose" of one account, the same on every machine. */
@@ -5028,6 +5032,7 @@ export interface Methods {
   "providers.accounts.login.finish": [{ id: string; name: string; color?: string | null; make_default?: boolean }, ProviderInstance];
   /** Called on the daemon of the computer with the browser. A failure (port busy, no handoff) falls back to a code. */
   "providers.accounts.login.handoff": [LoginHandoffParams, LoginHandoffResult];
+  "providers.accounts.login.handoff.cancel": [LoginHandoffCancelParams, Empty];
   "providers.accounts.update": [{ kind: ProviderKind; instance: string; name?: string | null; color?: string | null }, AccountSummary];
   /** `confirm_terminal` signs the terminal login (`default`) out; without it the daemon refuses that instance. */
   "providers.accounts.sign_out": [ProviderInstance & { confirm_terminal?: boolean }, AccountSummary];

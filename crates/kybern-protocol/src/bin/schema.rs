@@ -121,6 +121,7 @@ fn main() {
     method::<AccountsLoginCancel>(&mut methods);
     method::<AccountsLoginFinish>(&mut methods);
     method::<AccountsLoginHandoff>(&mut methods);
+    method::<AccountsLoginHandoffCancel>(&mut methods);
     method::<PeerAccountsLoginPeek>(&mut methods);
     method::<PeerAccountsLoginCallback>(&mut methods);
     method::<AccountsUpdate>(&mut methods);

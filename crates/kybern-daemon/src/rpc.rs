@@ -190,7 +190,14 @@ async fn dispatch_part_2(state: &AppState, ctx: &ConnectionCtx, method: &str, sl
         AccountsCatalog::NAME => ok(crate::provider_accounts::catalog(state, parse(params)?).await.map_err(provider_err)?),
         AccountsUsage::NAME => ok(crate::provider_accounts::usage(state, parse(params)?).await.map_err(provider_err)?),
         AccountsList::NAME => ok(crate::provider_accounts::list(state, parse_or_default(params)?).await.map_err(bad)?),
-        AccountsLoginStart::NAME => ok(state.account_logins.start(state, parse(params)?).await.map_err(bad)?),
+        AccountsLoginStart::NAME => {
+            let p: AccountLoginStartParams = parse(params)?;
+            // Codex listens for its browser on one fixed port: a handoff still holding it here lets go first.
+            if p.kind == ProviderKind::Codex && p.mode == AccountLoginMode::Browser {
+                crate::login_handoff::release_port(crate::login_handoff::CODEX_CALLBACK_PORT).await;
+            }
+            ok(state.account_logins.start(state, p).await.map_err(bad)?)
+        }
         AccountsLoginGet::NAME => {
             let p: AccountLoginIdParams = parse(params)?;
             let login = state.account_logins.get(&p.id).map_err(bad)?;
@@ -216,6 +223,11 @@ async fn dispatch_part_3(state: &AppState, ctx: &ConnectionCtx, method: &str, sl
         }
         AccountsLoginFinish::NAME => ok(state.account_logins.finish(state, parse(params)?).await.map_err(bad)?),
         AccountsLoginHandoff::NAME => ok(crate::login_handoff::start(state, parse(params)?).await?),
+        AccountsLoginHandoffCancel::NAME => {
+            let p: AccountLoginHandoffCancelParams = parse(params)?;
+            crate::login_handoff::cancel(&p.login_id).await;
+            ok(Empty {})
+        }
         AccountsUpdate::NAME => ok(crate::provider_accounts::update(state, parse(params)?).await.map_err(bad)?),
         AccountsSignOut::NAME => ok(crate::provider_accounts::sign_out(state, parse(params)?).await.map_err(bad)?),
         AccountsOffers::NAME => ok(crate::accounts_offers::offers(state)),

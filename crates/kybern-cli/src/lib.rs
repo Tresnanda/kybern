@@ -1025,6 +1025,11 @@ enum AccountsCmd {
         /// The login's id (from `accounts login` on that machine).
         login: String,
     },
+    /// Stop catching a sign-in's browser redirect here and let its port go.
+    HandoffCancel {
+        /// The login's id, as given to `accounts handoff`.
+        login: String,
+    },
     Remove {
         #[arg(long)]
         provider: ProviderKind,
@@ -1834,6 +1839,10 @@ pub async fn run() -> Result<()> {
                 let handoff =
                     client.call::<AccountsLoginHandoff>(AccountLoginHandoffParams { machine_id: machine, login_id: login }).await?;
                 println!("{}", serde_json::to_string_pretty(&handoff)?);
+            }
+            AccountsCmd::HandoffCancel { login } => {
+                client.call::<AccountsLoginHandoffCancel>(AccountLoginHandoffCancelParams { login_id: login }).await?;
+                println!("{}", serde_json::to_string(&Empty {})?);
             }
             AccountsCmd::Remove { provider, account } => {
                 client.call::<AccountsRemove>(ProviderInstance { kind: provider, instance: account }).await?;
