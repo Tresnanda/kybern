@@ -195,9 +195,11 @@ impl AgyAcp {
     }
 }
 
-/// `agy acp`'s arguments.
-pub(crate) fn launch_args(log_file: &Path) -> Vec<std::ffi::OsString> {
-    vec!["acp".into(), "--log-file".into(), log_file.into()]
+/// `agy acp`'s arguments: a named account's profile goes in `--gemini-dir`.
+pub(crate) fn launch_args(log_file: &Path, env: &BTreeMap<String, String>) -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = vec!["acp".into(), "--log-file".into(), log_file.into()];
+    args.extend(super::account::acp_args(env));
+    args
 }
 
 impl AcpFlavor for AgyAcp {
@@ -222,19 +224,21 @@ impl AcpFlavor for AgyAcp {
     const ENDS_WITH_PROCESS: bool = true;
 
     fn command(&self, bin: &Path, config: &SessionConfig) -> Command {
+        let env: BTreeMap<String, String> = config.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         let mut command = crate::binary::command(bin).no_window();
-        command.args(launch_args(&self.scratch.log_file()));
+        command.args(launch_args(&self.scratch.log_file(), &env));
         for (key, value) in &config.env {
             if key != BRIDGE_URL && key != BRIDGE_AUTHORIZATION {
                 command.env(key, value);
             }
         }
+        super::account::session_home(&mut command, &env);
         // The bridge process agy starts inherits these; without them it serves no tools.
         command.env_remove(BRIDGE_URL).env_remove(BRIDGE_AUTHORIZATION);
         for (key, value) in &self.bridge_env {
             command.env(key, value);
         }
-        crate::no_browser::quiet(&mut command, &config.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
+        crate::no_browser::quiet(&mut command, &env);
         command
     }
 
@@ -818,14 +822,49 @@ fn open_read_only(db: &Path) -> Option<rusqlite::Connection> {
 /// Whether `agy acp` starts and answers `initialize` with a protocol version: the check that picks
 /// ACP over `-p`. Nothing else is sent, so it never opens a conversation or a browser.
 pub(crate) async fn initializes(bin: &Path, env: &BTreeMap<String, String>) -> bool {
+    exchange(bin, env, |_| None, Duration::from_secs(20)).await.is_some_and(|(init, _)| init.get("protocolVersion").is_some())
+}
+
+/// Why `agy acp` didn't sign a profile out.
+#[derive(Debug, PartialEq, Eq)]
+pub enum LogoutFailure {
+    /// This agy doesn't advertise `auth.logout`.
+    Unsupported,
+    /// It didn't start, refused or didn't answer.
+    Failed,
+}
+
+/// Signs the profile in `env` out through ACP's `logout`, as T3 Code does: `agy acp` on the profile,
+/// `initialize`, and `logout` only when `initialize` advertises `auth.logout`. agy removes the login
+/// file (agy 1.5.17). Nothing else is sent.
+pub(crate) async fn logout(bin: &Path, env: &BTreeMap<String, String>) -> std::result::Result<(), LogoutFailure> {
+    let offered = |init: &Value| init.pointer("/agentCapabilities/auth/logout").is_some();
+    let (init, reply) = exchange(bin, env, |init| offered(init).then(|| ("logout", json!({}))), Duration::from_secs(60))
+        .await
+        .ok_or(LogoutFailure::Failed)?;
+    if !offered(&init) {
+        return Err(LogoutFailure::Unsupported);
+    }
+    match reply {
+        Some(reply) if reply.get("error").is_none() => Ok(()),
+        _ => Err(LogoutFailure::Failed),
+    }
+}
+
+/// Starts `agy acp` with `env` and sends `initialize`; then, when `next` picks one from its result,
+/// one more request. Returns `initialize`'s result and that request's whole reply, or `None` when agy
+/// didn't start or answer within `limit`. The process ends with the call.
+async fn exchange(
+    bin: &Path,
+    env: &BTreeMap<String, String>,
+    next: impl FnOnce(&Value) -> Option<(&'static str, Value)>,
+    limit: Duration,
+) -> Option<(Value, Option<Value>)> {
     use tokio::io::AsyncWriteExt;
-    let scratch = match Scratch::new() {
-        Ok(scratch) => scratch,
-        Err(_) => return false,
-    };
+    let scratch = Scratch::new().ok()?;
     let mut command = crate::binary::command(bin).no_window();
     command
-        .args(launch_args(&scratch.log_file()))
+        .args(launch_args(&scratch.log_file(), env))
         .envs(env)
         .current_dir(scratch.0.as_path())
         .stdin(std::process::Stdio::piped())
@@ -835,9 +874,9 @@ pub(crate) async fn initializes(bin: &Path, env: &BTreeMap<String, String>) -> b
     crate::no_browser::quiet(&mut command, env);
     #[cfg(unix)]
     command.process_group(0);
-    let Ok(mut child) = command.spawn() else { return false };
+    let mut child = command.spawn().ok()?;
     let tree = child.id().map(crate::process_tree::ProcessTree::new);
-    let check = async {
+    let talk = async {
         let mut stdin = child.stdin.take()?;
         let stdout = child.stdout.take()?;
         let request = json!({
@@ -847,18 +886,32 @@ pub(crate) async fn initializes(bin: &Path, env: &BTreeMap<String, String>) -> b
         stdin.write_all(format!("{request}\n").as_bytes()).await.ok()?;
         stdin.flush().await.ok()?;
         let mut lines = tokio::io::AsyncBufReadExt::lines(tokio::io::BufReader::new(stdout));
+        let mut init = None;
+        let mut next = Some(next);
         while let Ok(Some(line)) = lines.next_line().await {
             let Ok(message) = serde_json::from_str::<Value>(&line) else { continue };
-            if message.get("id") == Some(&json!(1)) {
-                return Some(message.pointer("/result/protocolVersion").is_some());
+            if message.get("method").is_some() {
+                continue;
+            }
+            if init.is_none() && message.get("id") == Some(&json!(1)) {
+                let result = message.get("result").cloned().unwrap_or(Value::Null);
+                let Some((method, params)) = next.take().and_then(|pick| pick(&result)) else { return Some((result, None)) };
+                let request = json!({ "jsonrpc": "2.0", "id": 2, "method": method, "params": params });
+                stdin.write_all(format!("{request}\n").as_bytes()).await.ok()?;
+                stdin.flush().await.ok()?;
+                init = Some(result);
+            } else if let Some(result) = &init
+                && message.get("id") == Some(&json!(2))
+            {
+                return Some((result.clone(), Some(message)));
             }
         }
-        None
+        init.map(|result| (result, None))
     };
-    let ok = tokio::time::timeout(Duration::from_secs(20), check).await.ok().flatten().unwrap_or(false);
+    let answer = tokio::time::timeout(limit, talk).await.ok().flatten();
     let _ = child.start_kill();
     drop(tree);
-    ok
+    answer
 }
 
 #[cfg(test)]

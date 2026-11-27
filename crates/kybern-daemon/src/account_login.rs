@@ -173,24 +173,29 @@ impl AccountLogins {
         // Grok Build signs in with `grok login` (or XAI_API_KEY) on the machine itself. Kybern has no
         // status probe for that login yet, so it cannot tell a finished sign-in from a failed one.
         ensure!(kind != ProviderKind::GrokBuild, "{}", crate::provider_accounts::GROK_BUILD_ONE_ACCOUNT);
-        // Antigravity has one login per machine and no way to isolate a second. This is the one
-        // harness where Kybern signs in the machine's own CLI login, in a visible terminal.
+        // Antigravity is the one harness where Kybern signs in the machine's own CLI login, in a
+        // visible terminal: `default`, or a new sign-in in Terminal mode that isn't `named` (what
+        // clients before named Antigravity accounts send). A named account has its own profile and
+        // signs in with `agy acp --gemini-dir … --login`, which prints Google's page and reads the code.
         let antigravity = kind == ProviderKind::Antigravity;
-        if antigravity {
+        let machine_login = antigravity
+            && (params.instance.as_deref() == Some("default")
+                || (params.instance.is_none() && params.directory.is_none() && params.mode == AccountLoginMode::Terminal && !params.named));
+        if machine_login {
             ensure!(
                 params.mode == AccountLoginMode::Terminal,
                 "Antigravity signs in from a terminal. Choose Terminal, then finish Google's sign-in there."
             );
+        } else if antigravity {
             ensure!(
-                params.directory.is_none() && params.instance.as_deref().is_none_or(|instance| instance == "default"),
-                "{}",
-                crate::provider_accounts::ANTIGRAVITY_ONE_ACCOUNT
+                matches!(params.mode, AccountLoginMode::Paste | AccountLoginMode::Terminal),
+                "Antigravity accounts sign in with the code from Google's page. Choose Paste code."
             );
         }
 
         // Where the sign-in lands.
         let (directory, created, env_instance, reauth) = match (&params.instance, &params.directory) {
-            _ if antigravity => {
+            _ if machine_login => {
                 // `agy` runs in its own empty folder, so it asks nothing about a project.
                 let scratch = data_dir.join("run").join("antigravity-login");
                 std::fs::create_dir_all(&scratch)?;
@@ -263,10 +268,22 @@ impl AccountLogins {
         } else {
             let binary = kybern_drivers::binary::resolve(kind, provider.binary.clone().map(PathBuf::from).as_ref())
                 .map_err(|_| anyhow!("{} isn't installed on {host}. Install it in Settings › Agent providers.", kind.display_name()))?;
-            let args = auth::login_args(kind, params.mode, params.upstream.as_deref()).map_err(|error| anyhow!(error.to_string()))?;
+            let args = if antigravity && !machine_login {
+                // `agy acp --gemini-dir <profile> --login`, pasted here or typed in a terminal.
+                let profile = kybern_drivers::antigravity::account::acp_args(&env);
+                std::iter::once("acp".to_string())
+                    .chain(profile.into_iter().map(|arg| arg.to_string_lossy().into_owned()))
+                    .chain(std::iter::once("--login".to_string()))
+                    .collect()
+            } else {
+                auth::login_args(kind, params.mode, params.upstream.as_deref()).map_err(|error| anyhow!(error.to_string()))?
+            };
             (Some(binary), args)
         };
 
+        if antigravity {
+            std::fs::create_dir_all(data_dir.join("run").join("antigravity-login"))?;
+        }
         let shim = install_shim(&data_dir)?;
         let url_dir = data_dir.join("run/logins");
         std::fs::create_dir_all(&url_dir)?;
@@ -288,7 +305,9 @@ impl AccountLogins {
             env,
             shim,
             url_file: url_file.clone(),
-            cwd: if antigravity { directory.clone() } else { data_dir.clone() },
+            // `agy` runs in an empty folder of its own, so it asks nothing about a project and
+            // leaves no `.gemini/skills` in an account folder.
+            cwd: if antigravity { data_dir.join("run").join("antigravity-login") } else { data_dir.clone() },
             // Claude's paste prompt is a terminal prompt; a hidden pseudo-terminal
             // is the interface it is known to accept a code through.
             hidden_pty: kind == ProviderKind::ClaudeCode && params.mode == AccountLoginMode::Paste,
@@ -308,7 +327,7 @@ impl AccountLogins {
             id: id.clone(),
             kind,
             // Signing in again is how the one default account is told apart from adding a new one.
-            instance: if antigravity { Some("default".into()) } else { params.instance.clone() },
+            instance: if machine_login { Some("default".into()) } else { params.instance.clone() },
             mode: params.mode,
             phase: if params.mode == AccountLoginMode::Terminal { AccountLoginPhase::Waiting } else { AccountLoginPhase::Starting },
             url: None,
@@ -1089,6 +1108,12 @@ async fn sign_out_folder(state: &AppState, kind: ProviderKind, folder: &Path) {
         let _ = kybern_drivers::cursor::sign_out(&ProbeContext { binary: None, ..context }).await;
         return;
     }
+    if kind == ProviderKind::Antigravity {
+        if let Ok(binary) = kybern_drivers::binary::resolve(kind, context.binary.as_ref()) {
+            let _ = kybern_drivers::antigravity::account::sign_out(&binary, &env).await;
+        }
+        return;
+    }
     let Some(args) = auth::sign_out_args(kind, None) else { return };
     let Ok(binary) = kybern_drivers::binary::resolve(kind, context.binary.as_ref()) else { return };
     let mut command = tokio::process::Command::new(binary).no_window();
@@ -1299,6 +1324,30 @@ esac
 exit 0
 "#;
 
+    /// `agy acp --gemini-dir <profile> --login`: prints Google's page, takes the code on stdin and
+    /// keeps the login as a file in the profile, only when told to stay out of the keyring.
+    const FAKE_AGY: &str = r#"#!/bin/sh
+case "$1" in
+acp)
+  [ "$2" = "--gemini-dir" ] && [ "$4" = "--login" ] || exit 3
+  [ -n "$SSH_CONNECTION" ] && [ "$AGY_ACP_FORCE_FILE_STORAGE" = "1" ] || exit 4
+  echo "Open this link in a browser to log in with Google:"
+  echo "  https://accounts.google.com/o/oauth2/auth?redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&state=S"
+  read code
+  [ "$code" = "good" ] || { echo "login cancelled"; exit 1; }
+  mkdir -p "$3/antigravity-cli"
+  printf '{"token":{"access_token":"t","expiry":"2099-01-01T00:00:00Z"},"auth_method":"oauth-personal","id_token_email":"second@arunika.co"}' > "$3/antigravity-cli/antigravity-oauth-token"
+  echo "Logged in as second@arunika.co."
+  exit 0 ;;
+models)
+  [ -f "$HOME/.gemini/antigravity-cli/antigravity-oauth-token" ] || { echo "Error: Please sign in to view available models."; exit 1; }
+  echo "Fetching available models..."
+  printf 'gemini-x\tGemini X\n'
+  exit 0 ;;
+esac
+exit 2
+"#;
+
     struct Fixture {
         state: AppState,
         root: PathBuf,
@@ -1357,11 +1406,43 @@ if ($args[0] -eq 'login') {
 exit 0
 "#,
         );
+        let agy = crate::test_support::powershell_script(
+            &bin,
+            "agy",
+            FAKE_AGY,
+            r#"
+switch ($args[0]) {
+    'acp' {
+        if ($args[1] -ne '--gemini-dir' -or $args[3] -ne '--login') { exit 3 }
+        if (!$env:SSH_CONNECTION -or $env:AGY_ACP_FORCE_FILE_STORAGE -ne '1') { exit 4 }
+        'Open this link in a browser to log in with Google:'
+        '  https://accounts.google.com/o/oauth2/auth?redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&state=S'
+        $code = [Console]::In.ReadLine()
+        if ($code -ne 'good') { 'login cancelled'; exit 1 }
+        $dir = Join-Path $args[2] 'antigravity-cli'
+        New-Item -ItemType Directory -Force $dir | Out-Null
+        [IO.File]::WriteAllText((Join-Path $dir 'antigravity-oauth-token'), '{"token":{"access_token":"t","expiry":"2099-01-01T00:00:00Z"},"auth_method":"oauth-personal","id_token_email":"second@arunika.co"}')
+        'Logged in as second@arunika.co.'
+        exit 0
+    }
+    'models' {
+        if (!(Test-Path (Join-Path $env:USERPROFILE '.gemini/antigravity-cli/antigravity-oauth-token'))) { 'Error: Please sign in to view available models.'; exit 1 }
+        'Fetching available models...'
+        "gemini-x`tGemini X"
+        exit 0
+    }
+}
+exit 2
+"#,
+        );
         let paths = crate::config::Paths::resolve(Some(root.join("data"))).unwrap();
         let state = AppState::initialize(&paths).unwrap();
         let mut settings = state.settings.get();
         settings.providers.entry(ProviderKind::ClaudeCode).or_default().binary = Some(claude.to_string_lossy().into_owned());
         settings.providers.entry(ProviderKind::Codex).or_default().binary = Some(codex.to_string_lossy().into_owned());
+        settings.providers.entry(ProviderKind::Antigravity).or_default().binary = Some(agy.to_string_lossy().into_owned());
+        // The tools entry is `agy mcp`'s, in the person's own profile; these tests leave it alone.
+        settings.antigravity.kybern_tools = false;
         state.settings.set(settings).unwrap();
         Fixture { state, root }
     }
@@ -1385,7 +1466,7 @@ exit 0
     }
 
     fn params(kind: ProviderKind, mode: AccountLoginMode) -> AccountLoginStartParams {
-        AccountLoginStartParams { kind, instance: None, mode, directory: None, upstream: None }
+        AccountLoginStartParams { kind, instance: None, mode, directory: None, upstream: None, named: false }
     }
 
     async fn wait_for(state: &AppState, id: &str, ready: impl Fn(&AccountLogin) -> bool) -> AccountLogin {
@@ -1617,6 +1698,58 @@ exit 0
         assert!(observed.url.is_none() && observed.user_code.is_none() && observed.terminal.is_none());
         assert_eq!(observed.phase, login.phase);
         state.account_logins.cancel(state, &login.id).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_second_antigravity_account_signs_in_to_its_own_profile_with_a_pasted_code() {
+        let fixture = fixture();
+        let state = &fixture.state;
+        // A named account takes the code from Google's page; a terminal is the machine's own login.
+        let error = state.account_logins.start(state, params(ProviderKind::Antigravity, AccountLoginMode::Browser)).await.unwrap_err();
+        assert!(error.to_string().contains("Paste code"), "{error}");
+
+        let login = state.account_logins.start(state, params(ProviderKind::Antigravity, AccountLoginMode::Paste)).await.unwrap();
+        assert_eq!(login.phase, AccountLoginPhase::Waiting, "{:?}", login.error);
+        assert_eq!(login.instance, None, "a new account, not the machine's login");
+        assert!(login.url.as_deref().unwrap().contains("antigravity.google"));
+        let folder = fixture.login_dir(&login);
+
+        // A code is single-use: a wrong one starts agy again for a new page.
+        state.account_logins.input(&login.id, "wrong".into()).await.unwrap();
+        let retry = wait_for(state, &login.id, |login| login.phase == AccountLoginPhase::Waiting && login.error.is_some()).await;
+        assert_eq!(retry.error.as_deref(), Some(WRONG_CODE));
+        state.account_logins.input(&login.id, "good".into()).await.unwrap();
+        let done = wait_for(state, &login.id, |login| login.phase == AccountLoginPhase::SignedIn).await;
+        assert_eq!(done.identity.unwrap().email.as_deref(), Some("second@arunika.co"));
+        assert!(folder.join(".gemini/antigravity-cli/antigravity-oauth-token").is_file(), "the login is a file in the account's profile");
+
+        let instance = state
+            .account_logins
+            .finish(state, AccountLoginFinishParams { id: login.id.clone(), name: "Second".into(), color: None, make_default: false })
+            .await
+            .unwrap();
+        let provider = state.settings.get().providers[&ProviderKind::Antigravity].clone();
+        assert_eq!(std::path::Path::new(&provider.accounts[&instance.instance].directory), folder);
+        let env = crate::provider_accounts::environment(&provider, ProviderKind::Antigravity, &instance.instance).unwrap();
+        assert_eq!(kybern_drivers::antigravity::account::account_home(&env).as_deref(), Some(folder.as_path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_named_antigravity_account_can_sign_in_from_a_terminal_and_the_computers_login_still_does() {
+        let fixture = fixture();
+        let state = &fixture.state;
+        let mut start = params(ProviderKind::Antigravity, AccountLoginMode::Terminal);
+        start.named = true;
+        let login = state.account_logins.start(state, start).await.unwrap();
+        assert_eq!(login.instance, None, "a new account, not this computer's login");
+        assert!(login.terminal.is_some());
+        assert!(fixture.login_dir(&login).is_dir(), "its own folder");
+        state.account_logins.cancel(state, &login.id).await.unwrap();
+        // Without `named`, a new sign-in in a terminal is this computer's own login, as older clients mean it.
+        let machine = state.account_logins.start(state, params(ProviderKind::Antigravity, AccountLoginMode::Terminal)).await.unwrap();
+        assert_eq!(machine.instance.as_deref(), Some("default"));
+        assert!(fixture.staging("antigravity").is_empty(), "no account folder for this computer's login");
+        let _ = state.account_logins.cancel(state, &machine.id).await;
     }
 
     #[tokio::test(flavor = "multi_thread")]

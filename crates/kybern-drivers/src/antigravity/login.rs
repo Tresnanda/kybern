@@ -172,14 +172,27 @@ fn is_user_home(home: Option<&Path>) -> bool {
     }
 }
 
+/// Whether `home` is known to be some other folder than the person's own: a named account's
+/// home, whose login is a file in its profile. The Keychain item belongs to the machine's login.
+#[cfg(target_os = "macos")]
+fn is_other_home(home: Option<&Path>) -> bool {
+    match (home, std::env::var_os("HOME").map(PathBuf::from)) {
+        (Some(home), Some(own)) => home != own,
+        _ => false,
+    }
+}
+
 /// `security`'s exit status when the keychain has no such item (`errSecItemNotFound`).
 #[cfg(target_os = "macos")]
 const SECURITY_ITEM_NOT_FOUND: i32 = 44;
 
 /// The macOS Keychain through `/usr/bin/security`, the program go-keyring itself stores the item with.
 #[cfg(target_os = "macos")]
-async fn keychain_login(_home: Option<&Path>) -> LoginRead {
+async fn keychain_login(home: Option<&Path>) -> LoginRead {
     use kybern_protocol::process::NoWindow;
+    if is_other_home(home) {
+        return LoginRead::Missing;
+    }
     if keyring_is_quiet() {
         return LoginRead::Unreadable;
     }

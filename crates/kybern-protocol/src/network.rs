@@ -88,6 +88,9 @@ pub mod features {
     /// removed it (a 403 with a `RemovalNotice` body), so one that was offline at its removal learns of it.
     /// A session request lists it in its `features` to ask for that answer.
     pub const REMOVAL_PROOF_V1: &str = "removal.proof.v1";
+    /// Antigravity takes named accounts, each with a profile of its own (`AccountLoginStartParams.named`).
+    /// A daemon feature, not a network one, so it is not part of [`ALL`].
+    pub const ANTIGRAVITY_ACCOUNTS_V1: &str = "antigravity.accounts.v1";
 
     /// Every feature the network design names, in design order.
     pub const ALL: [&str; 32] = [

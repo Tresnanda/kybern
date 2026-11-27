@@ -90,7 +90,14 @@ pub async fn login(
     upstream: Option<String>,
 ) -> Result<()> {
     let mut login = client
-        .call::<AccountsLoginStart>(AccountLoginStartParams { kind, instance: account.clone(), mode: mode.into(), directory, upstream })
+        .call::<AccountsLoginStart>(AccountLoginStartParams {
+            kind,
+            instance: account.clone(),
+            mode: mode.into(),
+            directory,
+            upstream,
+            named: false,
+        })
         .await?;
     let id = login.id.clone();
     describe(&login);

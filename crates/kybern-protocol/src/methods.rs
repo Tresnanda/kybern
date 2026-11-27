@@ -593,6 +593,11 @@ pub struct AccountLoginStartParams {
     /// omp only: upstream provider id passed to `omp login <provider>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream: Option<String>,
+    /// Antigravity only: a new named account with a profile of its own, in any mode. Without it, a new
+    /// Antigravity sign-in in Terminal mode is this computer's own login, as older clients mean it.
+    /// Daemons that list `antigravity.accounts.v1` in `daemon.info` take it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub named: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

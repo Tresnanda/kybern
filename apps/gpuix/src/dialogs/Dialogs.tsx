@@ -21,6 +21,6 @@ export function WorkspaceDialogs() {
   if (dialog?.kind === 'provision') return <ProvisionSheet key={`provision:${dialog.machineId ?? ''}:${dialog.projectId}`} projectId={dialog.projectId} {...(dialog.machineId ? { machineId: dialog.machineId } : {})} close={close} />
   if (dialog?.kind === 'antigravity-notice') return <AntigravityNotice proceed={dialog.proceed} close={close} />
   if (dialog?.kind === 'report') return <ReportProblem draft={dialog.draft} close={close} />
-  if (dialog?.kind === 'account') return <Account key={`${dialog.provider ?? ''}:${dialog.instance ?? ''}`} close={close} provider={dialog.provider} instance={dialog.instance} />
+  if (dialog?.kind === 'account') return <Account key={`${dialog.provider ?? ''}:${dialog.instance ?? ''}:${dialog.named ? 'named' : ''}`} close={close} provider={dialog.provider} instance={dialog.instance} named={dialog.named} />
   return null
 }

@@ -257,18 +257,25 @@ async fn antigravity_sessions_get_a_tool_free_guide_and_no_gateway_session() {
 }
 
 #[test]
-fn antigravity_has_one_account_per_machine() {
+fn a_named_antigravity_account_runs_on_its_own_profile_out_of_the_keyring() {
+    use kybern_drivers::antigravity::account;
     let mut provider = ProviderSettings::default();
-    provider.accounts.insert("second".into(), ProviderAccount { name: "Second".into(), directory: std::env::temp_dir().join("second").to_string_lossy().into_owned(), ..Default::default() });
-    let error = crate::provider_accounts::environment(&provider, ProviderKind::Antigravity, "second").unwrap_err();
-    assert!(error.to_string().contains("one account per machine"), "{error}");
-    // The default account is the machine's own login, with the key variable it may carry.
+    let directory = std::env::temp_dir().join("second");
+    provider.accounts.insert("second".into(), ProviderAccount { name: "Second".into(), directory: directory.to_string_lossy().into_owned(), ..Default::default() });
     provider.env.insert("GEMINI_API_KEY".into(), "key".into());
-    assert_eq!(crate::provider_accounts::environment(&provider, ProviderKind::Antigravity, "default").unwrap()["GEMINI_API_KEY"], "key");
+    let env = crate::provider_accounts::environment(&provider, ProviderKind::Antigravity, "second").unwrap();
+    assert_eq!(account::account_home(&env), Some(directory));
+    assert_eq!(env[account::FILE_STORAGE_ENV], "1");
+    assert!(!env["SSH_CONNECTION"].is_empty(), "agy keeps a login out of the keyring only over SSH");
+    assert_eq!(env["GEMINI_API_KEY"], "", "a named account never falls back to the machine's key");
+    // The default account is the machine's own login, with the key variable it may carry.
+    let default = crate::provider_accounts::environment(&provider, ProviderKind::Antigravity, "default").unwrap();
+    assert_eq!(default["GEMINI_API_KEY"], "key");
+    assert!(account::account_home(&default).is_none());
     assert_eq!(crate::provider_accounts::credential_keys(ProviderKind::Antigravity), ["GEMINI_API_KEY"]);
     let mut settings = Settings::default();
     settings.providers.insert(ProviderKind::Antigravity, provider);
-    assert!(crate::provider_accounts::validate(&settings).is_err(), "a named Antigravity account can't be saved");
+    crate::provider_accounts::validate(&settings).unwrap();
 }
 
 type RecordedSends = Arc<std::sync::Mutex<Vec<(Option<String>, String)>>>;

@@ -1,6 +1,6 @@
-// Settings › Agent providers › Antigravity (ADE-111). One account per machine, two ways in: a Gemini API key first (the provider
+// Settings › Agent providers › Antigravity (ADE-111). This computer's own login, two ways in: a Gemini API key first (the provider
 // environment `GEMINI_API_KEY`, which the daemon keeps in its secret store), then Google sign-in through `agy` in a terminal,
-// behind the one-time notice.
+// behind the one-time notice. More Google accounts are added in Settings › Accounts, each with a profile of its own.
 import { toastProblem } from '../problems/toast.ts'
 import { useState } from 'react'
 import { GEMINI_API_KEY_ENV } from '../../../../packages/kybern-client/src/antigravity.ts'

@@ -67,7 +67,7 @@ the same code.
 | # | Behaviour | Applies to | Covered today by |
 |---|-----------|------------|------------------|
 | 29 | Full access only on `-p` (`--dangerously-skip-permissions`); every other mode is refused wherever it is set, with the one sentence | `-p` | drivers `only_full_access_is_accepted_everywhere`; daemon `antigravity_threads_are_created_and_changed_only_in_full_access`, `switching_a_thread_to_antigravity_never_grants_it_full_access`, `delegation_to_antigravity_needs_a_full_access_parent_and_never_narrows`, `antigravity_rules::tests::only_antigravity_is_held_to_full_access` |
-| 30 | One Antigravity account per machine | Shared | daemon `antigravity_has_one_account_per_machine` |
+| 30 | Named accounts: each has its own profile (`agy acp --gemini-dir <account>/.gemini`, the login a file there, out of the keyring) and signs in with `agy acp --login` and a pasted code; sessions need ACP, and `-p` one-shots, `/usage` and `agy models` run with the account folder as `HOME` | ACP (sessions), shared (sign-in, limits, titles) | drivers `account::tests`, `a_named_account_runs_on_its_own_profile_and_never_on_print`; daemon `a_named_antigravity_account_runs_on_its_own_profile_out_of_the_keyring`, `a_second_antigravity_account_signs_in_to_its_own_profile_with_a_pasted_code` |
 
 ## Titles, login, quota
 

@@ -86,8 +86,18 @@ fn layout(kind: ProviderKind, env: &BTreeMap<String, String>, home: &Path) -> (P
         // Cursor already discovers skills from regular HOME; these links also
         // cover content put inside an imported isolated account directory.
         ProviderKind::Cursor => (home.join(".cursor"), skills),
-        // Kybern links nothing into `agy`'s storage.
-        ProviderKind::Antigravity => (home.join(".gemini/antigravity-cli"), vec![]),
+        // A named account's profile is `<account>/.gemini`: it shares the person's skills and
+        // global rules with `~/.gemini`, never the login, conversations or MCP servers.
+        ProviderKind::Antigravity => (
+            home.join(".gemini"),
+            vec![
+                (".gemini/config/skills", "config/skills", true),
+                (".gemini/antigravity-cli/skills", "antigravity-cli/skills", true),
+                (".gemini/config/skills.json", "config/skills.json", false),
+                (".gemini/GEMINI.md", "GEMINI.md", false),
+                (".gemini/AGENTS.md", "AGENTS.md", false),
+            ],
+        ),
         ProviderKind::GrokBuild => {
             let configured = env.get("GROK_HOME").cloned().or_else(|| std::env::var("GROK_HOME").ok());
             (kybern_drivers::binary::grok_home(Some(home), configured.as_deref()).unwrap_or_else(|| home.join(".grok")), vec![])

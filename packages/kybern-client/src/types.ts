@@ -3135,6 +3135,8 @@ export interface AccountLoginStartParams {
   mode: AccountLoginMode;
   directory?: string;
   upstream?: string;
+  /** Antigravity only: a new named account, even in Terminal mode. Needs `ANTIGRAVITY_ACCOUNTS_FEATURE`. */
+  named?: boolean;
 }
 export interface AccountLogin {
   id: string;

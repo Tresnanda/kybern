@@ -25,7 +25,8 @@ import {
 } from '../shared/lib/accounts.ts'
 import { requestAntigravitySignIn } from '../antigravity/notice.ts'
 import { showDialog } from './store.ts'
-import { accountPickerOptions, type AccountPickerOption } from './accountPicker.ts'
+import { accountPickerOptions, addsNamedAntigravityAccount, antigravityAccountsBlocked, type AccountPickerOption } from './accountPicker.ts'
+import { ANTIGRAVITY_ACCOUNTS_FEATURE } from '../../../../packages/kybern-client/src/antigravity.ts'
 import { PROVIDER_NAMES } from '../shared/lib/providerUsage.ts'
 import type { AccountLoginMode, ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
@@ -66,7 +67,10 @@ const TERMINAL_COPY: Partial<Record<ProviderKind, string>> = {
   antigravity: 'Antigravity opens your browser to finish signing in with Google. Kybern checks the sign-in when it finishes.',
 }
 
-export function Account({ close, provider, instance }: { close: () => void; provider?: ProviderKind; instance?: string }) {
+/** A named Antigravity account's terminal runs `agy acp --login`, which prints a link and reads the code back. */
+const NAMED_ANTIGRAVITY_TERMINAL_COPY = 'Open the Google link below, then paste the code from Google’s page into the terminal.'
+
+export function Account({ close, provider, instance, named = false }: { close: () => void; provider?: ProviderKind; instance?: string; named?: boolean }) {
   const t = useTheme()
   useAccountsFeed()
   const providers = useNav((s) => s.providers)
@@ -81,10 +85,13 @@ export function Account({ close, provider, instance }: { close: () => void; prov
   // Signing in again: opened for an account, or "Sign in again to Work" from the duplicate step.
   const reauthInstance = login?.instance ?? instance
   const reauth = !!reauthInstance
-  // Antigravity and Grok Build have one account per machine: no name or colour, and nothing to add.
-  const directSingle = provider === 'antigravity' || provider === 'grok-build'
-  const single = (kind ?? provider) === 'antigravity' || (kind ?? provider) === 'grok-build'
   const allAccounts = useAccounts()
+  // Antigravity's first sign-in is this computer's own `agy` login, in a terminal, with nothing to
+  // name. Each one after it is a named account with a profile of its own, signed in with a pasted code.
+  // Grok Build has one account per machine.
+  const antigravityNamed = named || (!!reauthInstance && reauthInstance !== 'default') || (!provider && addsNamedAntigravityAccount(allAccounts, legacy))
+  const directSingle = (provider === 'antigravity' && !named && !instance) || provider === 'grok-build'
+  const single = (kind ?? provider) === 'grok-build' || ((kind ?? provider) === 'antigravity' && !antigravityNamed)
   const accounts = useMemo(() => (kind ? allAccounts.filter((account) => account.provider.kind === kind) : allAccounts), [allAccounts, kind])
   const { settings } = useSettings()
   const environment = activeEnvironment()
@@ -114,26 +121,28 @@ export function Account({ close, provider, instance }: { close: () => void; prov
   const forcedDefault = namedCount === 0 && !providerSettings?.default_account
   const defaultOn = forcedDefault || makeDefault
 
-  const step: SheetStep | null = failure ? 'error' : api.legacyTerminal ? 'terminal' : (instance || directSingle) && !login ? null : stepFor(login)
+  const step: SheetStep | null = failure ? 'error' : api.legacyTerminal ? 'terminal' : (instance || directSingle || named) && !login ? null : stepFor(login)
   const verifying = login?.phase === 'verifying'
-  const modeFor = (k: ProviderKind): AccountLoginMode => initialLoginMode(k, remote)
+  const modeFor = (k: ProviderKind): AccountLoginMode => (k === 'antigravity' && antigravityNamed ? 'paste' : initialLoginMode(k, remote))
 
   const begin = async (patch: { mode?: AccountLoginMode } = {}) => {
     if (!kind) return
     const mode = patch.mode ?? modeFor(kind)
     if (reauth && legacy) { await api.signInLegacy({ kind, instance: reauthInstance! }); return }
-    await api.start({ kind, mode, ...(reauth ? { instance: reauthInstance } : {}), ...(!reauth && !single && folder.trim() ? { directory: folder.trim() } : {}) })
+    // `named` keeps a new Antigravity account apart from this computer's own login, in a terminal too.
+    const newNamed = !reauth && kind === 'antigravity' && antigravityNamed
+    await api.start({ kind, mode, ...(reauth ? { instance: reauthInstance } : {}), ...(newNamed ? { named: true } : {}), ...(!reauth && !single && folder.trim() ? { directory: folder.trim() } : {}) })
   }
 
   // Signing in again (or opened directly for a single-account agent) starts straight away, with no pick step.
   const started = useRef(false)
   useEffect(() => {
-    if (!(reauth || directSingle) || !kind || started.current) return
+    if (!(reauth || directSingle || named) || !kind || started.current) return
     started.current = true
     void begin()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-  useEffect(() => { if ((instance || directSingle) && provider && !kind) setKind(provider) }, [instance, provider, kind, directSingle])
+  useEffect(() => { if ((instance || directSingle || named) && provider && !kind) setKind(provider) }, [instance, provider, kind, directSingle, named])
 
   const finish = async (): Promise<boolean> => {
     const client = getClient()
@@ -166,7 +175,7 @@ export function Account({ close, provider, instance }: { close: () => void; prov
     const current = stateRef.current
     const client = getClient()
     if (single) {
-      // The machine's one Antigravity sign-in is already saved by `agy`; there is nothing to name or finish.
+      // This computer's own Antigravity sign-in is already saved by `agy`; there is nothing to name or finish.
       if (current.login?.phase === 'signed_in') void refreshAccounts()
       else void apiRef.current.cancel()
     } else if (client && shouldFinishOnClose(current.login) && current.login && isNameValid(current.shownName)) {
@@ -195,11 +204,14 @@ export function Account({ close, provider, instance }: { close: () => void; prov
   const showTerminal = () => void api.restart({ mode: 'terminal' })
   const tryAgain = () => (reauth && legacy ? begin() : api.retry())
 
-  const pickerOptions = useMemo(() => accountPickerOptions(providers, allAccounts, legacy), [providers, allAccounts, legacy])
+  // A daemon from before named Antigravity accounts can only sign this computer in.
+  const namedSupported = !!getClient()?.info?.features?.includes(ANTIGRAVITY_ACCOUNTS_FEATURE)
+  const blocked = antigravityAccountsBlocked(allAccounts, legacy, namedSupported, host)
+  const pickerOptions = useMemo(() => accountPickerOptions(providers, blocked), [providers, blocked])
   const selectedOption = kind ? pickerOptions.find((p) => p.kind === kind) : undefined
   const startPicked = () => {
     if (kind === 'antigravity') {
-      requestAntigravitySignIn(() => showDialog({ kind: 'account', provider: 'antigravity' }))
+      requestAntigravitySignIn(() => showDialog({ kind: 'account', provider: 'antigravity', ...(antigravityNamed ? { named: true } : {}) }))
       return
     }
     void begin()
@@ -207,9 +219,9 @@ export function Account({ close, provider, instance }: { close: () => void; prov
 
   let body: ReactNode
   let footer: ReactNode
-  if (step === 'pick' || (!step && !reauth && !directSingle)) {
+  if (step === 'pick' || (!step && !reauth && !directSingle && !named)) {
     const ready = !!selectedOption && selectedOption.available && !selectedOption.disabled
-    // omp has no account (it runs on the providers set up inside it); Antigravity is listed and disabled once signed in.
+    // omp has no account (it runs on the providers set up inside it).
     body = <PickStep providers={pickerOptions} kind={selectedOption?.disabled ? undefined : kind} onKind={(next) => {
       const option = pickerOptions.find((p) => p.kind === next)
       if (option?.disabled) return
@@ -260,7 +272,7 @@ export function Account({ close, provider, instance }: { close: () => void; prov
     const info = api.legacyTerminal ?? login?.terminal
     body = <Body gap={12}>
       <Title>Finish in the terminal</Title>
-      <Desc>{TERMINAL_COPY[kind] ?? `Follow ${agent}’s prompts below. Kybern checks the sign-in when it finishes.`}</Desc>
+      <Desc>{(kind === 'antigravity' && antigravityNamed ? NAMED_ANTIGRAVITY_TERMINAL_COPY : TERMINAL_COPY[kind]) ?? `Follow ${agent}’s prompts below. Kybern checks the sign-in when it finishes.`}</Desc>
       {legacy && <Label color={t.textSecondary} size={13} lineHeight={19.5}>{`Update Kybern on ${host} to sign in from the browser.`}</Label>}
       <div testId="account-terminal" style={{ display: 'flex', flexDirection: 'column', height: 256, minWidth: 0, borderWidth: 1, borderColor: t.border, borderRadius: 8, overflow: 'hidden' }}>
         {info ? <TerminalScreen key={info.id} info={info} width={382} /> : <div style={{ flexGrow: 1, backgroundColor: t.buttonSecondary }} />}
@@ -433,7 +445,7 @@ export function PickStep(props: { providers: AccountPickerOption[]; kind: Provid
   </>
 }
 
-function PasteStep({ login, remote, host, transport, wrong, code, onCode, shown, onShown, onSubmit, onTerminal }: { login: { url?: string }; remote: boolean; host: string; transport: 'SSH' | 'Tailscale'; wrong: boolean; code: string; onCode: (value: string) => void; shown: boolean; onShown: (value: boolean) => void; onSubmit: () => void; onTerminal: () => void }) {
+function PasteStep({ login, remote, host, transport, wrong, code, onCode, shown, onShown, onSubmit, onTerminal }: { login: { url?: string }; remote: boolean; host: string; transport: 'SSH' | 'Tailscale'; wrong: boolean; code: string; onCode: (value: string) => void; shown: boolean; onShown: (value: boolean) => void; onSubmit: () => void; onTerminal?: () => void }) {
   const t = useTheme()
   return <Body gap={12}>
     <Title pe>Paste the sign-in code</Title>
@@ -450,7 +462,7 @@ function PasteStep({ login, remote, host, transport, wrong, code, onCode, shown,
       <TextField testId="account-code" label="Code" size="lg" secure={!shown} autoFocus={wrong} placeholder="Paste code" value={code} onChange={onCode} onSubmit={onSubmit} invalid={wrong} mono={!!code} width="100%" trailing={<IconButton testId="account-code-toggle" icon={S.eye} label="Show code" size="sm" active={shown} onClick={() => onShown(!shown)} />} />
       {wrong && <Label color={t.v('--destructive')} size={13} lineHeight={19.5}>That code didn’t work. Open the sign-in page again and paste the new code.</Label>}
     </div>
-    <QuietLink testId="account-show-terminal" onClick={onTerminal}>Having trouble? Show terminal</QuietLink>
+    {onTerminal && <QuietLink testId="account-show-terminal" onClick={onTerminal}>Having trouble? Show terminal</QuietLink>}
   </Body>
 }
 function CopyButtonGhost({ text }: { text: string }) {

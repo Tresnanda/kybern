@@ -79,7 +79,11 @@ async fn dispatch_part_1(state: &AppState, ctx: &ConnectionCtx, method: &str, sl
                 started_at: state.started_at,
                 machine_id: state.environment_id.clone(),
                 network_protocol: NETWORK_PROTOCOL,
-                features: state.network.features(),
+                features: {
+                    let mut features = state.network.features();
+                    features.push(kybern_protocol::features::ANTIGRAVITY_ACCOUNTS_V1.to_string());
+                    features
+                },
             };
             ok(info)
         }

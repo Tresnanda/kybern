@@ -19,6 +19,7 @@
 //! global MCP entry (`kybern mcp-bridge`, added with `agy mcp add`) that forwards
 //! to the session's gateway; the session's endpoint and credential travel in the
 //! environment of the `agy` process, never on its command line.
+pub mod account;
 mod acp;
 mod login;
 mod stream;
@@ -105,6 +106,26 @@ pub fn acp_failed_problem() -> Problem {
         .with_subject("antigravity")
         .with_copy("Antigravity couldn't start in this permission mode", "Try again. If it keeps failing, choose Full access.")
         .with_action(ProblemAction::retry("Try again"))
+}
+
+/// The detail when a named account's session can't run on ACP: `-p` can't reach its profile.
+pub const ACCOUNT_NEEDS_ACP: &str =
+    "A named Antigravity account only runs on agy acp (agy 1.5 or later); -p would use this computer's own login.";
+
+/// A session on a named account that would fall back to `-p`, which only reaches the machine's own login.
+fn account_needs_acp_problem(state: Acp) -> Problem {
+    match state {
+        Acp::TooOld => crate::failure::update_needed_problem(ProviderKind::Antigravity, ACCOUNT_NEEDS_ACP)
+            .with_copy("Update Antigravity to use this account", "Accounts besides this computer's own login need agy 1.5 or later."),
+        Acp::Forced => Problem::new(ProblemKind::InvalidInput, ACCOUNT_NEEDS_ACP).with_subject("antigravity").with_copy(
+            "This Antigravity account can't run with print mode on",
+            "Remove KYBERN_ANTIGRAVITY_PRINT_MODE from the Antigravity environment, or use this computer's own login.",
+        ),
+        Acp::Unknown | Acp::Ready | Acp::Failed => Problem::new(ProblemKind::Internal, ACCOUNT_NEEDS_ACP)
+            .with_subject("antigravity")
+            .with_copy("Antigravity couldn't start for this account", "Try again. If it keeps failing, use this computer's own login.")
+            .with_action(ProblemAction::retry("Try again")),
+    }
 }
 
 #[derive(Default)]
@@ -244,6 +265,7 @@ impl AntigravityDriver {
         }
         let mut command = Command::new(binary).no_window();
         command.arg("models").envs(&context.env).stdin(std::process::Stdio::null());
+        account::print_home(&mut command, &context.env);
         crate::no_browser::quiet(&mut command, &context.env);
         if let Some(cwd) = context.cwd.as_deref().filter(|cwd| cwd.is_dir()) {
             command.current_dir(cwd);
@@ -322,6 +344,7 @@ impl AntigravityDriver {
 pub async fn signed_in_by_models(binary: &Path, context: &ProbeContext) -> bool {
     let mut command = Command::new(binary).no_window();
     command.arg("models").envs(&context.env).stdin(std::process::Stdio::null());
+    account::print_home(&mut command, &context.env);
     crate::no_browser::quiet(&mut command, &context.env);
     match tokio::time::timeout(MODELS_TIMEOUT, crate::process_tree::output(&mut command)).await {
         Ok(Ok(output)) if output.status.success() => !parse_models(&String::from_utf8_lossy(&output.stdout)).is_empty(),
@@ -504,6 +527,7 @@ impl AgentDriver for AntigravityDriver {
         let mut command = Command::new(&bin).no_window();
         command.current_dir(&work_dir).args(["--output-format", "stream-json", "--input-format", "stream-json", "--mode", "plan"]);
         command.arg("--log-file").arg(scratch.log_file()).arg("-p=").envs(env);
+        account::print_home(&mut command, env);
         let child = NdjsonChild::spawn(command)?;
         let mut mapper = TurnMapper::new(None);
         let run = async {
@@ -518,7 +542,7 @@ impl AgentDriver for AntigravityDriver {
         let result = tokio::time::timeout(ONE_SHOT_TIMEOUT, run).await;
         child.kill().await;
         if let Some(conversation_id) = mapper.conversation().map(str::to_string)
-            && let Some(home) = env_home(env)
+            && let Some(home) = account::agy_home(env)
         {
             let scratch_dir = work_dir.clone();
             let _ = tokio::task::spawn_blocking(move || cleanup_one_shot_conversation(&home, &conversation_id, &scratch_dir)).await;
@@ -548,7 +572,7 @@ impl AgentDriver for AntigravityDriver {
         let state = self.acp_state(&binary, &env, !full_access).await;
         self.record(state);
         if state == Acp::Ready {
-            let flavor = acp::AgyAcp::new(env_home(&env), config.native_tool_bridge.as_ref())?;
+            let flavor = acp::AgyAcp::new(account::agy_home(&env), config.native_tool_bridge.as_ref())?;
             let failed_to_start = flavor.failed_to_start.clone();
             match crate::acp::spawn(flavor, config.clone()).await {
                 Ok(session) => return Ok(session),
@@ -562,8 +586,14 @@ impl AgentDriver for AntigravityDriver {
                 }
                 Err(error) => return Err(error),
             }
+        } else if account::account_home(&env).is_some() {
+            return Err(DriverError::problem(account_needs_acp_problem(state)));
         } else if !full_access && let Some(problem) = state.refusal() {
             return Err(DriverError::problem(problem));
+        }
+        // A named account's profile only reaches a session through `agy acp --gemini-dir`.
+        if account::account_home(&env).is_some() {
+            return Err(DriverError::problem(account_needs_acp_problem(Acp::Failed)));
         }
         self.spawn_print(config, binary).await
     }

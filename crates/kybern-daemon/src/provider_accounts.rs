@@ -17,10 +17,6 @@ pub fn validate_color(color: &str) -> Result<()> {
     Ok(())
 }
 
-/// Antigravity signs in once per machine; there is nothing to isolate a second login in.
-pub const ANTIGRAVITY_ONE_ACCOUNT: &str =
-    "Antigravity has one account per machine. Sign in from Settings → Agents → Antigravity, or use a Gemini API key.";
-
 pub const GROK_BUILD_ONE_ACCOUNT: &str = "Grok Build has one account per machine. Sign in with `grok login` or set XAI_API_KEY.";
 
 /// The first color no other account of this agent uses, cycling once all are taken.
@@ -122,8 +118,15 @@ fn build_environment(settings: &ProviderSettings, kind: ProviderKind, instance: 
             env.insert("XDG_STATE_HOME".into(), path("state"));
             env.insert("XDG_CACHE_HOME".into(), path("cache"));
         }
-        // `agy` has no supported config-root override, so a second account cannot be isolated.
-        ProviderKind::Antigravity => return Err(anyhow!(ANTIGRAVITY_ONE_ACCOUNT)),
+        // The account folder is `agy`'s home for this account: its profile is `<folder>/.gemini`
+        // (`kybern_drivers::antigravity::account`). The login stays a file there, out of the keyring.
+        ProviderKind::Antigravity => {
+            use kybern_drivers::antigravity::account;
+            env.insert(account::HOME_ENV.into(), account.directory.clone());
+            env.insert(account::FILE_STORAGE_ENV.into(), "1".into());
+            let ssh = std::env::var("SSH_CONNECTION").ok().filter(|value| !value.is_empty());
+            env.entry("SSH_CONNECTION".into()).or_insert_with(|| ssh.unwrap_or_else(|| account::SSH_MARKER.into()));
+        }
         // Grok Build uses XAI_API_KEY or grok login; one account per machine.
         ProviderKind::GrokBuild => return Err(anyhow!(GROK_BUILD_ONE_ACCOUNT)),
     }
@@ -132,7 +135,6 @@ fn build_environment(settings: &ProviderSettings, kind: ProviderKind, instance: 
 
 pub fn validate(settings: &Settings) -> Result<()> {
     for (kind, provider) in &settings.providers {
-        ensure!(*kind != ProviderKind::Antigravity || provider.accounts.is_empty(), "{ANTIGRAVITY_ONE_ACCOUNT}");
         ensure!(*kind != ProviderKind::GrokBuild || provider.accounts.is_empty(), "{GROK_BUILD_ONE_ACCOUNT}");
         for (id, account) in &provider.accounts {
             ensure!(
@@ -153,7 +155,6 @@ pub fn validate(settings: &Settings) -> Result<()> {
 }
 
 pub fn create(state: &AppState, params: AccountsCreateParams) -> Result<ProviderInstance> {
-    ensure!(params.kind != ProviderKind::Antigravity, "{ANTIGRAVITY_ONE_ACCOUNT}");
     ensure!(params.kind != ProviderKind::GrokBuild, "{GROK_BUILD_ONE_ACCOUNT}");
     ensure!(!params.name.trim().is_empty() && params.name.len() <= 120, "Enter an account name up to 120 characters.");
     let id = uuid::Uuid::now_v7().to_string();
@@ -234,10 +235,16 @@ pub fn sign_in(state: &AppState, instance: ProviderInstance) -> Result<TerminalI
             ProviderKind::Pi => &[],
             ProviderKind::Omp => &["auth-broker", "login"],
             ProviderKind::Cursor => unreachable!(),
-            ProviderKind::Antigravity => return Err(anyhow!(ANTIGRAVITY_ONE_ACCOUNT)),
+            // `agy acp --login` prints Google's page and reads the code back.
+            ProviderKind::Antigravity => &["acp", "--login"],
             ProviderKind::GrokBuild => return Err(anyhow!(GROK_BUILD_ONE_ACCOUNT)),
         };
-        std::iter::once(binary.to_string_lossy().into_owned()).chain(args.iter().map(|s| s.to_string())).collect()
+        let mut args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        if instance.kind == ProviderKind::Antigravity {
+            let profile = kybern_drivers::antigravity::account::acp_args(&context.env);
+            args.splice(1..1, profile.into_iter().map(|arg| arg.to_string_lossy().into_owned()));
+        }
+        std::iter::once(binary.to_string_lossy().into_owned()).chain(args).collect()
     };
     let terminal = state.terminals.create_with_env(
         None,
@@ -300,7 +307,7 @@ fn summarize(
         managed: account.is_some_and(|account| is_managed(state.settings.dir(), &account.directory)),
         can_sign_out: named
             && matches!(status, AccountStatus::SignedIn | AccountStatus::NeedsSignIn)
-            && matches!(kind, ProviderKind::ClaudeCode | ProviderKind::Codex | ProviderKind::Cursor),
+            && matches!(kind, ProviderKind::ClaudeCode | ProviderKind::Codex | ProviderKind::Cursor | ProviderKind::Antigravity),
         broker: None,
     }
 }
@@ -379,6 +386,11 @@ async fn harness_sign_out(state: &AppState, instance: &ProviderInstance) -> Resu
     if instance.kind == ProviderKind::Cursor {
         context.binary = None;
         return kybern_drivers::cursor::sign_out(&context).await.map_err(|error| anyhow!(kybern_drivers::cursor::reason(error)));
+    }
+    if instance.kind == ProviderKind::Antigravity {
+        // ACP's `logout` on the account's own profile, as `/logout` in agy (and T3 Code) does.
+        let binary = kybern_drivers::binary::resolve(instance.kind, context.binary.as_ref()).map_err(|error| anyhow!(error.to_string()))?;
+        return kybern_drivers::antigravity::account::sign_out(&binary, &context.env).await.map_err(|sentence| anyhow!(sentence));
     }
     let args = kybern_drivers::account_auth::sign_out_args(instance.kind, None).ok_or_else(|| {
         anyhow!("{} can't sign out from Kybern. Remove its credentials from the agent instead.", instance.kind.display_name())
@@ -501,8 +513,8 @@ pub async fn usage(state: &AppState, instance: ProviderInstance) -> Result<Provi
         }
         ProviderKind::Codex => kybern_drivers::codex::read_account_limits(cwd, context.binary.as_ref(), &context.env).await,
         ProviderKind::Cursor => kybern_drivers::cursor::usage::read_account_usage(&context.env).await.map(|usage| usage.limits),
-        // One login per machine, under the user's home: read it as the usage monitor does, so both
-        // share one set of pauses and never start `agy` twice for the same account.
+        // Read as the usage monitor does, so both share one set of pauses and never start `agy`
+        // twice for the same account. A named account's environment names its own home.
         ProviderKind::Antigravity => {
             kybern_drivers::antigravity::read_account_usage(&crate::usage::user_home(), context.binary.as_ref(), &context.env)
                 .await

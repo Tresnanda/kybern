@@ -15,7 +15,8 @@ type Dialog =
   | { kind: 'move'; threadId: string; machineId?: string }
   /** Add a project to another machine (`provision/ProvisionSheet.tsx`); `machineId` is the machine of the row it was opened on. */
   | { kind: 'provision'; projectId: string; machineId?: string }
-  | { kind: 'account'; provider?: ProviderKind; instance?: string }
+  /** `named`: an Antigravity account of its own, next to this computer's login. */
+  | { kind: 'account'; provider?: ProviderKind; instance?: string; named?: boolean }
   /** Review the redacted GitHub issue for a failure before it opens in the browser (`problems/report.ts`). */
   | { kind: 'report'; draft: ProblemReport }
   /** The one-time Antigravity sign-in notice; `proceed` starts the sign-in once it is accepted. */
