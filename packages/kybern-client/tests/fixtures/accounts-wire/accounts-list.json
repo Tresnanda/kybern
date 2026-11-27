@@ -1,0 +1,155 @@
+{
+  "accounts": [
+    {
+      "provider": {
+        "kind": "claude-code",
+        "instance": "default"
+      },
+      "name": "CLI account",
+      "identity": {
+        "email": "work@example.com",
+        "plan": "Max",
+        "organization": "Work Inc"
+      },
+      "status": "signed_in",
+      "is_default": true,
+      "projects": [],
+      "managed": false,
+      "can_sign_out": true,
+      "key": "claude-code:work@example.com",
+      "terminal": true
+    },
+    {
+      "provider": {
+        "kind": "claude-code",
+        "instance": "p1"
+      },
+      "name": "Personal",
+      "color": "teal",
+      "identity": {
+        "email": "me@home.org",
+        "plan": "Pro"
+      },
+      "status": "signed_in",
+      "is_default": false,
+      "projects": [
+        "/home/me/code/site"
+      ],
+      "directory": "/home/me/.kybern/accounts/claude-code/p1",
+      "managed": true,
+      "can_sign_out": true,
+      "key": "claude-code:me@home.org",
+      "terminal": false
+    },
+    {
+      "provider": {
+        "kind": "claude-code",
+        "instance": "b1"
+      },
+      "name": "Via VPS",
+      "identity": {
+        "email": "shared@example.com",
+        "plan": "Max"
+      },
+      "status": "signed_in",
+      "is_default": false,
+      "projects": [],
+      "directory": "/home/me/.kybern/accounts/claude-code/b1",
+      "managed": true,
+      "can_sign_out": false,
+      "broker": {
+        "machine_id": "m-vps",
+        "machine_name": "VPS",
+        "broker_account": "s1",
+        "state": "borrowing"
+      },
+      "key": "claude-code:shared@example.com",
+      "terminal": false
+    },
+    {
+      "provider": {
+        "kind": "claude-code",
+        "instance": "b2"
+      },
+      "name": "Via PC",
+      "status": "unknown",
+      "is_default": false,
+      "projects": [],
+      "directory": "/home/me/.kybern/accounts/claude-code/b2",
+      "managed": true,
+      "can_sign_out": false,
+      "broker": {
+        "machine_id": "m-pc",
+        "machine_name": "PC",
+        "broker_account": "x",
+        "state": "broker_offline",
+        "message": "Signs in through PC, which is offline · Sign in here instead"
+      },
+      "terminal": false
+    },
+    {
+      "provider": {
+        "kind": "claude-code",
+        "instance": "o1"
+      },
+      "name": "Old",
+      "identity": {
+        "email": "old@example.com",
+        "plan": "Pro"
+      },
+      "status": "signed_out",
+      "is_default": false,
+      "projects": [],
+      "directory": "/home/me/.kybern/accounts/claude-code/o1",
+      "managed": true,
+      "can_sign_out": false,
+      "key": "claude-code:old@example.com",
+      "terminal": false
+    },
+    {
+      "provider": {
+        "kind": "codex",
+        "instance": "default"
+      },
+      "name": "CLI account",
+      "status": "signed_out",
+      "is_default": false,
+      "projects": [],
+      "managed": false,
+      "can_sign_out": false,
+      "terminal": true
+    },
+    {
+      "provider": {
+        "kind": "antigravity",
+        "instance": "g1"
+      },
+      "name": "Second",
+      "identity": {
+        "email": "second@example.com",
+        "plan": "Pro"
+      },
+      "status": "signed_in",
+      "is_default": false,
+      "projects": [],
+      "directory": "/home/me/.kybern/accounts/antigravity/g1",
+      "managed": true,
+      "can_sign_out": true,
+      "key": "antigravity:second@example.com",
+      "terminal": false
+    },
+    {
+      "provider": {
+        "kind": "antigravity",
+        "instance": "default"
+      },
+      "name": "CLI account",
+      "status": "unknown",
+      "is_default": false,
+      "projects": [],
+      "managed": false,
+      "can_sign_out": false,
+      "terminal": true
+    }
+  ]
+}

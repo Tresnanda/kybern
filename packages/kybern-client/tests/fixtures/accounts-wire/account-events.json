@@ -1,0 +1,74 @@
+[
+  {
+    "seq": 1,
+    "thread_id": "019c0000-0000-7000-8000-000000000001",
+    "at": "2026-11-27T14:00:00Z",
+    "kind": "account_switched",
+    "from": {
+      "kind": "claude-code",
+      "instance": "default"
+    },
+    "to": {
+      "kind": "claude-code",
+      "instance": "p1"
+    },
+    "reason": "limit",
+    "text": "Switched to Personal"
+  },
+  {
+    "seq": 2,
+    "thread_id": "019c0000-0000-7000-8000-000000000001",
+    "at": "2026-11-27T14:00:00Z",
+    "kind": "account_switched",
+    "from": {
+      "kind": "claude-code",
+      "instance": "b2"
+    },
+    "to": {
+      "kind": "claude-code",
+      "instance": "default"
+    },
+    "reason": "unavailable",
+    "text": "Switched to CLI account"
+  },
+  {
+    "seq": 3,
+    "thread_id": "019c0000-0000-7000-8000-000000000001",
+    "at": "2026-11-27T14:00:00Z",
+    "kind": "account_wait",
+    "until": "2026-11-27T15:00:00Z",
+    "account": {
+      "kind": "claude-code",
+      "instance": "default"
+    },
+    "text": "Waiting until 15:00"
+  },
+  {
+    "seq": 4,
+    "thread_id": "019c0000-0000-7000-8000-000000000001",
+    "at": "2026-11-27T14:00:00Z",
+    "kind": "account_wait_ended",
+    "account": {
+      "kind": "claude-code",
+      "instance": "default"
+    },
+    "cancelled": false,
+    "text": "Continued at 15:00"
+  },
+  {
+    "seq": 5,
+    "thread_id": "019c0000-0000-7000-8000-000000000001",
+    "at": "2026-11-27T14:00:00Z",
+    "kind": "account_wait",
+    "until": "2026-11-27T16:00:00Z",
+    "text": ""
+  },
+  {
+    "seq": 6,
+    "thread_id": "019c0000-0000-7000-8000-000000000001",
+    "at": "2026-11-27T14:00:00Z",
+    "kind": "account_wait_ended",
+    "cancelled": true,
+    "text": ""
+  }
+]

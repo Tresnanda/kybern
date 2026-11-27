@@ -54,6 +54,8 @@ pub mod updates;
 pub mod wake_watch;
 pub mod well_known;
 
+#[cfg(all(test, unix))]
+mod accounts_e2e_tests;
 #[cfg(test)]
 mod accounts_sync_tests;
 #[cfg(all(test, unix))]
