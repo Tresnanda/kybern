@@ -737,7 +737,8 @@ fn apply_transcript_event(
                 }
             }
             EventPayload::SessionTransitioned { text, .. } => {
-                if let Some(turn_id) = turn_id.or(last_turn_id_value) {
+                // No text: an account switch whose accounts share the conversation; its "Switched to" line stands alone.
+                if let Some(turn_id) = turn_id.or(last_turn_id_value).filter(|_| !text.is_empty()) {
                     out.push(TranscriptEntry::Notice { turn_id, seq: ev.seq, level: NoticeLevel::Info, text: text.clone(), at: ev.at, data: None, problem: None });
                 }
             }

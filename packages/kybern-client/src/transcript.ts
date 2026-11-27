@@ -608,6 +608,8 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
     case "provider_commands_updated":
       return { ...state, providerCommands: ev.commands, lastSeq: ev.seq }
     case "session_transitioned":
+      // No text: an account switch whose accounts share the conversation; its "Switched to" line stands alone.
+      if (!ev.text) return { ...state, providerUsage: undefined, providerCommands: [], lastSeq: ev.seq }
       return { ...state, providerUsage: undefined, providerCommands: [], blocks: [...blocks, { kind: "notice", id: `notice:${ev.seq}`, turnId: ev.turn_id ?? latestConversationTurnId(blocks), at, seq: ev.seq, level: "info", text: ev.text }], lastSeq: ev.seq }
     case "provider_usage_updated": {
       const after = ev.usage.context?.used_tokens

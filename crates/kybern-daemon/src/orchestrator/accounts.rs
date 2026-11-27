@@ -498,18 +498,24 @@ impl Orchestrator {
                     from: previous,
                     to: thread.provider.clone(),
                     native_resume: thread.provider_session_id.is_some(),
-                    text: format!(
-                        "Using {} · {}. {} Conversation and workspace stay in this thread.",
-                        thread.provider.kind.display_name(),
-                        thread.provider.instance,
-                        if shared_history && thread.provider_session_id.is_some() {
-                            "Resuming the same native conversation, which this account shares."
-                        } else if thread.provider_session_id.is_some() {
-                            "Resuming this account's native session with the conversation it missed."
-                        } else {
-                            "Starting a native session with portable conversation context."
-                        }
-                    ),
+                    // An account switch within one harness whose accounts share the conversation
+                    // changes nothing the person reads: the "Switched to" line already says it all.
+                    text: if shared_history && thread.provider_session_id.is_some() {
+                        String::new()
+                    } else {
+                        format!(
+                            "Using {} · {}. {} Conversation and workspace stay in this thread.",
+                            thread.provider.kind.display_name(),
+                            thread.provider.instance,
+                            if shared_history && thread.provider_session_id.is_some() {
+                                "Resuming the same native conversation, which this account shares."
+                            } else if thread.provider_session_id.is_some() {
+                                "Resuming this account's native session with the conversation it missed."
+                            } else {
+                                "Starting a native session with portable conversation context."
+                            }
+                        )
+                    },
                 },
             )?;
         }
