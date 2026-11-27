@@ -1600,6 +1600,10 @@ impl LoginBroker {
                 }
                 outcome => outcome.is_ok(),
             };
+            if lent {
+                // A borrow that worked is the account working here: it is no longer signed out (#16).
+                state.orchestrator.account_seen_signed_in(&ProviderInstance { kind: params.provider, instance: params.instance.clone() });
+            }
             // An offline lender, or an older one that doesn't say: the email its machine last published.
             if !lent || self.account_email(params.provider, &params.instance).is_none() {
                 let published = crate::network::accounts_sync::lender_key(state, &lender.machine_id, params.provider, account)

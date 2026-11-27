@@ -913,6 +913,12 @@ impl Orchestrator {
         }
     }
 
+    /// Whether Kybern saw this named account signed out (and nothing has seen it working since).
+    pub fn account_marked_signed_out(&self, provider: &ProviderInstance) -> bool {
+        provider.instance != "default"
+            && self.inner.store.meta_get(&Self::signed_out_key(provider)).ok().flatten().is_some_and(|value| !value.is_empty())
+    }
+
     pub(super) fn ensure_account_signed_in(&self, provider: &ProviderInstance) -> Result<()> {
         if provider.instance == "default" {
             return Ok(());

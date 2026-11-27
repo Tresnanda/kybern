@@ -1348,6 +1348,24 @@ async fn a_borrowed_account_carries_the_lenders_email_so_shared_defaults_reach_i
     assert_eq!(l.b.state.settings.get().providers[&ProviderKind::ClaudeCode].default_account.as_deref(), Some(l.local_account.as_str()));
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn binding_a_signed_out_account_to_a_lender_that_lends_it_clears_signed_out() {
+    let Some(l) = lending().await else { return };
+    let local = ProviderInstance { kind: ProviderKind::ClaudeCode, instance: l.local_account.clone() };
+    l.b.state.orchestrator.mark_account_signed_out(&local, true).unwrap();
+    assert!(l.b.state.orchestrator.account_marked_signed_out(&local));
+    client(&l.b)
+        .await
+        .call::<LoginBrokerBind>(LoginBrokerBindParams {
+            provider: ProviderKind::ClaudeCode,
+            instance: l.local_account.clone(),
+            broker_account: Some(l.broker_account.clone()),
+        })
+        .await
+        .unwrap();
+    assert!(!l.b.state.orchestrator.account_marked_signed_out(&local), "a borrow that worked is the account working here (#16)");
+}
+
 /// A `codex` whose app-server renews its login on `account/read { refreshToken: true }`: it logs the request and
 /// writes `$FAKE_STATE/codex-next-auth.json` over the account's `auth.json`.
 const FAKE_CODEX: &str = r#"#!/bin/sh

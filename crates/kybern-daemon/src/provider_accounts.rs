@@ -663,6 +663,11 @@ pub async fn catalog(state: &AppState, params: AccountsCatalogParams) -> Result<
 }
 
 pub async fn usage(state: &AppState, instance: ProviderInstance) -> Result<ProviderUsage> {
+    // A signed-out account has no limits to read, and reading them starts its harness for nothing
+    // (Claude: a `claude -p` that fails each time).
+    if state.orchestrator.account_marked_signed_out(&instance) {
+        return Ok(ProviderUsage::default());
+    }
     let context = context(state, &instance)?;
     let cwd = context.cwd.as_deref().unwrap();
     let limits = match instance.kind {
