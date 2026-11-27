@@ -188,7 +188,7 @@ impl Orchestrator {
     fn borrowed_email(&self, provider: &ProviderInstance) -> Option<String> {
         let broker = self.login_broker()?;
         let account = broker.binding(provider.kind, &provider.instance)?;
-        let machine = broker.broker_id()?;
+        let machine = broker.lender_for(provider.kind)?;
         let key = crate::network::accounts_sync::holding_key(&self.inner.store, &machine, provider.kind, &account)?;
         crate::accounts_shared::parse_key(&key).map(|(_, email)| email.to_string())
     }

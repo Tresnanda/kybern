@@ -19,6 +19,8 @@
 //! Tokens are never stored by the store, logged, traced or returned to a client; only sealed blobs
 //! cross the network and only the loan's bookkeeping is persisted.
 
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -168,6 +170,13 @@ pub struct PeerLoginStatus {
     /// older daemons.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub busy_loans: Vec<String>,
+    /// The effective lender per lendable harness, as this machine reads the registers (an agent's own lender
+    /// when one is set, else `broker`). Absent from daemons before 0.27.3 (`login.broker.per_kind.v1`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub lenders_by_kind: BTreeMap<ProviderKind, MachineId>,
+    /// The machines this one borrows each harness from. Absent from daemons before 0.27.3.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub borrowed_from_by_kind: BTreeMap<ProviderKind, Vec<MachineId>>,
 }
 
 /// `peer.login.release_all`: the broker was moved; drop every loan and optionally sign out.
@@ -176,6 +185,11 @@ pub struct PeerLoginReleaseAllParams {
     /// Run each lent harness's own sign-out. Only after every borrower re-borrowed elsewhere.
     #[serde(default)]
     pub sign_out: bool,
+    /// Only these harnesses (0.27.3+, `login.broker.per_kind.v1`): an agent's lender moved, the others did not.
+    /// Empty means every harness the machine no longer lends. An older daemon ignores it, so it is only sent
+    /// to one that lists the feature.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<ProviderKind>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -312,6 +326,11 @@ pub struct LoginBrokerStatus {
     /// (`login.broker.set`). Empty from daemons before 0.27.2.
     #[serde(default)]
     pub lenders: Vec<LenderCandidate>,
+    /// The effective lender per lendable harness (`claude-code`, `codex`, `omp`): the agent's own lender when one is
+    /// set with `login.broker.set { provider }`, else the default in `lender`. Absent from daemons before 0.27.3
+    /// (`login.broker.per_kind.v1`): a client then uses `lender` for every agent.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub lenders_by_kind: BTreeMap<ProviderKind, LenderStatus>,
 }
 
 // ---- choosing the lender (0.27.2) ----
@@ -387,10 +406,11 @@ pub struct LoginBrokerBindParams {
     pub broker_account: Option<String>,
 }
 
-/// `login.broker.set`: move the broker (or clear it).
+/// `login.broker.set`: move the broker (or clear it), for every agent or for one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct LoginBrokerSetParams {
-    /// The new broker, or `None` for no broker.
+    /// The new broker, or `None` for no broker. With `provider`, `None` removes that agent's own lender, so it
+    /// follows the default again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine_id: Option<MachineId>,
     /// After the members re-borrowed from the new lender, ask the old one to sign out of the accounts it
@@ -401,7 +421,25 @@ pub struct LoginBrokerSetParams {
     /// records the choice, so a legacy lender picked again by hand becomes usable for new setups.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub via: Option<LenderVia>,
+    /// Set the lender of this agent only (0.27.3+, `login.broker.per_kind.v1`): `claude-code`, `codex` or `omp`.
+    /// Absent sets the network-wide default every agent without its own lender uses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<ProviderKind>,
 }
+
+/// The network register that names an agent's own lender (0.27.3+): a machine id, or empty for none (the agent
+/// follows `broker`). Older daemons ignore it and keep using `broker`.
+pub fn lender_register(kind: ProviderKind) -> String {
+    format!("broker.kind:{}", kind.as_str())
+}
+
+/// The register next to [`lender_register`] that records how that lender was chosen: `{ machine_id, via }`.
+pub fn lender_choice_register(kind: ProviderKind) -> String {
+    format!("broker.choice.kind:{}", kind.as_str())
+}
+
+/// The harnesses whose login can be lent, in the order clients list them.
+pub const LENDABLE_KINDS: [ProviderKind; 3] = [ProviderKind::ClaudeCode, ProviderKind::Codex, ProviderKind::Omp];
 
 fn yes() -> bool {
     true
@@ -459,5 +497,31 @@ mod tests {
         assert_eq!((lender.chosen, lender.reason), (None, None));
         let status: LoginBrokerStatus = serde_json::from_value(serde_json::json!({ "is_broker": false, "providers": [] })).unwrap();
         assert!(status.lender.is_none() && status.lenders.is_empty());
+        assert!(status.lenders_by_kind.is_empty());
+    }
+
+    #[test]
+    fn an_agents_own_lender_is_optional_and_named_by_kind() {
+        let params: LoginBrokerSetParams = serde_json::from_value(serde_json::json!({ "machine_id": "vps", "provider": "codex" })).unwrap();
+        assert_eq!(params.provider, Some(ProviderKind::Codex));
+        let params: LoginBrokerSetParams = serde_json::from_value(serde_json::json!({ "machine_id": null })).unwrap();
+        assert_eq!(params.provider, None);
+        assert_eq!(lender_register(ProviderKind::ClaudeCode), "broker.kind:claude-code");
+        assert_eq!(lender_choice_register(ProviderKind::Codex), "broker.choice.kind:codex");
+        assert!(LENDABLE_KINDS.into_iter().all(broker_supports));
+        let status: LoginBrokerStatus = serde_json::from_value(serde_json::json!({
+            "is_broker": false,
+            "providers": [],
+            "lender": { "machine_id": "a", "name": "A" },
+            "lenders_by_kind": { "codex": { "machine_id": "b", "name": "B", "chosen": "manual" } }
+        }))
+        .unwrap();
+        assert_eq!(status.lenders_by_kind[&ProviderKind::Codex].machine_id, "b");
+        assert!(status.lenders_by_kind[&ProviderKind::Codex].usable_for_new);
+        let peer: PeerLoginStatus =
+            serde_json::from_value(serde_json::json!({ "is_broker": true, "lendable": [], "borrowed_from": [] })).unwrap();
+        assert!(peer.lenders_by_kind.is_empty() && peer.borrowed_from_by_kind.is_empty());
+        let release: PeerLoginReleaseAllParams = serde_json::from_value(serde_json::json!({ "sign_out": true })).unwrap();
+        assert!(release.providers.is_empty());
     }
 }

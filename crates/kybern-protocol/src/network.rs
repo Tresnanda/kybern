@@ -104,12 +104,15 @@ pub mod features {
     /// (with `usable_for_new` and `reason`) and `lenders`, `login.broker.set` takes `via`, and a borrow
     /// that fails carries a `login_borrow` problem with a `sign_in_here` action.
     pub const LOGIN_BROKER_CHOICE_V1: &str = "login.broker.choice.v1";
+    /// A lender per agent: `login.broker.set` takes `provider`, `login.broker.status` and `accounts.offers`
+    /// carry `lenders_by_kind`, and `peer.login.release_all` takes `providers` (0.27.3).
+    pub const LOGIN_BROKER_PER_KIND_V1: &str = "login.broker.per_kind.v1";
     /// Authorize-only sign-in for another machine: `providers.accounts.login.handoff` here and
     /// `peer.accounts.login.peek` / `peer.accounts.login.callback` on the machine being signed in.
     pub const ACCOUNTS_LOGIN_HANDOFF_V1: &str = "accounts.login.handoff.v1";
 
     /// Every feature the network design names, in design order.
-    pub const ALL: [&str; 36] = [
+    pub const ALL: [&str; 37] = [
         NETWORK_V1,
         SPACES_SYNC_V1,
         RELAY_V1,
@@ -146,6 +149,7 @@ pub mod features {
         ACCOUNTS_LOGIN_HANDOFF_V1,
         ACCOUNTS_WRITE_V1,
         LOGIN_BROKER_CHOICE_V1,
+        LOGIN_BROKER_PER_KIND_V1,
     ];
 }
 

@@ -115,12 +115,15 @@ pub enum BrokerCmd {
     Status,
     /// Make a machine the login broker (`none` clears it). It must already be signed in.
     Set {
-        /// A machine's name or id, or `none`.
+        /// A machine's name or id, or `none`. With `--provider`, `none` makes that agent use the default again.
         machine: String,
         /// Sign the old machine out of the accounts it shared, once the others moved to the new one.
         /// Without it the old machine keeps its own sign-ins.
         #[arg(long)]
         sign_out_old: bool,
+        /// Set the machine for this agent only (claude-code, codex or omp); the others keep the default.
+        #[arg(long)]
+        provider: Option<String>,
     },
     /// Make an account on this machine sign in through the broker.
     Use {
@@ -171,6 +174,12 @@ fn render_broker(status: &LoginBrokerStatus) {
         }
         for account in &provider.lendable {
             println!("               can lend: {} ({})", account.name, account.account);
+        }
+    }
+    // Agents with a lender of their own.
+    for (kind, lender) in &status.lenders_by_kind {
+        if status.lender.as_ref().map(|default| default.machine_id.as_str()) != Some(lender.machine_id.as_str()) {
+            println!("  {:<12} signs in through {}", kind.as_str(), lender.name);
         }
     }
     for loan in &status.loans {
@@ -557,13 +566,14 @@ pub async fn run(client: &Client, cmd: MachinesCmd, json: bool) -> Result<()> {
                 let status = client.call::<LoginBrokerStatusMethod>(Empty {}).await?;
                 if json { println!("{}", serde_json::to_string_pretty(&status)?) } else { render_broker(&status) }
             }
-            BrokerCmd::Set { machine, sign_out_old } => {
+            BrokerCmd::Set { machine, sign_out_old, provider } => {
+                let provider = provider.as_deref().map(parse_agent).transpose()?;
                 let machine_id = if machine.eq_ignore_ascii_case("none") {
                     None
                 } else {
                     Some(resolve_machine(&status(client).await?.members, &machine)?.machine_id.clone())
                 };
-                let result = client.call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id, sign_out_old, via: None }).await?;
+                let result = client.call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id, sign_out_old, via: None, provider }).await?;
                 if json {
                     println!("{}", serde_json::to_string_pretty(&result)?)
                 } else {

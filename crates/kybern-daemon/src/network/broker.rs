@@ -13,12 +13,15 @@
 //!   session and sends the message once more (`orchestrator/login_borrow.rs`).
 //! * **Moving the broker** ([`set_broker`]): the register changes, every member re-borrows from the new
 //!   broker, and only then does the old broker sign out, because a sign-out revokes every loan.
+//! * **A lender per agent** (0.27.3, `login.broker.per_kind.v1`): `broker.kind:<kind>` names an agent's own lender
+//!   (with its choice in `broker.choice.kind:<kind>`); an agent without one follows `broker`. Every borrow, bind,
+//!   rebind, push, usage read and refusal goes through [`LoginBroker::lender_for`], so each agent moves on its own.
 //! * **Pushed keys** ([`push_secret`]): a stored key is sealed to each member and delivered with
 //!   `peer.secrets.put`, or queued sealed in the outbox for a machine that is offline.
 //!
 //! Nothing here logs, traces, stores or returns a token. Loans record who borrowed what, never a credential.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -388,11 +391,43 @@ pub fn usable_for_new(name: &str, chosen: Option<LenderVia>, ratio: Option<f32>,
 
 /// How the lender was chosen, from the `broker.choice` register: only when it names the current lender.
 fn chosen_in(projection: &super::ops::Projection, lender: &str) -> Option<LenderVia> {
-    let value = &projection.register(CHOICE_REGISTER)?.value;
+    choice_in(projection, CHOICE_REGISTER, lender)
+}
+
+fn choice_in(projection: &super::ops::Projection, register: &str, lender: &str) -> Option<LenderVia> {
+    let value = &projection.register(register)?.value;
     if value.get("machine_id").and_then(Value::as_str) != Some(lender) {
         return None;
     }
     serde_json::from_value(value.get("via")?.clone()).ok()
+}
+
+/// The default lender: the member the `broker` register names.
+fn default_lender(projection: &super::ops::Projection) -> Option<String> {
+    projection.broker().filter(|id| projection.is_member(id)).map(str::to_string)
+}
+
+/// The agent's own lender (`broker.kind:<kind>`, 0.27.3+), when it is set and names a current member. One that names
+/// a removed machine is ignored: the agent follows the default again.
+fn own_lender(projection: &super::ops::Projection, kind: ProviderKind) -> Option<String> {
+    if !broker_supports(kind) {
+        return None;
+    }
+    let id = projection.register(&lender_register(kind))?.value.as_str()?;
+    (!id.is_empty() && projection.is_member(id)).then(|| id.to_string())
+}
+
+/// The machine `kind` borrows its sign-in from: its own lender when one is set, else the default.
+pub fn effective_lender(projection: &super::ops::Projection, kind: ProviderKind) -> Option<String> {
+    own_lender(projection, kind).or_else(|| default_lender(projection))
+}
+
+/// How `kind`'s effective lender was chosen: from its own choice register when it has its own lender, else the default's.
+fn chosen_for(projection: &super::ops::Projection, kind: Option<ProviderKind>, lender: &str) -> Option<LenderVia> {
+    match kind.and_then(|kind| own_lender(projection, kind).map(|_| kind)) {
+        Some(kind) => choice_in(projection, &lender_choice_register(kind), lender),
+        None => chosen_in(projection, lender),
+    }
 }
 
 // ---- borrower: leases ----
@@ -510,12 +545,27 @@ impl LoginBroker {
         self.network.is_enabled() && self.network.membership().is_some_and(|membership| membership.self_is_member())
     }
 
-    /// The machine the `broker` register names, when it is a current member.
+    /// The default lender: the machine the `broker` register names, when it is a current member. Every agent without
+    /// a lender of its own borrows from it; use [`LoginBroker::lender_for`] for one agent.
     pub fn broker_id(&self) -> Option<String> {
         let membership = self.network.membership()?;
-        let projection = membership.projection();
-        let id = projection.broker()?.to_string();
-        projection.is_member(&id).then_some(id)
+        default_lender(&membership.projection())
+    }
+
+    /// The machine `kind` borrows its sign-in from (its own lender, else the default), when it is a current member.
+    pub fn lender_for(&self, kind: ProviderKind) -> Option<String> {
+        let membership = self.network.membership()?;
+        effective_lender(&membership.projection(), kind)
+    }
+
+    /// This machine lends `kind` to the others.
+    fn lends(&self, kind: ProviderKind) -> bool {
+        self.lender_for(kind).as_deref() == Some(self.self_id().as_str())
+    }
+
+    /// This machine lends at least one agent's sign-in.
+    fn lends_any(&self) -> bool {
+        LENDABLE_KINDS.into_iter().any(|kind| self.lends(kind))
     }
 
     fn member_name(&self, id: &str) -> String {
@@ -679,18 +729,31 @@ impl LoginBroker {
 
     // ---- the lender, as setup sees it ----
 
-    /// The current lender and whether a new setup may borrow from it (`usable_for_new`, `reason`).
+    /// The default lender and whether a new setup may borrow from it (`usable_for_new`, `reason`).
     pub fn lender_status(&self) -> Option<LenderStatus> {
-        let id = self.broker_id()?;
+        self.lender_status_for(None)
+    }
+
+    /// The effective lender of one agent (or the default, with `None`) and whether a new setup may borrow from it.
+    pub fn lender_status_for(&self, kind: Option<ProviderKind>) -> Option<LenderStatus> {
         let membership = self.network.membership()?;
         let projection = membership.projection();
+        let id = match kind {
+            Some(kind) => effective_lender(&projection, kind)?,
+            None => default_lender(&projection)?,
+        };
         let me = self.self_id();
         let name = self.member_name(&id);
-        let chosen = chosen_in(&projection, &id);
+        let chosen = chosen_for(&projection, kind, &id);
         let ratio = (id != me).then(|| super::online::ratio(&self.store, &id, &me, Utc::now())).flatten();
         let always_on = if id == me { None } else { ratio.map(|ratio| ratio >= crate::accounts_offers::ALWAYS_ON_RATIO) };
         let (usable, reason) = usable_for_new(&name, chosen, ratio, id == me);
         Some(LenderStatus { machine_id: id, name, chosen, always_on, usable_for_new: usable, reason })
+    }
+
+    /// The effective lender of every lendable agent that has one.
+    pub fn lenders_by_kind(&self) -> BTreeMap<ProviderKind, LenderStatus> {
+        LENDABLE_KINDS.into_iter().filter_map(|kind| Some((kind, self.lender_status_for(Some(kind))?))).collect()
     }
 
     /// Every member, and whether "Share this machine's sign-ins" can pick it now.
@@ -792,7 +855,7 @@ impl LoginBroker {
             return Err(BrokerError::Left);
         }
         let me = self.self_id();
-        let broker_id = self.broker_id().ok_or(BrokerError::NoBroker)?;
+        let broker_id = self.lender_for(lease.kind).ok_or(BrokerError::NoBroker)?;
         if broker_id == me {
             return Err(BrokerError::IsSelf);
         }
@@ -888,8 +951,8 @@ impl LoginBroker {
     /// [`RETRY_REFUSED`] for any other refusal. Both Claude and Codex recover without a push.
     async fn retry_failed_leases(&self) {
         let leases: Vec<Arc<Lease>> = lock(&self.leases).values().cloned().collect();
-        let lender_online = self.broker_id().is_some_and(|id| self.hub.target(&id).is_some_and(|target| target.online));
         for lease in leases {
+            let lender_online = self.lender_for(lease.kind).is_some_and(|id| self.hub.target(&id).is_some_and(|target| target.online));
             let due = {
                 let state = lock(&lease.state);
                 match (&state.last_error, state.failed_at) {
@@ -939,7 +1002,7 @@ impl LoginBroker {
     /// The borrower's view of an account that signs in through the broker.
     pub fn account_view(&self, kind: ProviderKind, instance: &str) -> Option<AccountBroker> {
         let Some(account) = self.binding(kind, instance) else { return self.unmatched_view(kind, instance) };
-        let broker_id = self.broker_id();
+        let broker_id = self.lender_for(kind);
         let (machine_id, machine_name) = match &broker_id {
             Some(id) => (id.clone(), self.member_name(id)),
             None => (String::new(), "the machine that shares sign-ins".into()),
@@ -1040,8 +1103,8 @@ impl LoginBroker {
 
     /// Only the lender serves a borrow. The refusal names it (`not_lender`) so a borrower that has not heard of a move
     /// says so instead of "not signed in". Older borrowers read the code and show the sentence.
-    fn ensure_broker(&self) -> Result<(), RpcError> {
-        if self.broker_id().as_deref() == Some(self.self_id().as_str()) {
+    fn ensure_broker(&self, kind: ProviderKind) -> Result<(), RpcError> {
+        if self.lends(kind) {
             Ok(())
         } else {
             let name = self.hub.self_name();
@@ -1131,10 +1194,10 @@ impl LoginBroker {
         requester: &str,
         params: PeerLoginBorrowParams,
     ) -> Result<PeerLoginBorrowResult, RpcError> {
-        self.ensure_broker()?;
         if !broker_supports(params.provider) {
             return Err(RpcError::invalid_params(format!("{} sign-ins are not lent.", params.provider.display_name())));
         }
+        self.ensure_broker(params.provider)?;
         let membership = self.network.membership().ok_or_else(|| RpcError::new(codes::NOT_AVAILABLE, "no network"))?;
         let projection = membership.projection();
         let sealing_key = projection
@@ -1207,15 +1270,17 @@ impl LoginBroker {
     /// `peer.login.status`.
     pub async fn serve_status(&self, state: &AppState) -> PeerLoginStatus {
         let is_broker = self.broker_id().as_deref() == Some(self.self_id().as_str());
-        let borrowed_from = self
-            .store
-            .loans_open(LoanRole::Borrower)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|loan| loan.peer)
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect();
+        let borrowed = self.store.loans_open(LoanRole::Borrower).unwrap_or_default();
+        let borrowed_from = borrowed.iter().map(|loan| loan.peer.clone()).collect::<HashSet<_>>().into_iter().collect();
+        let mut borrowed_from_by_kind: BTreeMap<ProviderKind, Vec<MachineId>> = BTreeMap::new();
+        for loan in &borrowed {
+            let peers = borrowed_from_by_kind.entry(loan.provider).or_default();
+            if !peers.contains(&loan.peer) {
+                peers.push(loan.peer.clone());
+            }
+        }
+        let lenders_by_kind =
+            LENDABLE_KINDS.into_iter().filter_map(|kind| Some((kind, self.lender_for(kind)?))).collect::<BTreeMap<_, _>>();
         let mut busy_loans = Vec::new();
         for loan in self.store.loans_open(LoanRole::Borrower).unwrap_or_default() {
             if let Some(instance) = &loan.local_instance
@@ -1224,12 +1289,20 @@ impl LoginBroker {
                 busy_loans.push(loan.loan_id);
             }
         }
-        PeerLoginStatus { broker: self.broker_id(), is_broker, lendable: self.lendable(state).await, borrowed_from, busy_loans }
+        PeerLoginStatus {
+            broker: self.broker_id(),
+            is_broker,
+            lendable: self.lendable(state).await,
+            borrowed_from,
+            busy_loans,
+            lenders_by_kind,
+            borrowed_from_by_kind,
+        }
     }
 
     /// `peer.login.usage`: the plan limits the broker already reads for the account.
     pub async fn serve_usage(&self, state: &AppState, params: PeerLoginUsageParams) -> Result<UsageLimitsResult, RpcError> {
-        self.ensure_broker()?;
+        self.ensure_broker(params.provider)?;
         let instance = ProviderInstance { kind: params.provider, instance: params.account };
         let limits = state
             .orchestrator
@@ -1462,30 +1535,44 @@ impl LoginBroker {
 
     // ---- client methods ----
 
-    /// `login.broker.status`.
+    /// `login.broker.status`. Each agent is described against its own effective lender.
     pub async fn status(&self, state: &AppState) -> LoginBrokerStatus {
         let broker_id = self.broker_id();
         let me = self.self_id();
         let is_broker = broker_id.as_deref() == Some(me.as_str());
-        let broker = broker_id.as_ref().map(|id| BrokerInfo {
+        let info = |id: &String| BrokerInfo {
             machine_id: id.clone(),
             name: Some(self.member_name(id)),
             reachable: *id == me || self.hub.target(id).is_some_and(|target| target.online),
-        });
-        // What the broker can lend, from the broker itself.
-        let remote = match (&broker_id, is_broker) {
-            (Some(id), false) => match tokio::time::timeout(STATUS_WAIT, self.hub.call(id, PeerLoginStatusMethod::NAME, Value::Null)).await
-            {
-                Ok(Ok(value)) => serde_json::from_value::<PeerLoginStatus>(value).ok(),
-                _ => None,
-            },
-            _ => None,
         };
-        let local_lendable = if is_broker { self.lendable(state).await } else { Vec::new() };
+        let broker = broker_id.as_ref().map(info);
+        // What each lender can lend, from the lender itself, asked once per machine.
+        let mut remote: HashMap<String, Option<PeerLoginStatus>> = HashMap::new();
+        let mut local_lendable: Option<Vec<LendableAccount>> = None;
         let settings = state.settings.get();
         let mut providers = Vec::new();
         // Only harnesses with an account sign-in: omp, OpenCode and pi have none to lend or borrow.
         for kind in [ProviderKind::ClaudeCode, ProviderKind::Codex] {
+            let lender = self.lender_for(kind);
+            let lends_here = lender.as_deref() == Some(me.as_str());
+            let lender_info = lender.as_ref().map(info);
+            if lends_here && local_lendable.is_none() {
+                local_lendable = Some(self.lendable(state).await);
+            }
+            let from_lender = match &lender {
+                Some(id) if !lends_here => {
+                    if !remote.contains_key(id) {
+                        let status =
+                            match tokio::time::timeout(STATUS_WAIT, self.hub.call(id, PeerLoginStatusMethod::NAME, Value::Null)).await {
+                                Ok(Ok(value)) => serde_json::from_value::<PeerLoginStatus>(value).ok(),
+                                _ => None,
+                            };
+                        remote.insert(id.clone(), status);
+                    }
+                    remote.get(id).cloned().flatten()
+                }
+                _ => None,
+            };
             let bound = settings
                 .providers
                 .get(&kind)
@@ -1498,26 +1585,26 @@ impl LoginBroker {
                 })
                 .unwrap_or_default();
             let (local_account, broker_account) = bound.first().cloned().map(|(l, b)| (Some(l), Some(b))).unwrap_or((None, None));
-            let lendable: Vec<LendableAccount> = if is_broker {
-                local_lendable.iter().filter(|a| a.provider == kind).cloned().collect()
+            let lendable: Vec<LendableAccount> = if lends_here {
+                local_lendable.iter().flatten().filter(|a| a.provider == kind).cloned().collect()
             } else {
-                remote.as_ref().map(|r| r.lendable.iter().filter(|a| a.provider == kind).cloned().collect()).unwrap_or_default()
+                from_lender.as_ref().map(|r| r.lendable.iter().filter(|a| a.provider == kind).cloned().collect()).unwrap_or_default()
             };
             let (state_of, message) = if let Some(local) = &local_account {
                 match self.account_view(kind, local) {
                     Some(view) => (view.state, view.message),
                     None => (BrokerLoginState::NotUsed, None),
                 }
-            } else if is_broker {
+            } else if lends_here {
                 // Lending means something is signed in here to lend.
                 (if lendable.is_empty() { BrokerLoginState::NotUsed } else { BrokerLoginState::Lending }, None)
-            } else if broker_id.is_none() {
+            } else if lender.is_none() {
                 (BrokerLoginState::NotUsed, None)
-            } else if remote.is_none() {
-                let error = BrokerError::Offline(broker.as_ref().and_then(|b| b.name.clone()).unwrap_or_default());
+            } else if from_lender.is_none() {
+                let error = BrokerError::Offline(lender_info.as_ref().and_then(|b| b.name.clone()).unwrap_or_default());
                 (error.state(), Some(error.message(kind)))
             } else if lendable.is_empty() {
-                let name = broker.as_ref().and_then(|b| b.name.clone()).unwrap_or_default();
+                let name = lender_info.as_ref().and_then(|b| b.name.clone()).unwrap_or_default();
                 (BrokerLoginState::BrokerNotSignedIn, Some(format!("{} is not signed in on {name} yet.", kind.display_name())))
             } else {
                 (BrokerLoginState::NotUsed, None)
@@ -1532,7 +1619,7 @@ impl LoginBroker {
                 sessions: 0,
             });
         }
-        let loans = if is_broker {
+        let loans = if self.lends_any() {
             self.store
                 .loans_open(LoanRole::Lender)
                 .unwrap_or_default()
@@ -1550,7 +1637,15 @@ impl LoginBroker {
         } else {
             Vec::new()
         };
-        LoginBrokerStatus { broker, is_broker, providers, loans, lender: self.lender_status(), lenders: self.lender_candidates() }
+        LoginBrokerStatus {
+            broker,
+            is_broker,
+            providers,
+            loans,
+            lender: self.lender_status(),
+            lenders: self.lender_candidates(),
+            lenders_by_kind: self.lenders_by_kind(),
+        }
     }
 
     /// `login.broker.bind`.
@@ -1577,7 +1672,7 @@ impl LoginBroker {
         self.set_unmatched(params.provider, &params.instance, None);
         if let Some(account) = &params.broker_account {
             let refuse = |error: BrokerError| error.rpc_error(params.provider, &here);
-            let lender = self.lender_status().ok_or_else(|| refuse(BrokerError::NoBroker))?;
+            let lender = self.lender_status_for(Some(params.provider)).ok_or_else(|| refuse(BrokerError::NoBroker))?;
             if lender.machine_id == self.self_id() {
                 return Err(refuse(BrokerError::IsSelf));
             }
@@ -1640,12 +1735,12 @@ impl LoginBroker {
 
     /// `peer.login.release_all` on the old broker, after a move.
     pub async fn serve_release_all(&self, state: &AppState, params: PeerLoginReleaseAllParams) -> PeerLoginReleaseAllResult {
-        // A machine that is still the broker keeps its loans and its sign-ins: this is only for the old broker
-        // after the register moved, so no other member can sign a working broker out.
-        if self.broker_id().as_deref() == Some(self.self_id().as_str()) {
-            return PeerLoginReleaseAllResult::default();
-        }
-        let loans = self.store.loans_open(LoanRole::Lender).unwrap_or_default();
+        // A machine that still lends an agent keeps that agent's loans and sign-ins: this is only for the old lender
+        // after the register moved, so no other member can sign a working lender out. With `providers`, only those
+        // agents moved.
+        let released_kind = |kind: ProviderKind| (params.providers.is_empty() || params.providers.contains(&kind)) && !self.lends(kind);
+        let loans: Vec<LoanRow> =
+            self.store.loans_open(LoanRole::Lender).unwrap_or_default().into_iter().filter(|loan| released_kind(loan.provider)).collect();
         for loan in &loans {
             let _ = self.store.loan_release(&loan.loan_id);
         }
@@ -1653,7 +1748,7 @@ impl LoginBroker {
         let lent = self.store.accounts_ever_lent().unwrap_or_default();
         let mut signed_out = Vec::new();
         if params.sign_out {
-            for (kind, account) in lent {
+            for (kind, account) in lent.into_iter().filter(|(kind, _)| released_kind(*kind)) {
                 // The CLI account is the user's own sign-in on this machine: it stops lending, nothing more.
                 if account == "default" {
                     continue;
@@ -1664,7 +1759,7 @@ impl LoginBroker {
                 }
             }
         }
-        lock(&self.seen).clear();
+        lock(&self.seen).retain(|(kind, _), _| !released_kind(*kind));
         PeerLoginReleaseAllResult { released: loans.len() as u32, signed_out }
     }
 
@@ -1713,15 +1808,17 @@ impl LoginBroker {
     /// The account is the one with the same email on the new lender, never just any account of the harness; when
     /// it has none, the account is left unbound and says so ([`BrokerError::Unmatched`]).
     async fn rebind_borrowers(&self, state: &AppState) {
-        let current = self.broker_id();
         let me = self.self_id();
-        if current.as_deref() == Some(me.as_str()) {
-            // This machine became the lender: it signs in itself, and a binding here would only refuse its threads.
+        if self.lends_any() {
+            // This machine became the lender of an agent: it signs that agent in itself, and a binding here would only
+            // refuse its threads.
             self.drop_own_bindings(state).await;
         }
-        // What the new broker can lend, asked once per look.
-        let mut lendable: Option<Vec<LendableAccount>> = None;
+        // What each new lender can lend, asked once per look (`None`: it didn't answer).
+        let mut lendable: HashMap<String, Option<Vec<LendableAccount>>> = HashMap::new();
         for loan in self.store.loans_open(LoanRole::Borrower).unwrap_or_default() {
+            // Each agent follows its own lender.
+            let current = self.lender_for(loan.provider);
             if current.as_deref() == Some(loan.peer.as_str()) {
                 continue;
             }
@@ -1740,14 +1837,13 @@ impl LoginBroker {
                 lock(&self.leases).remove(&(loan.provider, instance.clone()));
                 continue;
             }
-            if lendable.is_none() {
-                lendable = Some(match self.lendable_on(&new_broker).await {
-                    Some(lendable) => lendable,
-                    // Not reachable yet: try again next look.
-                    None => continue,
-                });
+            if !lendable.contains_key(&new_broker) {
+                let answer = self.lendable_on(&new_broker).await;
+                lendable.insert(new_broker.clone(), answer);
             }
-            let offered: Vec<&LendableAccount> = lendable.iter().flatten().filter(|account| account.provider == loan.provider).collect();
+            // Not reachable yet: try again next look.
+            let Some(Some(on_lender)) = lendable.get(&new_broker) else { continue };
+            let offered: Vec<&LendableAccount> = on_lender.iter().filter(|account| account.provider == loan.provider).collect();
             let expected = self
                 .account_email(loan.provider, &instance)
                 .or_else(|| self.published_email(state, &loan.peer, loan.provider, &loan.account));
@@ -1809,7 +1905,7 @@ impl LoginBroker {
     }
 
     /// Accounts left unmatched bind again once the current lender has their email (signed in there since).
-    async fn recheck_unmatched(&self, state: &AppState, known: Option<Vec<LendableAccount>>) {
+    async fn recheck_unmatched(&self, state: &AppState, known: HashMap<String, Option<Vec<LendableAccount>>>) {
         let entries: Vec<(ProviderKind, String, String, Option<String>)> = self
             .store
             .meta_list_prefix(UNMATCHED_PREFIX)
@@ -1824,13 +1920,13 @@ impl LoginBroker {
         if entries.is_empty() {
             return;
         }
-        let Some(current) = self.broker_id() else { return };
         let me = self.self_id();
         let exists = |kind: ProviderKind, instance: &str| {
             self.settings.get().providers.get(&kind).is_some_and(|provider| provider.accounts.contains_key(instance))
         };
         let mut lendable = known;
         for (kind, instance, lender, email) in entries {
+            let Some(current) = self.lender_for(kind) else { continue };
             if current == me || !exists(kind, &instance) {
                 self.set_unmatched(kind, &instance, None);
                 continue;
@@ -1839,11 +1935,14 @@ impl LoginBroker {
                 self.set_unmatched(kind, &instance, Some((&current, email.as_deref())));
             }
             let Some(want) = email else { continue };
-            if lendable.is_none() {
-                lendable = self.lendable_on(&current).await;
+            if !lendable.contains_key(&current) {
+                let answer = self.lendable_on(&current).await;
+                lendable.insert(current.clone(), answer);
             }
             let Some(account) = lendable
-                .iter()
+                .get(&current)
+                .into_iter()
+                .flatten()
                 .flatten()
                 .find(|account| account.provider == kind && account.email.as_deref().is_some_and(|email| same_email(email, &want)))
                 .map(|account| account.account.clone())
@@ -1859,14 +1958,18 @@ impl LoginBroker {
         }
     }
 
-    /// This machine is the lender: every account here that borrowed stops, its loans go back, and the account loses
-    /// the lent email when this machine has its own login of it (so the shared account maps to that one).
+    /// This machine is an agent's lender: every account of that agent here that borrowed stops, its loans go back, and
+    /// the account loses the lent email when this machine has its own login of it (so the shared account maps to that
+    /// one). Accounts of agents another machine lends keep borrowing.
     async fn drop_own_bindings(&self, state: &AppState) {
         for (key, account) in self.store.meta_list_prefix(BINDING_PREFIX).unwrap_or_default() {
             if account.is_empty() {
                 continue;
             }
             let Some((kind, instance)) = parse_account_key(BINDING_PREFIX, &key) else { continue };
+            if !self.lends(kind) {
+                continue;
+            }
             let instance = instance.to_string();
             let _ = self.set_binding(kind, &instance, None);
             lock(&self.leases).remove(&(kind, instance.clone()));
@@ -1933,9 +2036,13 @@ impl LoginBroker {
         let key = format!("allow.{me}.logins");
         let stale = {
             let projection = membership.projection();
-            let Some(choice) = projection.register(CHOICE_REGISTER) else { return };
-            choice.value.get("machine_id").and_then(Value::as_str) == Some(me.as_str())
-                && projection.register(&key).is_some_and(|policy| policy.value == json!(false) && policy.lamport < choice.lamport)
+            let Some(policy) = projection.register(&key).filter(|policy| policy.value == json!(false)) else { return };
+            // The default's choice, or an agent's own (0.27.3+).
+            std::iter::once(CHOICE_REGISTER.to_string()).chain(LENDABLE_KINDS.into_iter().map(lender_choice_register)).any(|name| {
+                projection.register(&name).is_some_and(|choice| {
+                    choice.value.get("machine_id").and_then(Value::as_str) == Some(me.as_str()) && policy.lamport < choice.lamport
+                })
+            })
         };
         if !stale {
             return;
@@ -2017,7 +2124,7 @@ pub async fn run_every(state: AppState, tick: Duration) {
             continue;
         }
         broker.prune_removed(&state).await;
-        if broker.broker_id().as_deref() == Some(broker.self_id().as_str()) {
+        if broker.lends_any() {
             broker.allow_logins_after_choice();
             broker.watch_lent(&state).await;
         }
@@ -2053,9 +2160,40 @@ fn forget_pushed_secrets(state: &AppState) {
 
 // ---- moving the broker ----
 
+/// The effective lender of every lendable agent.
+fn effective_lenders(broker: &LoginBroker) -> BTreeMap<ProviderKind, Option<String>> {
+    LENDABLE_KINDS.into_iter().map(|kind| (kind, broker.lender_for(kind))).collect()
+}
+
+/// One agent whose lender a `login.broker.set` moved: `(agent, old lender, new lender)`.
+type LenderChange = (ProviderKind, Option<String>, Option<String>);
+
+/// Whether a member re-borrowed after a move, from its `peer.login.status`. A 0.27.3+ member says which lender each agent
+/// follows and what it borrows each agent from; an older one only knows the default.
+fn member_moved(status: &PeerLoginStatus, changes: &[LenderChange], new_default: &Option<MachineId>, old_default: &Option<String>) -> bool {
+    if !status.lenders_by_kind.is_empty() || !status.borrowed_from_by_kind.is_empty() {
+        return changes.iter().all(|(kind, old, new)| {
+            status.lenders_by_kind.get(kind) == new.as_ref()
+                && old.as_ref().is_none_or(|old| !status.borrowed_from_by_kind.get(kind).is_some_and(|peers| peers.contains(old)))
+        });
+    }
+    status.broker == *new_default && old_default.as_ref().is_none_or(|old| !status.borrowed_from.contains(old))
+}
+
 /// `login.broker.set`: the new broker signs in first (the client runs that), then the register switches,
 /// the online members borrow from the new broker, and only then does the old broker sign out.
+///
+/// Without `provider` this is the default lender, which every agent without a lender of its own follows. With it, the
+/// lender of that agent only (`broker.kind:<kind>`); `machine_id: None` then removes the agent's own lender.
 pub async fn set_broker(state: &AppState, params: LoginBrokerSetParams) -> Result<LoginBrokerSetResult, RpcError> {
+    if let Some(kind) = params.provider
+        && !broker_supports(kind)
+    {
+        return Err(RpcError::invalid_params(format!(
+            "{} sign-ins can't be shared from another machine. Choose a lender for Claude Code, Codex or omp.",
+            kind.display_name()
+        )));
+    }
     let broker = state
         .orchestrator
         .login_broker()
@@ -2065,7 +2203,17 @@ pub async fn set_broker(state: &AppState, params: LoginBrokerSetParams) -> Resul
     let membership =
         network.membership().ok_or_else(|| RpcError::new(codes::NOT_AVAILABLE, "The machine network is unavailable on this machine."))?;
     let me = broker.self_id();
-    let old = broker.broker_id();
+    let (register, choice_register) = match params.provider {
+        Some(kind) => (lender_register(kind), lender_choice_register(kind)),
+        None => ("broker".to_string(), CHOICE_REGISTER.to_string()),
+    };
+    // What the register names now: the agent's own lender (none when it follows the default), or the default.
+    let old = match params.provider {
+        Some(kind) => own_lender(&membership.projection(), kind),
+        None => broker.broker_id(),
+    };
+    let old_default = broker.broker_id();
+    let before = effective_lenders(&broker);
     let via = params.via.unwrap_or(LenderVia::Manual);
     // The choice is recorded next to the register: a lender picked here (0.27.2+) is deliberate, so new setups
     // borrow from it; a `broker` without it is a legacy lender (see `usable_for_new`).
@@ -2078,13 +2226,13 @@ pub async fn set_broker(state: &AppState, params: LoginBrokerSetParams) -> Resul
         // A fresh choice every time, also when it is recorded already: the lender turns Logins on again when it was
         // turned off before this choice (`allow_logins_after_choice`).
         if old.is_some() {
-            let op = membership.set(CHOICE_REGISTER, choice(&old)).map_err(|error| RpcError::new(codes::CONFLICT, error.to_string()))?;
+            let op = membership.set(&choice_register, choice(&old)).map_err(|error| RpcError::new(codes::CONFLICT, error.to_string()))?;
             network.publish_ops(vec![op]);
             network.wake();
         }
         return Ok(LoginBrokerSetResult { status: broker.status(state).await, ..Default::default() });
     }
-    // The new broker must be able to lend something, or every member would lose its sign-in.
+    // The new broker must be able to lend something (that agent, with `provider`), or every member would lose its sign-in.
     if let Some(target) = &params.machine_id {
         if !membership.projection().is_member(target) {
             return Err(RpcError::not_found("machine"));
@@ -2109,41 +2257,92 @@ pub async fn set_broker(state: &AppState, params: LoginBrokerSetParams) -> Resul
                     CallFailure::Offline(_) | CallFailure::Gone(_) => offline(),
                     other => RpcError::new(codes::NOT_AVAILABLE, other.to_string()),
                 })?;
+            // Only a 0.27.3+ lender serves an agent it lends on its own; an older one only serves as the default.
+            let knows_agents =
+                broker.hub.members().into_iter().any(|member| {
+                    member.id == *target && member.features.iter().any(|feature| feature == features::LOGIN_BROKER_PER_KIND_V1)
+                });
+            if params.provider.is_some() && !knows_agents {
+                let message =
+                    format!("{name} needs a newer Kybern to share one agent's sign-in on its own. Update it from Settings → Machines.");
+                return Err(
+                    RpcError::new(codes::NOT_AVAILABLE, message.clone()).with_problem(&Problem::new(ProblemKind::UpdateNeeded, message))
+                );
+            }
             serde_json::from_value::<PeerLoginStatus>(value).map(|status| status.lendable).unwrap_or_default()
         };
-        if lendable.is_empty() {
-            return Err(RpcError::new(
-                codes::NOT_AVAILABLE,
-                format!("{name} is not signed in to anything it could share. Sign in on {name} first, then share its sign-ins."),
-            ));
+        match params.provider {
+            // omp's sign-in is its own broker, not an account Kybern lists: answering is enough.
+            Some(ProviderKind::Omp) => {}
+            Some(kind) if !lendable.iter().any(|account| account.provider == kind) => {
+                let harness = kind.display_name();
+                return Err(RpcError::new(
+                    codes::NOT_AVAILABLE,
+                    format!("{name} isn't signed in to {harness}. Sign in to {harness} on {name} first, then share it."),
+                ));
+            }
+            Some(_) => {}
+            None if lendable.is_empty() => {
+                return Err(RpcError::new(
+                    codes::NOT_AVAILABLE,
+                    format!("{name} is not signed in to anything it could share. Sign in on {name} first, then share its sign-ins."),
+                ));
+            }
+            None => {}
         }
     }
     let op = membership
-        .set("broker", params.machine_id.clone().map_or(Value::String(String::new()), Value::String))
+        .set(&register, params.machine_id.clone().map_or(Value::String(String::new()), Value::String))
         .map_err(|error| RpcError::new(codes::CONFLICT, error.to_string()))?;
     let chosen =
-        membership.set(CHOICE_REGISTER, choice(&params.machine_id)).map_err(|error| RpcError::new(codes::CONFLICT, error.to_string()))?;
+        membership.set(&choice_register, choice(&params.machine_id)).map_err(|error| RpcError::new(codes::CONFLICT, error.to_string()))?;
     network.publish_ops(vec![op, chosen]);
     network.wake();
 
+    let after = effective_lenders(&broker);
+    let changes: Vec<LenderChange> = after
+        .iter()
+        .filter(|(kind, new)| before.get(kind) != Some(new))
+        .map(|(kind, new)| (*kind, before.get(kind).cloned().flatten(), new.clone()))
+        .collect();
+    let new_default = broker.broker_id();
+
     let mut result = LoginBrokerSetResult::default();
-    let members: Vec<String> = broker.hub.members().into_iter().filter(|member| !member.is_self).map(|member| member.id).collect();
+    let mut notes: Vec<String> = Vec::new();
+    let others: Vec<MemberView> = broker.hub.members().into_iter().filter(|member| !member.is_self).collect();
+    let members: Vec<String> = others.iter().map(|member| member.id.clone()).collect();
     // This machine re-borrows at once; the others do the same within a tick of hearing the register.
     broker.rebind_borrowers(state).await;
     let deadline = tokio::time::Instant::now() + REBIND_WAIT;
     let mut pending: Vec<String> = Vec::new();
-    for id in &members {
-        match broker.hub.target(id) {
-            Some(target) if target.online && !target.paused => pending.push(id.clone()),
-            _ => result.offline.push(id.clone()),
+    let mut older: Vec<String> = Vec::new();
+    for member in &others {
+        let knows_agents = member.features.iter().any(|feature| feature == features::LOGIN_BROKER_PER_KIND_V1);
+        match broker.hub.target(&member.id) {
+            // An older Kybern can't follow an agent's own lender: it keeps borrowing from the default.
+            Some(target)
+                if target.online && !target.paused && params.provider.is_some() && !member.features.is_empty() && !knows_agents =>
+            {
+                older.push(member.name.clone());
+                result.offline.push(member.id.clone());
+            }
+            Some(target) if target.online && !target.paused => pending.push(member.id.clone()),
+            _ => result.offline.push(member.id.clone()),
         }
+    }
+    if let (false, Some(kind)) = (older.is_empty(), params.provider) {
+        notes.push(format!(
+            "{} need a newer Kybern to use another machine for {}; they keep using the default until they are updated.",
+            older.join(", "),
+            kind.display_name()
+        ));
     }
     while !pending.is_empty() && tokio::time::Instant::now() < deadline {
         let mut still = Vec::new();
         for id in pending {
             let rebound = match tokio::time::timeout(STATUS_WAIT, broker.hub.call(&id, PeerLoginStatusMethod::NAME, Value::Null)).await {
                 Ok(Ok(value)) => serde_json::from_value::<PeerLoginStatus>(value)
-                    .map(|status| status.broker == params.machine_id && old.as_ref().is_none_or(|old| !status.borrowed_from.contains(old)))
+                    .map(|status| member_moved(&status, &changes, &new_default, &old_default))
                     .unwrap_or(false),
                 // A member that does not know the broker (an older Kybern) has nothing to move.
                 Ok(Err(CallFailure::Remote(error))) if error.code == codes::METHOD_NOT_FOUND => true,
@@ -2162,25 +2361,51 @@ pub async fn set_broker(state: &AppState, params: LoginBrokerSetParams) -> Resul
     }
     result.offline.extend(pending);
 
-    if let Some(old) = old.filter(|old| params.sign_out_old && Some(old.as_str()) != params.machine_id.as_deref()) {
-        // The old broker signs out only after the others re-borrowed, and only once it has heard of the move itself.
-        let heard = old == me || result.rebound.contains(&old);
-        if !heard {
-            result.note = Some("The old machine kept its sign-ins: it was offline, or had not heard of the change yet.".into());
-        } else if result.rebound.is_empty() && members.iter().any(|id| *id != old) && !result.offline.is_empty() {
-            result.note = Some("The old machine kept its sign-ins because no machine had borrowed from the new one yet.".into());
-        } else if old == me {
-            let released = broker.serve_release_all(state, PeerLoginReleaseAllParams { sign_out: true }).await;
-            result.old_signed_out = released.signed_out;
-        } else {
-            match broker.hub.call(&old, PeerLoginReleaseAll::NAME, json!({ "sign_out": true })).await {
-                Ok(value) => {
-                    result.old_signed_out =
-                        serde_json::from_value::<PeerLoginReleaseAllResult>(value).map(|released| released.signed_out).unwrap_or_default();
-                }
-                Err(failure) => result.note = Some(format!("The old machine was not asked to sign out: {failure}")),
+    if params.sign_out_old {
+        // Each old lender signs out of the agents it no longer lends, and only those.
+        let mut olds: Vec<(String, Vec<ProviderKind>)> = Vec::new();
+        for (kind, old, _) in &changes {
+            let Some(old) = old else { continue };
+            match olds.iter_mut().find(|(id, _)| id == old) {
+                Some((_, kinds)) => kinds.push(*kind),
+                None => olds.push((old.clone(), vec![*kind])),
             }
         }
+        for (old, kinds) in olds {
+            // The old broker signs out only after the others re-borrowed, and only once it has heard of the move itself.
+            let heard = old == me || result.rebound.contains(&old);
+            let still_lends = after.values().any(|lender| lender.as_deref() == Some(old.as_str()));
+            let knows_agents = old == me
+                || others
+                    .iter()
+                    .any(|member| member.id == old && member.features.iter().any(|feature| feature == features::LOGIN_BROKER_PER_KIND_V1));
+            if !heard {
+                notes.push("The old machine kept its sign-ins: it was offline, or had not heard of the change yet.".into());
+            } else if result.rebound.is_empty() && members.iter().any(|id| *id != old) && !result.offline.is_empty() {
+                notes.push("The old machine kept its sign-ins because no machine had borrowed from the new one yet.".into());
+            } else if still_lends && !knows_agents {
+                // An older Kybern would sign out of everything, also the agents it still lends.
+                notes.push("The old machine kept its sign-ins: it still shares another agent's sign-in and needs a newer Kybern to sign out of one agent only.".into());
+            } else if old == me {
+                let released = broker.serve_release_all(state, PeerLoginReleaseAllParams { sign_out: true, providers: kinds }).await;
+                result.old_signed_out.extend(released.signed_out);
+            } else {
+                let providers = if knows_agents { kinds } else { Vec::new() };
+                match broker.hub.call(&old, PeerLoginReleaseAll::NAME, json!({ "sign_out": true, "providers": providers })).await {
+                    Ok(value) => {
+                        result.old_signed_out.extend(
+                            serde_json::from_value::<PeerLoginReleaseAllResult>(value)
+                                .map(|released| released.signed_out)
+                                .unwrap_or_default(),
+                        );
+                    }
+                    Err(failure) => notes.push(format!("The old machine was not asked to sign out: {failure}")),
+                }
+            }
+        }
+    }
+    if !notes.is_empty() {
+        result.note = Some(notes.join(" "));
     }
     result.status = broker.status(state).await;
     Ok(result)
@@ -2316,7 +2541,7 @@ impl crate::usage::BoundUsage for LoginBroker {
     async fn read(&self, kind: ProviderKind, instance: &str) -> Option<Result<ProviderLimits, kybern_drivers::claude::UsageUnread>> {
         let account = self.binding(kind, instance)?;
         let unread = |detail: String| kybern_drivers::claude::UsageUnread { reason: LimitsStale::Unavailable, retry_at: None, detail };
-        let Some(broker_id) = self.broker_id().filter(|id| *id != self.self_id()) else {
+        let Some(broker_id) = self.lender_for(kind).filter(|id| *id != self.self_id()) else {
             return Some(Err(unread("no machine shares its sign-ins".into())));
         };
         let params = serde_json::to_value(PeerLoginUsageParams { provider: kind, account: account.clone() }).unwrap_or_default();
@@ -2538,6 +2763,111 @@ mod tests {
         assert_eq!(chosen_in(&projection, "mac"), None, "a choice of another machine is not this lender's");
         projection.registers.insert(CHOICE_REGISTER.into(), register(json!({})));
         assert_eq!(chosen_in(&projection, "vps"), None);
+    }
+
+    /// A projection with `vps`, `mac` and `pc` as members.
+    fn members() -> super::super::ops::Projection {
+        let mut projection = super::super::ops::Projection::default();
+        for id in ["vps", "mac", "pc"] {
+            projection.machines.insert(
+                id.into(),
+                super::super::ops::MachineEntry {
+                    descriptor: MachineDescriptor {
+                        machine_id: id.into(),
+                        name: id.into(),
+                        os: "linux".into(),
+                        signing_key: String::new(),
+                        sealing_key: String::new(),
+                        ts_node_id: None,
+                        ts_name: None,
+                        port: None,
+                    },
+                    paused: false,
+                    added_by: None,
+                    added_via: None,
+                    added_at: Utc::now(),
+                    add_op: String::new(),
+                    removed: None,
+                },
+            );
+        }
+        projection
+    }
+
+    fn set(projection: &mut super::super::ops::Projection, key: &str, value: Value) {
+        projection.registers.insert(key.into(), super::super::ops::Register { value, lamport: 1, signer: "vps".into(), op_id: key.into() });
+    }
+
+    #[test]
+    fn an_agent_follows_its_own_lender_and_else_the_default() {
+        let mut projection = members();
+        assert_eq!(effective_lender(&projection, ProviderKind::Codex), None);
+        set(&mut projection, "broker", json!("vps"));
+        set(&mut projection, CHOICE_REGISTER, json!({ "machine_id": "vps", "via": "always_on" }));
+        for kind in LENDABLE_KINDS {
+            assert_eq!(effective_lender(&projection, kind).as_deref(), Some("vps"));
+        }
+        // Codex from the Mac; the others keep the default.
+        set(&mut projection, &lender_register(ProviderKind::Codex), json!("mac"));
+        set(&mut projection, &lender_choice_register(ProviderKind::Codex), json!({ "machine_id": "mac", "via": "manual" }));
+        assert_eq!(effective_lender(&projection, ProviderKind::Codex).as_deref(), Some("mac"));
+        assert_eq!(effective_lender(&projection, ProviderKind::ClaudeCode).as_deref(), Some("vps"));
+        assert_eq!(chosen_for(&projection, Some(ProviderKind::Codex), "mac"), Some(LenderVia::Manual));
+        assert_eq!(chosen_for(&projection, Some(ProviderKind::ClaudeCode), "vps"), Some(LenderVia::AlwaysOn));
+        assert_eq!(chosen_for(&projection, None, "vps"), Some(LenderVia::AlwaysOn));
+        // An agent's own lender without a recorded choice is a legacy one, whatever the default's choice says.
+        set(&mut projection, &lender_choice_register(ProviderKind::Codex), json!({}));
+        assert_eq!(chosen_for(&projection, Some(ProviderKind::Codex), "mac"), None);
+        // Only lendable agents take one: a register for Cursor is ignored.
+        set(&mut projection, &lender_register(ProviderKind::Cursor), json!("mac"));
+        assert_eq!(effective_lender(&projection, ProviderKind::Cursor).as_deref(), Some("vps"));
+        // Cleared (empty), or naming a machine that left: the default again.
+        set(&mut projection, &lender_register(ProviderKind::Codex), json!(""));
+        assert_eq!(effective_lender(&projection, ProviderKind::Codex).as_deref(), Some("vps"));
+        set(&mut projection, &lender_register(ProviderKind::Codex), json!("gone"));
+        assert_eq!(effective_lender(&projection, ProviderKind::Codex).as_deref(), Some("vps"));
+        // No default: only the agent with its own lender has one.
+        set(&mut projection, &lender_register(ProviderKind::Codex), json!("mac"));
+        set(&mut projection, "broker", json!(""));
+        assert_eq!(effective_lender(&projection, ProviderKind::Codex).as_deref(), Some("mac"));
+        assert_eq!(effective_lender(&projection, ProviderKind::ClaudeCode), None);
+    }
+
+    #[test]
+    fn the_registers_of_an_agents_lender_are_any_members_to_set() {
+        assert!(super::super::ops::register_is_valid(&lender_register(ProviderKind::Codex), "m2"));
+        assert!(super::super::ops::register_is_valid(&lender_choice_register(ProviderKind::ClaudeCode), "m2"));
+    }
+
+    #[test]
+    fn a_member_has_moved_once_each_moved_agent_borrows_from_its_new_lender() {
+        let codex_moved: Vec<LenderChange> = vec![(ProviderKind::Codex, Some("vps".into()), Some("mac".into()))];
+        let status = |lenders: &[(ProviderKind, &str)], borrowed: &[(ProviderKind, &str)]| {
+            let mut status = PeerLoginStatus {
+                broker: Some("vps".into()),
+                lenders_by_kind: lenders.iter().map(|(kind, id)| (*kind, id.to_string())).collect(),
+                ..Default::default()
+            };
+            for (kind, peer) in borrowed {
+                status.borrowed_from_by_kind.entry(*kind).or_default().push(peer.to_string());
+                status.borrowed_from.push(peer.to_string());
+            }
+            status
+        };
+        let default = Some("vps".to_string());
+        // Still borrowing Claude from the VPS is fine; Codex must come from the Mac.
+        let moved = status(&[(ProviderKind::Codex, "mac"), (ProviderKind::ClaudeCode, "vps")], &[(ProviderKind::ClaudeCode, "vps")]);
+        assert!(member_moved(&moved, &codex_moved, &default, &default));
+        let not_heard = status(&[(ProviderKind::Codex, "vps")], &[]);
+        assert!(!member_moved(&not_heard, &codex_moved, &default, &default));
+        let still_borrowing = status(&[(ProviderKind::Codex, "mac")], &[(ProviderKind::Codex, "vps")]);
+        assert!(!member_moved(&still_borrowing, &codex_moved, &default, &default));
+        // An older member only knows the default.
+        let older = PeerLoginStatus { broker: Some("mac".into()), borrowed_from: vec!["vps".into()], ..Default::default() };
+        let mac = Some("mac".to_string());
+        assert!(!member_moved(&older, &[], &mac, &default));
+        let older = PeerLoginStatus { broker: Some("mac".into()), ..Default::default() };
+        assert!(member_moved(&older, &[], &mac, &default));
     }
 
     #[test]
