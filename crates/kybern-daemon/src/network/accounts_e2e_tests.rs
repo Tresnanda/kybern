@@ -880,12 +880,13 @@ async fn a_desktop_write_from_an_older_read_keeps_another_machines_edit() {
     sync_both(&a, &b).await;
     assert_eq!(a.state.settings.get().accounts_shared.profiles[&key_of(0)].name, "Renamed on b");
     // The desktop on a dismisses an offer, writing the document it read before the rename arrived.
-    let mut stale = read;
+    let mut stale = read.clone();
     stale
         .accounts_shared
         .offers
         .insert("new_machine:desktop".into(), OfferDismissal { state: OfferDismissalState::Never, fingerprint: "f".into() });
-    desktop.call::<SettingsUpdate>(SettingsUpdateParams { settings: stale }).await.unwrap();
+    // As the desktop and the phone send it: the document they edited, with the one it was made from.
+    desktop.call_raw(SettingsUpdate::NAME, json!({"settings": stale, "base": read})).await.unwrap();
     sync_both(&a, &b).await;
     sync_both(&a, &b).await;
     for node in [&a, &b] {
