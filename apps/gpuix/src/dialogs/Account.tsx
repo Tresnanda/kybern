@@ -16,7 +16,6 @@ import {
   supportsPasteCode,
   type SheetStep,
 } from '../shared/lib/accounts.ts'
-import { requestAntigravitySignIn } from '../antigravity/notice.ts'
 import { showDialog } from './store.ts'
 import { accountPickerOptions, antigravityAccountsBlocked, type AccountPickerOption } from './accountPicker.ts'
 import { ANTIGRAVITY_ACCOUNTS_FEATURE } from '../../../../packages/kybern-client/src/antigravity.ts'
@@ -151,8 +150,7 @@ function PickDialog({ view, initialKind, close, start }: { view: UnifiedView; in
     const machines = several ? targets : [view.machines[0]!]
     const items = planAdd({ kind, name, machines, computer, ...(folder.trim() ? { directory: folder.trim() } : {}) })
     if (kind !== 'antigravity') return start(items)
-    // The first sign-in on a device shows Google's notice, then comes back here.
-    requestAntigravitySignIn(() => showDialog({ kind: 'account', provider: 'antigravity', items }))
+    showDialog({ kind: 'account', provider: 'antigravity', items })
   }
   return <Dialog onClose={close} width={448} testId="add-account">
     <PickStep providers={pickerOptions} kind={selected?.disabled ? undefined : kind} onKind={choose} folder={folder} onFolder={setFolder} advancedOpen={advancedOpen} onAdvancedOpen={setAdvancedOpen} remote={remote}>

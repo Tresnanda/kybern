@@ -3,9 +3,6 @@
 /** Under a locked permission picker. */
 export const ANTIGRAVITY_FULL_ACCESS_NOTE = "Antigravity only runs in Full access";
 
-/** Before the first Google sign-in on a device. */
-export const ANTIGRAVITY_SIGN_IN_NOTICE = "Google says using Antigravity through other apps on a personal plan may get your account suspended.";
-
 /** The terminal command that signs Antigravity in. */
 export const ANTIGRAVITY_LOGIN_COMMAND = "agy";
 

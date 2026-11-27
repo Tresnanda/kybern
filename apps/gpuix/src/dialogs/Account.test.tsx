@@ -1,21 +1,11 @@
 // The Add an account picker lists Antigravity alongside the other sign-in agents (issue #347). Adding
-// it always makes a named account with a profile of its own, through the one-time Google notice; the
-// computer's own `agy` login is signed in only when asked for as its terminal login.
-import { afterEach, describe, expect, mock, test } from 'bun:test'
+// it always makes a named account with a profile of its own; the computer's own `agy` login is signed in only when
+// asked for as its terminal login.
+import { afterEach, describe, expect, test } from 'bun:test'
 import { useEffect } from 'react'
 import type { ProviderKind, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
-import { flushSync, harness } from './gpuixHarness.tsx'
+import { harness } from './gpuixHarness.tsx'
 import { showDialog, useDialog } from './store.ts'
-
-let noticeSeen = false
-mock.module('../antigravity/notice.ts', () => ({
-  antigravityNoticeSeen: () => noticeSeen,
-  acknowledgeAntigravityNotice: () => { noticeSeen = true },
-  requestAntigravitySignIn: (proceed: () => void) => {
-    if (noticeSeen) proceed()
-    else showDialog({ kind: 'antigravity-notice', proceed })
-  },
-}))
 
 const { accountPickerOptions, antigravityAccountsBlocked } = await import('./accountPicker.ts')
 const { Account, PickStep } = await import('./Account.tsx')
@@ -47,7 +37,6 @@ const ALL_PROVIDERS: ProviderStatus[] = [
 afterEach(() => {
   showDialog(null)
   setNav({ providers: [], providersLoaded: false })
-  noticeSeen = false
 })
 
 describe('accountPickerOptions', () => {
@@ -137,7 +126,7 @@ describe('PickStep Antigravity tile', () => {
     }
   })
 
-  test('adding Antigravity on a signed-out computer goes through the Google notice into a new named account, never its own login', () => {
+  test('adding Antigravity on a signed-out computer opens a new named account straight away, never its own login', () => {
     setNav({ providers: ALL_PROVIDERS, providersLoaded: true })
     const observed: { dialog: ReturnType<typeof useDialog> } = { dialog: null }
     function Observer() {
@@ -147,25 +136,10 @@ describe('PickStep Antigravity tile', () => {
     }
     const h = harness()
     try {
-      // First time (notice not yet seen): opens antigravity-notice whose proceed opens single-account sign-in.
-      noticeSeen = false
       h.render(<ThemeProvider><Observer /><Account close={() => {}} /></ThemeProvider>)
       h.fire(h.find('account-provider-antigravity')!, { eventType: 'click' })
       h.fire(h.find('account-start')!, { eventType: 'click' })
-      expect(observed.dialog?.kind).toBe('antigravity-notice')
-      if (observed.dialog?.kind === 'antigravity-notice') {
-        const proceed = observed.dialog.proceed
-        flushSync(() => proceed())
-      }
       const added = () => (observed.dialog?.kind === 'account' ? observed.dialog.items?.map((item) => [item.kind, item.named, item.ownLogin ?? false, item.instance]) : undefined)
-      expect(added()).toEqual([['antigravity', true, false, undefined]])
-
-      // After the notice is acknowledged: straight to the sign-in.
-      flushSync(() => showDialog(null))
-      noticeSeen = true
-      h.render(<ThemeProvider><Observer /><Account key="second" close={() => {}} /></ThemeProvider>)
-      h.fire(h.find('account-provider-antigravity')!, { eventType: 'click' })
-      h.fire(h.find('account-start')!, { eventType: 'click' })
       expect(added()).toEqual([['antigravity', true, false, undefined]])
     } finally {
       h.close()
