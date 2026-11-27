@@ -75,7 +75,8 @@ export async function saveSettings(next: Settings): Promise<boolean> {
   const at = revision;
   publish({ settings: next, saving: true, error: "" });
   try {
-    const saved = await active.call("settings.update", { settings: next });
+    // Sent with the document it was edited from, so account choices another machine made meanwhile stay.
+    const saved = await active.call("settings.update", { settings: next, base: previous });
     if ((settingsClient() ?? client) === active && revision === at) publish({ settings: saved });
     return true;
   } catch (e) {

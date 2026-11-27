@@ -66,7 +66,16 @@ impl AccountIdentities {
             return cached.probed.clone();
         }
         let probed = probe_context(instance.kind, &context).await;
+        // Signed in again, and the person hasn't chosen yet whether to keep it: the account stays as it was.
+        if state.account_logins.choice_pending(instance) {
+            return probed;
+        }
         self.remember(instance, digest, probed.clone());
+        if probed.0 == AccountStatus::SignedIn {
+            // Seen working, by whatever route it was signed in (a shell login, the terminal sign-in, a borrow):
+            // threads may use it again (#16).
+            state.orchestrator.account_seen_signed_in(instance);
+        }
         write_back(state, instance, &probed.1);
         probed
     }
@@ -97,7 +106,7 @@ fn write_back(state: &AppState, instance: &ProviderInstance, identity: &Option<A
         // make it this machine's login for the shared default, so the settings are mapped again.
         if identity.email.is_some()
             && crate::accounts_shared::remember_terminal_email(&state.store, instance.kind, identity.email.as_deref())
-            && let Err(error) = state.settings.set(state.settings.get())
+            && let Err(error) = state.settings.update(|current| Some((current.clone(), ())))
         {
             tracing::debug!(%error, "could not map the shared accounts after a terminal login changed");
         }
@@ -106,19 +115,22 @@ fn write_back(state: &AppState, instance: &ProviderInstance, identity: &Option<A
     if identity.email.is_none() && identity.plan.is_none() {
         return;
     }
-    let mut settings = state.settings.get();
-    let Some(account) = settings.providers.get_mut(&instance.kind).and_then(|provider| provider.accounts.get_mut(&instance.instance))
-    else {
-        return;
-    };
-    let email = identity.email.clone().or_else(|| account.email.clone());
-    let plan = identity.plan.clone().or_else(|| account.plan.clone());
-    if account.email == email && account.plan == plan {
-        return;
-    }
-    account.email = email;
-    account.plan = plan;
-    if let Err(error) = state.settings.set(settings) {
+    // Only this account's email and plan, against the settings as saved at the write: several probes run at
+    // once, and none may undo another writer's change (#378).
+    let saved = state.settings.update(|current| {
+        let account = current.providers.get(&instance.kind)?.accounts.get(&instance.instance)?;
+        let email = identity.email.clone().or_else(|| account.email.clone());
+        let plan = identity.plan.clone().or_else(|| account.plan.clone());
+        if account.email == email && account.plan == plan {
+            return None;
+        }
+        let mut next = current.clone();
+        let account = next.providers.get_mut(&instance.kind)?.accounts.get_mut(&instance.instance)?;
+        account.email = email;
+        account.plan = plan;
+        Some((next, ()))
+    });
+    if let Err(error) = saved {
         tracing::debug!(%error, "could not save an account's identity");
     }
 }

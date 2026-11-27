@@ -40,6 +40,10 @@ const RETAIN: Duration = Duration::from_secs(10 * 60);
 const STDOUT_URL_GRACE: Duration = Duration::from_millis(1500);
 const BUFFER_CAP: usize = 64 * 1024;
 const WRONG_CODE: &str = "That code didn't work. Open the sign-in page again and paste the new code.";
+/// Written into a staging folder when a new sign-in creates it and removed once the account is registered.
+/// Only a folder carrying it is ever swept at start: a folder without it is somebody's account, even when
+/// settings no longer list it (an overwrite, an older settings file), and is never deleted.
+pub const STAGING_MARKER: &str = ".kybern-staging";
 
 pub struct AccountLogins {
     inner: Arc<Inner>,
@@ -73,6 +77,9 @@ struct Login {
     finished: Option<ProviderInstance>,
     /// The sign-in was verified, so cleanup must also sign the folder out.
     signed_in: bool,
+    /// Signing an account in again landed on another email (or one already added): nothing about the
+    /// account changes until `finish` keeps it, and a cancel signs the folder out again (#13).
+    choice_pending: bool,
     ended_at: Option<Instant>,
 }
 
@@ -187,6 +194,20 @@ impl AccountLogins {
                 params.mode == AccountLoginMode::Terminal,
                 "Antigravity signs in from a terminal. Choose Terminal, then finish Google's sign-in there."
             );
+            // Like the other terminal logins: only while it is signed out, so no client can replace the person's
+            // own `agy` login. A Keychain that didn't answer is "unknown", never "signed out".
+            let (status, _) = state.account_identities.probe(state, &ProviderInstance::default_for(kind), true).await;
+            match status {
+                AccountStatus::SignedOut | AccountStatus::NeedsSignIn => {}
+                AccountStatus::SignedIn => anyhow::bail!(
+                    "Antigravity on {} is already signed in, and Kybern never switches it to another account. Add an account instead.",
+                    host_name()
+                ),
+                AccountStatus::Unknown => anyhow::bail!(
+                    "Kybern can't tell whether Antigravity is signed in on {}. Sign in from your terminal with agy, or add an account instead.",
+                    host_name()
+                ),
+            }
         } else if antigravity {
             ensure!(
                 matches!(params.mode, AccountLoginMode::Paste | AccountLoginMode::Terminal),
@@ -321,6 +342,7 @@ impl AccountLogins {
         let staging = if created {
             std::fs::create_dir_all(&directory)?;
             set_private_dir(&directory);
+            write_private(&directory.join(STAGING_MARKER), b"")?;
             Some(directory.clone())
         } else {
             None
@@ -386,6 +408,7 @@ impl AccountLogins {
                 hidden_terminal: spec.hidden_pty,
                 finished: None,
                 signed_in: false,
+                choice_pending: false,
                 ended_at: None,
             },
         );
@@ -494,8 +517,10 @@ impl AccountLogins {
         }
         // Not running: a verified sign-in that was never finished still holds a folder.
         self.cleanup(state, id).await;
+        self.discard_pending_choice(state, id).await;
         self.update(id, |login| {
-            let reauthorized = login.public.instance.is_some() && login.public.phase == AccountLoginPhase::SignedIn;
+            let reauthorized =
+                login.public.instance.is_some() && login.public.phase == AccountLoginPhase::SignedIn && !login.choice_pending;
             if login.finished.is_none()
                 && !reauthorized
                 && !matches!(login.public.phase, AccountLoginPhase::Failed | AccountLoginPhase::Canceled)
@@ -530,51 +555,144 @@ impl AccountLogins {
         self.update(id, |login| login.signed_in = false);
     }
 
+    /// A re-sign-in that went to another account and was canceled: the account keeps its email and
+    /// signed-out flag, and its folder, which now holds someone else's login, is signed out again.
+    async fn discard_pending_choice(&self, state: &AppState, id: &str) {
+        let pending = self.update(id, |login| {
+            let pending = login.choice_pending && login.finished.is_none();
+            login.choice_pending = false;
+            pending.then(|| (login.public.kind, login.public.instance.clone(), login.directory.clone()))
+        });
+        let Some(Some((kind, Some(instance), directory))) = pending else { return };
+        sign_out_folder(state, kind, &directory).await;
+        let provider_instance = ProviderInstance { kind, instance };
+        let _ = state.orchestrator.mark_account_signed_out(&provider_instance, true);
+        state.account_identities.invalidate(&provider_instance);
+        self.update(id, |login| login.public.phase = AccountLoginPhase::Canceled);
+    }
+
+    /// Whether signing `instance` in again waits for the person to keep or discard another account's
+    /// sign-in. Until then nothing may learn that account's new identity (#13).
+    pub fn choice_pending(&self, instance: &ProviderInstance) -> bool {
+        self.lock().values().any(|login| {
+            login.choice_pending
+                && login.finished.is_none()
+                && login.public.kind == instance.kind
+                && login.public.instance.as_deref() == Some(instance.instance.as_str())
+        })
+    }
+
     pub async fn finish(&self, state: &AppState, params: AccountLoginFinishParams) -> Result<ProviderInstance> {
-        let (public, directory, existing) = {
+        let (public, directory, existing, pending) = {
             let logins = self.lock();
             let login = logins.get(&params.id).ok_or_else(|| anyhow!("This sign-in has ended. Start again."))?;
-            (login.public.clone(), login.directory.clone(), login.finished.clone())
+            (login.public.clone(), login.directory.clone(), login.finished.clone(), login.choice_pending)
         };
         if let Some(instance) = existing {
             return Ok(instance);
         }
-        ensure!(public.instance.is_none(), "Signing in again doesn't add an account.");
         ensure!(public.phase == AccountLoginPhase::SignedIn, "Finish signing in before adding the account.");
+        if let Some(instance) = public.instance.clone() {
+            // Signing in again: "Keep" saves a sign-in that went to another account.
+            if let Some(other) = &public.duplicate_of {
+                let name = state
+                    .settings
+                    .get()
+                    .providers
+                    .get(&public.kind)
+                    .and_then(|provider| provider.accounts.get(other))
+                    .map(|account| account.name.clone())
+                    .unwrap_or_else(|| "the terminal login".into());
+                anyhow::bail!("This sign-in is already added as {name}. Try again with the account you meant.");
+            }
+            let provider_instance = ProviderInstance { kind: public.kind, instance };
+            if pending {
+                let identity = public.identity.clone().unwrap_or_default();
+                self.apply_sign_in_again(state, &provider_instance, &identity, None).await;
+            }
+            self.update(&params.id, |login| {
+                login.finished = Some(provider_instance.clone());
+                login.choice_pending = false;
+            });
+            return Ok(provider_instance);
+        }
         ensure!(public.duplicate_of.is_none(), "This account is already added.");
         let name = params.name.trim().to_string();
         ensure!(!name.is_empty() && name.len() <= 120, "Enter a name up to 120 characters.");
         if let Some(color) = &params.color {
             crate::provider_accounts::validate_color(color)?;
         }
-        let mut settings = state.settings.get();
-        let provider = settings.providers.entry(public.kind).or_default();
-        let color = params.color.clone().unwrap_or_else(|| crate::provider_accounts::next_color(provider));
         let identity = public.identity.clone().unwrap_or_default();
-        provider.accounts.insert(
-            public.id.clone(),
-            ProviderAccount {
-                name,
-                directory: directory.to_string_lossy().into_owned(),
-                color: Some(color),
-                email: identity.email,
-                plan: identity.plan,
-            },
-        );
-        if params.make_default {
-            provider.default_account = Some(public.id.clone());
-        }
-        crate::provider_assets::prepare(provider, public.kind)?;
-        state.settings.set(settings)?;
+        // Only this account and (when asked) this machine's default change; anything saved meanwhile stays.
+        state.settings.update_with(|current, choice| {
+            let mut settings = current.clone();
+            let provider = settings.providers.entry(public.kind).or_default();
+            let color = params.color.clone().unwrap_or_else(|| crate::provider_accounts::next_color(provider));
+            provider.accounts.insert(
+                public.id.clone(),
+                ProviderAccount {
+                    name: name.clone(),
+                    directory: directory.to_string_lossy().into_owned(),
+                    color: Some(color),
+                    email: identity.email.clone(),
+                    plan: identity.plan.clone(),
+                },
+            );
+            if params.make_default {
+                provider.default_account = Some(public.id.clone());
+                // A machine's first account is its default here. With a default shared across the network, the
+                // others keep it, and this machine follows it if it has that account (#2).
+                if current.accounts_shared.defaults.contains_key(&public.kind) {
+                    *choice = crate::settings::AccountChoice::LocalOnly;
+                }
+            }
+            crate::provider_assets::prepare(provider, public.kind)?;
+            Ok(Some((settings, ())))
+        })?;
         let instance = ProviderInstance { kind: public.kind, instance: public.id.clone() };
         self.update(&params.id, |login| {
             login.finished = Some(instance.clone());
             login.staging = None;
         });
+        // Registered first, so a stop between the two leaves a registered folder, which is never swept.
+        let _ = std::fs::remove_file(directory.join(STAGING_MARKER));
         state.account_identities.invalidate(&instance);
         state.provider_catalogs.invalidate().await;
         state.orchestrator.usage().forget_account(instance.kind, &instance.instance);
         Ok(instance)
+    }
+
+    /// Save what signing an account in again found: its email and plan (only those fields), the cleared
+    /// signed-out flag, and for the terminal login the email it now has.
+    async fn apply_sign_in_again(&self, state: &AppState, instance: &ProviderInstance, identity: &AccountIdentity, digest: Option<String>) {
+        let (kind, id) = (instance.kind, instance.instance.clone());
+        let saved = state.settings.update(|current| {
+            let account = current.providers.get(&kind)?.accounts.get(&id)?;
+            let email = identity.email.clone().or_else(|| account.email.clone());
+            let plan = identity.plan.clone().or_else(|| account.plan.clone());
+            if account.email == email && account.plan == plan {
+                return None;
+            }
+            let mut next = current.clone();
+            let account = next.providers.get_mut(&kind)?.accounts.get_mut(&id)?;
+            account.email = email;
+            account.plan = plan;
+            Some((next, ()))
+        });
+        if let Err(error) = saved {
+            tracing::debug!(%error, "could not save the identity of an account signed in again");
+        }
+        let _ = state.orchestrator.mark_account_signed_out(instance, false);
+        if id == "default" && crate::accounts_shared::remember_terminal_email(&state.store, kind, identity.email.as_deref()) {
+            // The terminal login may now be this machine's login for a shared account.
+            let _ = state.settings.update(|current| Some((current.clone(), ())));
+        }
+        match digest {
+            Some(digest) => state.account_identities.remember(instance, digest, (AccountStatus::SignedIn, Some(identity.clone()))),
+            None => state.account_identities.invalidate(instance),
+        }
+        state.orchestrator.usage().forget_account(kind, &id);
+        state.provider_catalogs.invalidate().await;
     }
 
     // ---- handing the redirect over from another machine ----
@@ -783,6 +901,26 @@ impl AccountLogins {
         }
     }
 
+    /// The account of this agent here (the terminal login first) whose login has `email`, other than `except`.
+    async fn duplicate_of(
+        &self,
+        state: &AppState,
+        kind: ProviderKind,
+        provider: &kybern_protocol::ProviderSettings,
+        email: &str,
+        except: Option<&str>,
+    ) -> Option<String> {
+        let email = email.to_ascii_lowercase();
+        let instances = std::iter::once("default".to_string()).chain(provider.accounts.keys().cloned());
+        for instance in instances.filter(|instance| Some(instance.as_str()) != except) {
+            let probed = state.account_identities.probe(state, &ProviderInstance { kind, instance: instance.clone() }, false).await;
+            if probed.1.and_then(|identity| identity.email).is_some_and(|other| other.to_ascii_lowercase() == email) {
+                return Some(instance);
+            }
+        }
+        None
+    }
+
     /// The harness finished: read the folder's identity, detect duplicates and
     /// suggest a name and color.
     async fn verify(&self, state: &AppState, id: &str, spec: &Spec) {
@@ -833,48 +971,32 @@ impl AccountLogins {
                 (Some(old), Some(new)) if !old.eq_ignore_ascii_case(new) => previous_email.clone(),
                 _ => None,
             };
-            let mut next = state.settings.get();
-            if let Some(account) = next.providers.get_mut(&public.kind).and_then(|provider| provider.accounts.get_mut(&instance)) {
-                account.email = identity.email.clone().or(account.email.take());
-                account.plan = identity.plan.clone().or(account.plan.take());
-                let _ = state.settings.set(next);
+            // The same duplicate check as a new account: another account here already has this email.
+            let duplicate_of = match (&identity.email, instance == "default") {
+                (Some(email), false) => self.duplicate_of(state, public.kind, &provider, email, Some(&instance)).await,
+                _ => None,
+            };
+            // A named account that went to someone else waits for Keep; nothing about it changes before.
+            let pending = instance != "default" && (changed.is_some() || duplicate_of.is_some());
+            if !pending {
+                self.apply_sign_in_again(state, &provider_instance, &identity, Some(crate::account_identity::digest(&spec.env))).await;
             }
-            let _ = state.orchestrator.mark_account_signed_out(&provider_instance, false);
-            if instance == "default"
-                && crate::accounts_shared::remember_terminal_email(&state.store, public.kind, identity.email.as_deref())
-            {
-                // The terminal login may now be this machine's login for a shared account.
-                let _ = state.settings.set(state.settings.get());
-            }
-            state.account_identities.remember(
-                &provider_instance,
-                crate::account_identity::digest(&spec.env),
-                (AccountStatus::SignedIn, Some(identity.clone())),
-            );
-            state.orchestrator.usage().forget_account(public.kind, &instance);
-            state.provider_catalogs.invalidate().await;
             self.update(id, |login| {
                 login.signed_in = false;
+                login.choice_pending = pending;
                 login.public.identity = Some(identity);
                 login.public.previous_email = changed;
+                login.public.duplicate_of = duplicate_of;
                 login.public.phase = AccountLoginPhase::SignedIn;
             });
             return;
         }
 
         // A new account: is this email already added for this agent?
-        let mut duplicate_of = None;
-        if let Some(email) = identity.email.as_deref().map(str::to_ascii_lowercase) {
-            let instances = std::iter::once("default".to_string()).chain(provider.accounts.keys().cloned()).collect::<Vec<_>>();
-            for instance in instances {
-                let probed =
-                    state.account_identities.probe(state, &ProviderInstance { kind: public.kind, instance: instance.clone() }, false).await;
-                if probed.1.and_then(|identity| identity.email).is_some_and(|other| other.to_ascii_lowercase() == email) {
-                    duplicate_of = Some(instance);
-                    break;
-                }
-            }
-        }
+        let duplicate_of = match identity.email.as_deref() {
+            Some(email) => self.duplicate_of(state, public.kind, &provider, email, None).await,
+            None => None,
+        };
         if duplicate_of.is_some() {
             // The sign-in is unusable as a new account: sign the folder out and delete it.
             self.cleanup(state, id).await;
@@ -1057,9 +1179,11 @@ pub fn for_observer(mut login: AccountLogin) -> AccountLogin {
 }
 
 /// Staging folders a previous daemon left behind (it stopped mid sign-in): a
-/// folder under `<data>/accounts/<kind>/` that no account uses, since finished
-/// accounts are registered before their login ends. Call before serving, so no
-/// sign-in of this daemon has started yet.
+/// folder under `<data>/accounts/<kind>/` that carries [`STAGING_MARKER`] and
+/// that no account uses. A folder without the marker is never returned, even
+/// when no account lists it: settings can lose an entry (an overwrite, an older
+/// file), and deleting it would sign a real account out. Call before serving,
+/// so no sign-in of this daemon has started yet.
 pub fn orphaned_staging(state: &AppState) -> Vec<(ProviderKind, PathBuf)> {
     let settings = state.settings.get();
     let registered: Vec<PathBuf> = settings
@@ -1078,7 +1202,13 @@ pub fn orphaned_staging(state: &AppState) -> Vec<(ProviderKind, PathBuf)> {
         for entry in entries.flatten() {
             let path = entry.path();
             let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
-            if entry.file_type().is_ok_and(|file| file.is_dir()) && !registered.contains(&canonical) {
+            if !entry.file_type().is_ok_and(|file| file.is_dir()) || !path.join(STAGING_MARKER).is_file() {
+                continue;
+            }
+            if registered.contains(&canonical) {
+                // Registered just before a stop removed the marker: the account is real.
+                let _ = std::fs::remove_file(path.join(STAGING_MARKER));
+            } else {
                 orphans.push((kind, path));
             }
         }
@@ -1527,6 +1657,36 @@ exit 2
         }
     }
 
+    /// Antigravity's own login reads `$HOME`: an empty home of the test's, never the person's.
+    fn isolate_antigravity_home(fixture: &Fixture) -> PathBuf {
+        let home = fixture.root.join("agy-home");
+        std::fs::create_dir_all(&home).unwrap();
+        let mut settings = fixture.state.settings.get();
+        let agy = settings.providers.entry(ProviderKind::Antigravity).or_default();
+        agy.env.insert("HOME".into(), home.to_string_lossy().into_owned());
+        agy.env.insert("USERPROFILE".into(), home.to_string_lossy().into_owned());
+        fixture.state.settings.set(settings).unwrap();
+        home
+    }
+
+    /// A named Claude account `id` in its own folder, last seen as `email`.
+    fn named_claude(fixture: &Fixture, id: &str, email: &str) -> PathBuf {
+        let folder = fixture.root.join(id);
+        std::fs::create_dir_all(&folder).unwrap();
+        let mut settings = fixture.state.settings.get();
+        settings.providers.entry(ProviderKind::ClaudeCode).or_default().accounts.insert(
+            id.into(),
+            ProviderAccount {
+                name: id.into(),
+                directory: folder.to_string_lossy().into_owned(),
+                email: Some(email.into()),
+                ..Default::default()
+            },
+        );
+        fixture.state.settings.set(settings).unwrap();
+        folder
+    }
+
     fn params(kind: ProviderKind, mode: AccountLoginMode) -> AccountLoginStartParams {
         AccountLoginStartParams { kind, instance: None, mode, directory: None, upstream: None, named: false }
     }
@@ -1551,6 +1711,7 @@ exit 2
         assert!(login.url.as_deref().unwrap().starts_with("https://claude.com/"), "the shim captured the page");
         let dir = fixture.login_dir(&login);
         assert!(dir.is_dir());
+        assert!(dir.join(STAGING_MARKER).is_file(), "a new sign-in's folder is marked as staging");
         std::fs::write(dir.join("email"), "dev@arunika.co").unwrap();
         std::fs::write(dir.join("approve"), "").unwrap();
         let signed_in = wait_for(state, &login.id, |login| login.phase == AccountLoginPhase::SignedIn).await;
@@ -1571,6 +1732,7 @@ exit 2
         assert_eq!(account.email.as_deref(), Some("dev@arunika.co"));
         assert_eq!(account.color.as_deref(), Some("blue"));
         assert!(dir.is_dir(), "a finished account keeps its folder");
+        assert!(!dir.join(STAGING_MARKER).exists(), "a registered account is no longer staging");
         // Closing the sheet after finish cancels nothing.
         state.account_logins.cancel(state, &login.id).await.unwrap();
         assert!(dir.is_dir());
@@ -1797,8 +1959,14 @@ exit 2
         let accounts = state.settings.dir().join("accounts").join(ProviderKind::ClaudeCode.as_str());
         let orphan = accounts.join("orphan");
         let kept = accounts.join("kept");
+        // An account whose settings entry was lost (an overwrite, an older settings file): no marker.
+        let unlisted = accounts.join("unlisted");
         std::fs::create_dir_all(&orphan).unwrap();
         std::fs::create_dir_all(&kept).unwrap();
+        std::fs::create_dir_all(&unlisted).unwrap();
+        std::fs::write(orphan.join(STAGING_MARKER), "").unwrap();
+        // Registered, then stopped before the marker went.
+        std::fs::write(kept.join(STAGING_MARKER), "").unwrap();
         let mut settings = state.settings.get();
         settings.providers.entry(ProviderKind::ClaudeCode).or_default().accounts.insert(
             "kept".into(),
@@ -1810,6 +1978,8 @@ exit 2
         remove_orphans(state.clone(), orphans).await;
         assert!(!orphan.exists());
         assert!(kept.is_dir(), "a registered account's folder is never swept");
+        assert!(!kept.join(STAGING_MARKER).exists(), "a registered folder loses a leftover marker");
+        assert!(unlisted.is_dir(), "a folder Kybern never marked as staging is never swept");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1874,13 +2044,118 @@ exit 2
         assert_eq!(unnamed.instance, None, "a new account");
         assert!(fixture.login_dir(&unnamed).is_dir(), "its own folder");
         state.account_logins.cancel(state, &unnamed.id).await.unwrap();
-        // This computer's own login only when named as `default`.
+        // This computer's own login only when named as `default`, and only while it is signed out (a home of its own here).
+        isolate_antigravity_home(&fixture);
         let mut own = params(ProviderKind::Antigravity, AccountLoginMode::Terminal);
         own.instance = Some("default".into());
         let machine = state.account_logins.start(state, own).await.unwrap();
         assert_eq!(machine.instance.as_deref(), Some("default"));
         assert!(fixture.staging("antigravity").is_empty(), "no account folder for this computer's login");
         let _ = state.account_logins.cancel(state, &machine.id).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_computers_own_antigravity_login_is_never_replaced_while_it_is_signed_in() {
+        let fixture = fixture();
+        let state = &fixture.state;
+        let home = isolate_antigravity_home(&fixture);
+        let token = home.join(".gemini/antigravity-cli");
+        std::fs::create_dir_all(&token).unwrap();
+        std::fs::write(
+            token.join("antigravity-oauth-token"),
+            r#"{"token":{"access_token":"t","expiry":"2099-01-01T00:00:00Z"},"auth_method":"oauth-personal","id_token_email":"me@arunika.co"}"#,
+        )
+        .unwrap();
+        let mut own = params(ProviderKind::Antigravity, AccountLoginMode::Terminal);
+        own.instance = Some("default".into());
+        let error = state.account_logins.start(state, own).await.unwrap_err();
+        assert!(error.to_string().contains("already signed in"), "{error}");
+        assert!(token.join("antigravity-oauth-token").is_file(), "the person's own login stays");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_first_sign_in_never_replaces_the_default_shared_across_machines() {
+        let fixture = fixture();
+        let state = &fixture.state;
+        let mut settings = state.settings.get();
+        settings.accounts_shared.defaults.insert(ProviderKind::ClaudeCode, "claude-code:else@where.com".into());
+        state.settings.set(settings).unwrap();
+        let login = state.account_logins.start(state, params(ProviderKind::ClaudeCode, AccountLoginMode::Browser)).await.unwrap();
+        let dir = fixture.login_dir(&login);
+        std::fs::write(dir.join("email"), "dev@arunika.co").unwrap();
+        std::fs::write(dir.join("approve"), "").unwrap();
+        wait_for(state, &login.id, |login| login.phase == AccountLoginPhase::SignedIn).await;
+        // The desktop sends `make_default` for a machine's first account.
+        let finish = AccountLoginFinishParams { id: login.id.clone(), name: "Arunika".into(), color: None, make_default: true };
+        state.account_logins.finish(state, finish).await.unwrap();
+        let settings = state.settings.get();
+        assert_eq!(settings.accounts_shared.defaults[&ProviderKind::ClaudeCode], "claude-code:else@where.com", "every machine keeps it");
+        assert_eq!(
+            settings.providers[&ProviderKind::ClaudeCode].default_account.as_deref(),
+            Some(login.id.as_str()),
+            "this one runs its own"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn signing_in_again_as_someone_else_changes_nothing_until_it_is_kept() {
+        let fixture = fixture();
+        let state = &fixture.state;
+        let folder = named_claude(&fixture, "work", "work@arunika.co");
+        let work = ProviderInstance { kind: ProviderKind::ClaudeCode, instance: "work".into() };
+        state.orchestrator.mark_account_signed_out(&work, true).unwrap();
+        let again = |state: &AppState| {
+            let mut start = params(ProviderKind::ClaudeCode, AccountLoginMode::Browser);
+            start.instance = Some("work".into());
+            let state = state.clone();
+            async move { state.account_logins.start(&state, start).await.unwrap() }
+        };
+        let email_of = |state: &AppState| state.settings.get().providers[&ProviderKind::ClaudeCode].accounts["work"].email.clone();
+
+        // The browser was signed in to someone else.
+        let login = again(state).await;
+        std::fs::write(folder.join("email"), "other@arunika.co").unwrap();
+        std::fs::write(folder.join("approve"), "").unwrap();
+        let done = wait_for(state, &login.id, |login| login.phase == AccountLoginPhase::SignedIn).await;
+        assert_eq!(done.previous_email.as_deref(), Some("work@arunika.co"));
+        assert_eq!(email_of(state).as_deref(), Some("work@arunika.co"), "nothing changes before Keep");
+        assert!(state.orchestrator.admit_signed_out_for_test(&work));
+        // A probe meanwhile doesn't learn the new identity either.
+        crate::provider_accounts::list(state, AccountsListParams { kind: Some(ProviderKind::ClaudeCode), refresh: true }).await.unwrap();
+        assert_eq!(email_of(state).as_deref(), Some("work@arunika.co"));
+        assert!(state.orchestrator.admit_signed_out_for_test(&work));
+        // Cancel: the account is as it was, and its folder no longer holds the other person's login.
+        let canceled = state.account_logins.cancel(state, &login.id).await.unwrap();
+        assert_eq!(canceled.phase, AccountLoginPhase::Canceled);
+        assert_eq!(email_of(state).as_deref(), Some("work@arunika.co"));
+        assert!(state.orchestrator.admit_signed_out_for_test(&work));
+        assert!(!folder.join(".signed-in").exists(), "signed out again");
+        assert!(folder.is_dir());
+
+        // Again, and Keep: now it is saved.
+        std::fs::remove_file(folder.join("approve")).unwrap();
+        let login = again(state).await;
+        std::fs::write(folder.join("approve"), "").unwrap();
+        wait_for(state, &login.id, |login| login.phase == AccountLoginPhase::SignedIn).await;
+        let finish = AccountLoginFinishParams { id: login.id.clone(), name: String::new(), color: None, make_default: false };
+        assert_eq!(state.account_logins.finish(state, finish).await.unwrap(), work);
+        assert_eq!(email_of(state).as_deref(), Some("other@arunika.co"));
+        assert!(!state.orchestrator.admit_signed_out_for_test(&work));
+
+        // The duplicate check applies to a re-sign-in too.
+        named_claude(&fixture, "home", "home@arunika.co");
+        std::fs::write(fixture.root.join("home").join(".signed-in"), "home@arunika.co").unwrap();
+        std::fs::remove_file(folder.join("approve")).unwrap();
+        let login = again(state).await;
+        std::fs::write(folder.join("email"), "home@arunika.co").unwrap();
+        std::fs::write(folder.join("approve"), "").unwrap();
+        let done = wait_for(state, &login.id, |login| login.phase == AccountLoginPhase::SignedIn).await;
+        assert_eq!(done.duplicate_of.as_deref(), Some("home"));
+        let finish = AccountLoginFinishParams { id: login.id.clone(), name: String::new(), color: None, make_default: false };
+        let error = state.account_logins.finish(state, finish).await.unwrap_err();
+        assert!(error.to_string().contains("already added as home"), "{error}");
+        assert_eq!(email_of(state).as_deref(), Some("other@arunika.co"));
+        state.account_logins.cancel(state, &login.id).await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -73,7 +73,7 @@ export async function makeDefault(view: UnifiedView, account: UnifiedAccount): P
         const client = clientOf(standing.machineId)
         const settings = await client.call('settings.get', {})
         const current = settings.providers[account.kind] ?? { env: {} }
-        const saved = await client.call('settings.update', { settings: { ...settings, providers: { ...settings.providers, [account.kind]: { ...current, default_account: named?.instance ?? null } } } })
+        const saved = await client.call('settings.update', { settings: { ...settings, providers: { ...settings.providers, [account.kind]: { ...current, default_account: named?.instance ?? null } } }, base: settings })
         if (standing.machineId === primaryId()) setSettings(saved)
         await reread(standing.machineId)
         took.push(standing.machine)

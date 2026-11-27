@@ -223,7 +223,7 @@ async fn removing_an_account_resets_thread_overrides_and_signed_out_accounts_fai
 }
 
 #[test]
-fn default_following_threads_resolve_on_next_admission_and_account_return_restores_native_identity() {
+fn a_default_change_moves_only_threads_that_never_ran_and_account_return_restores_native_identity() {
     let fixture = Fixture::new();
     let mut thread = fixture.thread(ThreadStatus::Idle);
     let kind = thread.provider.kind;
@@ -231,9 +231,18 @@ fn default_following_threads_resolve_on_next_admission_and_account_return_restor
     let mut settings = fixture.orchestrator.inner.settings.get();
     settings.providers.entry(thread.provider.kind).or_default().default_account = Some("work".into());
     fixture.orchestrator.inner.settings.set(settings).unwrap();
+    // A thread that already ran keeps its account and native session when the default changes (#21)...
+    let kept = fixture.orchestrator.thread_target(thread.id).unwrap();
+    assert_eq!(kept.target.provider.instance, "default");
+    assert_eq!(kept.native_session_id.as_deref(), Some("provider-session"));
+    assert_eq!(fixture.orchestrator.resolved_provider(&thread).unwrap().instance, "default");
+    // ...and one that never ran follows the new default.
+    let fresh = Thread { provider_session_id: None, ..thread.clone() };
+    fixture.store.thread_upsert(&fresh).unwrap();
     let next = fixture.orchestrator.thread_target(thread.id).unwrap();
     assert_eq!(next.target.provider.instance, "work");
     assert!(!next.account_override);
+    fixture.store.thread_upsert(&thread).unwrap();
     assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().provider.instance, "default");
     fixture.orchestrator.admit_target(&mut thread, next.target).unwrap();
     assert!(thread.provider_session_id.is_none());

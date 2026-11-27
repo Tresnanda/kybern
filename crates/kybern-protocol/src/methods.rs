@@ -566,6 +566,23 @@ pub struct AccountsListParams {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AccountsListResult {
     pub accounts: Vec<AccountSummary>,
+    /// The harnesses whose shared default this machine doesn't run on (0.27.2): it has no login for that
+    /// account (or its login now has another email), so its threads use another account until it does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unfollowed_defaults: Vec<UnfollowedDefault>,
+}
+
+/// A shared default this machine can't follow (`AccountsListResult::unfollowed_defaults`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct UnfollowedDefault {
+    pub kind: ProviderKind,
+    /// The shared default's account key (`<kind>:<email>`).
+    pub key: String,
+    /// The account this machine runs new threads on instead (`default` is the terminal login).
+    pub running_on: String,
+    /// This machine has a login for that account, but runs another one by choice (an account it chose
+    /// whose email isn't known yet). `false`: it has no login for that account.
+    pub has_account: bool,
 }
 method!(AccountsList, "providers.accounts.list", Some(Scope::OrchestrationRead), AccountsListParams, AccountsListResult);
 
@@ -2300,6 +2317,10 @@ method!(SettingsGet, "settings.get", Some(Scope::OrchestrationRead), Empty, Sett
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SettingsUpdateParams {
     pub settings: Settings,
+    /// The document `settings` was edited from (0.27.2). With it, account fields the client left as they were
+    /// keep what the daemon has now, so a default or name that another machine shared meanwhile is never undone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<Settings>,
 }
 method!(SettingsUpdate, "settings.update", Some(Scope::OrchestrationOperate), SettingsUpdateParams, Settings);
 

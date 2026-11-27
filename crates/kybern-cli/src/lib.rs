@@ -1653,6 +1653,7 @@ async fn preview_cmd(client: &Client, cmd: PreviewCmd, json: bool) -> Result<()>
         }
         PreviewCmd::Folders { remove } => {
             let mut settings = client.call::<SettingsGet>(Empty {}).await?;
+            let base = settings.clone();
             if let Some(folder) = remove {
                 let wanted = std::fs::canonicalize(&folder).map(|p| p.to_string_lossy().into_owned()).unwrap_or(folder.clone());
                 let before = settings.preview_allowed_folders.len();
@@ -1660,7 +1661,7 @@ async fn preview_cmd(client: &Client, cmd: PreviewCmd, json: bool) -> Result<()>
                 if settings.preview_allowed_folders.len() == before {
                     anyhow::bail!("{folder} is not an allowed preview folder. Run `kybern preview folders` to see the list.");
                 }
-                settings = client.call::<SettingsUpdate>(SettingsUpdateParams { settings }).await?;
+                settings = client.call::<SettingsUpdate>(SettingsUpdateParams { settings, base: Some(base) }).await?;
             }
             if json {
                 println!("{}", serde_json::to_string_pretty(&settings.preview_allowed_folders)?);
@@ -1876,6 +1877,7 @@ pub async fn run() -> Result<()> {
             }
             AccountsCmd::Default { provider, account, project } => {
                 let mut settings = client.call::<SettingsGet>(Empty {}).await?;
+                let base = settings.clone();
                 let path = match project {
                     Some(project) => {
                         let id = resolve_project(&client, &project, false).await?;
@@ -1902,7 +1904,8 @@ pub async fn run() -> Result<()> {
                 } else {
                     provider_settings.default_account = Some(account);
                 }
-                println!("{}", serde_json::to_string_pretty(&client.call::<SettingsUpdate>(SettingsUpdateParams { settings }).await?)?);
+                let saved = client.call::<SettingsUpdate>(SettingsUpdateParams { settings, base: Some(base) }).await?;
+                println!("{}", serde_json::to_string_pretty(&saved)?);
             }
         },
         Cmd::Target { thread, provider, account, model, effort, inherit } => {
@@ -2595,7 +2598,8 @@ pub async fn run() -> Result<()> {
             SettingsCmd::Set { file } => {
                 let text = if file == "-" { std::io::read_to_string(std::io::stdin())? } else { std::fs::read_to_string(&file)? };
                 let settings: Settings = serde_json::from_str(&text)?;
-                let r = client.call::<SettingsUpdate>(SettingsUpdateParams { settings }).await?;
+                // A whole document from a file replaces what is there, as before.
+                let r = client.call::<SettingsUpdate>(SettingsUpdateParams { settings, base: None }).await?;
                 println!("{}", serde_json::to_string_pretty(&r)?);
             }
         },

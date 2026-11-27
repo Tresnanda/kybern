@@ -906,7 +906,8 @@ async fn dispatch_part_11(state: &AppState, ctx: &ConnectionCtx, method: &str, s
                     Ok(()) => {}
                 }
             }
-            let updated = state.settings.set(p.settings).map_err(internal)?;
+            // Against the document the client edited, so account values that arrived meanwhile stay (#378).
+            let updated = state.settings.replace(p.settings, p.base.as_ref()).map_err(internal)?;
             if was_on
                 && !wants
                 && let Err(error) = crate::antigravity_mcp::turn_off(&updated).await

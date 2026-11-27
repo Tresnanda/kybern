@@ -124,7 +124,7 @@ export async function updateProviderSettings(kind: ProviderKind, change: (curren
   if (!client) throw new Error('Not connected to kybernd')
   const settings = await client.call('settings.get', {})
   const next = { ...settings, providers: { ...settings.providers, [kind]: change(settings.providers[kind] ?? { env: {} }) } }
-  setSettings(await client.call('settings.update', { settings: next }))
+  setSettings(await client.call('settings.update', { settings: next, base: settings }))
   await refreshAccounts()
 }
 

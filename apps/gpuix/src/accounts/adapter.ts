@@ -119,7 +119,8 @@ export function writeShared(client: KybernClient, change: (current: AccountsShar
   }
   const run = writes.then(async () => {
     const settings = await client.call('settings.get', {})
-    const saved = await client.call('settings.update', { settings: { ...settings, accounts_shared: change(settings.accounts_shared ?? {}) } })
+    // `base`: only the shared preferences this change touched are saved, whatever else arrived meanwhile.
+    const saved = await client.call('settings.update', { settings: { ...settings, accounts_shared: change(settings.accounts_shared ?? {}) }, base: settings })
     setSettings(saved)
     return saved
   })

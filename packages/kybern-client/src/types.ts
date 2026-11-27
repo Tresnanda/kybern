@@ -3063,8 +3063,20 @@ export interface SecretsStoreResult {
   gitignore_updated: boolean;
 }
 
+/** A shared default this machine can't follow (0.27.2): it has no login for that account, or runs another one by
+ *  choice. Its new threads run on `running_on` until it can. */
+export interface UnfollowedDefault {
+  kind: ProviderKind;
+  key: string;
+  running_on: string;
+  has_account: boolean;
+}
+
 export interface SettingsUpdateParams {
   settings: Settings;
+  /** The document `settings` was edited from (0.27.2): account fields left as they were in it keep the daemon's
+   *  current value, so a default or name another machine shared meanwhile is never undone. Older daemons ignore it. */
+  base?: Settings;
 }
 
 export type UsageGroup = "provider" | "model" | "day" | "thread";
@@ -5024,7 +5036,7 @@ export interface Methods {
   "providers.accounts.create": [{ kind: ProviderKind; name: string; directory?: string | null }, ProviderInstance];
   "providers.accounts.sign_in": [ProviderInstance, TerminalInfo];
   "providers.accounts.usage": [ProviderInstance, ProviderUsage];
-  "providers.accounts.list": [{ kind?: ProviderKind | null; refresh?: boolean }, { accounts: AccountSummary[] }];
+  "providers.accounts.list": [{ kind?: ProviderKind | null; refresh?: boolean }, { accounts: AccountSummary[]; unfollowed_defaults?: UnfollowedDefault[] }];
   "providers.accounts.login.start": [AccountLoginStartParams, AccountLogin];
   "providers.accounts.login.get": [{ id: string }, AccountLogin];
   "providers.accounts.login.input": [{ id: string; code: string }, AccountLogin];

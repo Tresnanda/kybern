@@ -104,7 +104,8 @@ impl Orchestrator {
         let settings = self.inner.settings.get();
         let provider = settings.providers.get(&target.provider.kind).cloned().unwrap_or_default();
         let project = self.inner.store.project_get(thread.project_id)?.ok_or_else(|| anyhow!("Project not found."))?;
-        target.provider.instance = crate::provider_accounts::resolve(&provider, Some(&project.path), override_id.as_deref());
+        let chosen = override_id.clone().or_else(|| Self::account_it_ran_on(&thread, &target.provider, &provider));
+        target.provider.instance = crate::provider_accounts::resolve(&provider, Some(&project.path), chosen.as_deref());
         // An account that is not on this machine is reported, not an error: the thread offers another.
         let account_unavailable = self.unavailable_reason(&target.provider).is_some();
         if account_unavailable {
@@ -140,6 +141,15 @@ impl Orchestrator {
             waiting_until: wait.as_ref().map(|wait| wait.until),
             waiting_account: wait.map(|wait| wait.account),
         })
+    }
+
+    /// The account a thread that already ran keeps when nothing pins it: the one its native session belongs
+    /// to, while that account is still here. A changed default (or project choice) is for new threads; one
+    /// that already ran stays on its account and keeps its session (#21). Removing the account lets it follow.
+    pub(super) fn account_it_ran_on(thread: &Thread, target: &ProviderInstance, settings: &ProviderSettings) -> Option<String> {
+        let ran = thread.provider_session_id.is_some() && thread.provider.kind == target.kind;
+        let here = thread.provider.instance == "default" || settings.accounts.contains_key(&thread.provider.instance);
+        (ran && here).then(|| thread.provider.instance.clone())
     }
 
     pub(super) fn thread_quota_limited(&self, thread: &Thread) -> Result<bool> {
@@ -892,6 +902,15 @@ impl Orchestrator {
     /// so threads that target it fail fast instead of starting a doomed session.
     pub fn mark_account_signed_out(&self, provider: &ProviderInstance, signed_out: bool) -> Result<()> {
         self.inner.store.meta_set(&Self::signed_out_key(provider), if signed_out { "1" } else { "" })
+    }
+
+    /// The account was seen signed in (a probe, a bound borrow): a signed-out flag left from an earlier
+    /// sign-out no longer holds, whatever route signed it in again (#16).
+    pub fn account_seen_signed_in(&self, provider: &ProviderInstance) {
+        let key = Self::signed_out_key(provider);
+        if self.inner.store.meta_get(&key).ok().flatten().is_some_and(|value| !value.is_empty()) {
+            let _ = self.inner.store.meta_set(&key, "");
+        }
     }
 
     pub(super) fn ensure_account_signed_in(&self, provider: &ProviderInstance) -> Result<()> {
