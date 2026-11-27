@@ -44,6 +44,7 @@ pub async fn activity(state: &AppState) -> Result<DaemonActivity> {
         running_threads: count(state.store.threads_running()?.len()),
         terminals: count(state.terminals.alive()),
         queued_messages: count(queued_messages),
+        sign_ins: count(state.account_logins.waiting()),
         idle_since,
         idle_exit_at: idle_since
             .zip(idle_exit)
@@ -63,6 +64,7 @@ pub fn is_busy(activity: &DaemonActivity, updating_harness: bool) -> bool {
         || activity.running_threads > 0
         || activity.terminals > 0
         || activity.queued_messages > 0
+        || activity.sign_ins > 0
         || updating_harness
 }
 
@@ -241,6 +243,7 @@ mod tests {
         assert!(is_busy(&DaemonActivity { live_sessions: 1, ..quiet.clone() }, false));
         assert!(is_busy(&DaemonActivity { running_threads: 1, ..quiet.clone() }, false));
         assert!(is_busy(&DaemonActivity { terminals: 1, ..quiet.clone() }, false));
-        assert!(is_busy(&DaemonActivity { queued_messages: 1, ..quiet }, false));
+        assert!(is_busy(&DaemonActivity { queued_messages: 1, ..quiet.clone() }, false));
+        assert!(is_busy(&DaemonActivity { sign_ins: 1, ..quiet }, false), "a sign-in in a browser is never cut off");
     }
 }

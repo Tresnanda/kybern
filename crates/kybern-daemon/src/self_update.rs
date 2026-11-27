@@ -417,6 +417,8 @@ pub(crate) async fn busy(state: &AppState, automatic: bool) -> Result<bool> {
     Ok(activity.running_threads > 0
         || activity.live_sessions != activity.idle_sessions
         || activity.queued_messages > 0
+        // A sign-in waiting in a browser or for a code isn't a terminal, and a restart would end it.
+        || activity.sign_ins > 0
         || (automatic && activity.terminals > 0))
 }
 

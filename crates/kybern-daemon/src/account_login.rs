@@ -571,6 +571,21 @@ impl AccountLogins {
         self.update(id, |login| login.public.phase = AccountLoginPhase::Canceled);
     }
 
+    /// Sign-ins a restart would lose: running ones that aren't terminals (a terminal sign-in already counts as a
+    /// terminal), and verified ones still waiting to be saved, kept or discarded (#10).
+    pub fn waiting(&self) -> usize {
+        self.lock()
+            .values()
+            .filter(|login| {
+                let running = login.active && login.public.mode != AccountLoginMode::Terminal;
+                let unsaved = login.finished.is_none()
+                    && login.public.phase == AccountLoginPhase::SignedIn
+                    && (login.staging.is_some() || login.choice_pending);
+                running || unsaved
+            })
+            .count()
+    }
+
     /// Whether signing `instance` in again waits for the person to keep or discard another account's
     /// sign-in. Until then nothing may learn that account's new identity (#13).
     pub fn choice_pending(&self, instance: &ProviderInstance) -> bool {
@@ -623,6 +638,10 @@ impl AccountLogins {
             crate::provider_accounts::validate_color(color)?;
         }
         let identity = public.identity.clone().unwrap_or_default();
+        // Whether this machine's terminal login can run threads, for a machine that can't follow the shared default.
+        let terminal_usable =
+            state.account_identities.probe(state, &ProviderInstance::default_for(public.kind), false).await.0 == AccountStatus::SignedIn;
+        let terminal = crate::accounts_shared::terminal_emails(Some(&state.store));
         // Only this account and (when asked) this machine's default change; anything saved meanwhile stays.
         state.settings.update_with(|current, choice| {
             let mut settings = current.clone();
@@ -638,14 +657,28 @@ impl AccountLogins {
                     plan: identity.plan.clone(),
                 },
             );
+            let shared = current.accounts_shared.defaults.get(&public.kind).cloned();
             if params.make_default {
                 provider.default_account = Some(public.id.clone());
                 // A machine's first account is its default here. With a default shared across the network, the
                 // others keep it, and this machine follows it if it has that account (#2).
-                if current.accounts_shared.defaults.contains_key(&public.kind) {
+                if shared.is_some() {
+                    *choice = crate::settings::AccountChoice::LocalOnly;
+                }
+            } else if provider.default_account.is_none() && !terminal_usable {
+                // A machine that can't follow the shared default (it has no login for it) and whose terminal login
+                // can't run threads: its first account is its default here, never the network's (#2).
+                let follows = |settings: &kybern_protocol::Settings| {
+                    shared.as_deref().is_some_and(|key| crate::accounts_shared::instance_for_key(settings, &terminal, key).is_some())
+                };
+                if shared.is_some() && !follows(&settings) {
+                    if let Some(provider) = settings.providers.get_mut(&public.kind) {
+                        provider.default_account = Some(public.id.clone());
+                    }
                     *choice = crate::settings::AccountChoice::LocalOnly;
                 }
             }
+            let provider = settings.providers.entry(public.kind).or_default();
             crate::provider_assets::prepare(provider, public.kind)?;
             Ok(Some((settings, ())))
         })?;
@@ -2098,6 +2131,42 @@ exit 2
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn a_machine_that_cant_follow_the_shared_default_runs_its_first_account_locally() {
+        let fixture = fixture();
+        let state = &fixture.state;
+        // The terminal login here is signed out: an empty folder of the test's, never the person's own login.
+        let terminal = fixture.root.join("terminal");
+        std::fs::create_dir_all(&terminal).unwrap();
+        let mut settings = state.settings.get();
+        let claude = settings.providers.get_mut(&ProviderKind::ClaudeCode).unwrap();
+        claude.env.insert("CLAUDE_CONFIG_DIR".into(), terminal.to_string_lossy().into_owned());
+        settings.accounts_shared.defaults.insert(ProviderKind::ClaudeCode, "claude-code:else@where.com".into());
+        state.settings.set(settings).unwrap();
+        // The desktop sends no `make_default` while a shared default exists.
+        let login = state.account_logins.start(state, params(ProviderKind::ClaudeCode, AccountLoginMode::Browser)).await.unwrap();
+        let dir = fixture.login_dir(&login);
+        std::fs::write(dir.join("email"), "dev@arunika.co").unwrap();
+        std::fs::write(dir.join("approve"), "").unwrap();
+        wait_for(state, &login.id, |login| login.phase == AccountLoginPhase::SignedIn).await;
+        let finish = AccountLoginFinishParams { id: login.id.clone(), name: "Arunika".into(), color: None, make_default: false };
+        state.account_logins.finish(state, finish).await.unwrap();
+        let settings = state.settings.get();
+        let local = settings.providers[&ProviderKind::ClaudeCode].default_account.clone();
+        assert_eq!(local.as_deref(), Some(login.id.as_str()), "threads run on it here");
+        assert_eq!(settings.accounts_shared.defaults[&ProviderKind::ClaudeCode], "claude-code:else@where.com", "never the network's");
+
+        // A second account changes nothing: this machine already has one to run.
+        let second = state.account_logins.start(state, params(ProviderKind::ClaudeCode, AccountLoginMode::Browser)).await.unwrap();
+        let dir = fixture.login_dir(&second);
+        std::fs::write(dir.join("email"), "two@arunika.co").unwrap();
+        std::fs::write(dir.join("approve"), "").unwrap();
+        wait_for(state, &second.id, |login| login.phase == AccountLoginPhase::SignedIn).await;
+        let finish = AccountLoginFinishParams { id: second.id.clone(), name: "Two".into(), color: None, make_default: false };
+        state.account_logins.finish(state, finish).await.unwrap();
+        assert_eq!(state.settings.get().providers[&ProviderKind::ClaudeCode].default_account.as_deref(), Some(login.id.as_str()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn signing_in_again_as_someone_else_changes_nothing_until_it_is_kept() {
         let fixture = fixture();
         let state = &fixture.state;
@@ -2156,6 +2225,31 @@ exit 2
         assert!(error.to_string().contains("already added as home"), "{error}");
         assert_eq!(email_of(state).as_deref(), Some("other@arunika.co"));
         state.account_logins.cancel(state, &login.id).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_sign_in_in_progress_holds_off_an_update_and_the_idle_exit() {
+        let fixture = fixture();
+        let state = &fixture.state;
+        assert_eq!(state.account_logins.waiting(), 0);
+        assert!(!crate::self_update::busy(state, false).await.unwrap());
+        let login = state.account_logins.start(state, params(ProviderKind::ClaudeCode, AccountLoginMode::Browser)).await.unwrap();
+        assert_eq!(login.phase, AccountLoginPhase::Waiting);
+        assert_eq!(state.account_logins.waiting(), 1);
+        let activity = crate::maintenance::activity(state).await.unwrap();
+        assert_eq!(activity.sign_ins, 1);
+        assert!(crate::maintenance::is_busy(&activity, false), "the idle exit waits");
+        assert!(crate::self_update::busy(state, false).await.unwrap(), "an update waits");
+        // Signed in but not saved yet: a restart would still lose it.
+        let dir = fixture.login_dir(&login);
+        std::fs::write(dir.join("email"), "dev@arunika.co").unwrap();
+        std::fs::write(dir.join("approve"), "").unwrap();
+        wait_for(state, &login.id, |login| login.phase == AccountLoginPhase::SignedIn).await;
+        assert_eq!(state.account_logins.waiting(), 1);
+        let finish = AccountLoginFinishParams { id: login.id.clone(), name: "Arunika".into(), color: None, make_default: false };
+        state.account_logins.finish(state, finish).await.unwrap();
+        assert_eq!(state.account_logins.waiting(), 0, "saved: nothing left to lose");
+        assert!(!crate::self_update::busy(state, false).await.unwrap());
     }
 
     #[tokio::test(flavor = "multi_thread")]

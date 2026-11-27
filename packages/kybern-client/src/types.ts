@@ -1705,6 +1705,8 @@ export interface DaemonActivity {
   running_threads: number;
   terminals: number;
   queued_messages: number;
+  /** Sign-ins in progress that aren't terminals, or signed in and waiting to be saved (0.27.2; older daemons leave it out). */
+  sign_ins?: number;
   idle_since?: DateTime | null;
   idle_exit_at?: DateTime | null;
   /** Absent when the daemon cannot tell. */

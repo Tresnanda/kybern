@@ -92,6 +92,10 @@ pub struct DaemonActivity {
     pub terminals: u32,
     /// Follow-ups waiting for their thread to become idle.
     pub queued_messages: u32,
+    /// Account sign-ins in progress that aren't terminals (a browser page, a code to paste or enter, an
+    /// authorize handoff), or signed in and waiting to be saved (0.27.2). A restart would lose them.
+    #[serde(default)]
+    pub sign_ins: u32,
     /// When the daemon last became fully idle, if it is idle now.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idle_since: Option<chrono::DateTime<chrono::Utc>>,
