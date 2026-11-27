@@ -146,9 +146,7 @@ impl Fakes {
         std::fs::create_dir_all(fakes.bin()).unwrap();
         kybern_protocol::process::write_executable(&fakes.bin().join("absent"), ABSENT).unwrap();
         kybern_protocol::process::write_executable(&fakes.bin().join("claude"), FAKE_CLAUDE).unwrap();
-        let agy = FAKE_AGY
-            .replace("@KEYRING@", &fakes.keyring_path().to_string_lossy())
-            .replace("@ROOT@", &fakes.root().to_string_lossy());
+        let agy = FAKE_AGY.replace("@KEYRING@", &fakes.keyring_path().to_string_lossy()).replace("@ROOT@", &fakes.root().to_string_lossy());
         kybern_protocol::process::write_executable(&fakes.bin().join("agy"), agy).unwrap();
         std::fs::write(fakes.keyring_path(), ORIGINAL_LOGIN).unwrap();
         fakes
@@ -255,9 +253,7 @@ fn refused(result: &anyhow::Result<Value>) -> bool {
 
 async fn both_heard(a: &Node, b: &Node) {
     eventually("both machines heard each other's presence", WAIT, || {
-        linked(a, b)
-            && a.state.network.peers.status(&b.id()).presence.is_some()
-            && b.state.network.peers.status(&a.id()).presence.is_some()
+        linked(a, b) && a.state.network.peers.status(&b.id()).presence.is_some() && b.state.network.peers.status(&a.id()).presence.is_some()
     })
     .await;
 }
@@ -329,7 +325,12 @@ async fn a_desktop_signs_accounts_in_on_another_machine_with_its_device_grant() 
     let done = login_reaches(&at_b, &login.id, AccountLoginPhase::SignedIn).await;
     assert_eq!(done.identity.and_then(|identity| identity.email).as_deref(), Some("paste@example.com"));
     let instance = at_b
-        .call::<AccountsLoginFinish>(AccountLoginFinishParams { id: login.id.clone(), name: "Pasted".into(), color: None, make_default: false })
+        .call::<AccountsLoginFinish>(AccountLoginFinishParams {
+            id: login.id.clone(),
+            name: "Pasted".into(),
+            color: None,
+            make_default: false,
+        })
         .await
         .unwrap();
     assert_eq!(claude_accounts(&b.state)[&instance.instance].email.as_deref(), Some("paste@example.com"));
@@ -431,10 +432,8 @@ async fn an_authorize_only_handoff_signs_the_other_machine_in_through_this_brows
     let login = at_b.call::<AccountsLoginStart>(start(ProviderKind::ClaudeCode, AccountLoginMode::Browser)).await.unwrap();
     let handoff = login.handoff.clone().expect("b's Claude waits for a loopback redirect");
     assert_eq!(handoff.path, "/callback");
-    let caught = desktop
-        .call::<AccountsLoginHandoff>(AccountLoginHandoffParams { machine_id: b.id(), login_id: login.id.clone() })
-        .await
-        .unwrap();
+    let caught =
+        desktop.call::<AccountsLoginHandoff>(AccountLoginHandoffParams { machine_id: b.id(), login_id: login.id.clone() }).await.unwrap();
     let page = reqwest::Url::parse(&caught.url).unwrap();
     let state = page.query_pairs().find(|(key, _)| key == "state").map(|(_, value)| value.into_owned()).unwrap();
 
@@ -453,9 +452,17 @@ async fn an_authorize_only_handoff_signs_the_other_machine_in_through_this_brows
         PathBuf::from(&b.state.settings.dir()).join("accounts").join("claude-code").join(&login.id).join("callbacks"),
     )
     .unwrap();
-    assert!(callbacks.contains(&format!("GET /callback?code=the-code&state={state} ")), "b's Claude got the browser's redirect: {callbacks}");
+    assert!(
+        callbacks.contains(&format!("GET /callback?code=the-code&state={state} ")),
+        "b's Claude got the browser's redirect: {callbacks}"
+    );
     let instance = at_b
-        .call::<AccountsLoginFinish>(AccountLoginFinishParams { id: login.id.clone(), name: "Handed".into(), color: None, make_default: false })
+        .call::<AccountsLoginFinish>(AccountLoginFinishParams {
+            id: login.id.clone(),
+            name: "Handed".into(),
+            color: None,
+            make_default: false,
+        })
         .await
         .unwrap();
     assert_eq!(claude_accounts(&b.state)[&instance.instance].email.as_deref(), Some("handoff@example.com"));
@@ -562,7 +569,10 @@ async fn named_antigravity_accounts_keep_their_logins_in_their_profiles_and_leav
         assert!(token.contains(email), "{instance}'s login is a file in its own profile");
     }
     assert_eq!(fakes.keyring(), ORIGINAL_LOGIN, "the computer's own login is still the original");
-    assert!(!fakes.home().join(".gemini/antigravity-cli/antigravity-oauth-token").exists(), "no login was written to the computer's profile");
+    assert!(
+        !fakes.home().join(".gemini/antigravity-cli/antigravity-oauth-token").exists(),
+        "no login was written to the computer's profile"
+    );
 }
 
 // ---- 5. the Claude terminal login's identity ----
@@ -588,7 +598,8 @@ fn login_due_for_refresh(home: &Path) {
 }
 
 async fn terminal_claude(state: &AppState) -> AccountSummary {
-    let list = crate::provider_accounts::list(state, AccountsListParams { kind: Some(ProviderKind::ClaudeCode), refresh: true }).await.unwrap();
+    let list =
+        crate::provider_accounts::list(state, AccountsListParams { kind: Some(ProviderKind::ClaudeCode), refresh: true }).await.unwrap();
     list.accounts.into_iter().find(|account| account.terminal).expect("the terminal login is listed")
 }
 
@@ -703,9 +714,11 @@ fn expected_after_edits(count: usize) -> impl Fn(&AccountsShared) -> bool {
     move |shared| {
         let last = STEPS - 1;
         (0..count).all(|index| {
-            shared.profiles.get(&key_of(index)).is_some_and(|profile| {
-                profile.name == format!("m{index}-{last}") && profile.manual_only == (last % 2 == 1)
-            }) && (0..STEPS).all(|step| shared.offers.contains_key(&format!("new_machine:m{index}-{step}")))
+            shared
+                .profiles
+                .get(&key_of(index))
+                .is_some_and(|profile| profile.name == format!("m{index}-{last}") && profile.manual_only == (last % 2 == 1))
+                && (0..STEPS).all(|step| shared.offers.contains_key(&format!("new_machine:m{index}-{step}")))
         }) && shared.defaults.get(&ProviderKind::ClaudeCode) == Some(&key_of(last % count))
     }
 }
@@ -754,9 +767,18 @@ async fn converge_under_concurrent_edits(names: &[&str]) {
     for (index, node) in nodes.iter().enumerate() {
         add_accounts(node, index, count);
     }
-    let same = |nodes: &[Node]| nodes.windows(2).all(|pair| pair[0].state.settings.get().accounts_shared == pair[1].state.settings.get().accounts_shared);
-    eventually("the machines share one set of accounts", WAIT, || {
-        same(&nodes) && nodes[0].state.settings.get().accounts_shared.profiles.len() == count
+    let same = |nodes: &[Node]| {
+        nodes.windows(2).all(|pair| pair[0].state.settings.get().accounts_shared == pair[1].state.settings.get().accounts_shared)
+    };
+    // Every machine has made its first sealing (its import) and heard every other's: an edit made before that is part
+    // of the machine's import, at clock zero, and may lose to another machine's import by design.
+    eventually("every machine imported its accounts and heard the others", WAIT, || {
+        same(&nodes)
+            && nodes[0].state.settings.get().accounts_shared.profiles.len() == count
+            && nodes.iter().all(|node| {
+                let heard = super::accounts_sync::all_holdings(&node.state);
+                nodes.iter().all(|other| heard.contains_key(&other.id()))
+            })
     })
     .await;
 
@@ -787,10 +809,31 @@ async fn converge_under_concurrent_edits(names: &[&str]) {
     }
 
     let expected = expected_after_edits(count);
-    eventually("every machine converges on every machine's last edits", WAIT, || {
-        same(&nodes) && expected(&nodes[0].state.settings.get().accounts_shared)
-    })
-    .await;
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while !(same(&nodes) && expected(&nodes[0].state.settings.get().accounts_shared)) {
+        if tokio::time::Instant::now() >= deadline {
+            let held: Vec<String> = nodes
+                .iter()
+                .map(|node| {
+                    let shared = node.state.settings.get().accounts_shared;
+                    let names: Vec<String> = (0..count)
+                        .map(|index| shared.profiles.get(&key_of(index)).map_or("-".into(), |p| format!("{}/{}", p.name, p.manual_only)))
+                        .collect();
+                    let missing: Vec<String> = (0..count)
+                        .flat_map(|index| (0..STEPS).map(move |step| format!("new_machine:m{index}-{step}")))
+                        .filter(|id| !shared.offers.contains_key(id))
+                        .collect();
+                    format!(
+                        "{}: profiles {names:?} default {:?} missing dismissals {missing:?}",
+                        node.name,
+                        shared.defaults.get(&ProviderKind::ClaudeCode)
+                    )
+                })
+                .collect();
+            panic!("the machines did not converge on every last edit (same: {}):\n{}", same(&nodes), held.join("\n"));
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
     // The local default follows the shared one on every machine.
     for (index, node) in nodes.iter().enumerate() {
         let local = node.state.settings.get().providers[&ProviderKind::ClaudeCode].default_account.clone();
@@ -854,73 +897,94 @@ async fn a_desktop_write_from_an_older_read_keeps_another_machines_edit() {
 
 // ---- 7. a lender for new setups (the lender lane's contract) ----
 
-/// Mark `machine` online in `observer`'s week, every slot where `online(slot)` (slot 0 is now), and `observer` itself in
-/// every slot.
-fn week_of(observer: &Node, machine: &Node, online: impl Fn(i64) -> bool) {
-    let now = chrono::Utc::now();
-    for slot in 0..super::online::SLOTS {
-        let at = now - chrono::Duration::minutes(15 * slot);
-        super::online::mark(&observer.state.store, &observer.id(), at);
-        if online(slot) {
-            super::online::mark(&observer.state.store, &machine.id(), at);
+/// A week of history in `observer`'s record of who was online (`online.rs`): `observer` itself every slot, `machine`
+/// in the share of slots each `byte` of the bitmap marks (`ff` every slot, `01` one in eight). The workers keep marking
+/// the current slot, so the write is repeated until `online::ratio` reads it back.
+async fn week_of(observer: &Node, machine: &Node, byte: &str, ratio: impl Fn(f32) -> bool) {
+    let deadline = tokio::time::Instant::now() + WAIT;
+    loop {
+        let now = chrono::Utc::now().timestamp().div_euclid(15 * 60);
+        let track = |byte: &str| json!({"last": now, "since": now - super::online::SLOTS + 1, "bits": byte.repeat(84)});
+        let mut tracks: serde_json::Map<String, Value> = observer
+            .state
+            .store
+            .meta_get("network.online.v1")
+            .unwrap()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default();
+        tracks.insert(observer.id(), track("ff"));
+        tracks.insert(machine.id(), track(byte));
+        observer.state.store.meta_set("network.online.v1", &Value::Object(tracks).to_string()).unwrap();
+        if super::online::ratio(&observer.state.store, &machine.id(), &observer.id(), chrono::Utc::now()).is_some_and(&ratio) {
+            return;
         }
+        assert!(tokio::time::Instant::now() < deadline, "the online history never read back");
+        tokio::time::sleep(Duration::from_millis(25)).await;
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "needs the lender lane: LoginBrokerStatus.usable_for_new and reason"]
+#[ignore = "needs the lender lane (0b325d869 + its daemon side): passes on origin/fix/claude-terminal-email at 207b5db9f"]
 async fn a_legacy_lender_that_is_not_always_on_is_not_used_for_new_setups() {
     let Some(cluster) = Cluster::new(&[NodeSpec::owner("a"), NodeSpec::owner("b"), NodeSpec::owner("c")]) else { return };
     let a = cluster.start("a", true).await;
     let b = cluster.start("b", true).await;
     let c = cluster.start("c", true).await;
+    // No harness here reads the computer's real logins.
+    let fakes: Vec<Fakes> = [&a, &b, &c].iter().map(|node| Fakes::new(&format!("lender-{}", node.name))).collect();
+    for (node, fake) in [&a, &b, &c].iter().zip(&fakes) {
+        fake.install(&node.state);
+    }
     cluster.form(&a, &[&b, &c], JoinVia::Auto).await;
     both_heard(&b, &c).await;
-    // The lender chosen before 0.27 is c, a laptop that is online a tenth of the time.
+    // The lender chosen before 0.27.2 is c, a laptop that is online an eighth of the time.
     let op = a.membership().set("broker", json!(c.id())).unwrap();
     a.state.network.publish_ops(vec![op]);
     eventually("the lender register reaches b", WAIT, || b.membership().projection().broker() == Some(c.id().as_str())).await;
-    week_of(&b, &c, |slot| slot % 10 == 0);
+    week_of(&b, &c, "01", |ratio| ratio < 0.2).await;
     let status = desktop(&b).await.call_raw(LoginBrokerStatusMethod::NAME, json!({})).await.unwrap();
-    assert_eq!(status["usable_for_new"], json!(false), "{status}");
-    assert!(status["reason"].as_str().is_some_and(|reason| !reason.is_empty()), "{status}");
+    assert_eq!(status["lender"]["machine_id"], json!(c.id()), "{status}");
+    assert_eq!(status["lender"]["usable_for_new"], json!(false), "{status}");
+    assert!(status["lender"]["reason"].as_str().is_some_and(|reason| !reason.is_empty()), "{status}");
     // Online all week, the same lender is used for new setups.
-    week_of(&b, &c, |_| true);
+    week_of(&b, &c, "ff", |ratio| ratio > 0.99).await;
     let status = desktop(&b).await.call_raw(LoginBrokerStatusMethod::NAME, json!({})).await.unwrap();
-    assert_eq!(status["usable_for_new"], json!(true), "{status}");
-    assert!(status.get("reason").is_none_or(Value::is_null), "{status}");
+    assert_eq!(status["lender"]["usable_for_new"], json!(true), "{status}");
+    assert!(status["lender"].get("reason").is_none_or(Value::is_null), "{status}");
 }
 
 // ---- 8. one-click update keeps machines in step (the update lane's contract) ----
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "needs the update lane: following ignores undeliverable queued messages and stale sessions"]
+#[ignore = "needs the update lane (b02f1f83b): passes on origin/fix/claude-terminal-email at 207b5db9f"]
 async fn a_following_machine_updates_despite_a_stuck_queue_and_auto_update_off() {
     let Some(cluster) = Cluster::new(&[NodeSpec::owner("a"), NodeSpec::owner("b")]) else { return };
     let a = cluster.start("a", true).await;
     let b = cluster.start("b", true).await;
+    let fakes = Fakes::new("follow-b");
+    fakes.install(&b.state);
     cluster.form(&a, &[&b], JoinVia::Auto).await;
     both_heard(&a, &b).await;
-    // b does not update itself, and a message waits for a thread whose agent is not installed anywhere.
+    // b does not update itself, and a message queued on a thread that then moved to another machine can never be sent.
     let mut settings = b.state.settings.get();
     settings.auto_update_daemon = false;
     b.state.settings.set(settings).unwrap();
     b.state.daemon_updates.allow_development.store(true, Ordering::SeqCst);
     let folder = b.root.join("project");
     std::fs::create_dir_all(&folder).unwrap();
-    let project = b.state.orchestrator.add_project(folder.to_string_lossy().into_owned(), Some("Stuck".into()), None).unwrap();
+    let project = b.state.orchestrator.add_project(folder.to_string_lossy().into_owned(), Some("Moved".into()), None).unwrap();
     let thread = desktop(&b)
         .await
         .call::<ThreadsCreate>(ThreadsCreateParams {
-            pin_account: true,
+            pin_account: false,
             project_id: Some(project.id),
-            provider: ProviderInstance { kind: ProviderKind::Pi, instance: "gone".into() },
+            provider: ProviderInstance::default_for(ProviderKind::ClaudeCode),
             model: None,
             effort: None,
             permission_mode: None,
             use_worktree: Some(false),
             base_branch: None,
-            title: Some("Stuck".into()),
+            title: Some("Moved".into()),
             message: None,
             thread_id: None,
             message_id: None,
@@ -931,6 +995,9 @@ async fn a_following_machine_updates_despite_a_stuck_queue_and_auto_update_off()
         .unwrap();
     let message = QueuedMessage { id: uuid::Uuid::now_v7(), thread_id: thread.id, message: UserMessage::text("hello") };
     b.state.orchestrator.emit(thread.id, None, EventPayload::MessageQueued { message }).unwrap();
+    let moved: MoveInfo =
+        serde_json::from_value(json!({"state": "departed", "peer": a.id(), "operation_id": uuid::Uuid::now_v7()})).unwrap();
+    b.state.store.thread_set_moved(thread.id, Some(&moved)).unwrap();
     assert_eq!(b.state.store.queue_list(None).unwrap().len(), 1);
     // "Keep all machines on the same version", and a runs a newer one.
     let op = a.membership().set("follow_updates", json!(true)).unwrap();

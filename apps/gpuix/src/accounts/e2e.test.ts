@@ -176,13 +176,13 @@ describe('sign-ins, targets and the lender', () => {
     }
   })
 
-  // The lender lane adds `usable_for_new` and `reason` to the lender's status. Un-skip at integration.
+  // The lender lane adds `lender.usable_for_new` and `lender.reason` to `login.broker.status`, read into
+  // `Sharing.usable` (`adapter.ts` `sharingFrom`). Un-skip at integration.
   test.skip('“Set up” never borrows from a lender the daemon says is not usable for new setups', async () => {
     const { setupItems } = await import('./actions.ts')
     const machines = network()
     const offer = offers().find((o) => o.kind === 'new_machine')!
-    const status = { ...wire<LoginBrokerStatus[]>('login-broker-status')[1]!, usable_for_new: false, reason: 'VPS is online less than 90% of the time' }
-    const sharing = { machineId: 'm-mac', machine: 'MacBook', usable_for_new: status.usable_for_new, reason: status.reason }
+    const sharing = { machineId: 'm-mac', machine: 'MacBook', usable: false, reason: 'MacBook is online less than 90% of the time' }
     const items = setupItems({ groups: unifyAccounts(machines), machines, sharing } as never, offer as Offer)
     expect(items.every((item) => item.method === 'sign_in')).toBe(true)
   })

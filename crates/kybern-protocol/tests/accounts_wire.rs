@@ -243,7 +243,7 @@ fn events() -> Vec<ThreadEvent> {
     let instance = |id: &str| ProviderInstance { kind: ProviderKind::ClaudeCode, instance: id.into() };
     let event = |seq: u64, payload| ThreadEvent {
         seq: serde_json::from_value(json!(seq)).unwrap(),
-        thread_id: thread.clone(),
+        thread_id: thread,
         turn_id: None,
         at: at(14),
         payload,
@@ -268,7 +268,10 @@ fn events() -> Vec<ThreadEvent> {
             },
         ),
         event(3, EventPayload::AccountWait { until: at(15), account: Some(instance("default")), text: "Waiting until 15:00".into() }),
-        event(4, EventPayload::AccountWaitEnded { account: Some(instance("default")), cancelled: false, text: "Continued at 15:00".into() }),
+        event(
+            4,
+            EventPayload::AccountWaitEnded { account: Some(instance("default")), cancelled: false, text: "Continued at 15:00".into() },
+        ),
         event(5, EventPayload::AccountWait { until: at(16), account: None, text: String::new() }),
         event(6, EventPayload::AccountWaitEnded { account: None, cancelled: true, text: String::new() }),
     ]
