@@ -182,6 +182,52 @@ describe('unifyAccounts', () => {
   })
 })
 
+describe('a machine that isn’t on the shared default', () => {
+  const KEY = 'claude-code:w@x.com'
+  const shared = { defaults: { 'claude-code': KEY } }
+  const unfollowed = (running_on: string, has_account = false, key = KEY) => [{ kind: 'claude-code' as const, key, running_on, has_account }]
+  const mac = machine('mac', 'MacBook', [named('a1', 'Work', 'w@x.com', { is_default: true })], { isLocal: true })
+  const fedora = (patch: Partial<MachineAccounts> = {}, accounts = [named('p', 'Personal', 'p@x.com', { is_default: true })]) =>
+    machine('fedora', 'fedora', accounts, { unfollowed: unfollowed('p'), ...patch })
+  const chipsOf = (machines: MachineAccounts[], name = 'Work', prefs: object = shared) => chipsFor(find(accountsOf(machines, 'claude-code', prefs), name), machines)
+  const warned = (machines: MachineAccounts[], prefs: object = shared) => unifyAccounts(machines, { shared: prefs }).flatMap((g) => g.accounts).filter((a) => a.unfollowed)
+
+  test('is one warning chip in the default’s row, naming the account it uses instead', () => {
+    const machines = [mac, fedora()]
+    expect(warned(machines).map((a) => [a.name, a.unfollowed])).toEqual([['Work', [{ machineId: 'fedora', uses: 'Personal', hasAccount: false }]]])
+    expect(chipsOf(machines).map((c) => [c.label, c.state, c.unfollowed?.hasAccount])).toEqual([['MacBook', 'signed_in', undefined], ['fedora · Uses Personal', 'add', false]])
+    // The row of the account it does use is as ever.
+    expect(chipsOf(machines, 'Personal').map((c) => c.label)).toEqual(['MacBook', 'fedora'])
+  })
+
+  test('uses the shared name of that account, or says it is the terminal login', () => {
+    const renamed = { ...shared, profiles: { 'claude-code:p@x.com': { name: 'Side' } } }
+    expect(chipsOf([mac, fedora()], 'Work', renamed)[1]!.label).toBe('fedora · Uses Side')
+    // A signed-out terminal login has no row of its own.
+    const terminal = fedora({ unfollowed: unfollowed('default') }, [summary('claude-code', 'default', { status: 'signed_out' })])
+    expect(chipsOf([mac, terminal])[1]!.label).toBe('fedora · Uses Terminal login')
+  })
+
+  test('keeps the login it has there when it runs another by choice', () => {
+    const own = fedora({ unfollowed: unfollowed('p', true) }, [named('b', 'Work', 'w@x.com'), named('p', 'Personal', 'p@x.com', { is_default: true })])
+    const chip = chipsOf([mac, own])[1]!
+    expect([chip.label, chip.state, chip.unfollowed?.hasAccount, chip.standing?.presences.map((p) => p.instance)]).toEqual(['fedora · Uses Personal', 'signed_in', true, ['b']])
+    // A lone machine needs no chip for a plain sign-in, but does for this.
+    const alone = machine('mac', 'MacBook', [named('b', 'Work', 'w@x.com'), named('p', 'Personal', 'p@x.com', { is_default: true })], { isLocal: true, unfollowed: unfollowed('p', true) })
+    expect(chipsOf([alone]).map((c) => c.label)).toEqual(['Uses Personal'])
+  })
+
+  test('says nothing when it is away, reports an older default, or does run it', () => {
+    expect(warned([mac, fedora({ online: false, state: 'unreachable' })])).toEqual([])
+    expect(warned([mac, fedora({ unfollowed: unfollowed('p', false, 'claude-code:old@x.com') })])).toEqual([])
+    expect(warned([mac, fedora()], {})).toEqual([])
+    // A borrowed sign-in whose email the machine doesn't know is still the default's.
+    const borrowed = named('b', 'Work', 'w@x.com', { is_default: true, broker: { machine_id: 'mac', machine_name: 'MacBook', broker_account: 'a1', state: 'borrowing' } })
+    expect(warned([mac, fedora({ unfollowed: unfollowed('b') }, [borrowed])])).toEqual([])
+    expect(chipsOf([mac, fedora({ unfollowed: [] })])[1]!.label).toBe('fedora')
+  })
+})
+
 describe('a delegated agent’s account', () => {
   const machines = [
     machine('mac', 'MacBook', [named('a1', 'Work', 'w@x.com', { is_default: true }), summary('claude-code', 'default', { identity: { email: 'w@x.com' }, is_default: false })], { isLocal: true }),

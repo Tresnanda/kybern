@@ -3,7 +3,7 @@
 // signed in on two machines is one row, read once. No React and no GPUIX: tests load it directly.
 import { CLI_ACCOUNT_NAME, CLI_INSTANCE, isCliInstance, withoutSignIn } from '../shared/lib/accounts.ts'
 import { bindingLimit, limitUsed } from '../shared/lib/providerUsage.ts'
-import { ACCOUNTS_SHARED_FEATURE, type AccountSummary, type AccountsShared, type ProviderInstance, type ProviderKind, type ProviderLimits, type ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
+import { ACCOUNTS_SHARED_FEATURE, type AccountSummary, type AccountsShared, type ProviderInstance, type ProviderKind, type ProviderLimits, type ProviderStatus, type UnfollowedDefault } from '../../../../packages/kybern-client/src/types.ts'
 
 /** What one machine told us about its accounts. */
 export interface MachineAccounts {
@@ -24,6 +24,8 @@ export interface MachineAccounts {
   features: readonly string[]
   /** What this connection may do there (`daemon.info.scopes`). */
   scopes?: readonly string[]
+  /** The shared defaults it doesn't run new threads on (`unfollowed_defaults`); older daemons report none. */
+  unfollowed?: readonly UnfollowedDefault[]
 }
 
 /** Where one account stands on one login of one machine. */
@@ -70,6 +72,17 @@ export interface UnifiedAccount {
   presences: AccountPresence[]
   /** The freshest limit reading of this account from any machine; the same account on two machines counts once. */
   limit: LimitReading | null
+  /** Set on the shared default: the online machines that run new threads on another account instead. */
+  unfollowed?: Unfollowed[]
+}
+
+/** A machine that can't, or chose not to, run the default every machine shares. */
+export interface Unfollowed {
+  machineId: string
+  /** The name of the account it uses instead. */
+  uses: string
+  /** It has a login for the default; `false` means signing in there is what it needs. */
+  hasAccount: boolean
 }
 
 /** A shell's own login that is signed out and reports no account: one line under the agent, not a row. */
@@ -222,6 +235,7 @@ export function unifyAccounts(machines: readonly MachineAccounts[], options: Uni
     const signedOutTerminals = signedOut.filter((entry) => entry.kind === kind).map(({ kind: _, ...entry }) => entry)
     const chosen = defaultId(kind, accounts, shared, local, signedOutTerminals.some((entry) => entry.machineId === local && entry.defaultThere))
     for (const account of accounts) account.isDefault = account.id === chosen
+    markUnfollowed(kind, accounts, machines, shared)
     // Accounts keep the order they were first seen in; the shells' own accountless logins come last.
     accounts.sort((a, b) => Number(a.terminalOnly) - Number(b.terminalOnly))
     return { kind, accounts, signedOutTerminals }
@@ -256,6 +270,23 @@ function build(draft: Draft, shared: AccountsShared, local: string | undefined):
     isDefault: false,
     presences: summaries.map((s) => s.presence),
     limit,
+  }
+}
+
+/** Put each machine that isn't on the shared default onto that account, named after what it runs instead. */
+function markUnfollowed(kind: ProviderKind, accounts: readonly UnifiedAccount[], machines: readonly MachineAccounts[], shared: AccountsShared) {
+  const wanted = shared.defaults?.[kind]
+  const account = wanted ? accounts.find((a) => a.key === wanted) : undefined
+  if (!account) return
+  for (const machine of ordered(machines)) {
+    // A machine that is away, or still reports another default than the shared one, has nothing current to say.
+    const entry = machine.online ? machine.unfollowed?.find((u) => u.kind === kind && u.key === wanted) : undefined
+    if (!entry) continue
+    const runs = (a: UnifiedAccount) => a.presences.some((p) => p.machineId === machine.machineId && p.instance === entry.running_on)
+    // A borrowed sign-in can be the default's without the machine knowing its email: it does run it.
+    if (runs(account)) continue
+    const uses = accounts.find(runs)?.name ?? (isCliInstance(entry.running_on) ? TERMINAL_ROW_NAME : machine.accounts.find((a) => a.provider.kind === kind && a.provider.instance === entry.running_on)?.name ?? 'another account')
+    ;(account.unfollowed ??= []).push({ machineId: machine.machineId, uses, hasAccount: entry.has_account })
   }
 }
 

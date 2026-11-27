@@ -6,14 +6,14 @@ import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import type { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 import {
   ACCOUNTS_LOGIN_CHANGED_NOTIFICATION, USAGE_LIMITS_CHANGED_NOTIFICATION,
-  type AccountOffer, type AccountSummary, type MachineId, type ProviderKind, type ProviderLimits, type ProviderStatus, type Scope, type Settings, type UsageLimitsResult,
+  type AccountOffer, type AccountSummary, type MachineId, type ProviderKind, type ProviderLimits, type ProviderStatus, type Scope, type Settings, type UnfollowedDefault, type UsageLimitsResult,
 } from '../../../../packages/kybern-client/src/types.ts'
 import { errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
 import { machineHub, useMachines, type MachineRow } from '../machines/index.ts'
 import { useNav } from '../nav/store.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { getClient, useApp } from '../state.ts'
-import { askAccountLimits, mergeAccountLimits, refreshAccounts, useAccountLimitEntries, useAccounts, useAccountsFeed, useAccountsLegacy, useAccountsLoaded } from '../usage/accounts.ts'
+import { askAccountLimits, mergeAccountLimits, refreshAccounts, useAccountLimitEntries, useAccounts, useAccountsFeed, useAccountsLegacy, useAccountsLoaded, useUnfollowedDefaults } from '../usage/accounts.ts'
 import { featuresOf, fetchDaemonOffers, readShared, sharingFrom, supportsShared, type Sharing } from './adapter.ts'
 import { applyAnswers, computeOffers, LOGIN_SHARING_FEATURE, type Offer } from './offers.ts'
 import { keyOf, unifyAccounts, type HarnessGroup, type MachineAccounts } from './unified.ts'
@@ -22,6 +22,7 @@ import type { LendableAccount } from '../../../../packages/kybern-client/src/typ
 export interface RemoteSnapshot {
   state: MachineAccounts['state']
   accounts: AccountSummary[]
+  unfollowed?: UnfollowedDefault[]
   providers: ProviderStatus[] | null
   limits: ProviderLimits[]
   globalLimits: ProviderLimits[]
@@ -109,6 +110,7 @@ export function readMachine(machineId: MachineId, { probe = false, refresh = fal
       features,
       scopes,
       accounts: legacy ? [] : list,
+      unfollowed: legacy ? [] : accounts.value.unfollowed_defaults ?? [],
       ...(providers.status === 'fulfilled' ? { providers: providers.value.providers ?? null } : {}),
       ...(limits.status === 'fulfilled' ? { limits: mergeAccountLimits(snapshot(machineId).limits, limits.value.accounts), globalLimits: limits.value.providers ?? [] } : {}),
     })
@@ -169,13 +171,21 @@ export function refreshOfferInputs(): Promise<void> {
  *  (`network.status` also ticks the daemon's discovery). A change of settings, a sign-in or a page opening reads them. */
 let inputsFor: { client: KybernClient; machines: number } | null = null
 
+/** The shared and local default accounts in a settings document, to see whether either changed. */
+const defaultsOf = (settings: Settings | null) => JSON.stringify([settings?.accounts_shared?.defaults, Object.entries(settings?.providers ?? {}).map(([kind, provider]) => [kind, provider.default_account])])
+
 /** Follow the machine this window is at. */
 function watchPrimary(client: KybernClient) {
   if (primary === client) return
   primary = client
   client.onNotification('settings.changed', (params) => {
     const settings = (params as { settings?: Settings })?.settings
-    if (settings && getClient() === client) emit({ settings })
+    if (settings && getClient() === client) {
+      const moved = defaultsOf(settings) !== defaultsOf(state.settings)
+      emit({ settings })
+      // Which shared defaults this machine follows comes with its account list.
+      if (moved) void refreshAccounts()
+    }
     void refreshOfferInputs()
   })
   client.onNotification(ACCOUNTS_LOGIN_CHANGED_NOTIFICATION, (params) => { if ((params as { phase?: string }).phase === 'signed_in') void refreshOfferInputs() })
@@ -241,6 +251,7 @@ export interface UnifiedView {
 /** Every account of every machine, merged. Mount `useUnifiedFeed` with it. */
 export function useUnifiedAccounts(rows: readonly MachineRow[]): UnifiedView {
   const accounts = useAccounts()
+  const unfollowed = useUnfollowedDefaults()
   const legacy = useAccountsLegacy()
   const loaded = useAccountsLoaded()
   const limits = useAccountLimitEntries()
@@ -265,6 +276,7 @@ export function useUnifiedAccounts(rows: readonly MachineRow[]): UnifiedView {
       online,
       state: legacy ? 'legacy' : loaded ? 'ready' : 'reading',
       accounts,
+      unfollowed,
       providers: providersLoaded ? providers : null,
       limits,
       globalLimits,
@@ -280,6 +292,7 @@ export function useUnifiedAccounts(rows: readonly MachineRow[]): UnifiedView {
         online: !row.offline,
         state: row.offline ? 'unreachable' : read?.state ?? 'reading',
         accounts: read?.accounts ?? [],
+        unfollowed: read?.unfollowed,
         providers: read?.providers ?? null,
         limits: read?.limits ?? [],
         globalLimits: read?.globalLimits ?? [],
@@ -287,7 +300,7 @@ export function useUnifiedAccounts(rows: readonly MachineRow[]): UnifiedView {
         scopes: read?.scopes,
       }
     })]
-  }, [local, rows, online, legacy, loaded, accounts, providers, providersLoaded, limits, globalLimits, featureKey, scopeKey, remote])
+  }, [local, rows, online, legacy, loaded, accounts, unfollowed, providers, providersLoaded, limits, globalLimits, featureKey, scopeKey, remote])
   const shared = useMemo(() => readShared(settings, features), [settings, featureKey, prefs])
   const groups = useMemo(() => unifyAccounts(machines, { shared }), [machines, shared])
   return { machines, groups, shared, supportsShared: supportsShared(features), primaryId: local, legacy, loaded: loaded && machines.every((m) => m.state !== 'reading'), sharing }

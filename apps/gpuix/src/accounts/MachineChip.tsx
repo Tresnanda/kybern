@@ -52,6 +52,8 @@ export function MachineChip({ chip, account, view, actions }: { chip: AccountChi
     <MenuItem id="share" testId={`chip-${share}-${id}`} label={share === 'stop' ? 'Stop sharing' : 'Share this machine’s sign-ins'} onSelect={() => void shareSignIns(share === 'stop' ? null : chip.machineId, chip.machine)} />
   </>
 
+  // No login for the shared default there: signing that machine in is the one thing to do.
+  if (chip.unfollowed && !chip.unfollowed.hasAccount) return <Chip id={id} chip={chip} label={`Sign in on ${chip.machine}`} onClick={() => signInOn(account, target)} />
   if (chip.state === 'offline' || (chip.state === 'unknown' && !standing?.terminal)) return <Chip id={id} chip={chip} />
   if (chip.state === 'add') return <Chip id={id} chip={chip} label={`Add to ${chip.machine}`} onClick={() => signInOn(account, target)} />
   if (chip.state === 'signed_out') {
@@ -87,12 +89,13 @@ function Chip({ id, chip, onClick, open, menu, label }: { id: string; chip: Acco
   const t = useTheme()
   const c = useControls()
   const interactive = !!onClick || !!menu
-  const warning = chip.state === 'unreachable' || chip.state === 'signed_out' || chip.state === 'terminal_out'
-  const quiet = chip.state === 'add' || chip.state === 'offline'
+  const warning = !!chip.unfollowed || chip.state === 'unreachable' || chip.state === 'signed_out' || chip.state === 'terminal_out'
+  const add = chip.state === 'add' && !warning
+  const quiet = add || chip.state === 'offline'
   const base = t.variant === 'dark' ? '252, 252, 252' : '13, 13, 13'
-  const fill = warning ? alpha(t.warning, t.variant === 'dark' ? 0.12 : 0.13) : chip.state === 'add' ? 'transparent' : `rgba(${base}, ${chip.state === 'offline' ? 0.035 : 0.06})`
+  const fill = warning ? alpha(t.warning, t.variant === 'dark' ? 0.12 : 0.13) : add ? 'transparent' : `rgba(${base}, ${chip.state === 'offline' ? 0.035 : 0.06})`
   const hover = warning ? alpha(t.warning, 0.2) : `rgba(${base}, 0.1)`
-  const source = chip.state === 'add' ? N.plus : warning ? S.triangleAlert : chip.state === 'borrowed' ? LINK : chip.terminal ? S.terminal : null
+  const source = warning ? S.triangleAlert : add ? N.plus : chip.state === 'borrowed' ? LINK : chip.terminal ? S.terminal : null
   const color = warning ? t.warning : quiet ? t.textTertiary : t.textSecondary
   const name = `${label ?? chip.label}${chip.lender ? ', shares its sign-ins' : ''}`
   return <div
@@ -100,7 +103,7 @@ function Chip({ id, chip, onClick, open, menu, label }: { id: string; chip: Acco
     {...(interactive ? { role: 'button', tabIndex: 0 } : {})}
     aria-label={name}
     {...(onClick ? { onClick, onKeyDown: (e: { key?: string }) => { if (e.key === 'enter' || e.key === 'space') onClick() } } : {})}
-    style={{ display: 'flex', alignItems: 'center', gap: 5, height: 24, paddingLeft: source ? 6 : 8, paddingRight: 8, borderRadius: RADIUS.sm - 2, borderWidth: 1, borderColor: chip.state === 'add' ? t.border : 'transparent', backgroundColor: open ? hover : fill, flexShrink: 0, maxWidth: '100%', ...(interactive ? { cursor: 'pointer', hover: { backgroundColor: hover }, focusVisible: { borderColor: c.accent } } : {}) }}
+    style={{ display: 'flex', alignItems: 'center', gap: 5, height: 24, paddingLeft: source ? 6 : 8, paddingRight: 8, borderRadius: RADIUS.sm - 2, borderWidth: 1, borderColor: add ? t.border : 'transparent', backgroundColor: open ? hover : fill, flexShrink: 0, maxWidth: '100%', ...(interactive ? { cursor: 'pointer', hover: { backgroundColor: hover }, focusVisible: { borderColor: c.accent } } : {}) }}
   >
     {source ? <Icon source={source} size={13} color={color} /> : <div style={{ width: 6, height: 6, marginRight: 1, borderRadius: 3, flexShrink: 0, backgroundColor: chip.state === 'signed_in' ? t.v('--success') : t.textTertiary }} />}
     <Label color={quiet ? t.textSecondary : t.text} size={12} lineHeight={16} weight={500} truncate>{chip.label}</Label>

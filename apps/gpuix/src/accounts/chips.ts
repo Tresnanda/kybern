@@ -2,7 +2,7 @@
 // added. They answer "which account is fedora using, and does it touch my shell?" at a glance. Pure.
 import { withoutSignIn } from '../shared/lib/accounts.ts'
 import { LENDABLE_KINDS, LOGIN_SHARING_FEATURE } from './offers.ts'
-import { isOutdatedMachine, standings, type MachineAccounts, type MachineStanding, type UnifiedAccount } from './unified.ts'
+import { isOutdatedMachine, standings, type MachineAccounts, type MachineStanding, type Unfollowed, type UnifiedAccount } from './unified.ts'
 
 /** `terminal_out`: the account works on that machine, but its shell's own login of it is signed out. */
 export type ChipState = 'signed_in' | 'borrowed' | 'unreachable' | 'signed_out' | 'terminal_out' | 'unknown' | 'offline' | 'add'
@@ -17,6 +17,8 @@ export interface AccountChip {
   standing?: MachineStanding
   /** The other machines can use this sign-in: the machine is the one that shares. */
   lender?: boolean
+  /** The machine doesn't run this shared default: the chip warns and names what it uses instead. */
+  unfollowed?: Unfollowed
 }
 
 /** What a machine's menu offers about its sign-ins: share them, stop sharing them, or nothing (a lone, offline or older
@@ -58,6 +60,8 @@ function label(machine: string, state: ChipState, standing: MachineStanding | un
   return `${machine} · ${state === 'borrowed' ? rest.replace(/^From/, 'from') : rest}`
 }
 
+const unfollowedLabel = (machine: string, unfollowed: Unfollowed, several: boolean) => `${several ? `${machine} · ` : ''}Uses ${unfollowed.uses}`
+
 export function chipsFor(account: UnifiedAccount, machines: readonly MachineAccounts[], sharing?: string | null): AccountChip[] {
   const several = machines.length > 1
   const there = new Map(standings(account).map((standing) => [standing.machineId, standing]))
@@ -65,15 +69,17 @@ export function chipsFor(account: UnifiedAccount, machines: readonly MachineAcco
   const chips: AccountChip[] = []
   for (const machine of machines) {
     const standing = there.get(machine.machineId)
+    const unfollowed = account.unfollowed?.find((u) => u.machineId === machine.machineId)
+    const warn = unfollowed ? { unfollowed } : {}
     if (!standing) {
-      if (several && addable && canAdd(account, machine)) chips.push({ machineId: machine.machineId, machine: machine.name, state: 'add', terminal: false, label: label(machine.name, 'add', undefined, several) })
+      if (several && addable && canAdd(account, machine)) chips.push({ machineId: machine.machineId, machine: machine.name, state: 'add', terminal: false, label: unfollowed ? unfollowedLabel(machine.name, unfollowed, several) : label(machine.name, 'add', undefined, several), ...warn })
       continue
     }
     const state = stateOf(standing)
     // On a lone machine a plain sign-in needs no chip: the row itself says it.
-    if (!several && state === 'signed_in' && !standing.terminal) continue
+    if (!several && state === 'signed_in' && !standing.terminal && !unfollowed) continue
     const lender = several && machine.machineId === sharing && standing.state === 'signed_in' && LENDABLE_KINDS.includes(account.kind)
-    chips.push({ machineId: machine.machineId, machine: machine.name, state, terminal: standing.terminal, label: label(machine.name, state, standing, several), standing, ...(lender ? { lender } : {}) })
+    chips.push({ machineId: machine.machineId, machine: machine.name, state, terminal: standing.terminal, label: unfollowed ? unfollowedLabel(machine.name, unfollowed, several) : label(machine.name, state, standing, several), standing, ...(lender ? { lender } : {}), ...warn })
   }
   return chips
 }

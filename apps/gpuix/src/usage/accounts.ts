@@ -10,7 +10,7 @@ import {readAccounts} from '../requests/accounts.ts'
 import { errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
 import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import { legacyAccounts } from '../shared/lib/accounts.ts'
-import { USAGE_LIMITS_CHANGED_NOTIFICATION, type AccountSummary, type ProviderInstance, type ProviderKind, type ProviderLimits, type ProviderSettings, type UsageLimitsParams, type UsageLimitsResult } from '../../../../packages/kybern-client/src/types.ts'
+import { USAGE_LIMITS_CHANGED_NOTIFICATION, type AccountSummary, type ProviderInstance, type ProviderKind, type ProviderLimits, type ProviderSettings, type UnfollowedDefault, type UsageLimitsParams, type UsageLimitsResult } from '../../../../packages/kybern-client/src/types.ts'
 import { useNav } from '../nav/store.ts'
 import { getClient, useApp } from '../state.ts'
 import { setSettings, useSettings } from '../settings/store.ts'
@@ -18,6 +18,8 @@ import { refreshComposerAccounts } from '../composer/store.ts'
 
 interface State {
   accounts: AccountSummary[]
+  /** The shared defaults this machine doesn't run on. */
+  unfollowed: UnfollowedDefault[]
   /** The daemon has no `providers.accounts.list`: read-only accounts from settings. */
   legacy: boolean
   loaded: boolean
@@ -28,7 +30,7 @@ interface State {
   /** Element id the Usage page scrolls to when it opens. */
   usageAnchor: string | null
 }
-const EMPTY: State = { accounts: [], legacy: false, loaded: false, flash: null, limits: [], usageAnchor: null }
+const EMPTY: State = { accounts: [], unfollowed: [], legacy: false, loaded: false, flash: null, limits: [], usageAnchor: null }
 let state: State = EMPTY
 const listeners = new Set<() => void>()
 const emit = (patch: Partial<State>) => { state = { ...state, ...patch }; for (const listener of listeners) listener() }
@@ -55,12 +57,12 @@ export function refreshAccounts({ probe = false }: { probe?: boolean } = {}): Pr
       const result = await readAccounts(client,probe)
       if (generation === at) {
         const accounts = result.accounts ?? []
-        emit({ accounts, legacy: false, loaded: true })
+        emit({ accounts, unfollowed: result.unfollowed_defaults ?? [], legacy: false, loaded: true })
         void refreshComposerAccounts(accounts)
       }
       return true
     } catch (error) {
-      if (isMethodNotFound(error)) { if (generation === at) emit({ accounts: [], legacy: true, loaded: true }); return true }
+      if (isMethodNotFound(error)) { if (generation === at) emit({ accounts: [], unfollowed: [], legacy: true, loaded: true }); return true }
       return false
     } finally {
       inflight.delete(key)
@@ -87,6 +89,7 @@ export function useAccountsFeed() {
 
 export const useAccountsLegacy = () => select((s) => s.legacy)
 export const useAccountsLoaded = () => select((s) => s.loaded)
+export const useUnfollowedDefaults = () => select((s) => s.unfollowed)
 
 /** Every account of the environment, or only one agent's. CLI account first, then named accounts. */
 export function useAccounts(kind?: ProviderKind): AccountSummary[] {
