@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { FREE_CHAT_PROJECT_ID, type Project, type Space, type Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { currentEntry, goPage } from '../nav/history.ts'
 import { getNav, setNav } from '../nav/store.ts'
@@ -15,7 +15,9 @@ const thread = (id: string, project_id: string): Thread =>
 
 startSpaces()
 
+let previousStatus: ReturnType<typeof getState>['status']
 beforeEach(() => {
+  previousStatus = getState().status
   setSpacesState({ supported: true, spaces: [space('s1', 0), space('s2', 1)] })
   set({
     status: 'open', listsLoaded: true, selectedId: null, draft: {},
@@ -24,6 +26,8 @@ beforeEach(() => {
   })
   setNav({ page: 'home', spaceId: 's1', spaceViews: {}, projectOrder: [], settingsOpen: false, paletteOpen: false, keyboardNav: false, history: { entries: [], index: -1 } })
 })
+// An open connection here is only a fixture for navigation history.
+afterEach(() => set({ status: previousStatus }))
 
 describe('currentSpaceId', () => {
   test('is the saved id, else the first space, and null when the daemon has none', () => {
