@@ -280,6 +280,28 @@ export function useUnifiedAccounts(rows: readonly MachineRow[]): UnifiedView {
   return { machines, groups, shared, supportsShared: supportsShared(features), primaryId: local, legacy, loaded: loaded && machines.every((m) => m.state !== 'reading'), sharing }
 }
 
+/**
+ * The merged accounts for a row that only needs a name (a delegated agent's account): no reads, and no limits, so nothing
+ * that changes while turns run re-renders it.
+ */
+export function useAccountNames(): { groups: HarnessGroup[]; primaryId: MachineId } {
+  const rows = useMachines()
+  const accounts = useAccounts()
+  const remote = select((s) => s.remote)
+  const settings = select((s) => s.settings)
+  const prefs = select((s) => s.prefs)
+  const local = primaryId()
+  const groups = useMemo(() => {
+    const named = (machineId: MachineId, name: string, isLocal: boolean, list: readonly AccountSummary[]): MachineAccounts =>
+      ({ machineId, name, isLocal, online: true, state: 'ready', accounts: list, providers: null, limits: [], globalLimits: [], features: [] })
+    return unifyAccounts([
+      named(local, '', true, accounts),
+      ...others(rows, local).map((row) => named(row.machineId, row.name, false, remote[row.machineId]?.accounts ?? [])),
+    ], { shared: readShared(settings, featuresOf(getClient())) })
+  }, [local, rows, accounts, remote, settings, prefs])
+  return { groups, primaryId: local }
+}
+
 /** The view alone, for a surface that is always there (a composer): what other surfaces read, without reading again. */
 export function useAccountsView(): UnifiedView {
   return useUnifiedAccounts(useMachines())

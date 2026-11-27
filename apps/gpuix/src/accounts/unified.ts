@@ -1,9 +1,9 @@
 // Every account of every machine, as one list: the unified view of "Accounts across machines". Each daemon keeps its own
 // logins; this layer asks every machine for its accounts and groups them by identity (`<kind>:<email>`), so an account
 // signed in on two machines is one row, read once. No React and no GPUIX: tests load it directly.
-import { CLI_ACCOUNT_NAME, isCliInstance, withoutSignIn } from '../shared/lib/accounts.ts'
+import { CLI_ACCOUNT_NAME, CLI_INSTANCE, isCliInstance, withoutSignIn } from '../shared/lib/accounts.ts'
 import { bindingLimit, limitUsed } from '../shared/lib/providerUsage.ts'
-import type { AccountSummary, AccountsShared, ProviderKind, ProviderLimits, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
+import type { AccountSummary, AccountsShared, ProviderInstance, ProviderKind, ProviderLimits, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
 
 /** What one machine told us about its accounts. */
 export interface MachineAccounts {
@@ -233,6 +233,16 @@ function defaultId(kind: ProviderKind, accounts: readonly UnifiedAccount[], shar
 
 export const defaultAccountOf = (groups: readonly HarnessGroup[], kind: ProviderKind): UnifiedAccount | undefined =>
   groups.find((group) => group.kind === kind)?.accounts.find((account) => account.isDefault)
+
+/** The account behind one login of a machine. */
+export const accountAt = (groups: readonly HarnessGroup[], machineId: string, provider: ProviderInstance): UnifiedAccount | undefined =>
+  groups.find((group) => group.kind === provider.kind)?.accounts.find((account) => account.presences.some((p) => p.machineId === machineId && p.instance === (provider.instance || CLI_INSTANCE)))
+
+/** The name of the account a thread runs on when it isn't the agent's default; null on the default, and when unknown. */
+export function otherAccountName(groups: readonly HarnessGroup[], machineId: string, provider: ProviderInstance): string | null {
+  const account = accountAt(groups, machineId, provider)
+  return account && !account.isDefault && !account.terminalOnly ? account.name : null
+}
 
 // ── Per machine ──────────────────────────────────────────────────────────────
 

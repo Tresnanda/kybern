@@ -333,6 +333,9 @@ test("delegationMeta names the model as the picker does and drops the default wo
   assert.equal(delegationMeta(null, "codex", providers, "Worktree kept"), "Worktree kept");
   assert.equal(delegationMeta("sonnet", "claude-code", providers, "Shared checkout", "Windows PC"), "Sonnet 5.5 · on Windows PC");
   assert.equal(delegationMeta("gpt-6.1-sol", "codex", providers, "Own worktree", "instabox"), "GPT-6.1 Sol · on instabox · Own worktree");
+  // The account sits after the model, and only a child off the default has one to show.
+  assert.equal(delegationMeta("sonnet", "claude-code", providers, "Own worktree", "fedora", "Work"), "Sonnet 5.5 · Work · on fedora · Own worktree");
+  assert.equal(delegationMeta("sonnet", "claude-code", providers, "Shared checkout", null, null), "Sonnet 5.5");
 });
 
 // ---- ADE-121: children on other machines, by the delegating machine's own record ----

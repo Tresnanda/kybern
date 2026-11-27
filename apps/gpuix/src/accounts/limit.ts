@@ -2,7 +2,7 @@
 // another account on its own: these are the choices behind the one tap. Pure.
 import { CLI_INSTANCE, withoutSignIn } from '../shared/lib/accounts.ts'
 import type { ProviderInstance } from '../../../../packages/kybern-client/src/types.ts'
-import { isUsable, leftOf, suggestAccount, type HarnessGroup, type MachineAccounts, type UnifiedAccount } from './unified.ts'
+import { accountAt, isUsable, leftOf, suggestAccount, type HarnessGroup, type MachineAccounts, type UnifiedAccount } from './unified.ts'
 
 export interface SwitchChoice {
   /** The login on the thread's machine. */
@@ -21,10 +21,6 @@ export interface SwitchChoices {
 }
 
 const groupOf = (groups: readonly HarnessGroup[], provider: ProviderInstance) => groups.find((g) => g.kind === provider.kind)?.accounts ?? []
-
-/** The account behind one login of a machine. */
-export const accountAt = (groups: readonly HarnessGroup[], machineId: string, provider: ProviderInstance): UnifiedAccount | undefined =>
-  groupOf(groups, provider).find((account) => account.presences.some((p) => p.machineId === machineId && p.instance === provider.instance))
 
 /** The login of `account` a thread on `machineId` would use: its named one, else the terminal login. */
 function usableLogin(account: UnifiedAccount, machineId: string) {

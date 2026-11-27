@@ -24,6 +24,8 @@ import { usePaneAccess } from '../state.ts'
 import { openTabFromPane } from '../tabs/open.ts'
 import { MachineBadge } from '../sidebar/MachineBadge.tsx'
 import { glyphOfMachine, machineHub } from '../machines/index.ts'
+import { useAccountNames } from '../accounts/store.ts'
+import { otherAccountName } from '../accounts/unified.ts'
 export function LaunchMember({ block, thread, task, delegated = false, grouped = false }: { block: Block; thread?: Thread & { machineId?: string }; task?: RuntimeTask; delegated?: boolean; grouped?: boolean }) {
   const t = useTheme(), catalog = useNav(s => s.providers)
   const call = block.kind === 'tool' ? block : null
@@ -43,9 +45,10 @@ export function LaunchMember({ block, thread, task, delegated = false, grouped =
   // the child has its own worktree: a shared checkout is the default and says nothing. Subagent rows keep their type label.
   const machineId = delegated ? thread?.machineId ?? result?.machine?.id : undefined
   const machineName = machineId ? machineHub().set.displayName(machineId) : undefined
-  const meta = delegated
-    ? delegationMeta(thread?.model ?? result?.model ?? input?.model, provider, catalog, info ? workspaceLabel(info) : (result?.workspace ?? input?.workspace) === 'worktree' ? 'Own worktree' : null, machineName)
-    : [subagentTypeLabel(thread?.subagent?.agent_type), thread?.model ?? result?.model ?? input?.model].filter(Boolean).join(' · ')
+  // A delegated row's line also names the child's account when it isn't the default (`DelegatedMeta`).
+  const model = thread?.model ?? result?.model ?? input?.model
+  const workspace = delegated ? (info ? workspaceLabel(info) : (result?.workspace ?? input?.workspace) === 'worktree' ? 'Own worktree' : null) : null
+  const meta = delegated ? '' : [subagentTypeLabel(thread?.subagent?.agent_type), model].filter(Boolean).join(' · ')
   const start = thread?.subagent ? subagentSpan(thread) : thread ? { startedAt: childStartedAt(thread), endedAt: childEndedAt(thread) } : state.phase === 'working' ? { startedAt: Date.parse(block.at), endedAt: null } : null
   const override = info?.default_override ? defaultOverrideText(info.default_override, catalog) : null
   if (!delegated) {
@@ -68,7 +71,7 @@ export function LaunchMember({ block, thread, task, delegated = false, grouped =
     </div>
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, minWidth: 0 }}>
       <Label color={t.text} size={13} lineHeight={18} truncate>{title}</Label>
-      {meta && <Label color={muted(t)} size={11} lineHeight={15} truncate>{meta}</Label>}
+      <DelegatedMeta thread={thread} machineId={machineId} line={(account) => delegationMeta(model, provider, catalog, workspace, machineName, account)} />
     </div>
     {!!info?.conflicts?.length && <Label color={t.red} size={11} style={{ flexShrink: 0 }}>{conflictsLabel(info.conflicts.length)}</Label>}
     {pin}
@@ -79,6 +82,14 @@ export function LaunchMember({ block, thread, task, delegated = false, grouped =
     <Icon source={T.chevronRight} size={14} color={id ? muted(t) : 'rgba(0, 0, 0, 0)'} style={{ flexShrink: 0 }} />
   </div>
   return <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}><PinRow id={thread?.machineId ? undefined : id} title={title} inline>{row}</PinRow>{override && <Para color={muted(t)} size={11} style={{ paddingLeft: 40, paddingBottom: 6 }}>{override}</Para>}</div>
+}
+
+/** A delegated row's second line, with the account named when the child runs on one other than the agent's default. */
+function DelegatedMeta({ thread, machineId, line }: { thread?: Thread; machineId?: string; line: (account: string | null) => string }) {
+  const t = useTheme()
+  const { groups, primaryId } = useAccountNames()
+  const text = line(thread ? otherAccountName(groups, machineId ?? primaryId, thread.provider) : null)
+  return text ? <Label color={muted(t)} size={11} lineHeight={15} truncate>{text}</Label> : null
 }
 
 /**

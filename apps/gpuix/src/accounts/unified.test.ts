@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { AccountSummary, ProviderKind, ProviderLimits, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
 import { chipsFor, usableMachines } from './chips.ts'
 import { accountAway, switchChoices } from './limit.ts'
-import { accountKey, leftOf, limitsOn, railEntries, standings, suggestAccount, unifyAccounts, type MachineAccounts, type UnifiedAccount } from './unified.ts'
+import { accountKey, leftOf, limitsOn, otherAccountName, railEntries, standings, suggestAccount, unifyAccounts, type MachineAccounts, type UnifiedAccount } from './unified.ts'
 
 const NOW = Date.parse('2026-11-27T10:00:00Z')
 
@@ -133,6 +133,28 @@ describe('unifyAccounts', () => {
     expect(accountsOf([machine('mac', 'MacBook', [summary('claude-code', 'default', { identity: { email: 'me@work.com', plan: 'Max' } })], { isLocal: true })])[0]).toMatchObject({ name: 'me@work.com', plan: 'Max' })
     expect(accountKey('codex', '  Me@X.com ')).toBe('codex:me@x.com')
     expect(accountKey('codex', '')).toBeNull()
+  })
+})
+
+describe('a delegated agent’s account', () => {
+  const machines = [
+    machine('mac', 'MacBook', [named('a1', 'Work', 'w@x.com', { is_default: true }), summary('claude-code', 'default', { identity: { email: 'w@x.com' }, is_default: false })], { isLocal: true }),
+    machine('fedora', 'fedora', [named('b', 'Work', 'w@x.com'), named('p', 'Personal', 'p@x.com', { is_default: true }), summary('claude-code', 'default', { status: 'signed_out', is_default: false })]),
+  ]
+  const groups = unifyAccounts(machines)
+  const on = (machineId: string, instance: string) => otherAccountName(groups, machineId, { kind: 'claude-code', instance })
+  test('is named only off the default, whichever machine it runs on', () => {
+    // The default account, by any of its logins on any machine, says nothing.
+    expect(on('mac', 'a1')).toBeNull()
+    expect(on('mac', 'default')).toBeNull()
+    expect(on('fedora', 'b')).toBeNull()
+    // Another account is named, even where it is that machine's own default.
+    expect(on('fedora', 'p')).toBe('Personal')
+  })
+  test('says nothing when the account is unknown', () => {
+    expect(on('fedora', 'default')).toBeNull()
+    expect(on('fedora', 'gone')).toBeNull()
+    expect(on('win', 'p')).toBeNull()
   })
 })
 

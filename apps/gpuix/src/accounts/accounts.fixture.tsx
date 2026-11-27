@@ -1,7 +1,8 @@
 // "Accounts across machines" on three made-up machines: the real app (`main.tsx`) against a loopback fixture daemon per
 // machine, with a thread at its usage limit. Run by `accounts.shots.ts`; every file and credential stays in its scratch
 // directory. `ACCOUNTS_DEMO_OFFER=clash` opens on the changed-default card instead of the new-machine one, and
-// `ACCOUNTS_DEMO_AWAY=1` shows the thread with its account unavailable instead of at its limit.
+// `ACCOUNTS_DEMO_AWAY=1` shows the thread with its account unavailable instead of at its limit, and
+// `ACCOUNTS_DEMO_DELEGATED=1` a turn that delegated to agents on the default and on another account.
 import { generateKeyPairSync, sign } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -14,6 +15,7 @@ for (const key of ['KYBERN_DATA_DIR', 'KYBERN_CLIENT_CONFIG_DIR', 'KYBERN_GPUIX_
 }
 
 const AWAY = process.env.ACCOUNTS_DEMO_AWAY === '1'
+const DELEGATED = process.env.ACCOUNTS_DEMO_DELEGATED === '1'
 const ids = ['mac', 'fedora', 'satya'] as const
 type Id = typeof ids[number]
 const NAMES: Record<Id, string> = { mac: 'MacBook Pro', fedora: 'fedora', satya: 'SatyaMas' }
@@ -65,7 +67,7 @@ const usage = (id: Id) => {
   return { providers: [], accounts: [] }
 }
 
-const provider = (kind: ProviderKind, display_name: string, available: boolean): ProviderStatus => ({ kind, display_name, available, supported_permission_modes: ['supervised', 'full-access'], supports_fork: true, supports_model_switch: true, models: [{ id: 'default', display_name: 'Default', is_default: true }], instances: ['default'] })
+const provider = (kind: ProviderKind, display_name: string, available: boolean): ProviderStatus => ({ kind, display_name, available, supported_permission_modes: ['supervised', 'full-access'], supports_fork: true, supports_model_switch: true, models: [{ id: 'default', display_name: 'Default', is_default: true }, { id: 'claude-opus-5-5', display_name: 'Claude Opus 5.5' }], instances: ['default'] })
 const providers = (id: Id) => [
   provider('claude-code', 'Claude Code', true), provider('codex', 'Codex', true), provider('antigravity', 'Antigravity', id === 'mac'), provider('cursor', 'Cursor', false),
 ]
@@ -103,6 +105,30 @@ const transcript = [
   { role: 'notice', turn_id: 't1', seq: 4, at: ago(2), level: 'info', text: `Waiting for Work’s limit to reset at ${new Date(now + 138 * 60_000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`, data: { kind: 'account_wait', until: new Date(now + 138 * 60_000).toISOString(), account: { kind: 'claude-code', instance: 'work' } } },
 ]
 
+// ── Delegated agents: one on the default account, one on another, one on another machine ─────────────────────────────
+
+const delegates = [
+  { id: 'child-default', machine: 'mac' as Id, instance: 'work', title: 'Review the totals change' },
+  { id: 'child-other', machine: 'mac' as Id, instance: 'default', title: 'Add coupon edge cases' },
+  { id: 'child-remote', machine: 'fedora' as Id, instance: 'default', title: 'Run the suite on Linux' },
+]
+const childThread = (child: typeof delegates[number], n: number) => ({
+  ...thread, id: child.id, title: child.title, model: 'claude-opus-5-5',
+  // A child on its parent's machine lists under it; one on another machine lists there, with the thread it came from.
+  ...(child.machine === 'mac' ? { parent_thread_id: thread.id } : { origin: { machine_id: 'mac', machine_name: NAMES.mac, thread_id: thread.id, operation_id: `op-${n}`, kind: 'delegation', permission_cap: 'supervised' } }),
+  // fedora's terminal login is Personal for this run, so the remote child is on another account too.
+  provider: { kind: 'claude-code', instance: child.instance },
+  delegation: { task_id: `task-${n}`, operation_id: `op-${n}`, parent_thread_id: thread.id, depth: 1, role: 'implementation', workspace: 'worktree', status: 'completed', worktree_state: 'active', started_at: ago(8), completed_at: ago(5) },
+})
+const delegateCalls = delegates.map((child, n) => ({
+  role: 'tool_call', turn_id: 't1', seq: 2 + n / 10, at: ago(9), origin: { kind: 'root' }, is_error: false, complete: true,
+  call: { id: `call-${n}`, name: 'kybern_agent_delegate', input: { title: child.title, provider: 'claude-code', model: 'claude-opus-5-5', workspace: 'worktree' } },
+  output: { task_id: `task-${n}`, thread_id: child.id, title: child.title, provider: 'claude-code', model: 'claude-opus-5-5', workspace: 'worktree', status: 'completed', ...(child.machine === 'mac' ? {} : { machine: { id: child.machine, name: NAMES[child.machine] } }) },
+}))
+if (DELEGATED) accounts.fedora[0] = account('claude-code', 'default', 'CLI account', 'sam@hey.example')
+const shownTranscript = () => DELEGATED ? [transcript[0]!, ...delegateCalls, ...transcript.slice(1).filter((entry) => entry.role !== 'notice')] : AWAY ? transcript.filter((entry) => entry.role !== 'notice') : transcript
+const childrenOn = (id: Id) => (DELEGATED ? delegates.flatMap((child, n) => (child.machine === id ? [childThread(child, n)] : [])) : [])
+
 // ── The daemons ──────────────────────────────────────────────────────────────
 
 const network = (id: Id): NetworkStatus => ({ enabled: true, configured: true, removed: false, network_id: 'fixture', self_machine: cards.find((c) => c.machine_id === id)!, members: cards.map((c) => ({ ...c, is_self: c.machine_id === id })), found: [], broker: null, outbox: { queued: 0, failed: 0 }, tailscale: { installed: true, running: true } } as unknown as NetworkStatus)
@@ -126,9 +152,9 @@ const server = Bun.serve<{ id: Id }>({ port: 0, hostname: '127.0.0.1', fetch(req
     const handlers: Record<string, () => unknown> = {
       'daemon.info': () => ({ protocol_version: PROTOCOL_VERSION, environment_id: id, machine_id: id, hostname: NAMES[id], version: '0.27.0', os: cards.find((c) => c.machine_id === id)!.os, arch: 'arm64', data_dir: '/fixture', scopes: [], started_at: at, features: FEATURES }),
       'projects.list': () => ({ projects: mac ? [project] : [] }),
-      'threads.list': () => ({ threads: mac && !request.params.parent_thread_id ? [thread] : [] }),
-      'threads.get': () => ({ thread, transcript: AWAY ? transcript.filter((entry) => entry.role !== 'notice') : transcript, pending_approvals: [], next_before_seq: null }),
-      'threads.target.get': () => ({ target: { provider: thread.provider }, account_override: false, effective_permission_mode: 'supervised', suggested_account: 'default', ...(AWAY ? { account_unavailable: true } : { quota_limited: true, waiting_until: new Date(now + 138 * 60_000).toISOString() }) }),
+      'threads.list': () => ({ threads: request.params.parent_thread_id ? (mac ? childrenOn(id) : []) : mac ? [thread] : childrenOn(id) }),
+      'threads.get': () => ({ thread, transcript: shownTranscript(), pending_approvals: [], next_before_seq: null }),
+      'threads.target.get': () => ({ target: { provider: thread.provider }, account_override: false, effective_permission_mode: 'supervised', suggested_account: 'default', ...(DELEGATED ? {} : AWAY ? { account_unavailable: true } : { quota_limited: true, waiting_until: new Date(now + 138 * 60_000).toISOString() }) }),
       'threads.messages.list': () => ({ messages: [] }),
       'events.subscribe': () => ({ subscription_id: `fixture-${id}`, head_seq: 8, replay_ready: true }),
       'tasks.list': () => ({ tasks: [] }),

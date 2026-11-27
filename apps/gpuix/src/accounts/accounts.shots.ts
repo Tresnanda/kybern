@@ -11,7 +11,7 @@ import { acquirePreviewUiLock } from '../../scripts/preview-ui-lock.ts'
 const out = path.resolve(process.env.KYBERN_VERIFY_OUTPUT ?? 'native/build/accounts')
 mkdirSync(out, { recursive: true })
 const release = acquirePreviewUiLock()
-const themes = (process.env.ACCOUNTS_THEMES ?? 'dark,light').split(',')
+const themes = (process.env.ACCOUNTS_THEMES ?? 'dark,light').split(',').filter(Boolean)
 
 async function run(theme: string, env: Record<string, string>, steps: (a: Awaited<ReturnType<typeof launchFixture>>['app'], shot: (name: string) => Promise<void>) => Promise<void>) {
   const scratch = mkdtempSync(path.join(tmpdir(), 'gpuix-accounts-'))
@@ -86,6 +86,29 @@ try {
     await a.getByTestId('account-away-use').waitFor({ timeoutMs: 30_000 })
     assert.match(await a.getByTestId('account-away-use').textContent(), /Use Personal here/)
     await shot('account-away')
+  })
+  await run('dark', { ACCOUNTS_DEMO_DELEGATED: '1' }, async (a, shot) => {
+    // The agents' rows name an account only off the default, on this machine and on another.
+    const line = async (call: number) => {
+      const id = `launch-member-tool:call-${call}`
+      await a.getByTestId(id).waitFor({ timeoutMs: 30_000 })
+      // The row remounts when its child's thread arrives.
+      return a.getByTestId(id).textContent().catch(() => '')
+    }
+    const until = async (call: number, wanted: RegExp) => {
+      const deadline = Date.now() + 15_000
+      while (!wanted.test(await line(call))) { assert.ok(Date.now() < deadline, `row ${call} reads ${wanted}: ${await line(call)}`); await Bun.sleep(100) }
+    }
+    // The group folds once every agent is done: open it.
+    await a.getByTestId('launch-group-tool:call-0').waitFor({ timeoutMs: 30_000 })
+    await Bun.sleep(1500)
+    if (!await a.getByTestId('launch-member-tool:call-0').count()) await a.getByTestId('launch-group-tool:call-0').click()
+    await until(1, /Claude Opus 5\.5 · Personal · Own worktree/)
+    await until(2, /Claude Opus 5\.5 · Personal · on fedora · Own worktree/)
+    assert.doesNotMatch(await line(0), /Work ·|Personal/)
+    if (await a.getByTestId('offer-later').count()) await a.getByTestId('offer-later').click()
+    await Bun.sleep(600)
+    await shot('delegated-agents')
   })
   console.log(`PASS accounts: captures in ${out}`)
 } finally { release() }
