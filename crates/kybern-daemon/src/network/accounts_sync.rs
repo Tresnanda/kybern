@@ -328,20 +328,63 @@ fn merge(state: &AppState, mut all: Registers, incoming: &[OpEnvelope]) -> anyho
         }
     }
     state.store.meta_set(KEY, &serde_json::to_string(&all)?)?;
-    let shared = projection(&all);
-    let settings = state.settings.get();
-    if settings.accounts_shared != shared {
-        let mut next = settings;
-        next.accounts_shared = shared.clone();
-        if let Err(error) = state.settings.set(next) {
-            // The baseline stays, so the next pass tries again rather than sealing the old values.
-            tracing::warn!(target: super::TARGET, %error, "could not apply the shared accounts");
-            return Ok(all);
+    let shared = flatten(&projection(&all));
+    // `observe` just left the baseline at the settings it read. A value changed here since (a write that
+    // landed while this pass ran) is not sealed yet: it stays, with its old baseline, so the next pass seals
+    // it instead of this one undoing it.
+    let base = baseline(state)?.unwrap_or_default();
+    let mut next_base = None;
+    let applied = state.settings.update(|settings| {
+        let (values, base) = keep_unsealed(&shared, &base, &flatten(&settings.accounts_shared));
+        next_base = Some(base);
+        let mut merged = AccountsShared::default();
+        for (entity, value) in &values {
+            apply_entity(&mut merged, entity, value);
         }
+        (settings.accounts_shared != merged).then(|| {
+            let mut next = settings.clone();
+            next.accounts_shared = merged;
+            (next, ())
+        })
+    });
+    if let Err(error) = applied {
+        // The baseline stays, so the next pass tries again rather than sealing the old values.
+        tracing::warn!(target: super::TARGET, %error, "could not apply the shared accounts");
+        return Ok(all);
     }
     // What normalize added for this machine's own accounts differs from this and is sealed next time.
-    state.store.meta_set(BASE, &serde_json::to_string(&flatten(&shared))?)?;
+    if let Some(base) = next_base {
+        state.store.meta_set(BASE, &serde_json::to_string(&base)?)?;
+    }
     Ok(all)
+}
+
+/// The values to write and the baseline to keep, from what the registers say (`shared`), the baseline
+/// `observe` left (`base`) and the settings now (`local`): an entity whose local value moved off its
+/// baseline was changed after `observe` read it, so it keeps its local value and its old baseline.
+fn keep_unsealed(
+    shared: &BTreeMap<String, Value>,
+    base: &BTreeMap<String, Value>,
+    local: &BTreeMap<String, Value>,
+) -> (BTreeMap<String, Value>, BTreeMap<String, Value>) {
+    let mut values = shared.clone();
+    let mut next_base = shared.clone();
+    for entity in local.keys().chain(base.keys()) {
+        let now = local.get(entity);
+        let before = base.get(entity);
+        if now == before {
+            continue;
+        }
+        match now {
+            Some(value) => values.insert(entity.clone(), value.clone()),
+            None => values.remove(entity),
+        };
+        match before {
+            Some(value) => next_base.insert(entity.clone(), value.clone()),
+            None => next_base.remove(entity),
+        };
+    }
+    (values, next_base)
 }
 
 pub async fn serve(state: &AppState, p: PeerSpacesSyncParams) -> Result<PeerSpacesSyncResult, RpcError> {
@@ -379,6 +422,12 @@ pub(crate) fn observe_now(state: &AppState) -> anyhow::Result<()> {
     observe(state).map(|_| ())
 }
 
+/// Apply `incoming` and write the result, as the end of a pass does, for tests.
+#[cfg(test)]
+pub(crate) fn merge_now(state: &AppState, incoming: &[OpEnvelope]) -> anyhow::Result<()> {
+    merge(state, registers(state)?, incoming).map(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -404,5 +453,25 @@ mod tests {
         assert!(!apply_entity(&mut back, "nonsense", &Value::Null));
         assert!(!valid("holdings:m1", &serde_json::to_value(MachineHoldings::default()).unwrap(), "m2"), "only m1 signs its holdings");
         assert!(valid("holdings:m1", &serde_json::to_value(MachineHoldings::default()).unwrap(), "m1"));
+    }
+
+    #[test]
+    fn a_value_changed_after_observe_is_kept_and_left_unsealed() {
+        let map = |pairs: &[(&str, &str)]| -> BTreeMap<String, Value> {
+            pairs.iter().map(|(k, v)| (k.to_string(), Value::String(v.to_string()))).collect()
+        };
+        // The registers say personal; observe saw personal; the user has since chosen work and added a project.
+        let shared = map(&[("default:claude-code", "personal"), ("offer:x", "o")]);
+        let base = map(&[("default:claude-code", "personal"), ("offer:gone", "g")]);
+        let local = map(&[("default:claude-code", "work"), ("project:claude-code:r", "w")]);
+        let (values, next_base) = keep_unsealed(&shared, &base, &local);
+        // Kept: the new default and project; the removal of `offer:gone` here stays removed.
+        assert_eq!(values, map(&[("default:claude-code", "work"), ("offer:x", "o"), ("project:claude-code:r", "w")]));
+        // Still unsealed: the baseline keeps what observe saw, so the next observe seals all three.
+        assert_eq!(next_base, map(&[("default:claude-code", "personal"), ("offer:gone", "g"), ("offer:x", "o")]));
+        // Nothing changed since observe: the registers win.
+        let (values, next_base) = keep_unsealed(&shared, &base, &base);
+        assert_eq!(values, shared);
+        assert_eq!(next_base, shared);
     }
 }

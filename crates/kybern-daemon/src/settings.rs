@@ -1,7 +1,7 @@
 //! settings.json: loaded at startup, replaced atomically on update.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use anyhow::{Context, Result};
 use kybern_protocol::Settings;
@@ -11,6 +11,8 @@ use kybern_store::Store;
 pub struct SettingsStore {
     path: PathBuf,
     current: Arc<RwLock<Settings>>,
+    /// Held for each whole write, so writes never interleave and [`SettingsStore::update`] reads what it replaces.
+    writer: Arc<Mutex<()>>,
     changed: tokio::sync::broadcast::Sender<Settings>,
     /// Where the stamps of shared-field changes are kept once the daemon attaches its store (S1).
     stamps: Arc<OnceLock<Store>>,
@@ -31,6 +33,7 @@ impl SettingsStore {
         Ok(Self {
             path: path.to_path_buf(),
             current: Arc::new(RwLock::new(settings)),
+            writer: Arc::new(Mutex::new(())),
             changed: tokio::sync::broadcast::channel(32).0,
             stamps: Arc::new(OnceLock::new()),
         })
@@ -54,7 +57,21 @@ impl SettingsStore {
         self.changed.subscribe()
     }
 
-    pub fn set(&self, mut settings: Settings) -> Result<Settings> {
+    pub fn set(&self, settings: Settings) -> Result<Settings> {
+        let _writer = self.writer.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.write(settings)
+    }
+
+    /// Change the current settings in place: `change` sees what is saved at that moment, and no other write
+    /// lands between that read and this write. `None` from `change` writes nothing. A background writer uses
+    /// this so it never overwrites an edit made since it last read the settings.
+    pub fn update<T>(&self, change: impl FnOnce(&Settings) -> Option<(Settings, T)>) -> Result<Option<(Settings, T)>> {
+        let _writer = self.writer.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some((next, out)) = change(&self.get()) else { return Ok(None) };
+        Ok(Some((self.write(next)?, out)))
+    }
+
+    fn write(&self, mut settings: Settings) -> Result<Settings> {
         // A credential a client just typed goes into the secret store; settings keep the reference.
         crate::secret_store::externalize(&mut settings)?;
         validate_orchestration(&settings.orchestration)?;
