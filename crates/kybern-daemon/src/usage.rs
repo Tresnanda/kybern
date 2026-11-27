@@ -480,6 +480,10 @@ impl UsageMonitor {
         }
         self.sync_accounts();
         self.seed();
+        // Tests never read a real account's limits; they report them with `observe_account`.
+        if cfg!(test) {
+            return self.cached_limits(kind, instances);
+        }
         let default = {
             let settings = self.inner.settings.get();
             crate::provider_accounts::resolve(&settings.providers.get(&kind).cloned().unwrap_or_default(), None, None)

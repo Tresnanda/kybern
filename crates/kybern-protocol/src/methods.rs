@@ -5147,6 +5147,26 @@ method!(PeerDelegationGet, "peer.delegation.get", Some(Scope::MachineDelegate), 
 method!(PeerDelegationCancel, "peer.delegation.cancel", Some(Scope::MachineDelegate), PeerDelegationCancelParams, PeerDelegationView);
 method!(PeerGitBundle, "peer.git.bundle", Some(Scope::MachineDelegate), PeerGitBundleParams, PeerGitBundleResult);
 method!(PeerGitImport, "peer.git.import", Some(Scope::MachineDelegate), PeerGitImportParams, PeerGitImportResult);
+/// One signed-in account of a harness on a machine, for choosing a delegated child's account.
+/// Never carries limits: a parent may only pick an account the user named, or the default.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct DelegationAccount {
+    pub provider: crate::ProviderKind,
+    /// This machine's instance id (`default` is the terminal login).
+    pub instance: String,
+    pub name: String,
+    /// `<kind>:<email>`, the same on every machine, when the email is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// The account new threads of this harness use here.
+    #[serde(default)]
+    pub is_default: bool,
+}
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PeerAccountsListResult {
+    pub accounts: Vec<DelegationAccount>,
+}
+method!(PeerAccountsList, "peer.accounts.list", Some(Scope::MachineDelegate), Empty, PeerAccountsListResult);
 // Outbox delivery of a composer's new thread and message: the same parameters as `threads.create` and
 // `threads.send`, which already take a client-chosen `thread_id` and `message_id`, so a repeat is the first.
 method!(PeerThreadCreate, "peer.thread.create", Some(Scope::MachineDelegate), ThreadsCreateParams, Thread);
@@ -5526,6 +5546,7 @@ registry!(
     PeerDelegationCancel,
     PeerGitBundle,
     PeerGitImport,
+    PeerAccountsList,
     PeerThreadCreate,
     PeerThreadSend,
     ThreadsForkNote,

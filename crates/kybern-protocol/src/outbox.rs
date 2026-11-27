@@ -183,6 +183,10 @@ pub struct PeerDelegateParams {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// The account the child runs on: an account name or `<kind>:<email>` key, resolved on B.
+    /// Omitted: B's default account for the harness.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
     /// Already resolved against the parent's mode on A; B can only lower it.
     pub permission_mode: PermissionMode,
     #[serde(default)]

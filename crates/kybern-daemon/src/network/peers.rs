@@ -892,7 +892,8 @@ pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, para
         | PeerMovePrepare::NAME
         | PeerMoveCommit::NAME
         | PeerMoveGet::NAME
-        | PeerMoveAbort::NAME => state.orchestrator.peer_dispatch(&link.machine_id, method, params).await,
+        | PeerMoveAbort::NAME
+        | PeerAccountsList::NAME => state.orchestrator.peer_dispatch(&link.machine_id, method, params).await,
         // Adding a project to this machine from another one.
         PeerProvisionProbeMethod::NAME
         | PeerProvisionPrepare::NAME

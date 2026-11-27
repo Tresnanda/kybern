@@ -17,6 +17,7 @@ use super::*;
 use anyhow::ensure;
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::BTreeMap;
 
 /// How long a sign-in probe answers for an account.
@@ -262,6 +263,10 @@ impl Orchestrator {
     async fn probe_usable(&self, provider: &ProviderInstance) -> bool {
         if let Some(known) = self.usable_now(provider) {
             return known;
+        }
+        // Tests never start a real harness to ask about a login (`set_probe_for_test` sets the answer).
+        if cfg!(test) {
+            return true;
         }
         let context = (|| -> Result<kybern_drivers::ProbeContext> {
             let settings = self.inner.settings.get();
@@ -511,6 +516,28 @@ impl Orchestrator {
         result
     }
 
+    /// For a limited thread whose own reset is known: the line saying it waits for it.
+    pub(super) fn limit_wait_note(&self, thread: &Thread) -> Result<Option<String>> {
+        if !self.thread_quota_limited(thread)? {
+            return Ok(None);
+        }
+        let until = match self.pending_wait(thread.id)? {
+            Some(wait) => Some(wait.until),
+            None => {
+                let limits = self.inner.usage.cached_limits(thread.provider.kind, std::slice::from_ref(&thread.provider.instance));
+                own_reset(limits.get(&thread.provider.instance).map(Vec::as_slice).unwrap_or(&[]), Utc::now().timestamp())
+                    .and_then(|ready| DateTime::from_timestamp(ready, 0))
+            }
+        };
+        Ok(until.map(|until| {
+            format!(
+                "{} is out of limit. This agent waits for its reset ({} UTC) and continues on the same account; its result follows when it finishes.",
+                self.account_label(&thread.provider),
+                until.format("%Y-%m-%d %H:%M")
+            )
+        }))
+    }
+
     /// The account a send would use, as `thread_target` resolves it, without requiring it to exist here.
     pub(super) fn resolved_provider(&self, thread: &Thread) -> Result<ProviderInstance> {
         let mut provider = self.stored_target(thread)?.map(|target| target.provider).unwrap_or_else(|| thread.provider.clone());
@@ -686,6 +713,115 @@ impl Orchestrator {
             .await?;
         }
         result
+    }
+}
+
+/// Harnesses whose accounts a delegated agent can be pinned to.
+const DELEGATION_KINDS: [ProviderKind; 4] =
+    [ProviderKind::ClaudeCode, ProviderKind::Codex, ProviderKind::Cursor, ProviderKind::Antigravity];
+/// Longest a delegation waits for sign-in probes or another machine's account list.
+const DELEGATION_LOOKUP: Duration = Duration::from_secs(5);
+
+impl Orchestrator {
+    fn machine_label(&self) -> String {
+        self.remote_hub().map(|hub| hub.self_name()).unwrap_or_else(|| "this machine".into())
+    }
+
+    fn delegation_account(&self, provider: &ProviderInstance) -> methods::DelegationAccount {
+        let settings = self.inner.settings.get();
+        let raw = settings.providers.get(&provider.kind).cloned().unwrap_or_default();
+        methods::DelegationAccount {
+            provider: provider.kind,
+            instance: provider.instance.clone(),
+            name: self.account_label(provider),
+            key: self.account_email(provider).map(|email| AccountsShared::key(provider.kind, &email)),
+            is_default: crate::provider_accounts::resolve(&raw, None, None) == provider.instance,
+        }
+    }
+
+    /// The signed-in accounts of each harness on this machine, for `kybern_agent_capabilities`
+    /// and `peer.accounts.list`. Never limits: the parent picks the account the user named.
+    /// Accounts whose sign-in could not be checked in time are listed.
+    pub(super) async fn delegation_accounts(&self) -> Vec<methods::DelegationAccount> {
+        let providers = DELEGATION_KINDS
+            .into_iter()
+            .filter(|kind| self.inner.drivers.get(*kind).is_some())
+            .flat_map(|kind| self.switch_instances(kind).into_iter().map(move |instance| ProviderInstance { kind, instance }))
+            .collect::<Vec<_>>();
+        let checks = providers
+            .iter()
+            .map(|provider| async move { tokio::time::timeout(DELEGATION_LOOKUP, self.probe_usable(provider)).await.unwrap_or(true) });
+        let usable = futures::future::join_all(checks).await;
+        providers.iter().zip(usable).filter(|(_, usable)| *usable).map(|(provider, _)| self.delegation_account(provider)).collect()
+    }
+
+    pub(super) fn account_matches(account: &methods::DelegationAccount, query: &str) -> bool {
+        let query = query.trim().to_lowercase();
+        account.instance.to_lowercase() == query
+            || account.name.trim().to_lowercase() == query
+            || account.key.as_deref().is_some_and(|key| key == query || key.split_once(':').is_some_and(|(_, email)| email == query))
+            || (account.instance == "default" && matches!(query.as_str(), "default" | "terminal login" | "cli account"))
+    }
+
+    /// The other machines where an account matching `query` is signed in, by name (bounded).
+    pub(super) async fn machines_with_account(&self, kind: ProviderKind, query: &str) -> Vec<String> {
+        let Some(hub) = self.remote_hub().cloned() else { return Vec::new() };
+        let asks = hub.targets().into_iter().filter(|target| target.online).map(|target| {
+            let hub = hub.clone();
+            async move {
+                let answer = tokio::time::timeout(
+                    DELEGATION_LOOKUP,
+                    hub.call(&target.id, <methods::PeerAccountsList as methods::Method>::NAME, json!({})),
+                )
+                .await;
+                let accounts = answer.ok()?.ok().and_then(|value| serde_json::from_value::<methods::PeerAccountsListResult>(value).ok())?;
+                accounts
+                    .accounts
+                    .iter()
+                    .any(|account| account.provider == kind && Self::account_matches(account, query))
+                    .then_some(target.name)
+            }
+        });
+        futures::future::join_all(asks).await.into_iter().flatten().collect()
+    }
+
+    /// The account a delegated agent of `kind` runs on, from the parent's `account` (a name, a
+    /// `<kind>:<email>` key, an email or an instance id). It must be signed in on this machine.
+    pub(super) async fn resolve_delegation_account(&self, kind: ProviderKind, query: &str) -> Result<ProviderInstance, String> {
+        let machine = self.machine_label();
+        let accounts = self
+            .switch_instances(kind)
+            .into_iter()
+            .map(|instance| self.delegation_account(&ProviderInstance { kind, instance }))
+            .collect::<Vec<_>>();
+        let Some(account) = accounts.iter().find(|account| Self::account_matches(account, query)) else {
+            let here = accounts.iter().map(|account| account.name.clone()).collect::<Vec<_>>().join(", ");
+            return Err(format!("{} has no account \"{}\" on {machine}. Accounts here: {here}.", kind.display_name(), query.trim()));
+        };
+        let provider = ProviderInstance { kind, instance: account.instance.clone() };
+        if let Some(reason) = self.unavailable_reason(&provider) {
+            return Err(reason);
+        }
+        if !self.probe_usable(&provider).await {
+            return Err(format!("{} is not signed in on {machine}.", account.name));
+        }
+        Ok(provider)
+    }
+
+    /// The error for an account the parent asked for that is not usable where the agent would run,
+    /// naming the machines where it is signed in.
+    pub(super) async fn delegation_account_error(&self, kind: ProviderKind, query: &str, reason: String) -> anyhow::Error {
+        let elsewhere = self.machines_with_account(kind, query).await;
+        if elsewhere.is_empty() {
+            anyhow!("{reason} Use an account the user named or omit account for the default.")
+        } else {
+            anyhow!("{reason} It is signed in on {}: pass machine to run the agent there.", elsewhere.join(", "))
+        }
+    }
+
+    /// Pin a new delegated thread to the account its parent chose (`threads.target.set` semantics).
+    pub(super) fn pin_account(&self, thread_id: ThreadId, provider: &ProviderInstance) -> Result<()> {
+        self.inner.store.meta_set(&format!("account_override:{thread_id}"), &provider.instance)
     }
 }
 

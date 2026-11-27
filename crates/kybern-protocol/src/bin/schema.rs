@@ -338,6 +338,7 @@ fn main() {
     method::<OutboxCancel>(&mut methods);
     method::<OutboxEnqueue>(&mut methods);
     method::<PeerDelegate>(&mut methods);
+    method::<PeerAccountsList>(&mut methods);
     method::<PeerDelegationGet>(&mut methods);
     method::<PeerDelegationCancel>(&mut methods);
     method::<PeerGitBundle>(&mut methods);

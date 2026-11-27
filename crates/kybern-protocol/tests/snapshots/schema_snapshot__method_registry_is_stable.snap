@@ -249,6 +249,7 @@ expression: names
 - peer.delegation.cancel
 - peer.git.bundle
 - peer.git.import
+- peer.accounts.list
 - peer.thread.create
 - peer.thread.send
 - threads.fork_note

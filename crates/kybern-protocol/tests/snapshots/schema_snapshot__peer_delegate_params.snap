@@ -60,6 +60,13 @@ expression: schema_for!(PeerDelegateParams)
         "null"
       ]
     },
+    "account": {
+      "description": "The account the child runs on: an account name or `<kind>:<email>` key, resolved on B.\nOmitted: B's default account for the harness.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "permission_mode": {
       "description": "Already resolved against the parent's mode on A; B can only lower it.",
       "$ref": "#/$defs/PermissionMode"

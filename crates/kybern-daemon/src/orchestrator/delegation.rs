@@ -185,6 +185,10 @@ struct DelegateArgs {
     model: Option<String>,
     #[serde(default)]
     effort: Option<String>,
+    /// The account the child runs on (a name or `<kind>:<email>` key the user named); omit for
+    /// the harness's default account on the machine that runs it.
+    #[serde(default)]
+    account: Option<String>,
     /// A Coordinator that picks another harness or model than its default for
     /// this role says why here.
     #[serde(default)]
@@ -671,12 +675,38 @@ impl Orchestrator {
         if let Some(defaults) = coordinator_defaults {
             capabilities["coordinator"] = defaults;
         }
+        // Signed-in accounts per harness here (`account` on kybern_agent_delegate). No limits: the
+        // parent picks only the account the user named, or the default.
+        capabilities["accounts"] = json!(self.delegation_accounts().await);
+        capabilities["accounts_note"] = json!(
+            "Pass account only when the user named one; otherwise omit it for the default. Never rotate children across accounts to stretch usage limits."
+        );
         // Other machines of the network that can run delegated agents (`machine` on kybern_agent_delegate).
-        if let Some(hub) = self.remote_hub() {
-            let machines: Vec<Value> = hub
-                .targets()
+        if let Some(hub) = self.remote_hub().cloned() {
+            let targets = hub.targets();
+            let accounts = futures::future::join_all(targets.iter().map(|target| {
+                let hub = hub.clone();
+                async move {
+                    if !target.online {
+                        return None;
+                    }
+                    let answer = tokio::time::timeout(
+                        Duration::from_secs(5),
+                        hub.call(&target.id, <methods::PeerAccountsList as methods::Method>::NAME, json!({})),
+                    )
+                    .await;
+                    answer
+                        .ok()?
+                        .ok()
+                        .and_then(|value| serde_json::from_value::<methods::PeerAccountsListResult>(value).ok())
+                        .map(|list| list.accounts)
+                }
+            }))
+            .await;
+            let machines: Vec<Value> = targets
                 .into_iter()
-                .map(|target| {
+                .zip(accounts)
+                .map(|(target, accounts)| {
                     let supports =
                         target.features.as_ref().is_none_or(|features| features.iter().any(|f| f == features::DELEGATE_REMOTE_V1));
                     json!({
@@ -684,6 +714,7 @@ impl Orchestrator {
                         "name": target.name,
                         "status": if target.paused { "paused" } else if target.online { "online" } else { "offline" },
                         "can_delegate": supports,
+                        "accounts": accounts,
                         "note": if target.online { None } else { Some("Offline: a task queues and starts when the machine returns.") },
                     })
                 })
@@ -716,6 +747,7 @@ impl Orchestrator {
                 provider: args.provider,
                 model: args.model.clone(),
                 effort: args.effort.clone(),
+                account: args.account.clone().filter(|account| !account.trim().is_empty()),
                 permission_mode: args.permission_mode,
                 workspace: args.workspace.unwrap_or_default(),
                 owns: args.owns.clone().unwrap_or_default(),
@@ -808,6 +840,15 @@ impl Orchestrator {
             None if same_kind => parent.provider.clone(),
             None => ProviderInstance::default_for(kind),
         };
+        // An account the parent names is pinned; without one the child follows the default account.
+        let pinned = match args.account.as_deref().map(str::trim).filter(|account| !account.is_empty()) {
+            Some(query) => match self.resolve_delegation_account(kind, query).await {
+                Ok(account) => Some(account),
+                Err(reason) => return Err(self.delegation_account_error(kind, query, reason).await),
+            },
+            None => None,
+        };
+        let provider = pinned.clone().unwrap_or(provider);
         let configured_model = self.inner.settings.get().providers.get(&kind).and_then(|provider| provider.model.clone());
         let asked_model = args.model.clone().filter(|model| !model.trim().is_empty());
         let default_model = default_here.and_then(|default| default.model.clone());
@@ -982,6 +1023,9 @@ impl Orchestrator {
             self.discard_unstarted_worktree(&parent.cwd, &thread).await;
             bail!("native tool caller turn ended before the agent was created");
         };
+        if let Some(account) = &pinned {
+            self.pin_account(thread.id, account)?;
+        }
 
         // First turn: the brief, recorded as a delivered task message from the parent.
         let brief = delegation_brief(role, &parent.title, workspace, &owns, branch.as_deref(), &task);
@@ -1413,6 +1457,20 @@ impl Orchestrator {
 
     async fn delegation_complete_child(&self, child: &Thread, turn_id: TurnId, outcome: TurnOutcome) -> Result<()> {
         let info = child.delegation.clone().ok_or_else(|| anyhow!("not a delegation"))?;
+        // A child out of limit waits for its own account's reset and continues (never another
+        // account): it stays running, and its status says what it waits for.
+        if matches!(outcome, TurnOutcome::Failed(_))
+            && let Some(note) = self.limit_wait_note(child)?
+        {
+            self.delegation_update(child.id, |info| {
+                if info.status != DelegationStatus::Running {
+                    return false;
+                }
+                info.error = Some(note);
+                true
+            })?;
+            return Ok(());
+        }
         let (status, error, terminal) = match outcome {
             TurnOutcome::Completed { stop_reason: StopReason::Completed | StopReason::MaxTurns, terminal_message_id } => {
                 (DelegationStatus::Completed, None, terminal_message_id)
