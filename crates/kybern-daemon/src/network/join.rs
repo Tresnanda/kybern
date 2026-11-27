@@ -425,6 +425,7 @@ fn fallback_card(target: &Candidate) -> MachineCard {
         added_by: None,
         added_via: Some(JoinVia::Code),
         added_at: None,
+        online_ratio_7d: None,
     }
 }
 

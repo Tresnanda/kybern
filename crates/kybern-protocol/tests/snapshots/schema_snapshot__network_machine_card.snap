@@ -123,6 +123,14 @@ expression: schema_for!(MachineCard)
         "null"
       ],
       "format": "date-time"
+    },
+    "online_ratio_7d": {
+      "description": "How much of the last 7 days this machine was online, 0–1, as this daemon sampled it from\nheartbeats. `None` until a day has been sampled.",
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "float"
     }
   },
   "required": [

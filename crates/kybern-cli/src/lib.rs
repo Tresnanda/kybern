@@ -1005,11 +1005,18 @@ enum AccountsCmd {
         account: String,
         color: String,
     },
+    /// Sign an account out. `default` (the terminal login) needs --confirm-terminal: it also signs out
+    /// your terminal on this machine.
     SignOut {
         #[arg(long)]
         provider: ProviderKind,
         account: String,
+        #[arg(long)]
+        confirm_terminal: bool,
     },
+    /// Offers about accounts across machines: always-on machines, machines missing accounts, signed-out
+    /// terminal logins and defaults the first run changed.
+    Offers,
     Remove {
         #[arg(long)]
         provider: ProviderKind,
@@ -1806,9 +1813,14 @@ pub async fn run() -> Result<()> {
                     .await?;
                 println!("{}", serde_json::to_string_pretty(&summary)?);
             }
-            AccountsCmd::SignOut { provider, account } => {
-                let summary = client.call::<AccountsSignOut>(ProviderInstance { kind: provider, instance: account }).await?;
+            AccountsCmd::SignOut { provider, account, confirm_terminal } => {
+                let summary =
+                    client.call::<AccountsSignOut>(AccountsSignOutParams { kind: provider, instance: account, confirm_terminal }).await?;
                 println!("{}", serde_json::to_string_pretty(&summary)?);
+            }
+            AccountsCmd::Offers => {
+                let offers = client.call::<AccountsOffers>(Empty {}).await?;
+                println!("{}", serde_json::to_string_pretty(&offers)?);
             }
             AccountsCmd::Remove { provider, account } => {
                 client.call::<AccountsRemove>(ProviderInstance { kind: provider, instance: account }).await?;

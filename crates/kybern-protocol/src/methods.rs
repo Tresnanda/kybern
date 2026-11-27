@@ -541,9 +541,18 @@ pub struct AccountSummary {
     pub managed: bool,
     #[serde(default)]
     pub can_sign_out: bool,
-    /// Set when this account signs in through the login broker (design §9.4).
+    /// Set when this account signs in through the login broker (design §9.4). A lender that cannot
+    /// be reached shows as `state: broker_offline` with the lender's `machine_name`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub broker: Option<AccountBroker>,
+    /// The account across machines, `<kind>:<email>` lowercase (`Settings.accounts_shared`). `None`
+    /// while the email is unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// The harness's own login on this machine (instance `default`: `~/.claude`, `~/.codex`, …), which
+    /// the user's terminal uses too.
+    #[serde(default)]
+    pub terminal: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -671,7 +680,83 @@ pub struct AccountsUpdateParams {
     pub color: Option<String>,
 }
 method!(AccountsUpdate, "providers.accounts.update", Some(Scope::OrchestrationOperate), AccountsUpdateParams, AccountSummary);
-method!(AccountsSignOut, "providers.accounts.sign_out", Some(Scope::AccessWrite), ProviderInstance, AccountSummary);
+/// `providers.accounts.sign_out`. The terminal login (instance `default`) is signed out only with
+/// `confirm_terminal`, after the user confirmed it on that machine.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AccountsSignOutParams {
+    pub kind: ProviderKind,
+    pub instance: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub confirm_terminal: bool,
+}
+impl From<ProviderInstance> for AccountsSignOutParams {
+    fn from(instance: ProviderInstance) -> Self {
+        Self { kind: instance.kind, instance: instance.instance, confirm_terminal: false }
+    }
+}
+method!(AccountsSignOut, "providers.accounts.sign_out", Some(Scope::AccessWrite), AccountsSignOutParams, AccountSummary);
+
+// ---- accounts across machines: offers ----
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountOfferKind {
+    /// A reliably online machine has accounts others lack, for harnesses that can be lent: let the other
+    /// machines use its sign-ins.
+    AlwaysOn,
+    /// A machine lacks accounts the others have: "Use your accounts on <machine>?"
+    NewMachine,
+    /// A terminal login is signed out: sign it in.
+    TerminalLogin,
+    /// The first run with shared accounts changed a machine's default ("fedora's default was Personal,
+    /// now Work everywhere").
+    MigrationClash,
+}
+
+/// A default that changed when a machine's accounts were merged into the shared ones.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AccountClash {
+    pub kind: ProviderKind,
+    pub machine_id: crate::MachineId,
+    /// The key that machine used before.
+    pub was: String,
+    /// The key every machine uses now.
+    pub now: String,
+}
+
+/// One card the app may show. Dismissing it writes `accounts_shared.offers[id] = { state, fingerprint }`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AccountOffer {
+    /// Stable for the situation: `always_on:<machine>`, `new_machine:<machine>`,
+    /// `terminal_login:<machine>:<kind>`, `clash:<kind>:<machine>`.
+    pub id: String,
+    pub kind: AccountOfferKind,
+    /// Changes when the situation changes (another account, another machine); a "later" dismissal with
+    /// an older fingerprint no longer hides the offer.
+    pub fingerprint: String,
+    /// The machine the offer is about.
+    pub machine_id: crate::MachineId,
+    pub machine_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<ProviderKind>,
+    /// Account keys involved: the accounts to lend (always on) or the ones missing (new machine).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keys: Vec<String>,
+    /// Always on: the machines that would borrow. New machine: the machines that have the missing accounts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub machines: Vec<crate::MachineId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clash: Option<AccountClash>,
+    /// Set when the user dismissed this offer in its current situation. Dismissed offers are still listed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dismissed: Option<crate::OfferDismissalState>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AccountsOffersResult {
+    pub offers: Vec<AccountOffer>,
+}
+method!(AccountsOffers, "accounts.offers", Some(Scope::OrchestrationRead), Empty, AccountsOffersResult);
 method!(AccountsRemove, "providers.accounts.remove", Some(Scope::AccessWrite), ProviderInstance, Empty);
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -5060,6 +5145,9 @@ pub struct TaskItemsChangedNotification {
 
 method!(NetworkCachedLists, "network.cached_lists", Some(Scope::NetworkRead), NetworkCachedListsParams, NetworkCachedListsResult);
 method!(PeerPreferencesSync, "peer.preferences.sync", Some(Scope::MachineSettings), PeerSpacesSyncParams, PeerSpacesSyncResult);
+// The shared account registers (`Settings.accounts_shared` and what each machine holds), exchanged like
+// `peer.preferences.sync`: signed field registers, last writer wins.
+method!(PeerAccountsSync, "peer.accounts.sync", Some(Scope::MachineSettings), PeerSpacesSyncParams, PeerSpacesSyncResult);
 // Group project member lists (signed registers, `groups.sync.v1`): a repository added to or removed from a group
 // on one machine reaches that group on every machine.
 method!(PeerGroupsSync, "peer.groups.sync", Some(Scope::MachineSettings), PeerSpacesSyncParams, PeerSpacesSyncResult);
@@ -5327,6 +5415,7 @@ registry!(
     AccountsLoginFinish,
     AccountsUpdate,
     AccountsSignOut,
+    AccountsOffers,
     AccountsRemove,
     ThreadsTargetGet,
     ThreadsTargetSet,
@@ -5505,6 +5594,7 @@ registry!(
     NetworkCachedLists,
     PeerListSnapshot,
     PeerPreferencesSync,
+    PeerAccountsSync,
     PeerGroupsSync,
     PeerGroupBundle,
     NetworkStatusMethod,

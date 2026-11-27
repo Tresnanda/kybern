@@ -301,10 +301,20 @@ fn summarize(
         identity = Some(AccountIdentity { email: account.email.clone(), plan: account.plan.clone(), organization: None });
     }
     let named = account.is_some();
+    let key = identity
+        .as_ref()
+        .and_then(|identity| identity.email.as_deref())
+        .filter(|_| crate::accounts_shared::has_identity(kind))
+        .map(|email| crate::accounts_shared::key(kind, email));
+    // Name and colour belong to the account, the same on every machine.
+    let profile = key.as_ref().and_then(|key| settings.accounts_shared.profiles.get(key));
     AccountSummary {
         provider: ProviderInstance { kind, instance: instance.to_string() },
-        name: account.map(|account| account.name.clone()).unwrap_or_else(|| CLI_ACCOUNT.to_string()),
-        color: account.and_then(|account| account.color.clone()),
+        name: profile
+            .map(|profile| profile.name.clone())
+            .or_else(|| account.map(|account| account.name.clone()))
+            .unwrap_or_else(|| CLI_ACCOUNT.to_string()),
+        color: profile.and_then(|profile| profile.color.clone()).or_else(|| account.and_then(|account| account.color.clone())),
         identity,
         status,
         is_default: resolve(&provider, None, None) == instance,
@@ -315,6 +325,8 @@ fn summarize(
             && matches!(status, AccountStatus::SignedIn | AccountStatus::NeedsSignIn)
             && matches!(kind, ProviderKind::ClaudeCode | ProviderKind::Codex | ProviderKind::Cursor | ProviderKind::Antigravity),
         broker: None,
+        key,
+        terminal: instance == "default",
     }
 }
 
@@ -331,6 +343,10 @@ fn through_broker(state: &AppState, summary: &mut AccountSummary) {
         _ => AccountStatus::NeedsSignIn,
     };
     summary.can_sign_out = false;
+    // A borrowed login's folder is empty here: its key is the lender's account's.
+    if summary.key.is_none() && !view.machine_id.is_empty() {
+        summary.key = crate::network::accounts_sync::lender_key(state, &view.machine_id, summary.provider.kind, &view.broker_account);
+    }
     summary.broker = Some(view);
 }
 
@@ -355,7 +371,12 @@ pub async fn list(state: &AppState, params: AccountsListParams) -> Result<Accoun
             reads.push(async move { summary_for(state, kind, &instance, params.refresh).await });
         }
     }
-    Ok(AccountsListResult { accounts: futures::future::join_all(reads).await })
+    let accounts = futures::future::join_all(reads).await;
+    if params.kind.is_none() {
+        // What the other machines see of this one (offers, "signed in on fedora").
+        crate::network::accounts_sync::publish_holdings(state, &accounts);
+    }
+    Ok(AccountsListResult { accounts })
 }
 
 fn valid_name(name: &str) -> Result<String> {
@@ -424,8 +445,40 @@ fn forget_account_caches(state: &AppState, instance: &ProviderInstance) {
     state.orchestrator.usage().forget_account(instance.kind, &instance.instance);
 }
 
-pub async fn sign_out(state: &AppState, instance: ProviderInstance) -> Result<AccountSummary> {
-    ensure!(instance.instance != "default", "Kybern can't sign out the CLI account. Sign out in your terminal instead.");
+/// Sign the terminal login out, after the user confirmed it on this machine. Kybern never does it on its own.
+async fn sign_out_terminal(state: &AppState, kind: ProviderKind) -> Result<AccountSummary> {
+    let instance = ProviderInstance::default_for(kind);
+    ensure!(
+        matches!(kind, ProviderKind::ClaudeCode | ProviderKind::Codex | ProviderKind::Cursor | ProviderKind::Antigravity),
+        "{} can't sign out from Kybern. Sign out in your terminal instead.",
+        kind.display_name()
+    );
+    let running = state.orchestrator.running_turns_on(&instance).await;
+    ensure!(
+        running == 0,
+        "The terminal login is running in {running} {}. Stop {}, then sign it out.",
+        if running == 1 { "thread" } else { "threads" },
+        if running == 1 { "it" } else { "them" }
+    );
+    harness_sign_out(state, &instance).await.map_err(|error| anyhow!("Couldn't sign the terminal login out. {error}"))?;
+    state.orchestrator.mark_account_signed_out(&instance, true)?;
+    crate::accounts_shared::remember_terminal_email(&state.store, kind, None);
+    forget_account_caches(state, &instance);
+    state.provider_catalogs.invalidate().await;
+    let mut summary = summary_for(state, kind, "default", true).await;
+    summary.status = AccountStatus::SignedOut;
+    Ok(summary)
+}
+
+pub async fn sign_out(state: &AppState, params: AccountsSignOutParams) -> Result<AccountSummary> {
+    if params.instance == "default" {
+        ensure!(
+            params.confirm_terminal,
+            "Signing out the terminal login also signs out your terminal on this machine. Confirm it, then sign out."
+        );
+        return sign_out_terminal(state, params.kind).await;
+    }
+    let instance = ProviderInstance { kind: params.kind, instance: params.instance };
     let name = state
         .settings
         .get()
@@ -812,7 +865,7 @@ exit 2
         )
         .await;
         assert!(default.is_err());
-        assert!(sign_out(&fixture.state, claude("default")).await.is_err());
+        assert!(sign_out(&fixture.state, claude("default").into()).await.is_err());
         assert!(remove(&fixture.state, claude("default")).await.is_err());
     }
 
@@ -822,7 +875,7 @@ exit 2
         let work = fixture.root.join("data/accounts/claude/work");
         add(&fixture, "work", &work, None);
         std::fs::write(work.join(".signed-in"), "dev@arunika.co").unwrap();
-        let summary = sign_out(&fixture.state, claude("work")).await.unwrap();
+        let summary = sign_out(&fixture.state, claude("work").into()).await.unwrap();
         assert_eq!(summary.status, AccountStatus::SignedOut);
         assert!(!work.join(".signed-in").exists());
         assert!(fixture.state.orchestrator.admit_signed_out_for_test(&claude("work")));

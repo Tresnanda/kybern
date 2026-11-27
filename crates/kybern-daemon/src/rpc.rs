@@ -82,6 +82,7 @@ async fn dispatch_part_1(state: &AppState, ctx: &ConnectionCtx, method: &str, sl
                 features: {
                     let mut features = state.network.features();
                     features.push(kybern_protocol::features::ANTIGRAVITY_ACCOUNTS_V1.to_string());
+                    features.push(kybern_protocol::features::ACCOUNTS_SHARED_V1.to_string());
                     features
                 },
             };
@@ -216,6 +217,7 @@ async fn dispatch_part_3(state: &AppState, ctx: &ConnectionCtx, method: &str, sl
         AccountsLoginFinish::NAME => ok(state.account_logins.finish(state, parse(params)?).await.map_err(bad)?),
         AccountsUpdate::NAME => ok(crate::provider_accounts::update(state, parse(params)?).await.map_err(bad)?),
         AccountsSignOut::NAME => ok(crate::provider_accounts::sign_out(state, parse(params)?).await.map_err(bad)?),
+        AccountsOffers::NAME => ok(crate::accounts_offers::offers(state)),
         AccountsRemove::NAME => {
             crate::provider_accounts::remove(state, parse(params)?).await.map_err(bad)?;
             ok(Empty {})

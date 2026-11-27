@@ -58,6 +58,8 @@ expression: scopes
   - "orchestration:operate"
 - - providers.accounts.sign_out
   - "access:write"
+- - accounts.offers
+  - "orchestration:read"
 - - providers.accounts.remove
   - "access:write"
 - - threads.target.get
@@ -413,6 +415,8 @@ expression: scopes
 - - peer.lists.snapshot
   - "machine:tools"
 - - peer.preferences.sync
+  - "machine:settings"
+- - peer.accounts.sync
   - "machine:settings"
 - - peer.groups.sync
   - "machine:settings"

@@ -90,7 +90,8 @@ classify!(SETTINGS_FIELDS, every_settings_field_is_classified, Settings, {
     network => PerMachine,
     compaction => Shared,
     older_after => Shared,
-    accounts_shared => Shared,
+    // The same on every machine, but kept in step by its own exchange (`network::accounts_sync`), never by a patch.
+    accounts_shared => PerMachine,
 });
 
 classify!(PROVIDER_FIELDS, every_provider_field_is_classified, ProviderSettings, {

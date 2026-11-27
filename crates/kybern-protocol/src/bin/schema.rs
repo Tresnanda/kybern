@@ -122,6 +122,7 @@ fn main() {
     method::<AccountsLoginFinish>(&mut methods);
     method::<AccountsUpdate>(&mut methods);
     method::<AccountsSignOut>(&mut methods);
+    method::<AccountsOffers>(&mut methods);
     method::<AccountsRemove>(&mut methods);
     method::<ThreadsTargetGet>(&mut methods);
     method::<ThreadsTargetSet>(&mut methods);
@@ -300,6 +301,7 @@ fn main() {
     method::<EventsRange>(&mut methods);
     method::<NetworkCachedLists>(&mut methods);
     method::<PeerPreferencesSync>(&mut methods);
+    method::<PeerAccountsSync>(&mut methods);
     method::<PeerGroupsSync>(&mut methods);
     method::<PeerGroupBundle>(&mut methods);
     method::<PeerListSnapshot>(&mut methods);

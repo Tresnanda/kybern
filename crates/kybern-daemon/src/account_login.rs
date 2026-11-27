@@ -193,8 +193,35 @@ impl AccountLogins {
             );
         }
 
+        // Claude Code, Codex and Cursor: Kybern signs the terminal login (`default`) in only while it is
+        // signed out. It never switches it to another account and never signs it out on its own.
+        let terminal_login = !antigravity && params.instance.as_deref() == Some("default");
+        if terminal_login {
+            ensure!(
+                matches!(kind, ProviderKind::ClaudeCode | ProviderKind::Codex | ProviderKind::Cursor),
+                "Kybern can't sign in the terminal login of {}. Sign in from your terminal.",
+                kind.display_name()
+            );
+            // The probe reads a Claude login that is due for a refresh without running Claude Code (#107).
+            let (status, _) = state.account_identities.probe(state, &ProviderInstance::default_for(kind), true).await;
+            match status {
+                AccountStatus::SignedOut | AccountStatus::NeedsSignIn => {}
+                AccountStatus::SignedIn => anyhow::bail!(
+                    "The terminal login on {} is already signed in, and Kybern never switches it to another account. Add an account instead.",
+                    host_name()
+                ),
+                AccountStatus::Unknown => anyhow::bail!(
+                    "Kybern can't tell whether the terminal login of {} is signed in on {}. Check that it is installed, or sign in from your terminal.",
+                    kind.display_name(),
+                    host_name()
+                ),
+            }
+        }
+
         // Where the sign-in lands.
         let (directory, created, env_instance, reauth) = match (&params.instance, &params.directory) {
+            // The harness's own place; the path only tells this sign-in apart from others and is never created.
+            _ if terminal_login => (data_dir.join("run").join("terminal-login").join(kind.as_str()), false, "default".to_string(), true),
             _ if machine_login => {
                 // `agy` runs in its own empty folder, so it asks nothing about a project.
                 let scratch = data_dir.join("run").join("antigravity-login");
@@ -785,6 +812,12 @@ impl AccountLogins {
                 let _ = state.settings.set(next);
             }
             let _ = state.orchestrator.mark_account_signed_out(&provider_instance, false);
+            if instance == "default"
+                && crate::accounts_shared::remember_terminal_email(&state.store, public.kind, identity.email.as_deref())
+            {
+                // The terminal login may now be this machine's login for a shared account.
+                let _ = state.settings.set(state.settings.get());
+            }
             state.account_identities.remember(
                 &provider_instance,
                 crate::account_identity::digest(&spec.env),

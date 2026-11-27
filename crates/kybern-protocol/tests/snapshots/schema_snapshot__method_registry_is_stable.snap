@@ -30,6 +30,7 @@ expression: names
 - providers.accounts.login.finish
 - providers.accounts.update
 - providers.accounts.sign_out
+- accounts.offers
 - providers.accounts.remove
 - threads.target.get
 - threads.target.set
@@ -208,6 +209,7 @@ expression: names
 - network.cached_lists
 - peer.lists.snapshot
 - peer.preferences.sync
+- peer.accounts.sync
 - peer.groups.sync
 - peer.groups.bundle
 - network.status

@@ -13,6 +13,7 @@
 //! removal side effects and the `network.*` handlers (N4) use [`Network::membership`],
 //! [`Network::publish_ops`], [`peers::Peers`] and [`Network::found`].
 
+pub mod accounts_sync;
 pub mod broker;
 pub mod client_grant;
 pub mod clipboard;
@@ -32,6 +33,7 @@ pub mod list_cache;
 pub mod machine_info;
 pub mod manage;
 pub mod membership;
+pub mod online;
 pub mod ops;
 pub mod outbox;
 pub mod peers;
@@ -432,6 +434,7 @@ impl Network {
             features::NOTES_FEDERATED_V1.to_string(),
             features::OFFLINE_LISTS_V1.to_string(),
             features::PREFERENCES_SYNC_V1.to_string(),
+            features::ACCOUNTS_SYNC_V1.to_string(),
             features::SECRETS_STORE_V1.to_string(),
             features::LOGIN_BROKER_V1.to_string(),
             features::UPDATE_V1.to_string(),

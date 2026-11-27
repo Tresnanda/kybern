@@ -91,9 +91,15 @@ pub mod features {
     /// Antigravity takes named accounts, each with a profile of its own (`AccountLoginStartParams.named`).
     /// A daemon feature, not a network one, so it is not part of [`ALL`].
     pub const ANTIGRAVITY_ACCOUNTS_V1: &str = "antigravity.accounts.v1";
+    /// Accounts across machines: `Settings.accounts_shared` is kept and synced, `AccountSummary` has
+    /// `key` and `terminal`, a signed-out terminal login can be signed in, and `accounts.offers` answers.
+    /// A daemon feature, not a network one, so it is not part of [`ALL`].
+    pub const ACCOUNTS_SHARED_V1: &str = "accounts.shared.v1";
+    /// The peer side of accounts across machines: `peer.accounts.sync`.
+    pub const ACCOUNTS_SYNC_V1: &str = "accounts.sync.v1";
 
     /// Every feature the network design names, in design order.
-    pub const ALL: [&str; 32] = [
+    pub const ALL: [&str; 33] = [
         NETWORK_V1,
         SPACES_SYNC_V1,
         RELAY_V1,
@@ -126,6 +132,7 @@ pub mod features {
         PLUGINS_SYNC_V1,
         RELAY_PAGE_V1,
         REMOVAL_PROOF_V1,
+        ACCOUNTS_SYNC_V1,
     ];
 }
 
@@ -158,6 +165,16 @@ impl RepoIdentity {
     /// Every root commit known for this checkout, `root_commit` included.
     pub fn roots(&self) -> impl Iterator<Item = &String> {
         self.root_commit.iter().chain(self.root_commits.iter())
+    }
+
+    /// One string that names the repository on every machine, for maps keyed by repository
+    /// (`AccountsShared::projects`): `root:<smallest root commit>`, or `remote:<host/owner/repo>` for a
+    /// shallow clone.
+    pub fn key(&self) -> Option<String> {
+        if let Some(root) = self.roots().min() {
+            return Some(format!("root:{root}"));
+        }
+        self.remote.as_ref().map(|remote| format!("remote:{remote}"))
     }
 }
 
@@ -385,6 +402,10 @@ pub struct MachineCard {
     pub added_via: Option<JoinVia>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub added_at: Option<DateTime<Utc>>,
+    /// How much of the last 7 days this machine was online, 0–1, as this daemon sampled it from
+    /// heartbeats. `None` until a day has been sampled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub online_ratio_7d: Option<f32>,
 }
 
 /// What to do with a machine found on the tailnet that is not a member.

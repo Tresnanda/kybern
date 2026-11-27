@@ -718,6 +718,7 @@ mod tests {
             added_by: None,
             added_via: None,
             added_at: None,
+            online_ratio_7d: None,
         }
     }
 

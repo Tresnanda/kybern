@@ -937,7 +937,7 @@ impl LoginBroker {
                     continue;
                 }
                 let instance = ProviderInstance { kind, instance: account };
-                if crate::provider_accounts::sign_out(state, instance).await.is_ok() && !signed_out.contains(&kind) {
+                if crate::provider_accounts::sign_out(state, instance.into()).await.is_ok() && !signed_out.contains(&kind) {
                     signed_out.push(kind);
                 }
             }

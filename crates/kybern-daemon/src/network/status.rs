@@ -33,6 +33,7 @@ fn card_now(state: &AppState, machine_id: &str) -> Option<MachineCard> {
         card.network_protocol = presence.network_protocol;
         card.features = presence.features;
         card.harnesses = presence.harnesses;
+        card.online_ratio_7d = super::online::ratio(&state.store, machine_id, &me, chrono::Utc::now());
         return Some(card);
     }
     let peer = network.peers.status(machine_id);
@@ -56,6 +57,7 @@ fn card_now(state: &AppState, machine_id: &str) -> Option<MachineCard> {
     if card.status != MachineStatus::Paused {
         card.status = if peer.online { MachineStatus::Online } else { MachineStatus::Offline };
     }
+    card.online_ratio_7d = super::online::ratio(&state.store, machine_id, &me, chrono::Utc::now());
     Some(card)
 }
 
@@ -84,6 +86,7 @@ async fn lone_card(state: &AppState) -> MachineCard {
         added_by: None,
         added_via: None,
         added_at: None,
+        online_ratio_7d: None,
     }
 }
 
