@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.27.0
+
+<!-- kybern-release-title: Your accounts, on every machine -->
+<!-- kybern-release-summary: One Accounts page for every machine, sign-ins that work from your desktop with one Authorize click, a one-tap switch when an account hits its limit, and several Antigravity accounts. -->
+
+- **One Accounts page for all your machines.** Each account appears once, matched by email, with a chip per machine showing whether it's signed in there, is that machine's terminal login, or uses another machine's sign-in. Names, colours and the default account are the same everywhere, and per-project choices follow the project.
+- **Add an account to several machines at once.** Tick the machines and approve each sign-in in your browser. For Claude Code and Codex on another machine it's one **Authorize** click, with nothing to paste; otherwise a code. Logins are never copied between machines.
+- **Kybern offers instead of asking you to configure.** A card appears when a new machine is missing your accounts, when an always-on machine could share its sign-ins, or when a terminal login is signed out. **Not now** and **Never** are remembered.
+- **When an account hits its limit,** the thread offers **Continue on <account>** with the one that has the most left, and otherwise waits for its own limit to reset and continues by itself. Kybern never switches accounts on its own. Claude Code and Codex accounts share their conversations, so a switched thread keeps its full history.
+- **Antigravity supports several accounts,** each with its own agy profile and sign-out (agy 1.5 or later).
+- **Delegated agents can run on a named account,** and their row says which one. The delegate tool now lists every harness, Antigravity and Grok Build included.
+- The usage rail reads the default account across machines, and every limit reads "% left".
+- Choosing a newly added account as the default no longer fails with "Account … is unavailable".
+
 ## 0.26.0
 
 <!-- kybern-release-title: Every harness, tightened -->
