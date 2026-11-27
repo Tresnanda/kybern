@@ -814,10 +814,10 @@ pub struct AccountOffer {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<ProviderKind>,
     /// Account keys involved: the accounts to lend (always on) or the ones missing (new machine).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub keys: Vec<String>,
     /// Always on: the machines that would borrow. New machine: the machines that have the missing accounts.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub machines: Vec<crate::MachineId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clash: Option<AccountClash>,

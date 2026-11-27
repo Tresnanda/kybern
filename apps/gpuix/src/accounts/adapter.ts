@@ -18,7 +18,8 @@ const isMethodNotFound = (error: unknown) => /method not found|-32601|unknown me
 /** `accounts.offers`, or null when the daemon cannot compute offers (they are then worked out here). */
 export async function fetchDaemonOffers(client: KybernClient): Promise<AccountOffer[] | null> {
   if (!supportsShared(featuresOf(client))) return null
-  try { return (await client.call('accounts.offers', {})).offers } catch (error) {
+  // The daemon leaves `keys` and `machines` out when they are empty (terminal login, migration clash offers).
+  try { return (await client.call('accounts.offers', {})).offers.map((offer) => ({ ...offer, keys: offer.keys ?? [], machines: offer.machines ?? [] })) } catch (error) {
     if (isMethodNotFound(error)) return null
     throw error
   }
