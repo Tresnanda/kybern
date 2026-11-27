@@ -66,8 +66,10 @@ describe('offers only what makes sense', () => {
     // Its terminal login is that account, signed out.
     const same = fedora([summary('claude-code', 'default', { status: 'signed_out', identity: { email: 'w@x.com' } })])
     expect(computeOffers(context([wanted, same]))).toEqual([])
-    // A signed-out terminal login of someone else hides nothing.
-    expect(ids(computeOffers(context([wanted, fedora([summary('claude-code', 'default', { status: 'signed_out' })])])))).toEqual(['new_machine:fedora'])
+    // A signed-out terminal login of someone else hides nothing (on a current daemon: an older one is asked to update instead).
+    const current = { features: ['login.broker.v1', ACCOUNTS_SHARED_FEATURE] }
+    const offered = ids(computeOffers(context([wanted, fedora([summary('claude-code', 'default', { status: 'signed_out' })], current)])))
+    expect(offered.filter((id) => id.startsWith('new_machine:'))).toEqual(['new_machine:fedora'])
   })
   test('a thread is use enough for a terminal login offer', () => {
     const empty = fedora([summary('cursor', 'default', { status: 'signed_out' })], { features: [ACCOUNTS_SHARED_FEATURE] })
