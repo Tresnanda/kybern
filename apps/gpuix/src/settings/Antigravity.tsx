@@ -4,7 +4,6 @@
 import { toastProblem } from '../problems/toast.ts'
 import { useState } from 'react'
 import { GEMINI_API_KEY_ENV } from '../../../../packages/kybern-client/src/antigravity.ts'
-import { requestAntigravitySignIn } from '../antigravity/notice.ts'
 import { showDialog } from '../dialogs/store.ts'
 import { Button } from '../kit/Button.tsx'
 import { Switch } from '../kit/Switch.tsx'
@@ -65,7 +64,7 @@ export function AntigravitySetup() {
         )}
       </Row>
       <Row title="Sign in with Google" description={signedIn ? (email ? `Signed in as ${email}` : 'Signed in') : 'Opens Antigravity in a terminal so you can finish in your browser.'}>
-        <Button testId="antigravity-signin" variant={signedIn ? 'secondary' : 'primary'} onClick={() => requestAntigravitySignIn(() => showDialog({ kind: 'account', provider: 'antigravity' }))}>
+        <Button testId="antigravity-signin" variant={signedIn ? 'secondary' : 'primary'} onClick={() => showDialog({ kind: 'account', provider: 'antigravity' })}>
           {signedIn ? 'Sign in again' : 'Sign in with Google'}
         </Button>
       </Row>
