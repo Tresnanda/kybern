@@ -175,7 +175,7 @@ impl AppState {
         let shutdown = CancellationToken::new();
         let hub = crate::network::outbox::NetworkHub::new(network.clone(), shutdown.clone());
         // The login broker (S4) calls other machines through the same hub.
-        let login_broker = crate::network::broker::LoginBroker::new(hub.clone(), network.clone(), store.clone());
+        let login_broker = crate::network::broker::LoginBroker::new(hub.clone(), network.clone(), store.clone(), settings.clone());
         let orchestrator = Orchestrator::new(store.clone(), drivers.clone(), events.clone(), paths.clone(), settings.clone())
             .with_terminal_manager(terminals.clone())
             .with_previews(previews.clone())

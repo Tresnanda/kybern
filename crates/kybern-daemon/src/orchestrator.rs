@@ -2243,7 +2243,9 @@ impl Orchestrator {
     pub async fn send_client_message(&self, params: methods::ThreadsSendParams) -> Result<methods::ThreadsSendResult> {
         let retryable = params.message_id.is_some();
         let message_id = params.message_id.unwrap_or_else(Uuid::now_v7);
-        // An account that is not usable on this machine fails before anything starts, naming one to use instead.
+        // An account that is not usable on this machine fails before anything starts, naming one to use instead. A
+        // borrowed account whose last borrow failed borrows once more first, so a stale failure never refuses it.
+        self.retry_borrow_before_send(params.thread_id).await;
         self.ensure_account_available(params.thread_id)?;
         let (turn_id, message_id, admission) = self.send_with_id(params.thread_id, message_id, params.message, false, retryable).await?;
         Ok(methods::ThreadsSendResult { turn_id, message_id, queued: admission == Admission::Queued })

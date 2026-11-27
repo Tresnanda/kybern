@@ -103,6 +103,32 @@ impl Orchestrator {
         }
     }
 
+    /// Whether a live session of this local account has a turn running now. A lender asks before it refreshes the
+    /// login ahead of expiry, so the turn finishes on the token it started with.
+    pub async fn login_sessions_busy(&self, kind: ProviderKind, instance: &str) -> bool {
+        let candidates: Vec<(ThreadId, Arc<LiveSession>)> =
+            self.inner.sessions.lock().await.iter().map(|(id, live)| (*id, live.clone())).collect();
+        for (thread_id, live) in candidates {
+            let Ok(Some(thread)) = self.inner.store.thread_get(thread_id) else { continue };
+            if thread.provider.kind != kind || thread.provider.instance != instance {
+                continue;
+            }
+            if live.turn.lock().await.is_some() || !live.pending.lock().await.is_empty() || thread.status == ThreadStatus::Running {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Before a send is refused for a borrowed account whose last borrow failed, borrow once more: the lender may
+    /// be back online, or may let this machine borrow again.
+    pub(super) async fn retry_borrow_before_send(&self, thread_id: ThreadId) {
+        let Some(broker) = self.login_broker().cloned() else { return };
+        let Ok(Some(thread)) = self.inner.store.thread_get(thread_id) else { return };
+        let Ok(provider) = self.resolved_provider(&thread) else { return };
+        broker.retry_failed(provider.kind, &provider.instance).await;
+    }
+
     /// A turn failed. If the lent login was rejected, plan to recover once: end the process gracefully, borrow
     /// a fresh token, resume the provider conversation and send the same message again. Call while holding
     /// `live.turn`, then [`Orchestrator::run_resend`] once it is released. `None`: the failure is the turn's.

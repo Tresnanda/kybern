@@ -1049,7 +1049,9 @@ fn refused(network: &Network, link: &PeerLink, scope: Scope) -> RpcError {
         Some((Some(me), Some(caller))) => (me, caller),
         _ => ("This machine".to_string(), "that machine".to_string()),
     };
-    let message = format!("{me} doesn't let other machines, {caller} included, use its sign-ins. Turn on Logins in {me}'s settings.");
+    let message = format!(
+        "{me} doesn't let other machines, {caller} included, use its sign-ins. Choose Share this machine’s sign-ins for {me} in Settings → Accounts."
+    );
     RpcError::new(codes::FORBIDDEN, message.clone()).with_problem(
         &kybern_protocol::rpc::Problem::new(kybern_protocol::rpc::ProblemKind::Permission, message).with_subject(super::broker::LOGINS_OFF),
     )

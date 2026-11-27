@@ -228,7 +228,7 @@ function legacyBorrowCopy(problem: Problem, message: string, borrow: BorrowConte
   if (/missing scope: (access|accounts):write/i.test(detail))
     return { title, body: `${borrow.machine} needs a newer Kybern to use another machine's sign-ins. Update Kybern on ${borrow.machine} and try again, or sign in on ${borrow.machine} instead.`, action, secondary: copyDetail, retryable: true }
   if (problem.kind === "permission")
-    return { title, body: `${lender} doesn't let other machines use its sign-ins. Turn on Logins in ${borrow.lender ?? "that machine"}'s settings, or sign in on ${borrow.machine} instead.`, action, secondary: copyDetail, retryable: true }
+    return { title, body: `${lender} doesn't let other machines use its sign-ins. Choose Share this machine’s sign-ins for ${borrow.lender ?? "it"} in Settings → Accounts, or sign in on ${borrow.machine} instead.`, action, secondary: copyDetail, retryable: true }
   if (problem.kind === "offline")
     return { title, body: `${lender} is offline. Bring it online and try again, or sign in on ${borrow.machine} instead.`, action, secondary: retry(), retryable: true }
   if (problem.kind === "update_needed")

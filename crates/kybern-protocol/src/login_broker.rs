@@ -163,6 +163,11 @@ pub struct PeerLoginStatus {
     /// Loans this machine holds as a borrower, so a move can tell when every member re-borrowed.
     #[serde(default)]
     pub borrowed_from: Vec<MachineId>,
+    /// Loans this machine holds as a borrower with a turn running on them now. The lender waits for these to
+    /// finish before it refreshes the login ahead of expiry, which would revoke the token mid-turn. Absent from
+    /// older daemons.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub busy_loans: Vec<String>,
 }
 
 /// `peer.login.release_all`: the broker was moved; drop every loan and optionally sign out.

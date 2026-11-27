@@ -7,7 +7,7 @@ const rpc = (code, message, data) => new RpcCallError({ code, message, ...(data 
 
 // What a 0.27.2 daemon sends when kdi-vps has Logins off and MacBook tries to borrow its Claude sign-in.
 const refusedSentence =
-  "kdi-vps doesn't let other machines use its sign-ins. Turn on Logins in kdi-vps's settings (Settings → Machines), or sign in on MacBook instead.";
+  "kdi-vps doesn't let other machines use its sign-ins. Choose Share this machine’s sign-ins for kdi-vps in Settings → Accounts, or sign in on MacBook instead.";
 const refused = rpc(-32002, refusedSentence, {
   problem: {
     kind: "permission",
@@ -60,7 +60,9 @@ test("an older daemon's bare refusal becomes a sentence naming both machines whe
   assert.deepEqual(scope.action, { id: "sign_in_here", label: "Sign in on fedora instead", params: { machine_id: "m-new", provider: "claude-code" } });
   assert.doesNotMatch(scope.body, /refused access|Check the permissions/);
   const logins = describeProblem(rpc(-32002, "missing scope: machine:logins"), { action: "use Treshnandas-Macbook.local's sign-in", borrow });
-  assert.match(logins.body, /^Treshnandas-Macbook\.local doesn't let other machines use its sign-ins\. Turn on Logins in Treshnandas-Macbook\.local's settings, or sign in on fedora instead\.$/);
+  assert.match(logins.body, /^Treshnandas-Macbook\.local doesn't let other machines use its sign-ins\. Choose Share this machine’s sign-ins for Treshnandas-Macbook\.local in Settings → Accounts, or sign in on fedora instead\.$/);
+  // Settings → Machines has no Logins control: the fix is on the Accounts page.
+  assert.doesNotMatch(logins.body, /Turn on Logins|Settings → Machines/);
   assert.equal(logins.action?.id, "sign_in_here");
   // Without the borrow context nothing changes.
   const plain = describeProblem(rpc(-32002, "missing scope: access:write"), { action: "rename the thread" });

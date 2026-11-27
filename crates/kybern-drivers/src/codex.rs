@@ -297,6 +297,40 @@ pub async fn read_account_limits(
     account_limits(&result?)
 }
 
+/// Have Codex renew its own login ahead of expiry: `account/read { refreshToken: true }` runs Codex's
+/// normal refresh-token flow and saves the new tokens to its `auth.json`. Kybern never redeems the
+/// refresh token itself. Used by a machine that shares its Codex sign-in, so a borrowed token never
+/// runs out while nobody uses Codex there.
+pub async fn refresh_account_login(
+    cwd: &std::path::Path,
+    binary: Option<&PathBuf>,
+    env: &std::collections::BTreeMap<String, String>,
+) -> std::result::Result<(), String> {
+    let bin = resolve(ProviderKind::Codex, binary).map_err(|error| error.to_string())?;
+    let mut cmd = crate::binary::command(bin).no_window();
+    cmd.current_dir(cwd).arg("app-server").envs(env);
+    let child = NdjsonChild::spawn(cmd).map_err(|error| format!("Codex could not start to renew its login: {error}"))?;
+    let initialized = catalog_call(
+        &child,
+        1,
+        "initialize",
+        json!({
+            "clientInfo": { "name": "kybern", "title": "Kybern", "version": env!("CARGO_PKG_VERSION") },
+            "capabilities": { "experimentalApi": true }
+        }),
+    )
+    .await
+    .is_some();
+    if !initialized || child.write(&json!({ "method": "initialized" })).await.is_err() {
+        stop_after_startup_work(child);
+        return Err("Codex did not start to renew its login.".into());
+    }
+    let result = catalog_call(&child, 2, "account/read", json!({ "refreshToken": true })).await;
+    // Input closes first, so Codex finishes saving what it refreshed before it exits.
+    stop_after_startup_work(child);
+    result.map(|_| ()).ok_or_else(|| "Codex could not renew its login. Use Codex on this machine once, or sign in again.".into())
+}
+
 /// Ask Codex's own app-server for its effective skill catalog. This preserves
 /// plugin namespaces, disabled state, and repo/system precedence that cannot be
 /// reconstructed reliably from a blind filesystem walk.

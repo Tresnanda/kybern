@@ -5442,6 +5442,8 @@ export interface PeerLoginStatus {
   is_broker: boolean;
   lendable: LendableAccount[];
   borrowed_from: MachineId[];
+  /** Borrowed loans with a turn running on them now (the lender defers a refresh ahead of expiry). */
+  busy_loans?: string[];
 }
 export interface SecretsPushParams {
   name: string;

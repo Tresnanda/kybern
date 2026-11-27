@@ -323,7 +323,9 @@ pub fn read_codex(env: &BTreeMap<String, String>) -> std::result::Result<CodexSt
 }
 
 pub fn codex_stored_from_json(value: &Value) -> std::result::Result<CodexStored, String> {
-    let tokens = value.get("tokens").ok_or("Codex is signed in with an API key, which cannot be lent.")?;
+    let tokens = value
+        .get("tokens")
+        .ok_or("Codex is signed in with an API key, which can't be shared. Sign in to Codex with ChatGPT there, or push the key instead.")?;
     let access_token =
         tokens.get("access_token").and_then(Value::as_str).filter(|t| !t.is_empty()).ok_or("Codex is not signed in here.")?.to_string();
     let id_token = tokens.get("id_token").and_then(Value::as_str).map(str::to_string);
@@ -343,6 +345,11 @@ pub fn codex_stored_from_json(value: &Value) -> std::result::Result<CodexStored,
         .and_then(|claims| claims.pointer("/https:~1~1api.openai.com~1auth/chatgpt_plan_type").and_then(Value::as_str).map(str::to_string));
     let expires_at = jwt_claims(&access_token).and_then(|claims| claims.get("exp").and_then(Value::as_i64));
     Ok(CodexStored { access_token, id_token, account_id, plan_type, expires_at })
+}
+
+/// When a lent Codex access token expires (its JWT `exp`), in seconds.
+pub fn codex_expires_at(access_token: &str) -> Option<i64> {
+    jwt_claims(access_token).and_then(|claims| claims.get("exp").and_then(Value::as_i64))
 }
 
 /// A plan name for a client: "pro" reads "Pro".
