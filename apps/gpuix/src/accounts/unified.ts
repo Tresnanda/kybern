@@ -22,6 +22,8 @@ export interface MachineAccounts {
   /** The machine's own entry per agent: its default account's limits. */
   globalLimits: readonly ProviderLimits[]
   features: readonly string[]
+  /** What this connection may do there (`daemon.info.scopes`). */
+  scopes?: readonly string[]
 }
 
 /** Where one account stands on one login of one machine. */

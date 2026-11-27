@@ -28,6 +28,14 @@ const installed = (machine: MachineAccounts, kind: ProviderKind) => {
 }
 
 const has = (account: UnifiedAccount, machine: MachineId) => account.presences.some((p) => p.machineId === machine)
+/** The machine's terminal login is this account, or a signed-in login of the agent there doesn't say whose it is: it may
+ *  be this one. */
+const mayHave = (group: HarnessGroup, account: UnifiedAccount, machine: MachineId) =>
+  account.presences.some((p) => p.machineId === machine && p.terminal)
+  || group.accounts.some((other) => !other.key && other.presences.some((p) => p.machineId === machine && isUsable(p.state)))
+/** In use: signed in on some machine as an account added to Kybern, or as a terminal login the user runs threads with. */
+const inUse = (account: UnifiedAccount, threadKinds: readonly string[]) =>
+  account.presences.some((p) => isUsable(p.state) && (!p.terminal || threadKinds.includes(account.kind)))
 const usableOn = (account: UnifiedAccount, machine: MachineId) => standings(account).some((s) => s.machineId === machine && isUsable(s.state))
 /** Signed in with its own login (not borrowed) somewhere. */
 const ownedBy = (account: UnifiedAccount, machine: MachineId) => account.presences.some((p) => p.machineId === machine && p.state === 'signed_in')
@@ -39,22 +47,29 @@ export interface OfferContext {
   ratios: Readonly<Record<MachineId, number | null | undefined>>
   /** The machine whose sign-ins the others already use. */
   sharing: MachineId | null
+  /** The harnesses the user has threads for. */
+  threadKinds?: readonly string[]
 }
 
 const ready = (machine: MachineAccounts) => machine.online && machine.state === 'ready' && !isOutdatedMachine(machine)
 const identityAccounts = (groups: readonly HarnessGroup[]) => groups.flatMap((group) => group.accounts.filter((account) => account.key && OFFER_KINDS.includes(account.kind)))
 const sorted = (values: Iterable<string>) => [...values].sort()
 
-/** The offers of a network whose daemon cannot compute them. A migration clash needs the daemon's record, so none here. */
-export function computeOffers({ groups, machines, ratios, sharing }: OfferContext): Offer[] {
+/** The offers of a network whose daemon cannot compute them (the daemon's rules, `accounts_offers.rs`). A migration
+ *  clash needs the daemon's record, so none here. */
+export function computeOffers({ groups, machines, ratios, sharing, threadKinds = [] }: OfferContext): Offer[] {
   const offers: Offer[] = []
   const online = machines.filter(ready)
   if (!online.length) return offers
+  /** The machine could use the account and may not have it. */
+  const lacks = (account: UnifiedAccount, machine: MachineAccounts) =>
+    installed(machine, account.kind) && !usableOn(account, machine.machineId) && !mayHave(groups.find((g) => g.kind === account.kind)!, account, machine.machineId)
 
-  // New machine: accounts signed in elsewhere that this machine doesn't have.
+  // New machine: accounts in use elsewhere that this machine doesn't have.
   for (const machine of online) {
     const missing = identityAccounts(groups).filter((account) => !has(account, machine.machineId)
-      && installed(machine, account.kind)
+      && lacks(account, machine)
+      && inUse(account, threadKinds)
       && online.some((other) => other.machineId !== machine.machineId && usableOn(account, other.machineId)))
     if (!missing.length) continue
     const keys = sorted(missing.map((account) => account.key!))
@@ -68,7 +83,7 @@ export function computeOffers({ groups, machines, ratios, sharing }: OfferContex
       if ((ratios[machine.machineId] ?? 0) < ALWAYS_ON_RATIO || !machine.features.includes(LOGIN_SHARING_FEATURE)) continue
       const savings = identityAccounts(groups)
         .filter((account) => LENDABLE_KINDS.includes(account.kind) && ownedBy(account, machine.machineId))
-        .map((account) => ({ account, lacking: online.filter((other) => other.machineId !== machine.machineId && installed(other, account.kind) && !usableOn(account, other.machineId)) }))
+        .map((account) => ({ account, lacking: online.filter((other) => other.machineId !== machine.machineId && lacks(account, other)) }))
         .filter((saving) => saving.lacking.length > 0)
       if (!savings.length) continue
       const keys = sorted(savings.map((saving) => saving.account.key!))
@@ -77,14 +92,15 @@ export function computeOffers({ groups, machines, ratios, sharing }: OfferContex
     }
   }
 
-  // Empty terminal login: only where the daemon can sign it in, and only for an agent the user signs in to somewhere.
+  // Empty terminal login: only where the daemon can sign it in, and only for an agent the machine has and the user uses.
   for (const machine of online) {
     if (!machine.features.includes(ACCOUNTS_SHARED_FEATURE)) continue
     for (const group of groups) {
       if (!TERMINAL_SIGN_IN_KINDS.includes(group.kind) || !installed(machine, group.kind)) continue
       const empty = group.signedOutTerminals.some((entry) => entry.machineId === machine.machineId)
         || group.accounts.some((account) => account.presences.some((p) => p.machineId === machine.machineId && p.terminal && p.state === 'signed_out'))
-      const used = group.accounts.some((account) => account.key && account.presences.some((p) => isUsable(p.state)))
+      // An account added to Kybern, a signed-in terminal login or a thread, on any machine.
+      const used = threadKinds.includes(group.kind) || group.accounts.some((account) => account.presences.some((p) => !p.terminal || isUsable(p.state)))
       if (!empty || !used) continue
       offers.push({ id: `terminal_login:${machine.machineId}:${group.kind}`, kind: 'terminal_login', fingerprint: 'signed_out', machine_id: machine.machineId, machine_name: machine.name, provider: group.kind, keys: [], machines: [] })
     }

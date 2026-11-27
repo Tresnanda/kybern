@@ -1,6 +1,6 @@
-// Pure option-building logic for the Add an account picker (`Account.tsx`): which agents appear,
-// and whether this computer's own Antigravity login is signed in (the next one is a named account).
-import type { AccountSummary, ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
+// Pure option-building logic for the Add an account picker (`Account.tsx`): which agents appear, and whether this
+// machine can add an Antigravity account (always a named one, never the computer's own `agy` login).
+import type { ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
 import { withoutSignIn } from '../shared/lib/accounts.ts'
 
 export interface PickerProvider {
@@ -15,34 +15,11 @@ export interface AccountPickerOption extends PickerProvider {
 }
 
 /**
- * Whether this computer's own Antigravity login (the CLI account) is signed in, using the same
- * `providers.accounts.list` data and status rule as Settings › Accounts (`StatusCell`).
+ * Why Antigravity can't be picked: adding it makes a named account, and the daemon on `host` is from before those.
+ * `undefined` when it can be.
  */
-export function isAntigravitySignedIn(accounts: readonly AccountSummary[], legacy = false): boolean {
-  return accounts.some(
-    (account) =>
-      account.provider.kind === 'antigravity' &&
-      account.provider.instance === 'default' &&
-      (account.status === 'signed_in' || (!legacy && account.status === 'unknown' && !!account.identity)),
-  )
-}
-
-/**
- * Whether picking Antigravity adds a named account (a profile of its own, signed in with a pasted
- * code) rather than this computer's own login: once that login is signed in. A daemon without
- * login records can't add one.
- */
-export function addsNamedAntigravityAccount(accounts: readonly AccountSummary[], legacy = false): boolean {
-  return !legacy && isAntigravitySignedIn(accounts, legacy)
-}
-
-/**
- * Why Antigravity can't be picked: this computer is signed in, so the next one is a named account,
- * and the daemon on `host` is from before named accounts. `undefined` when it can be.
- */
-export function antigravityAccountsBlocked(accounts: readonly AccountSummary[], legacy: boolean, namedSupported: boolean, host: string): string | undefined {
-  if (namedSupported || !isAntigravitySignedIn(accounts, legacy)) return undefined
-  return `Update Kybern on ${host} to add another Antigravity account.`
+export function antigravityAccountsBlocked(namedSupported: boolean, host: string): string | undefined {
+  return namedSupported ? undefined : `Update Kybern on ${host} to add an Antigravity account.`
 }
 
 /**

@@ -76,7 +76,8 @@ const signIn: ProblemActionHandler = {
       // The same sheet Settings opens: it runs `useAccountLogin` (browser, pasted code, terminal). With an `instance`
       // it signs that account in again; without one it adds an account.
       const instance = text(action, 'instance')
-      if (kind) return (await import('../dialogs/store.ts')).showDialog({ kind: 'account', provider: kind, ...(instance ? { instance } : {}) })
+      // Antigravity's own login is the machine's terminal login, which only Accounts signs in, by that name.
+      if (kind && !(kind === 'antigravity' && instance === 'default')) return (await import('../dialogs/store.ts')).showDialog({ kind: 'account', provider: kind, ...(instance ? { instance } : {}) })
       ;(await import('../settings/SettingsScreen.tsx')).openSettingsTab('accounts')
     })().catch(() => {})
   },

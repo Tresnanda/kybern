@@ -188,6 +188,7 @@ export async function retryMachineUpdate(id: string) {
   try {
     const update = await machineHub().clientFor(id).call('daemon_update.run', {})
     updateRuns.reconcile(members.map(m => ({ ...m, update })))
+    return update
   } catch (e) { updateRuns.fail([id]); throw e }
 }
 /** "Keep all machines on the same version": a member that sees a newer version updates itself when idle. */

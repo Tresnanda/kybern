@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { ACCOUNTS_SHARED_FEATURE, LOGIN_HANDOFF_FEATURE, type AccountSummary } from '../../../../packages/kybern-client/src/types.ts'
 import { canHandoff } from './adapter.ts'
 import { applyAnswers, computeOffers, listedOffers, nextCard, offerCopy, type Offer, type OfferContext } from './offers.ts'
-import { advance, fallbackModeFor, loginModeFor, mismatch, planAdd, planOnMachine, planSetup, resolvedItem, startQueue } from './queue.ts'
+import { advance, fallbackModeFor, loginModeFor, makesDefault, mismatch, needsAccountsUpdate, planAdd, planOnMachine, planSetup, resolvedItem, signInNeedsUpdate, startQueue, updateLine, type SignInItem } from './queue.ts'
 import { unifyAccounts, type MachineAccounts } from './unified.ts'
 import { machine, summary } from './unified.test.ts'
 
@@ -49,6 +49,79 @@ describe('computeOffers', () => {
 
 const offer = (id: string, patch: Partial<Offer> = {}): Offer => ({ id, kind: 'new_machine', fingerprint: 'a', machine_id: 'fedora', machine_name: 'fedora', keys: [], machines: [], ...patch })
 
+describe('offers only what makes sense', () => {
+  const shell = (patch: Partial<AccountSummary> = {}) => summary('codex', 'default', { is_default: false, ...patch })
+  const source = (accounts: AccountSummary[]) => machine('mac', 'MacBook', accounts, { isLocal: true })
+
+  test('a terminal login nobody runs threads with is not pushed to other machines', () => {
+    const machines = [source([shell({ identity: { email: 'c@x.com' } })]), fedora()]
+    expect(computeOffers(context(machines))).toEqual([])
+    expect(ids(computeOffers(context(machines, { threadKinds: ['codex'] })))).toEqual(['new_machine:fedora'])
+  })
+  test('never an account the machine may already have', () => {
+    const wanted = source([claude('a1', 'Work', 'w@x.com')])
+    // A signed-in login there that doesn't say whose it is may be this one.
+    const unknown = fedora([summary('claude-code', 'default', { is_default: false })])
+    expect(computeOffers(context([wanted, unknown]))).toEqual([])
+    // Its terminal login is that account, signed out.
+    const same = fedora([summary('claude-code', 'default', { status: 'signed_out', identity: { email: 'w@x.com' } })])
+    expect(computeOffers(context([wanted, same]))).toEqual([])
+    // A signed-out terminal login of someone else hides nothing.
+    expect(ids(computeOffers(context([wanted, fedora([summary('claude-code', 'default', { status: 'signed_out' })])])))).toEqual(['new_machine:fedora'])
+  })
+  test('a thread is use enough for a terminal login offer', () => {
+    const empty = fedora([summary('cursor', 'default', { status: 'signed_out' })], { features: [ACCOUNTS_SHARED_FEATURE] })
+    expect(computeOffers(context([source([]), empty]))).toEqual([])
+    expect(ids(computeOffers(context([source([]), empty], { threadKinds: ['cursor'] })))).toEqual(['terminal_login:fedora:cursor'])
+  })
+})
+
+describe('machines that must update first', () => {
+  const old = { features: ['accounts.shared.v1'], scopes: ['orchestration_operate'] }
+  test('one whose daemon predates `accounts:write` and a connection without `access:write`', () => {
+    expect(needsAccountsUpdate(old)).toBe(true)
+    expect(needsAccountsUpdate({ features: ['accounts.write.v1'], scopes: [] })).toBe(false)
+    // An older daemon takes sign-ins from a connection with full access, and this one's token may carry the new scope.
+    expect(needsAccountsUpdate({ features: [], scopes: ['access_write'] })).toBe(false)
+    expect(needsAccountsUpdate({ features: [], scopes: ['accounts_write'] })).toBe(false)
+    expect(needsAccountsUpdate(null)).toBe(false)
+  })
+  test('never this computer, and nothing before the machine answered', () => {
+    expect(signInNeedsUpdate(machine('fedora', 'fedora', [], old), 'mac')).toBe(true)
+    expect(signInNeedsUpdate(machine('mac', 'MacBook', [], old), 'mac')).toBe(false)
+    expect(signInNeedsUpdate(machine('fedora', 'fedora', [], { ...old, state: 'reading' }), 'mac')).toBe(false)
+  })
+  test('says how asking it to update went', () => {
+    expect(updateLine({ status: 'updating' }, 'fedora')).toBe('Updating Kybern on fedora…')
+    expect(updateLine({ status: 'waiting' }, 'fedora')).toBe('fedora updates when its running work finishes.')
+    expect(updateLine({ status: 'current' }, 'fedora')).toBe('fedora has no newer version yet.')
+  })
+})
+
+describe('which sign-in is meant', () => {
+  const agy = (patch: Partial<SignInItem> = {}): SignInItem => ({ id: 'x', machineId: 'mac', machine: 'MacBook', kind: 'antigravity', method: 'sign_in', ...patch })
+  test('Antigravity’s own login only when asked for by name', () => {
+    for (const asked of [agy(), agy({ instance: 'default' })]) {
+      expect(startQueue([asked]).items[0]).toMatchObject({ named: true })
+      expect(startQueue([asked]).items[0]!.instance).toBeUndefined()
+    }
+    expect(startQueue([agy({ ownLogin: true })]).items[0]).toEqual(agy({ ownLogin: true }))
+    expect(startQueue([agy({ instance: 'a1' })]).items[0]).toEqual(agy({ instance: 'a1' }))
+    // Claude Code's terminal login is named by `default`, and stays it.
+    expect(startQueue([agy({ kind: 'claude-code', instance: 'default' })]).items[0]!.instance).toBe('default')
+  })
+  test('an account whose only login on a machine is `agy`’s own is added there as a new one', () => {
+    const account = unifyAccounts([machine('mac', 'MacBook', [summary('antigravity', 'default', { status: 'signed_out', identity: { email: 'g@x.com' } })])])[0]!.accounts[0]!
+    const item = planOnMachine(account, { machineId: 'mac', name: 'MacBook' })
+    expect([item.named, item.instance, item.ownLogin]).toEqual([true, undefined, undefined])
+  })
+  test('a new account becomes the default only while none is shared', () => {
+    expect(makesDefault([], 'codex', {})).toBe(true)
+    expect(makesDefault([], 'codex', { defaults: { codex: 'codex:c@x.com' } })).toBe(false)
+    expect(makesDefault([codex('c1', 'c@x.com')], 'codex', {})).toBe(false)
+  })
+})
+
 describe('answers', () => {
   test('“Not now” holds until the situation changes; “Never” holds', () => {
     const answers = { one: { state: 'later' as const, fingerprint: 'a' }, two: { state: 'never' as const, fingerprint: 'old' }, three: { state: 'later' as const, fingerprint: 'old' } }
@@ -89,7 +162,7 @@ describe('sign-in queue', () => {
     expect(resolvedItem(queue)).toBeNull()
     expect(queue.results).toEqual({ [items[0]!.id]: 'signed_in', [items[1]!.id]: 'skipped' })
   })
-  test('Antigravity signs this computer’s own agy in first, and named accounts everywhere else', () => {
+  test('adding Antigravity makes a named account everywhere', () => {
     // Adding never signs in a computer's own login, even one that looks signed out.
     expect(planAdd({ kind: 'antigravity', machines, computer: 'mac' }).map((i) => [i.ownLogin ?? false, i.named ?? false])).toEqual([[false, true], [false, true]])
   })
@@ -112,7 +185,7 @@ describe('sign-in queue', () => {
     expect(loginModeFor(item, true)).toBe('paste')
     expect(loginModeFor(item, true, true)).toBe('browser')
     expect(loginModeFor({ kind: 'codex' }, true)).toBe('device_code')
-    expect(loginModeFor({ kind: 'antigravity', instance: 'default' }, true)).toBe('terminal')
+    expect(loginModeFor({ kind: 'antigravity', ownLogin: true }, true)).toBe('terminal')
     expect(loginModeFor({ kind: 'antigravity', named: true }, true)).toBe('paste')
     expect(fallbackModeFor('codex')).toBe('device_code')
     expect(fallbackModeFor('claude-code')).toBe('paste')

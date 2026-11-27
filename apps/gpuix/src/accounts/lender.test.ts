@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { AccountBroker, AccountSummary, LendableAccount, LoginBrokerStatus, MachineCard } from '../../../../packages/kybern-client/src/types.ts'
 import { describeProblem } from '../../../../packages/kybern-client/src/problems.ts'
-import { borrow, setupItems, stopBorrowing } from './actions.ts'
+import { borrow, defaultMessage, defaultTakers, discardBorrow, setupItems, stopBorrowing } from './actions.ts'
 import { lenderVerdict, setSharing, sharingFrom } from './adapter.ts'
 import { chipsFor, sharingAction } from './chips.ts'
 import type { Offer } from './offers.ts'
@@ -111,25 +111,100 @@ describe('a failed borrow', () => {
   })
 
   const item: SignInItem = { id: 'new:claude-code:new', machineId: 'new', machine: 'laptop', kind: 'claude-code', method: 'borrow', email: 'w@x.com', lender: { machine: 'kdi-vps', account: 'a1' } }
-  const refusing = () => {
-    const calls: [string, unknown][] = []
-    const client = { call: async (method: string, params: unknown) => {
+  const target = () => fresh({ features: [...SHARES, 'accounts.write.v1'] })
+  const there = () => ({ machines: [target()] }) as unknown as UnifiedView
+  /** An account as `providers.accounts.create` leaves it. */
+  const empty = (instance: string, name: string) => summary('claude-code', instance, { name, status: 'signed_out', managed: true, is_default: false })
+  type Connect = NonNullable<Parameters<typeof borrow>[2]>
+  /** A machine that keeps its accounts, with calls that can be made to fail. */
+  const daemon = (fail: Partial<Record<string, (n: number) => boolean>> = {}, have: AccountSummary[] = []) => {
+    const calls: [string, any][] = []
+    const accounts = [...have]
+    const counts: Record<string, number> = {}
+    let made = 0
+    const client = { call: async (method: string, params: any) => {
       calls.push([method, params])
-      if (method === 'login.broker.bind') throw new Error('refused')
-      return { kind: 'claude-code', instance: 'made' }
+      const n = (counts[method] = (counts[method] ?? 0) + 1)
+      const refused = () => { if (fail[method]?.(n)) throw new Error('refused') }
+      if (method === 'providers.accounts.create') {
+        const instance = `made${++made}`
+        // `create:lost` makes the account, then loses the answer.
+        refused()
+        accounts.push(empty(instance, params.name))
+        if (fail.lost?.(n)) throw new Error('connection closed')
+        return { kind: params.kind, instance }
+      }
+      refused()
+      if (method === 'providers.accounts.remove') accounts.splice(accounts.findIndex((a) => a.provider.instance === params.instance), 1)
+      if (method === 'providers.accounts.list') return { accounts: [...accounts] }
+      return {}
     } }
-    return { calls, connect: (() => client) as unknown as NonNullable<Parameters<typeof borrow>[2]> }
+    return { calls, accounts, methods: () => calls.map(([method]) => method), connect: (() => client) as unknown as Connect }
   }
+  const lending = (account: string): SignInItem => ({ ...item, lender: { machine: 'kdi-vps', account } })
+
   test('takes away the account it made', async () => {
-    const { calls, connect } = refusing()
-    await expect(borrow({ machines: [fresh()] } as unknown as UnifiedView, item, connect)).rejects.toThrow('refused')
-    expect(calls.map(([method]) => method)).toEqual(['providers.accounts.create', 'login.broker.bind', 'providers.accounts.remove'])
-    expect(calls[2]![1]).toEqual({ kind: 'claude-code', instance: 'made' })
+    const machine = daemon({ 'login.broker.bind': () => true })
+    await expect(borrow(there(), lending('refused'), machine.connect)).rejects.toThrow('refused')
+    expect(machine.methods()).toEqual(['providers.accounts.list', 'providers.accounts.create', 'login.broker.bind', 'providers.accounts.remove'])
+    expect(machine.accounts).toEqual([])
   })
   test('keeps an account the machine already had', async () => {
-    const { calls, connect } = refusing()
-    await expect(borrow({ machines: [fresh()] } as unknown as UnifiedView, { ...item, instance: 'old' }, connect)).rejects.toThrow('refused')
-    expect(calls.map(([method]) => method)).toEqual(['login.broker.bind'])
+    const machine = daemon({ 'login.broker.bind': () => true })
+    await expect(borrow(there(), { ...item, instance: 'old' }, machine.connect)).rejects.toThrow('refused')
+    expect(machine.methods()).toEqual(['login.broker.bind'])
+  })
+  test('an account it couldn’t take away is the one the next try uses', async () => {
+    const machine = daemon({ 'login.broker.bind': (n) => n === 1, 'providers.accounts.remove': () => true })
+    await expect(borrow(there(), lending('stuck'), machine.connect)).rejects.toThrow('refused')
+    await borrow(there(), lending('stuck'), machine.connect)
+    expect(machine.methods().filter((m) => m === 'providers.accounts.create')).toHaveLength(1)
+    expect(machine.calls.filter(([m]) => m === 'login.broker.bind').map(([, p]) => p.instance)).toEqual(['made1', 'made1'])
+    expect(machine.accounts).toHaveLength(1)
+    // Borrowed now: nothing left to take away.
+    await discardBorrow(lending('stuck'), machine.connect)
+    expect(machine.accounts).toHaveLength(1)
+  })
+  test('closing the sheet later takes away what couldn’t be then', async () => {
+    const machine = daemon({ 'login.broker.bind': () => true, 'providers.accounts.remove': (n) => n === 1 })
+    await expect(borrow(there(), lending('later'), machine.connect)).rejects.toThrow('refused')
+    expect(machine.accounts).toHaveLength(1)
+    await discardBorrow(lending('later'), machine.connect)
+    expect(machine.accounts).toEqual([])
+  })
+  test('an account made just as the connection dropped is taken away', async () => {
+    const machine = daemon({ lost: () => true })
+    await expect(borrow(there(), lending('lost'), machine.connect)).rejects.toThrow('connection closed')
+    expect(machine.accounts).toEqual([])
+    expect(machine.methods()).not.toContain('login.broker.bind')
+  })
+  test('uses an empty account an earlier try left, instead of making another', async () => {
+    const machine = daemon({}, [empty('left', 'w@x.com')])
+    await borrow(there(), lending('leftover'), machine.connect)
+    expect(machine.methods()).not.toContain('providers.accounts.create')
+    expect(machine.calls.find(([m]) => m === 'login.broker.bind')![1]).toMatchObject({ instance: 'left' })
+  })
+  test('uses the account that already borrows this sign-in', async () => {
+    const bound = { ...empty('bound', 'Work'), status: 'signed_in' as const, broker: { machine_id: 'vps', machine_name: 'kdi-vps', broker_account: 'again', state: 'borrowing' as const } }
+    const machine = daemon({}, [bound])
+    await borrow(there(), lending('again'), machine.connect)
+    expect(machine.methods()).toEqual(['providers.accounts.list', 'login.broker.bind'])
+  })
+  test('cancelled before it is bound, it binds nothing and leaves nothing', async () => {
+    const cancel = new AbortController()
+    const machine = daemon()
+    const connect = (() => {
+      const client = machine.connect('new')
+      return { call: async (method: string, params: unknown) => { const answer = await client.call(method as never, params as never); if (method === 'providers.accounts.create') cancel.abort(); return answer } }
+    }) as unknown as Connect
+    await expect(borrow(there(), lending('cancelled'), connect, cancel.signal)).rejects.toThrow()
+    expect(machine.methods()).not.toContain('login.broker.bind')
+    expect(machine.accounts).toEqual([])
+  })
+  test('asks nothing of a machine that must update first', async () => {
+    const machine = daemon()
+    await expect(borrow({ machines: [fresh({ features: SHARES })] } as unknown as UnifiedView, lending('old-daemon'), machine.connect)).rejects.toThrow('Update Kybern on laptop')
+    expect(machine.calls).toEqual([])
   })
   test('a login that borrows stops before it signs in itself', async () => {
     const broker = (state: AccountBroker['state']): AccountBroker => ({ machine_id: 'vps', machine_name: 'kdi-vps', broker_account: 'a1', state })
@@ -138,5 +213,24 @@ describe('a failed borrow', () => {
     const connect = (() => ({ call: async (method: string, params: unknown) => { calls.push([method, params]) } })) as unknown as NonNullable<Parameters<typeof stopBorrowing>[2]>
     for (const instance of ['away', 'lends', 'own', 'default', undefined]) await stopBorrowing(view, { machineId: 'new', kind: 'claude-code', instance }, connect)
     expect(calls).toEqual([['login.broker.bind', { provider: 'claude-code', instance: 'away', broker_account: null }]])
+  })
+})
+
+describe('the “now the default” toast', () => {
+  const have = (machineId: string, name: string, patch: Partial<MachineAccounts> = {}) => machine(machineId, name, [account('claude-code', 'a1', 'w@x.com')], { features: ['accounts.shared.v1'], ...patch })
+  const machines = [have('mac', 'MacBook', { isLocal: true }), have('fedora', 'fedora'), have('old', 'old-box', { features: [] }), have('away', 'SatyaMas', { online: false }), machine('bare', 'bare', [], { features: ['accounts.shared.v1'] })]
+  const work = unifyAccounts(machines)[0]!.accounts[0]!
+
+  test('names only the machines that took it', () => {
+    const takers = defaultTakers({ machines }, work)
+    expect(takers).toEqual({ took: ['MacBook', 'fedora'], later: ['SatyaMas'] })
+    expect(defaultMessage('Work', 'Claude Code', takers.took, { later: takers.later }, machines.length)).toBe('Work is now the default for Claude Code on MacBook and fedora. SatyaMas follows when it’s back.')
+  })
+  test('names none when every machine took it', () => {
+    expect(defaultMessage('Work', 'Claude Code', ['MacBook'], {}, 1)).toBe('Work is now the default for Claude Code')
+  })
+  test('claims nothing when none could yet', () => {
+    expect(defaultMessage('Work', 'Claude Code', [], { later: ['SatyaMas', 'fedora'] }, 3)).toBe('Work is saved as the default for Claude Code. SatyaMas and fedora follow when they’re back.')
+    expect(defaultMessage('Work', 'Claude Code', ['MacBook'], { kept: ['SatyaMas'] }, 2)).toBe('Work is now the default for Claude Code on MacBook. SatyaMas keeps its default until it’s back.')
   })
 })

@@ -460,7 +460,9 @@ function ModelPickerPanel({
     if (tab.needsSignIn) {
       if (tab.signedOutOn) return
       close()
-      showDialog({ kind: 'account', provider: tab.kind, instance: tab.instance })
+      // Antigravity's own login is the machine's terminal login: signed in from Accounts, where it is asked for as that.
+      if (tab.kind === 'antigravity' && tab.instance === 'default') void import('../settings/SettingsScreen.tsx').then((m) => m.openSettingsTab('accounts'))
+      else showDialog({ kind: 'account', provider: tab.kind, instance: tab.instance })
       return
     }
     if (tab.kind === provider.kind) {
