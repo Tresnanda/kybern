@@ -3,7 +3,8 @@
 import { withoutSignIn } from '../shared/lib/accounts.ts'
 import { standings, type MachineAccounts, type MachineStanding, type UnifiedAccount } from './unified.ts'
 
-export type ChipState = 'signed_in' | 'borrowed' | 'unreachable' | 'signed_out' | 'unknown' | 'offline' | 'add'
+/** `terminal_out`: the account works on that machine, but its shell's own login of it is signed out. */
+export type ChipState = 'signed_in' | 'borrowed' | 'unreachable' | 'signed_out' | 'terminal_out' | 'unknown' | 'offline' | 'add'
 
 export interface AccountChip {
   machineId: string
@@ -17,6 +18,7 @@ export interface AccountChip {
 
 const stateOf = (standing: MachineStanding): ChipState => {
   if (!standing.online) return 'offline'
+  if (standing.state !== 'signed_out' && standing.presences.some((p) => p.terminal && p.state === 'signed_out')) return 'terminal_out'
   if (standing.state === 'borrow_unreachable') return 'unreachable'
   return standing.state
 }
@@ -30,6 +32,7 @@ const words: Record<ChipState, (standing: MachineStanding | undefined) => string
   borrowed: (s) => `From ${s?.lender}`,
   unreachable: (s) => `${s?.lender} unreachable`,
   signed_out: () => 'Signed out',
+  terminal_out: () => 'Terminal signed out',
   unknown: (s) => (s?.terminal ? 'Terminal login' : 'Checking…'),
   offline: () => 'Offline',
   add: () => 'Add',

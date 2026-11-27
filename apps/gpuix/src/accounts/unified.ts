@@ -70,12 +70,22 @@ export interface UnifiedAccount {
   limit: LimitReading | null
 }
 
+/** A shell's own login that is signed out and reports no account: one line under the agent, not a row. */
+export interface SignedOutTerminal {
+  machineId: string
+  machine: string
+  online: boolean
+  /** It is the machine's own default for the agent. */
+  defaultThere: boolean
+}
+
 export interface HarnessGroup {
   kind: ProviderKind
   accounts: UnifiedAccount[]
+  signedOutTerminals: SignedOutTerminal[]
 }
 
-/** The name of a row that stands for the shells' own logins when they report no account. */
+/** The name of a row that stands for the shells' own logins that work but report no account. */
 export const TERMINAL_ROW_NAME = 'Terminal login'
 
 export const accountKey = (kind: ProviderKind, email: string | null | undefined): string | null => {
@@ -144,6 +154,7 @@ export function unifyAccounts(machines: readonly MachineAccounts[], options: Uni
   const shared = options.shared ?? {}
   const drafts = new Map<string, Draft>()
   const kinds: ProviderKind[] = []
+  const signedOut: (SignedOutTerminal & { kind: ProviderKind })[] = []
   const local = machines.find((machine) => machine.isLocal)?.machineId
   for (const machine of ordered(machines)) {
     for (const account of machine.accounts) {
@@ -155,12 +166,18 @@ export function unifyAccounts(machines: readonly MachineAccounts[], options: Uni
       if (terminal && !installedOn(machine, kind)) continue
       const key = withoutSignIn(kind) ? null : keyOf(account)
       const id = key ?? (terminal ? `${kind}:@terminal` : `${kind}:@${machine.machineId}:${instance}`)
+      const state = presenceState(account)
+      if (terminal && !key && state === 'signed_out') {
+        signedOut.push({ kind, machineId: machine.machineId, machine: machine.name, online: machine.online, defaultThere: account.is_default })
+        if (!kinds.includes(kind)) kinds.push(kind)
+        continue
+      }
       const presence: AccountPresence = {
         machineId: machine.machineId,
         machine: machine.name,
         instance,
         terminal,
-        state: presenceState(account),
+        state,
         online: machine.online,
         ...(account.broker ? { lender: account.broker.machine_name } : {}),
         managed: account.managed,
@@ -181,11 +198,12 @@ export function unifyAccounts(machines: readonly MachineAccounts[], options: Uni
 
   return kinds.map((kind) => {
     const accounts = [...drafts.values()].filter((draft) => draft.kind === kind).map((draft) => build(draft, shared, local))
-    const chosen = defaultId(kind, accounts, shared, local)
+    const signedOutTerminals = signedOut.filter((entry) => entry.kind === kind).map(({ kind: _, ...entry }) => entry)
+    const chosen = defaultId(kind, accounts, shared, local, signedOutTerminals.some((entry) => entry.machineId === local && entry.defaultThere))
     for (const account of accounts) account.isDefault = account.id === chosen
     // Accounts keep the order they were first seen in; the shells' own accountless logins come last.
     accounts.sort((a, b) => Number(a.terminalOnly) - Number(b.terminalOnly))
-    return { kind, accounts }
+    return { kind, accounts, signedOutTerminals }
   })
 }
 
@@ -220,15 +238,16 @@ function build(draft: Draft, shared: AccountsShared, local: string | undefined):
   }
 }
 
-/** One default per agent: the shared choice, else the one of the machine this window is on, else any machine's. */
-function defaultId(kind: ProviderKind, accounts: readonly UnifiedAccount[], shared: AccountsShared, local: string | undefined): string | null {
+/** One default per agent: the shared choice, else the one of the machine this window is on, else any machine's. None when
+ *  this machine's default is a signed-out terminal login: another machine's account is not its default. */
+function defaultId(kind: ProviderKind, accounts: readonly UnifiedAccount[], shared: AccountsShared, local: string | undefined, localSignedOut: boolean): string | null {
   const wanted = shared.defaults?.[kind]
   if (wanted) {
     const found = accounts.find((account) => account.key === wanted || account.id === wanted)
     if (found) return found.id
   }
   const there = (machine: string | undefined) => accounts.find((account) => account.presences.some((p) => p.machineId === machine && p.defaultThere))
-  return there(local)?.id ?? accounts.find((account) => account.presences.some((p) => p.defaultThere))?.id ?? null
+  return there(local)?.id ?? (localSignedOut ? null : accounts.find((account) => account.presences.some((p) => p.defaultThere))?.id ?? null)
 }
 
 export const defaultAccountOf = (groups: readonly HarnessGroup[], kind: ProviderKind): UnifiedAccount | undefined =>
@@ -253,11 +272,13 @@ export interface MachineStanding {
   online: boolean
   /** The best of the logins' states: usable beats signed out. */
   state: PresenceState
-  /** The shell on that machine uses this account. */
+  /** The shell on that machine uses this account (its terminal login is not signed out). */
   terminal: boolean
   lender?: string
   presences: AccountPresence[]
 }
+
+const usesShell = (presence: AccountPresence) => presence.terminal && presence.state !== 'signed_out'
 
 const RANK: Record<PresenceState, number> = { signed_in: 4, borrowed: 3, borrow_unreachable: 2, unknown: 1, signed_out: 0 }
 
@@ -266,11 +287,11 @@ export function standings(account: Pick<UnifiedAccount, 'presences'>): MachineSt
   for (const presence of account.presences) {
     const current = byMachine.get(presence.machineId)
     if (!current) {
-      byMachine.set(presence.machineId, { machineId: presence.machineId, machine: presence.machine, online: presence.online, state: presence.state, terminal: presence.terminal, ...(presence.lender ? { lender: presence.lender } : {}), presences: [presence] })
+      byMachine.set(presence.machineId, { machineId: presence.machineId, machine: presence.machine, online: presence.online, state: presence.state, terminal: usesShell(presence), ...(presence.lender ? { lender: presence.lender } : {}), presences: [presence] })
       continue
     }
     current.presences.push(presence)
-    current.terminal ||= presence.terminal
+    current.terminal ||= usesShell(presence)
     if (RANK[presence.state] > RANK[current.state]) {
       current.state = presence.state
       if (presence.lender) current.lender = presence.lender

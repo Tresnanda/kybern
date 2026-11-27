@@ -78,7 +78,8 @@ export function computeOffers({ groups, machines, ratios, sharing }: OfferContex
     if (!machine.features.includes(ACCOUNTS_SHARED_FEATURE)) continue
     for (const group of groups) {
       if (!TERMINAL_SIGN_IN_KINDS.includes(group.kind) || !installed(machine, group.kind)) continue
-      const empty = group.accounts.some((account) => account.presences.some((p) => p.machineId === machine.machineId && p.terminal && p.state === 'signed_out'))
+      const empty = group.signedOutTerminals.some((entry) => entry.machineId === machine.machineId)
+        || group.accounts.some((account) => account.presences.some((p) => p.machineId === machine.machineId && p.terminal && p.state === 'signed_out'))
       const used = group.accounts.some((account) => account.key && account.presences.some((p) => isUsable(p.state)))
       if (!empty || !used) continue
       offers.push({ id: `terminal_login:${machine.machineId}:${group.kind}`, kind: 'terminal_login', fingerprint: 'signed_out', machine_id: machine.machineId, machine_name: machine.name, provider: group.kind, keys: [], machines: [] })

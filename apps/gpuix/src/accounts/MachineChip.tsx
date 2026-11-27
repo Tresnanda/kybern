@@ -12,10 +12,8 @@ import type { ProviderKind } from '../../../../packages/kybern-client/src/types.
 import { copyText } from '../transcript/store.ts'
 import { toast } from '../shell/toasts.tsx'
 import type { AccountChip } from './chips.ts'
-import { TERMINAL_SIGN_IN_KINDS } from './offers.ts'
 import { planOnMachine } from './queue.ts'
-import { signIn, signInInstead, signInOn } from './actions.ts'
-import { requestAntigravitySignIn } from '../antigravity/notice.ts'
+import { canSignInTerminal, signIn, signInInstead, signInOn, signInTerminals } from './actions.ts'
 import type { UnifiedView } from './store.ts'
 import { supportsShared } from './adapter.ts'
 import type { UnifiedAccount } from './unified.ts'
@@ -23,7 +21,7 @@ import type { UnifiedAccount } from './unified.ts'
 const LINK = glyph(Link01Icon)
 
 /** What a person types in that machine's terminal, for a daemon that can't do it from the app. */
-const TERMINAL_COMMANDS: Partial<Record<ProviderKind, { signIn: string; signOut: string }>> = {
+export const TERMINAL_COMMANDS: Partial<Record<ProviderKind, { signIn: string; signOut: string }>> = {
   'claude-code': { signIn: 'claude auth login', signOut: 'claude auth logout' },
   codex: { signIn: 'codex login', signOut: 'codex logout' },
   cursor: { signIn: 'cursor-agent login', signOut: 'cursor-agent logout' },
@@ -43,6 +41,7 @@ export function MachineChip({ chip, account, view, actions }: { chip: AccountChi
   const named = standing?.presences.find((p) => !p.terminal)
   const terminal = standing?.presences.find((p) => p.terminal)
   const shared = supportsShared(machine.features)
+  const inTerminal = () => signInTerminals(account.kind, [{ machineId: chip.machineId, machine: chip.machine }])
   const target = { machineId: chip.machineId, name: chip.machine }
   const commands = TERMINAL_COMMANDS[account.kind]
   const copy = (command: string) => { void copyText(command); toast.success(`Copied ${command}`) }
@@ -51,15 +50,16 @@ export function MachineChip({ chip, account, view, actions }: { chip: AccountChi
   if (chip.state === 'add') return <Chip id={id} chip={chip} label={`Add to ${chip.machine}`} onClick={() => signInOn(account, target)} />
   if (chip.state === 'signed_out') {
     if (named) return <Chip id={id} chip={chip} label={`Sign in on ${chip.machine}`} onClick={() => signInOn(account, target)} />
-    // The terminal login: Antigravity's own sign-in has always worked from here; the others need a newer daemon.
-    if (account.kind === 'antigravity') return <Chip id={id} chip={chip} label={`Sign in on ${chip.machine}`} onClick={() => requestAntigravitySignIn(() => signIn([{ id: `${chip.machineId}:antigravity:own`, machineId: chip.machineId, machine: chip.machine, kind: 'antigravity', method: 'sign_in', ownLogin: true }]))} />
-    if (shared && TERMINAL_SIGN_IN_KINDS.includes(account.kind)) return <Chip id={id} chip={chip} label={`Sign in the terminal on ${chip.machine}`} onClick={() => signIn([{ id: `${chip.machineId}:${account.kind}:default`, machineId: chip.machineId, machine: chip.machine, kind: account.kind, method: 'sign_in', instance: 'default' }])} />
+    if (canSignInTerminal(account.kind, machine.features)) return <Chip id={id} chip={chip} label={`Sign in the terminal on ${chip.machine}`} onClick={inTerminal} />
     return <ChipMenu id={id} chip={chip}>
       {commands && <><MenuLabel>{`Sign in from a terminal on ${chip.machine}`}</MenuLabel><MenuItem id="copy" testId={`chip-copy-${id}`} label={`Copy ${commands.signIn}`} onSelect={() => copy(commands.signIn)} /></>}
     </ChipMenu>
   }
   // Signed in, borrowed, or a borrowed sign-in whose machine is away.
   return <ChipMenu id={id} chip={chip}>
+    {chip.state === 'terminal_out' && (canSignInTerminal(account.kind, machine.features)
+      ? <MenuItem id="signin-terminal" testId={`chip-signin-terminal-${id}`} label="Sign in the terminal" onSelect={inTerminal} />
+      : commands && <><MenuLabel>{`Sign in from a terminal on ${chip.machine}`}</MenuLabel><MenuItem id="copy-in" testId={`chip-copy-${id}`} label={`Copy ${commands.signIn}`} onSelect={() => copy(commands.signIn)} /></>)}
     {standing?.lender && <MenuItem id="instead" testId={`chip-instead-${id}`} label={`Sign in on ${chip.machine} instead`} onSelect={() => void signInInstead(account, target)} />}
     {!standing?.lender && named && <MenuItem id="again" testId={`chip-again-${id}`} label="Sign in again" onSelect={() => signIn([planOnMachine(account, target)])} />}
     {!standing?.lender && named?.canSignOut && <MenuItem id="signout" testId={`chip-signout-${id}`} label="Sign out…" onSelect={() => actions.signOut(account, chip.machineId)} />}
@@ -78,12 +78,12 @@ function Chip({ id, chip, onClick, open, menu, label }: { id: string; chip: Acco
   const t = useTheme()
   const c = useControls()
   const interactive = !!onClick || !!menu
-  const warning = chip.state === 'unreachable' || chip.state === 'signed_out'
+  const warning = chip.state === 'unreachable' || chip.state === 'signed_out' || chip.state === 'terminal_out'
   const quiet = chip.state === 'add' || chip.state === 'offline'
   const base = t.variant === 'dark' ? '252, 252, 252' : '13, 13, 13'
   const fill = warning ? alpha(t.warning, t.variant === 'dark' ? 0.12 : 0.13) : chip.state === 'add' ? 'transparent' : `rgba(${base}, ${chip.state === 'offline' ? 0.035 : 0.06})`
   const hover = warning ? alpha(t.warning, 0.2) : `rgba(${base}, 0.1)`
-  const source = chip.state === 'add' ? N.plus : chip.state === 'unreachable' || chip.state === 'signed_out' ? S.triangleAlert : chip.state === 'borrowed' ? LINK : chip.terminal ? S.terminal : null
+  const source = chip.state === 'add' ? N.plus : warning ? S.triangleAlert : chip.state === 'borrowed' ? LINK : chip.terminal ? S.terminal : null
   const color = warning ? t.warning : quiet ? t.textTertiary : t.textSecondary
   return <div
     testId={`chip-${id}`}

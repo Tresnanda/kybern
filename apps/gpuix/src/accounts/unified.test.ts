@@ -63,17 +63,38 @@ describe('unifyAccounts', () => {
     expect(accounts[0]!.presences[0]!.terminal).toBe(true)
   })
 
-  test('puts signed-out terminal logins with no identity in one row after the accounts', () => {
+  test('keeps signed-out terminal logins with no account out of the rows, listed once per agent', () => {
+    const groups = unifyAccounts([
+      machine('mac', 'MacBook', [summary('claude-code', 'default', { status: 'signed_out', is_default: false }), named('a1', 'Work', 'me@work.com')], { isLocal: true }),
+      machine('fedora', 'fedora', [summary('claude-code', 'default', { status: 'needs_sign_in' })]),
+    ])
+    expect(groups[0]!.accounts.map((a) => a.name)).toEqual(['Work'])
+    expect(groups[0]!.signedOutTerminals.map((e) => [e.machine, e.defaultThere])).toEqual([['MacBook', false], ['fedora', true]])
+  })
+
+  test('puts a signed-out terminal login on its account’s chip when the account is known', () => {
+    const machines = [
+      machine('mac', 'MacBook', [named('a1', 'Work', 'me@work.com')], { isLocal: true }),
+      machine('fedora', 'fedora', [summary('claude-code', 'default', { status: 'signed_out', key: 'claude-code:me@work.com' })]),
+      machine('vps', 'vps', [named('b', 'Work', 'me@work.com'), summary('claude-code', 'default', { status: 'signed_out', identity: { email: 'me@work.com' } })]),
+    ]
+    const group = unifyAccounts(machines)[0]!
+    expect(group.signedOutTerminals).toEqual([])
+    const chips = chipsFor(group.accounts[0]!, machines)
+    expect(chips.map((c) => [c.label, c.state, c.terminal])).toEqual([['MacBook', 'signed_in', false], ['fedora · Signed out', 'signed_out', false], ['vps · Terminal signed out', 'terminal_out', false]])
+  })
+
+  test('keeps a working login with no identity as its own row, after the accounts', () => {
+    const accounts = accountsOf([machine('mac', 'MacBook', [summary('claude-code', 'default', { status: 'signed_in' }), named('a1', 'Work', 'me@work.com')], { isLocal: true })])
+    expect(accounts.map((a) => [a.name, a.terminalOnly])).toEqual([['Work', false], ['Terminal login', true]])
+  })
+
+  test('marks no default when this machine’s own default is a signed-out terminal login', () => {
     const accounts = accountsOf([
       machine('mac', 'MacBook', [summary('claude-code', 'default', { status: 'signed_out' }), named('a1', 'Work', 'me@work.com')], { isLocal: true }),
-      machine('fedora', 'fedora', [summary('claude-code', 'default', { status: 'signed_out' })]),
+      machine('fedora', 'fedora', [named('b', 'Home', 'me@home.com', { is_default: true })]),
     ])
-    expect(accounts.map((a) => a.name)).toEqual(['Work', 'Terminal login'])
-    const terminal = accounts[1]!
-    expect(terminal.key).toBeNull()
-    expect(terminal.terminalOnly).toBe(true)
-    expect(terminal.presences.map((p) => p.state)).toEqual(['signed_out', 'signed_out'])
-    expect(usableMachines(terminal)).toEqual([])
+    expect(accounts.filter((a) => a.isDefault)).toEqual([])
   })
 
   test('hides a terminal login of an agent that machine doesn’t have', () => {

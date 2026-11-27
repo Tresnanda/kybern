@@ -46,7 +46,8 @@ const accounts: Record<Id, AccountSummary[]> = {
     account('antigravity', 'default', 'CLI account', 'sam@hey.example', { is_default: true }),
   ],
   fedora: [
-    account('claude-code', 'default', 'CLI account', null),
+    // fedora's shell was signed out of Personal (its chip says so); SatyaMas's was never signed in (one line under the agent).
+    account('claude-code', 'default', 'CLI account', 'sam@hey.example', { status: 'signed_out' }),
     account('claude-code', 'w2', 'Work', 'sam@acme.example', { identity: { email: 'sam@acme.example', plan: 'Team' }, color: 'blue', is_default: true }),
     account('codex', 'default', 'CLI account', 'sam@hey.example', { is_default: true }),
   ],

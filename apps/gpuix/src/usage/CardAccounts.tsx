@@ -88,7 +88,7 @@ function CardAccountRow({ account, view, onChoose }: { account: UnifiedAccount; 
   return <div testId={`rail-account-${account.id}`} style={{ display: 'flex', alignItems: 'center', gap: 2, borderRadius: 8, ...(account.isDefault ? { backgroundColor: t.buttonSecondary } : {}) }}>
     <div testId={`rail-account-choose-${account.id}`} role="radio" aria-checked={account.isDefault} aria-label={account.name} tabIndex={0} onClick={onChoose} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') onChoose() }} style={{ ...row, flexGrow: 1, flexShrink: 1, minWidth: 0, backgroundColor: 'transparent', cursor: 'pointer', ...(account.isDefault ? {} : { hover: { backgroundColor: t.buttonSecondaryHover } }) }}>
       {body}
-      {left !== null && <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}><AccountUsageRing left={left} size={16} /><Label color={t.textSecondary} size={13} lineHeight={19.5} style={{ fontVariantNumeric: 'tabular-nums' } as never}>{`${Math.round(left)}%`}</Label></div>}
+      {left !== null && <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}><AccountUsageRing left={left} size={16} /><Label color={t.textSecondary} size={13} lineHeight={19.5} style={{ fontVariantNumeric: 'tabular-nums' } as never}>{`${Math.round(left)}% left`}</Label></div>}
       <div style={{ display: 'flex', width: 14, height: 14, flexShrink: 0 }}>{account.isDefault && <Icon source={N.check} size={14} color={t.text} />}</div>
     </div>
     {missing.length > 0 && <IconButton testId={`rail-account-add-${account.id}`} size="sm" icon={N.plus} label={addLabel} onClick={sign} style={{ marginRight: 4 }} />}

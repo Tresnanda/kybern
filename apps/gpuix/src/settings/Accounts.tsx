@@ -8,7 +8,7 @@ import type { ProviderKind } from '../../../../packages/kybern-client/src/types.
 import { goPage } from '../nav/history.ts'
 import { N } from '../nav/glyphs.ts'
 import { toastProblem } from '../problems/toast.ts'
-import { Dialog, Menu, MenuCheckboxItem, MenuItem, MenuSeparator, MenuSub, Tip } from '../nav/overlay.tsx'
+import { Dialog, Menu, MenuCheckboxItem, MenuItem, MenuLabel, MenuSeparator, MenuSub, Tip } from '../nav/overlay.tsx'
 import { useNav } from '../nav/store.ts'
 import { showDialog } from '../dialogs/store.ts'
 import { CloseX, MachineChecks } from '../dialogs/Account.tsx'
@@ -34,11 +34,12 @@ import { useSettings } from './store.ts'
 import { AccountIdleCompaction } from './Compaction.tsx'
 import { idleCompactionDetail } from '../../../../packages/kybern-client/src/compaction.ts'
 import { refreshAllAccounts, useAccountsEverywhere, useOffers, type UnifiedView } from '../accounts/store.ts'
-import { canStyle, makeDefault, removeFrom, setProfile, shareSignIns, signOutOn, signOutTerminalOn } from '../accounts/actions.ts'
+import { canSignInTerminal, canStyle, makeDefault, removeFrom, setProfile, shareSignIns, signInTerminals, signOutOn, signOutTerminalOn } from '../accounts/actions.ts'
 import { listedOffers } from '../accounts/offers.ts'
 import { OfferRows } from '../accounts/OfferCard.tsx'
-import { chipsFor, usableMachines } from '../accounts/chips.ts'
-import { MachineChip, type ChipActions } from '../accounts/MachineChip.tsx'
+import { chipsFor } from '../accounts/chips.ts'
+import { MachineChip, TERMINAL_COMMANDS, type ChipActions } from '../accounts/MachineChip.tsx'
+import { copyText } from '../transcript/store.ts'
 import { leftOf, standings, type HarnessGroup, type UnifiedAccount } from '../accounts/unified.ts'
 
 /** Skeleton rows fade in after 150 ms (the fade's own `delay`, no timer), so a fast answer never flashes them. */
@@ -113,7 +114,7 @@ function AccountDialog({ pending, view, onClose }: { pending: Exclude<Pending, {
 function orderGroups(view: UnifiedView, order: ProviderKind[]): HarnessGroup[] {
   const rank = (kind: ProviderKind) => { const i = order.indexOf(kind); return i < 0 ? order.length : i }
   // omp, OpenCode and pi have no account: they are listed only for profiles set up before Kybern stopped offering them.
-  return view.groups.filter((group) => group.accounts.length > 0).sort((a, b) => rank(a.kind) - rank(b.kind))
+  return view.groups.filter((group) => group.accounts.length > 0 || group.signedOutTerminals.some((entry) => entry.online)).sort((a, b) => rank(a.kind) - rank(b.kind))
 }
 
 function Note({ children }: { children: string }) {
@@ -132,11 +133,37 @@ function AgentSection({ group, view, onPending, chipActions, children }: { group
   const name = providers.find((p) => p.kind === group.kind)?.display_name ?? PROVIDER_NAMES[group.kind] ?? group.kind
   return <PageBlock><div testId={`accounts-${group.kind}`} style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 30 }}>
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 2 }}><ProviderMark kind={group.kind} size={14} /><Label color={t.text} size={14} lineHeight={19.6} weight={600}>{name}</Label></div>
-    <div style={{ display: 'flex', flexDirection: 'column', ...settingsCardStyle(t, g), overflow: 'hidden' }}><GlassEdge radius={12} color={g.highlight} />
+    {group.accounts.length > 0 && <div style={{ display: 'flex', flexDirection: 'column', ...settingsCardStyle(t, g), overflow: 'hidden' }}><GlassEdge radius={12} color={g.highlight} />
       {group.accounts.map((account, index) => <AccountRow key={account.id} first={index === 0} account={account} view={view} onPending={onPending} chipActions={chipActions} />)}
-    </div>
+    </div>}
+    <SignedOutTerminals group={group} view={view} />
     {children}
   </div></PageBlock>
+}
+
+/** The shells' own logins that are signed out and name no account: one line under the agent, with the sign-in. */
+function SignedOutTerminals({ group, view }: { group: HarnessGroup; view: UnifiedView }) {
+  const t = useTheme()
+  const [open, setOpen] = useState(false)
+  useSettingsModal(open)
+  const entries = group.signedOutTerminals.filter((entry) => entry.online)
+  if (!entries.length) return null
+  const able = entries.filter((entry) => canSignInTerminal(group.kind, view.machines.find((m) => m.machineId === entry.machineId)?.features ?? []))
+  const several = view.machines.length > 1
+  const where = entries.map((entry) => entry.machine).join(', ')
+  const command = TERMINAL_COMMANDS[group.kind]?.signIn
+  const link = <Label color={t.text} size={12} lineHeight={19.2} weight={500} style={{ textDecoration: 'underline' }}>Sign in</Label>
+  const id = `accounts-terminal-signin-${group.kind}`
+  return <div testId={`accounts-terminal-out-${group.kind}`} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', columnGap: 4, paddingLeft: 2 }}>
+    <Label color={t.textSecondary} size={12} lineHeight={19.2}>{`Terminal login signed out${several ? ` on ${where}` : ''} ·`}</Label>
+    {able.length > 0
+      ? <div testId={id} role="button" aria-label={`Sign in the terminal${several ? ` on ${able.map((entry) => entry.machine).join(', ')}` : ''}`} tabIndex={0} onClick={() => signInTerminals(group.kind, able)} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') signInTerminals(group.kind, able) }} style={{ display: 'flex', cursor: 'pointer' }}>{link}</div>
+      // A daemon too old to sign it in from here: the command to run there.
+      : command && <Menu testId={`${id}-how`} align="start" minWidth={220} onOpenChange={setOpen} trigger={() => <div testId={id} role="button" aria-label="How to sign in the terminal" tabIndex={0} style={{ display: 'flex', cursor: 'pointer' }}>{link}</div>}>
+        <MenuLabel>{`Run in a terminal${several ? ` on ${where}` : ''}`}</MenuLabel>
+        <MenuItem id="copy" testId={`${id}-copy`} label={`Copy ${command}`} onSelect={() => { void copyText(command); toast.success(`Copied ${command}`) }} />
+      </Menu>}
+  </div>
 }
 
 // ── Row ──────────────────────────────────────────────────────────────────────
@@ -181,8 +208,7 @@ function AccountRow({ account, first, view, onPending, chipActions }: { account:
     </div>
     <div style={{ display: 'flex', alignItems: 'center', gap: 4, height: 32, flexShrink: 0 }}>
       <UsageCell account={account} view={view} />
-      {/* Signed-out terminal logins are not an account: their chips are all there is to do. */}
-      {!view.legacy && !(account.terminalOnly && usableMachines(account).length === 0) && <AccountMenu account={account} view={view} onRename={() => setRenaming(true)} onPending={onPending} />}
+      {!view.legacy && <AccountMenu account={account} view={view} onRename={() => setRenaming(true)} onPending={onPending} />}
     </div>
   </div>
 }
@@ -239,7 +265,7 @@ function UsageCell({ account, view }: { account: UnifiedAccount; view: UnifiedVi
   return <Tip label={`${Math.round(left)}% of the ${window} limit left${family ? ` for ${family}` : ''}${from}`} side="top" size={64}>
     <Button testId={`account-usage-${account.id}`} variant="ghost" size="sm" label={`${Math.round(left)}% left`} onClick={() => { if (here) setUsageAnchor(account.kind, here.instance); goPage('usage') }}>
       <AccountUsageRing left={left} />
-      <Label color={t.textSecondary} size={12} lineHeight={16} weight={500}>{`${Math.round(left)}%`}</Label>
+      <Label color={t.textSecondary} size={12} lineHeight={16} weight={500}>{`${Math.round(left)}% left`}</Label>
     </Button>
   </Tip>
 }
