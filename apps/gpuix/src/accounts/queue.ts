@@ -112,13 +112,24 @@ export function lenderFor(account: Pick<UnifiedAccount, 'kind' | 'email' | 'pres
   return offered ? { machine: sharing.machine, account: offered.account } : undefined
 }
 
+type Lending = Parameters<typeof lenderFor>[1]
+/** Who lends: one machine for every agent, or a lender per agent. */
+export type LenderSource = Lending | ((kind: ProviderKind) => Lending)
+
+/** Sign `account` in on one machine, borrowed from the agent's lender when it has this account. */
+export function planSignIn(account: UnifiedAccount, machine: Pick<MachineAccounts, 'machineId' | 'name'>, sharing: LenderSource): SignInItem {
+  const item = planOnMachine(account, machine)
+  const lender = lenderFor(account, typeof sharing === 'function' ? sharing(account.kind) : sharing, machine.machineId)
+  return lender ? { ...item, method: 'borrow', lender } : item
+}
+
 /** "Set up" on a machine: every account it is missing, borrowed where possible, else signed in one after another. */
-export function planSetup(accounts: readonly UnifiedAccount[], machine: Pick<MachineAccounts, 'machineId' | 'name'>, sharing: Parameters<typeof lenderFor>[1]): SignInItem[] {
+export function planSetup(accounts: readonly UnifiedAccount[], machine: Pick<MachineAccounts, 'machineId' | 'name'>, sharing: LenderSource): SignInItem[] {
   const items = accounts
     .filter((account) => !standings(account).some((s) => s.machineId === machine.machineId && isUsable(s.state)))
     .map((account): SignInItem => {
       const item = planOnMachine(account, machine)
-      const lender = lenderFor(account, sharing, machine.machineId)
+      const lender = lenderFor(account, typeof sharing === 'function' ? sharing(account.kind) : sharing, machine.machineId)
       return lender ? { ...item, method: 'borrow', lender } : item
     })
   // Borrowed ones need no clicks: they go first, so the browser steps come together at the end.

@@ -14,7 +14,7 @@ import { useNav } from '../nav/store.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { getClient, useApp } from '../state.ts'
 import { askAccountLimits, mergeAccountLimits, refreshAccounts, useAccountLimitEntries, useAccounts, useAccountsFeed, useAccountsLegacy, useAccountsLoaded, useUnfollowedDefaults } from '../usage/accounts.ts'
-import { featuresOf, fetchDaemonOffers, readShared, sharingFrom, supportsShared, type Sharing } from './adapter.ts'
+import { featuresOf, fetchDaemonOffers, lenderOptions, lendersByKind, readShared, sharingFrom, supportsShared, type LenderOption, type Sharing } from './adapter.ts'
 import { applyAnswers, computeOffers, LOGIN_SHARING_FEATURE, type Offer } from './offers.ts'
 import { keyOf, unifyAccounts, type HarnessGroup, type MachineAccounts } from './unified.ts'
 import type { LendableAccount } from '../../../../packages/kybern-client/src/types.ts'
@@ -40,13 +40,17 @@ interface State {
   daemonOffers: AccountOffer[] | null
   ratios: Readonly<Record<MachineId, number | null | undefined>>
   sharing: Sharing | null
+  /** Each lendable agent's lender; null from a daemon that lends every agent from one machine. */
+  lenders: Partial<Record<ProviderKind, Sharing | null>> | null
+  /** The machines that can be chosen to lend (`lenders`); null from older daemons. */
+  lenderOptions: LenderOption[] | null
   /** The offers' inputs were read at least once. */
   extrasRead: boolean
   /** Bumped when this computer's copy of the preferences changes. */
   prefs: number
 }
 
-const EMPTY: State = { remote: {}, settings: null, daemonOffers: null, ratios: {}, sharing: null, extrasRead: false, prefs: 0 }
+const EMPTY: State = { remote: {}, settings: null, daemonOffers: null, ratios: {}, sharing: null, lenders: null, lenderOptions: null, extrasRead: false, prefs: 0 }
 let state: State = EMPTY
 const listeners = new Set<() => void>()
 const emit = (patch: Partial<State>) => { state = { ...state, ...patch }; for (const listener of listeners) listener() }
@@ -159,6 +163,8 @@ export function refreshOfferInputs(): Promise<void> {
         daemonOffers: offers.status === 'fulfilled' ? offers.value : state.daemonOffers,
         ratios: Object.fromEntries(members.map((member) => [member.machine_id, member.online_ratio_7d])),
         sharing: sharing.status === 'fulfilled' ? sharingFrom(sharing.value, members) : null,
+        lenders: sharing.status === 'fulfilled' ? lendersByKind(sharing.value, members) : null,
+        lenderOptions: sharing.status === 'fulfilled' ? lenderOptions(sharing.value) : null,
         extrasRead: true,
       })
     } while (extrasAgain)
@@ -246,6 +252,9 @@ export interface UnifiedView {
   legacy: boolean
   loaded: boolean
   sharing: Sharing | null
+  /** Each lendable agent's lender (`login.broker.per_kind.v1`); null when one machine lends every agent (`sharing`). */
+  lenders: Partial<Record<ProviderKind, Sharing | null>> | null
+  lenderOptions: LenderOption[] | null
 }
 
 /** Every account of every machine, merged. Mount `useUnifiedFeed` with it. */
@@ -263,6 +272,8 @@ export function useUnifiedAccounts(rows: readonly MachineRow[]): UnifiedView {
   const settings = select((s) => s.settings)
   const prefs = select((s) => s.prefs)
   const sharing = select((s) => s.sharing)
+  const lenders = select((s) => s.lenders)
+  const options = select((s) => s.lenderOptions)
   const local = primaryId()
   const features = featuresOf(getClient())
   const featureKey = features.join(',')
@@ -303,7 +314,7 @@ export function useUnifiedAccounts(rows: readonly MachineRow[]): UnifiedView {
   }, [local, rows, online, legacy, loaded, accounts, unfollowed, providers, providersLoaded, limits, globalLimits, featureKey, scopeKey, remote])
   const shared = useMemo(() => readShared(settings, features), [settings, featureKey, prefs])
   const groups = useMemo(() => unifyAccounts(machines, { shared }), [machines, shared])
-  return { machines, groups, shared, supportsShared: supportsShared(features), primaryId: local, legacy, loaded: loaded && machines.every((m) => m.state !== 'reading'), sharing }
+  return { machines, groups, shared, supportsShared: supportsShared(features), primaryId: local, legacy, loaded: loaded && machines.every((m) => m.state !== 'reading'), sharing, lenders, lenderOptions: options }
 }
 
 /**
@@ -353,6 +364,10 @@ export function useOffers(view: UnifiedView): { offers: Offer[]; ready: boolean 
   )
   return { offers, ready: extrasRead && view.loaded }
 }
+
+/** The machine that lends this agent's sign-ins: its own lender, else the one for every agent. */
+export const lenderOf = (view: Pick<UnifiedView, 'sharing' | 'lenders'>, kind: ProviderKind): Sharing | null =>
+  view.lenders ? view.lenders[kind] ?? null : view.sharing
 
 /** What the sharing machine can lend: its own signed-in accounts of the lendable agents. */
 export function lendableOn(groups: readonly HarnessGroup[], machineId: MachineId): LendableAccount[] {

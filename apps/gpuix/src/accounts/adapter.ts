@@ -62,15 +62,49 @@ export function lenderVerdict(status: LoginBrokerStatus | null | undefined): { u
   return { usableForNew: lender.usable_for_new, ...(typeof lender.reason === 'string' && lender.reason ? { reason: lender.reason } : {}) }
 }
 
+/** A daemon that lends each agent from its own machine: `login.broker.status` carries `lenders_by_kind` and
+ *  `login.broker.set` takes `provider` (0.27.3). */
+export const LOGIN_BROKER_PER_KIND_FEATURE = 'login.broker.per_kind.v1'
+export const supportsPerKind = (features: readonly string[] | undefined | null) => !!features?.includes(LOGIN_BROKER_PER_KIND_FEATURE)
+
 /** Choose the sharing machine, or clear it with null. Neither signs the previous one out of its own accounts. `via` says
- *  the always-on offer chose it; without it the daemon records a choice by hand (0.27.2; older daemons ignore it). */
-export function setSharing(client: KybernClient, machineId: MachineId | null, via?: 'always_on') {
-  const params: LoginBrokerSetParams & { via?: 'always_on' } = { machine_id: machineId, sign_out_old: false, ...(via ? { via } : {}) }
+ *  the always-on offer chose it; without it the daemon records a choice by hand (0.27.2; older daemons ignore it).
+ *  `provider` sets or clears the lender of that agent only (`login.broker.per_kind.v1`); without it, every agent's. */
+export function setSharing(client: KybernClient, machineId: MachineId | null, via?: 'always_on', provider?: ProviderKind) {
+  const params: LoginBrokerSetParams & { via?: 'always_on'; provider?: ProviderKind } = { machine_id: machineId, sign_out_old: false, ...(via ? { via } : {}), ...(provider ? { provider } : {}) }
   return client.call('login.broker.set', params)
 }
 
+type Members = readonly Pick<MachineCard, 'machine_id' | 'name' | 'online_ratio_7d'>[]
+interface KindLender { machine_id?: unknown; name?: unknown; usable_for_new?: unknown; reason?: unknown }
+
+/** One agent's lender from `lenders_by_kind`, as a `Sharing`. */
+function kindSharing(entry: KindLender | null | undefined, members: Members): Sharing | null {
+  if (!entry || typeof entry.machine_id !== 'string' || !entry.machine_id) return null
+  const member = members.find((m) => m.machine_id === entry.machine_id)
+  const name = typeof entry.name === 'string' && entry.name ? entry.name : member?.name ?? 'your other machine'
+  const said = typeof entry.usable_for_new === 'boolean' ? entry.usable_for_new : undefined
+  return { machineId: entry.machine_id, machine: name, usable: lenderUsable(said, member?.online_ratio_7d), ...(typeof entry.reason === 'string' && entry.reason ? { reason: entry.reason } : {}) }
+}
+
+/** Each lendable agent's lender (`lenders_by_kind`, 0.27.3), null for a daemon that lends every agent from one machine.
+ *  An agent missing from the map has no lender: each machine signs in itself. */
+export function lendersByKind(status: LoginBrokerStatus | null | undefined, members: Members): Partial<Record<ProviderKind, Sharing | null>> | null {
+  const map = (status as { lenders_by_kind?: unknown } | null | undefined)?.lenders_by_kind
+  if (!map || typeof map !== 'object' || Array.isArray(map)) return null
+  return Object.fromEntries(Object.entries(map as Record<string, KindLender>).map(([kind, entry]) => [kind, kindSharing(entry, members)])) as Partial<Record<ProviderKind, Sharing | null>>
+}
+
+/** The machines "Shared sign-ins" can pick (`lenders`, 0.27.2): each with why it can't, when it can't. */
+export interface LenderOption { machineId: MachineId; name: string; canShare: boolean; reason?: string }
+export function lenderOptions(status: LoginBrokerStatus | null | undefined): LenderOption[] | null {
+  const lenders = status?.lenders
+  if (!Array.isArray(lenders)) return null
+  return lenders.filter((l) => l.supported || l.is_lender).map((l) => ({ machineId: l.machine_id, name: l.name, canShare: l.can_share || l.is_lender, ...(l.reason ? { reason: l.reason } : {}) }))
+}
+
 /** The sharing machine from `login.broker.status` and the members of `network.status`; null when nobody shares. */
-export function sharingFrom(status: LoginBrokerStatus | null | undefined, members: readonly Pick<MachineCard, 'machine_id' | 'name' | 'online_ratio_7d'>[]): Sharing | null {
+export function sharingFrom(status: LoginBrokerStatus | null | undefined, members: Members): Sharing | null {
   const lender = status?.broker
   if (!lender) return null
   const member = members.find((m) => m.machine_id === lender.machine_id)

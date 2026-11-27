@@ -1,7 +1,7 @@
-// The machine chips of an account row: where it is signed in, which shell uses it, what it borrows, and where it can be
-// added. They answer "which account is fedora using, and does it touch my shell?" at a glance. Pure.
+// Where an account stands on each machine, for the rail usage card: which machines can use it and which could still
+// sign it in. Settings › Accounts uses `detail.ts`. Pure.
 import { withoutSignIn } from '../shared/lib/accounts.ts'
-import { LENDABLE_KINDS, LOGIN_SHARING_FEATURE } from './offers.ts'
+import { LENDABLE_KINDS } from './offers.ts'
 import { isOutdatedMachine, standings, type MachineAccounts, type MachineStanding, type Unfollowed, type UnifiedAccount } from './unified.ts'
 
 /** `terminal_out`: the account works on that machine, but its shell's own login of it is signed out. */
@@ -19,14 +19,6 @@ export interface AccountChip {
   lender?: boolean
   /** The machine doesn't run this shared default: the chip warns and names what it uses instead. */
   unfollowed?: Unfollowed
-}
-
-/** What a machine's menu offers about its sign-ins: share them, stop sharing them, or nothing (a lone, offline or older
- *  machine, or a window whose own daemon can't choose). `machines` starts with this window's. */
-export function sharingAction(machine: Pick<MachineAccounts, 'machineId' | 'online' | 'features'>, machines: readonly Pick<MachineAccounts, 'features'>[], sharing: string | null | undefined): 'share' | 'stop' | null {
-  const able = (m: Pick<MachineAccounts, 'features'> | undefined) => !!m?.features.includes(LOGIN_SHARING_FEATURE)
-  if (machines.length < 2 || !machine.online || !able(machine) || !able(machines[0])) return null
-  return machine.machineId === sharing ? 'stop' : 'share'
 }
 
 const stateOf = (standing: MachineStanding): ChipState => {

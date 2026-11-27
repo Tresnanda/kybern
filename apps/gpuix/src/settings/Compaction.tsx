@@ -1,5 +1,5 @@
 // Settings → Agent providers → Compaction (issue #295): "Compact idle threads" with a count of the accounts that
-// choose for themselves (their ⋯ menu, `AccountIdleCompaction`), and "Auto-compact at", one compact select per agent
+// choose for themselves (their detail pane in Settings › Accounts, `AccountIdleCompactionSelect`), and "Auto-compact at", one compact select per agent
 // that has its own limit, like "Default models". Words are shared (`packages/kybern-client/src/compaction.ts`).
 import {
   AUTO_COMPACT_CHOICES,
@@ -97,4 +97,15 @@ export function AccountIdleCompaction({ kind, instance, testId }: { kind: Provid
       ))}
     </MenuSub>
   )
+}
+
+/** The same choice as a pop-up, for an account's detail pane in Settings › Accounts (null for agents without it). */
+export function AccountIdleCompactionSelect({ kind, instance, testId }: { kind: ProviderKind; instance: string; testId: string }) {
+  const { settings } = useSettings()
+  if (!IDLE_COMPACTION_HARNESSES.includes(kind)) return null
+  const own = settings?.providers[kind]?.idle_compaction?.[instance] ?? null
+  const global = compaction(settings).idle
+  // The pane is narrow: the default's own choice is named in the menu, not on the button.
+  const options = [{ value: 'default', label: own ? `Use default (${idleCompactionLabel(global)})` : 'Use default' }, ...IDLE_COMPACTION_OPTIONS.map(({ value, label }) => ({ value, label }))]
+  return <Select compact testId={testId} label="Compact idle threads" value={own ?? 'default'} options={options} onChange={(value) => setAccountIdleCompaction(kind, instance, value === 'default' ? null : value as IdleCompaction)} />
 }

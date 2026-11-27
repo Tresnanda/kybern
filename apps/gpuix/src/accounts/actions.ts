@@ -10,8 +10,8 @@ import { PROVIDER_NAMES } from '../shared/lib/providerUsage.ts'
 import { refreshAccounts } from '../usage/accounts.ts'
 import { setSharing, signOutTerminalLogin, supportsShared, writeShared } from './adapter.ts'
 import { TERMINAL_SIGN_IN_KINDS, type Offer } from './offers.ts'
-import { existingFor, needsAccountsUpdate, planOnMachine, planSetup, signInNeedsUpdate, type SignInItem } from './queue.ts'
-import { adoptSettings, clientOf, computerId, infoOf, lendableOn, prefsChanged, primaryId, readMachine, refreshAllAccounts, type UnifiedView } from './store.ts'
+import { existingFor, needsAccountsUpdate, planOnMachine, planSetup, planSignIn, signInNeedsUpdate, type LenderSource, type SignInItem } from './queue.ts'
+import { adoptSettings, clientOf, computerId, infoOf, lendableOn, lenderOf, prefsChanged, primaryId, readMachine, refreshAllAccounts, type UnifiedView } from './store.ts'
 import { standings, type UnifiedAccount } from './unified.ts'
 
 const list = (names: readonly string[]) => new Intl.ListFormat('en', { style: 'long', type: 'conjunction' }).format(names)
@@ -274,16 +274,22 @@ export async function updateMachine(machineId: MachineId): Promise<DaemonUpdate>
   return retryMachineUpdate(machineId)
 }
 
-export async function shareSignIns(machineId: MachineId | null, name: string, via?: 'always_on') {
+/** Lend sign-ins from `machineId`, or stop with null: for every agent, or only `provider`'s (`login.broker.per_kind.v1`). */
+export async function shareSignIns(machineId: MachineId | null, name: string, via?: 'always_on', provider?: ProviderKind) {
+  const agent = provider ? PROVIDER_NAMES[provider] ?? provider : null
   try {
     const client = getClient()
     if (!client) throw new Error('Not connected to kybernd')
-    await setSharing(client, machineId, via)
+    await setSharing(client, machineId, via, provider)
     await refreshAllAccounts()
-    toast.success(machineId ? `Your machines can use ${name}’s sign-ins` : `${name} stopped sharing its sign-ins`)
+    toast.success(agent
+      ? (machineId ? `Your machines use ${name}’s ${agent} sign-ins` : `Each machine signs in to ${agent} itself`)
+      : (machineId ? `Your machines can use ${name}’s sign-ins` : `${name} stopped sharing its sign-ins`))
     return true
   } catch (error) {
-    toastProblem(error, { action: machineId ? `share ${name}’s sign-ins` : `stop sharing ${name}’s sign-ins` })
+    toastProblem(error, { action: agent
+      ? (machineId ? `share ${name}’s ${agent} sign-ins` : `stop sharing ${agent} sign-ins`)
+      : (machineId ? `share ${name}’s sign-ins` : `stop sharing ${name}’s sign-ins`) })
     return false
   }
 }
@@ -296,12 +302,23 @@ export async function answerOffer(offer: Offer, state: 'later' | 'never') {
   }
 }
 
+/** Each agent's lender with what it can lend, for planning sign-ins. */
+export function lenderSource(view: Pick<UnifiedView, 'sharing' | 'lenders' | 'groups'>): LenderSource {
+  return (kind) => {
+    const sharing = lenderOf(view, kind)
+    return sharing && { ...sharing, lendable: lendableOn(view.groups, sharing.machineId) }
+  }
+}
+
 /** The steps "Set up" runs for a new machine: what it is missing, borrowed where possible. */
 export function setupItems(view: UnifiedView, offer: Offer): SignInItem[] {
   const accounts = view.groups.flatMap((group) => group.accounts).filter((account) => account.key && (offer.keys ?? []).includes(account.key))
-  const sharing = view.sharing && { ...view.sharing, lendable: lendableOn(view.groups, view.sharing.machineId) }
-  return planSetup(accounts, { machineId: offer.machine_id, name: offer.machine_name }, sharing)
+  return planSetup(accounts, { machineId: offer.machine_id, name: offer.machine_name }, lenderSource(view))
 }
+
+/** "Sign in" on a machine of an account: borrowed from the agent's lender when it has this account, else a sign-in. */
+export const signInWith = (view: UnifiedView, account: UnifiedAccount, machine: { machineId: MachineId; name: string }) =>
+  signIn([planSignIn(account, machine, lenderSource(view))])
 
 /** Do what a card offers. `change` is a clash's "Change". */
 export async function acceptOffer(view: UnifiedView, offer: Offer, answer: 'accept' | 'change' = 'accept'): Promise<void> {

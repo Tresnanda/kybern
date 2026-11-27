@@ -1,11 +1,11 @@
 // The rail usage card's account half: every account of the agent on any machine, with what is left of it, the machines
-// it is on, one click to make it the default everywhere, and sign-in for a machine that lacks it. `NavRail.tsx` mounts
+// it is on, one click to make it the default everywhere, and sign-in for an account signed in nowhere ("+ Add account"
+// below the card adds the rest). `NavRail.tsx` mounts
 // it between the card header and the limits.
 import { useEffect, useRef, useState } from 'react'
 import type { ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
 import { Button } from '../kit/Button.tsx'
-import { IconButton } from '../kit/IconButton.tsx'
 import { N } from '../nav/glyphs.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { PROVIDER_NAMES } from '../shared/lib/providerUsage.ts'
@@ -81,10 +81,8 @@ function CardAccountRow({ account, view, onChoose }: { account: UnifiedAccount; 
   const several = view.machines.length > 1
   const usable = machines.length > 0
   const detail = several ? (usable ? machineList(machines, view.machines.length) : 'Signed out') : account.email && account.email !== account.name ? account.email : account.plan
-  // Machines that could have it and don't: one step each, in the sign-in queue.
+  // Machines that could have it and don't: an account signed in nowhere offers its sign-in here.
   const missing = chipsFor(account, view.machines).filter((chip) => chip.state === 'add' || (chip.state === 'signed_out' && !chip.terminal))
-  const sign = () => signIn(missing.map((chip) => planOnMachine(account, { machineId: chip.machineId, name: chip.machine })))
-  const addLabel = missing.length === 1 ? `Sign in on ${missing[0]!.machine}` : `Sign in on ${missing.length} more machines`
   const body = <>
     <AccountMarkStack kind={account.kind} color={account.color} size={14} />
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, minWidth: 0 }}>
@@ -106,6 +104,5 @@ function CardAccountRow({ account, view, onChoose }: { account: UnifiedAccount; 
       {left !== null && <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}><AccountUsageRing left={left} size={16} /><Label color={t.textSecondary} size={13} lineHeight={19.5} style={{ fontVariantNumeric: 'tabular-nums' } as never}>{`${Math.round(left)}% left`}</Label></div>}
       <div style={{ display: 'flex', width: 14, height: 14, flexShrink: 0 }}>{account.isDefault && <Icon source={N.check} size={14} color={t.text} />}</div>
     </div>
-    {missing.length > 0 && <IconButton testId={`rail-account-add-${account.id}`} size="sm" icon={N.plus} label={addLabel} onClick={sign} style={{ marginRight: 4 }} />}
   </div>
 }
