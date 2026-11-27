@@ -279,8 +279,8 @@ function SignInStep({ item, view, multiple, onResult, dismiss, close }: { item: 
     await api.start({
       kind,
       mode,
-      // This computer's own `agy` login has no instance: a start for Antigravity without one signs the machine in.
-      ...(item.instance && !item.ownLogin ? { instance: item.instance } : {}),
+      // This computer's own `agy` login is `default`, named explicitly: the daemon never assumes it.
+      ...(item.ownLogin ? { instance: 'default' } : item.instance ? { instance: item.instance } : {}),
       // `named` keeps a new Antigravity account apart from the computer's own login, in a terminal too.
       ...(!reauth && antigravityNamed ? { named: true } : {}),
       ...(!reauth && !own && item.directory ? { directory: item.directory } : {}),

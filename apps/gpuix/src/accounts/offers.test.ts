@@ -90,7 +90,8 @@ describe('sign-in queue', () => {
     expect(queue.results).toEqual({ [items[0]!.id]: 'signed_in', [items[1]!.id]: 'skipped' })
   })
   test('Antigravity signs this computer’s own agy in first, and named accounts everywhere else', () => {
-    expect(planAdd({ kind: 'antigravity', machines, computer: 'mac' }).map((i) => [i.ownLogin ?? false, i.named ?? false])).toEqual([[true, false], [false, true]])
+    // Adding never signs in a computer's own login, even one that looks signed out.
+    expect(planAdd({ kind: 'antigravity', machines, computer: 'mac' }).map((i) => [i.ownLogin ?? false, i.named ?? false])).toEqual([[false, true], [false, true]])
   })
   test('signs a signed-out login on a machine in again, and a missing one anew', () => {
     expect(planOnMachine(work, { machineId: 'fedora', name: 'fedora' })).toMatchObject({ instance: 'b', email: 'w@x.com', name: 'Work' })

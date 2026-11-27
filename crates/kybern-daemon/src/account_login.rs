@@ -178,9 +178,10 @@ impl AccountLogins {
         // clients before named Antigravity accounts send). A named account has its own profile and
         // signs in with `agy acp --gemini-dir … --login`, which prints Google's page and reads the code.
         let antigravity = kind == ProviderKind::Antigravity;
-        let machine_login = antigravity
-            && (params.instance.as_deref() == Some("default")
-                || (params.instance.is_none() && params.directory.is_none() && params.mode == AccountLoginMode::Terminal && !params.named));
+        // Only when named as `default`: a new sign-in is never taken for the machine's own login. A Terminal sign-in
+        // without `named` once was (for clients older than named accounts), and a 0.27.1 Add account that thought the
+        // Keychain login signed out replaced the person's own login that way.
+        let machine_login = antigravity && params.instance.as_deref() == Some("default");
         if machine_login {
             ensure!(
                 params.mode == AccountLoginMode::Terminal,
@@ -1868,8 +1869,15 @@ exit 2
         assert!(login.terminal.is_some());
         assert!(fixture.login_dir(&login).is_dir(), "its own folder");
         state.account_logins.cancel(state, &login.id).await.unwrap();
-        // Without `named`, a new sign-in in a terminal is this computer's own login, as older clients mean it.
-        let machine = state.account_logins.start(state, params(ProviderKind::Antigravity, AccountLoginMode::Terminal)).await.unwrap();
+        // Without `named` a new sign-in is still a new account: it is never taken for this computer's own login.
+        let unnamed = state.account_logins.start(state, params(ProviderKind::Antigravity, AccountLoginMode::Terminal)).await.unwrap();
+        assert_eq!(unnamed.instance, None, "a new account");
+        assert!(fixture.login_dir(&unnamed).is_dir(), "its own folder");
+        state.account_logins.cancel(state, &unnamed.id).await.unwrap();
+        // This computer's own login only when named as `default`.
+        let mut own = params(ProviderKind::Antigravity, AccountLoginMode::Terminal);
+        own.instance = Some("default".into());
+        let machine = state.account_logins.start(state, own).await.unwrap();
         assert_eq!(machine.instance.as_deref(), Some("default"));
         assert!(fixture.staging("antigravity").is_empty(), "no account folder for this computer's login");
         let _ = state.account_logins.cancel(state, &machine.id).await;

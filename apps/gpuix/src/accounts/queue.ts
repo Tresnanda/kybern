@@ -45,9 +45,6 @@ export function loginModeFor(item: Pick<SignInItem, 'kind' | 'ownLogin' | 'insta
 /** The code to fall back to when a handoff can't be done: Codex's device code, else a pasted code. */
 export const fallbackModeFor = (kind: ProviderKind): AccountLoginMode => initialLoginMode(kind, true)
 
-const antigravityOwnSignedIn = (accounts: readonly AccountSummary[]) =>
-  accounts.some((a) => a.provider.kind === 'antigravity' && a.provider.instance === 'default' && (a.status === 'signed_in' || (a.status === 'unknown' && !!a.identity)))
-
 export interface AddRequest {
   kind: ProviderKind
   name?: string
@@ -60,15 +57,13 @@ export interface AddRequest {
 }
 
 /** "Add account": one sign-in on each ticked machine. */
-export function planAdd({ kind, name, machines, computer, directory }: AddRequest): SignInItem[] {
+export function planAdd({ kind, name, machines, directory }: AddRequest): SignInItem[] {
   const label = name?.trim() || undefined
   return machines.map((machine) => {
     const item: SignInItem = { id: `${machine.machineId}:${kind}:new`, machineId: machine.machineId, machine: machine.name, kind, method: 'sign_in', ...(label ? { name: label } : {}) }
-    if (kind === 'antigravity') {
-      // The first Antigravity sign-in on this computer is its own `agy` login; every one after it is a named account.
-      if (machine.machineId === computer && !antigravityOwnSignedIn(machine.accounts)) item.ownLogin = true
-      else item.named = true
-    }
+    // Adding an account always makes a new one with its own profile. It never signs in the computer's own `agy` login:
+    // a Keychain Kybern can't read quietly looks signed out, and that sign-in replaced the person's own login (0.27.1).
+    if (kind === 'antigravity') item.named = true
     if (directory && machines.length === 1) item.directory = directory
     return item
   })
