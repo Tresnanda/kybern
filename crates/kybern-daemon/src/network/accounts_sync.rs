@@ -238,7 +238,9 @@ pub fn all_holdings(state: &AppState) -> BTreeMap<MachineId, MachineHoldings> {
         }
     }
     let me = state.network.machine_id().unwrap_or_else(|| state.environment_id.clone());
-    out.insert(me, own_holdings(state));
+    let mut mine = own_holdings(state);
+    mine.premigration = crate::accounts_shared::premigration(&state.store);
+    out.insert(me, mine);
     out
 }
 

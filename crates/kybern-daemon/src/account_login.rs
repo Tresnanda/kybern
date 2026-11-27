@@ -1548,6 +1548,50 @@ exit 2
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn the_terminal_login_is_signed_in_only_while_it_is_signed_out() {
+        let fixture = fixture();
+        let state = &fixture.state;
+        // The fake Claude keeps the terminal login in this folder.
+        let terminal = fixture.root.join("terminal");
+        std::fs::create_dir_all(&terminal).unwrap();
+        let mut settings = state.settings.get();
+        settings
+            .providers
+            .get_mut(&ProviderKind::ClaudeCode)
+            .unwrap()
+            .env
+            .insert("CLAUDE_CONFIG_DIR".into(), terminal.to_string_lossy().into_owned());
+        state.settings.set(settings).unwrap();
+        std::fs::write(terminal.join(".signed-in"), "shell@arunika.co").unwrap();
+        let mut start = params(ProviderKind::ClaudeCode, AccountLoginMode::Browser);
+        start.instance = Some("default".into());
+        let error = state.account_logins.start(state, start.clone()).await.unwrap_err().to_string();
+        assert!(error.contains("already signed in"), "{error}");
+        assert!(state.account_logins.start(state, AccountLoginStartParams { kind: ProviderKind::Pi, ..start.clone() }).await.is_err());
+
+        std::fs::remove_file(terminal.join(".signed-in")).unwrap();
+        let login = state.account_logins.start(state, start).await.unwrap();
+        assert_eq!(login.phase, AccountLoginPhase::Waiting, "{:?}", login.error);
+        assert_eq!(login.instance.as_deref(), Some("default"));
+        std::fs::write(terminal.join("email"), "shell@arunika.co").unwrap();
+        std::fs::write(terminal.join("approve"), "").unwrap();
+        let signed_in = wait_for(state, &login.id, |login| login.phase == AccountLoginPhase::SignedIn).await;
+        assert_eq!(signed_in.identity.as_ref().unwrap().email.as_deref(), Some("shell@arunika.co"));
+        assert_eq!(crate::accounts_shared::terminal_email(&state.store, ProviderKind::ClaudeCode).as_deref(), Some("shell@arunika.co"));
+        assert!(state.settings.get().providers[&ProviderKind::ClaudeCode].accounts.is_empty(), "no account was added");
+        // Kybern signs it out only when asked to, with the confirmation.
+        let refused = crate::provider_accounts::sign_out(state, ProviderInstance::default_for(ProviderKind::ClaudeCode).into()).await;
+        assert!(refused.unwrap_err().to_string().contains("Confirm"));
+        assert!(terminal.join(".signed-in").exists());
+        let params = AccountsSignOutParams { kind: ProviderKind::ClaudeCode, instance: "default".into(), confirm_terminal: true };
+        let summary = crate::provider_accounts::sign_out(state, params).await.unwrap();
+        assert_eq!(summary.status, AccountStatus::SignedOut);
+        assert!(summary.terminal);
+        assert!(!terminal.join(".signed-in").exists());
+        assert_eq!(crate::accounts_shared::terminal_email(&state.store, ProviderKind::ClaudeCode), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn cancel_leaves_no_staging_folder_and_no_account() {
         let fixture = fixture();
         let state = &fixture.state;
@@ -1786,12 +1830,14 @@ exit 2
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn the_cli_account_cannot_be_signed_in_from_kybern() {
+    async fn the_cli_account_of_a_harness_without_terminal_sign_in_cannot_be_signed_in_from_kybern() {
         let fixture = fixture();
         let state = &fixture.state;
-        let mut start = params(ProviderKind::ClaudeCode, AccountLoginMode::Browser);
-        start.instance = Some("default".into());
-        let error = state.account_logins.start(state, start).await.unwrap_err();
-        assert!(error.to_string().contains("CLI account"));
+        for kind in [ProviderKind::Opencode, ProviderKind::Pi, ProviderKind::Omp] {
+            let mut start = params(kind, AccountLoginMode::Browser);
+            start.instance = Some("default".into());
+            let error = state.account_logins.start(state, start).await.unwrap_err();
+            assert!(error.to_string().contains("terminal login"), "{kind}: {error}");
+        }
     }
 }

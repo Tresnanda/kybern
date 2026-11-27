@@ -28,6 +28,8 @@ const TERMINAL_EMAIL: &str = "accounts.terminal_email.";
 pub const MIGRATED: &str = "accounts.shared.migrated";
 /// This machine's own defaults from before the migration, by harness: the source of clash offers.
 pub const PREMIGRATION: &str = "accounts.shared.premigration";
+/// This machine's default instances at the first start with shared accounts, until the migration ran.
+const SNAPSHOT: &str = "accounts.shared.premigration.instances";
 
 pub const MAX_PROFILES: usize = 256;
 pub const MAX_PROJECTS: usize = 512;
@@ -311,12 +313,37 @@ pub async fn migrate(state: &AppState) -> Result<()> {
     }
     // Learning the terminal logins' emails (and the named accounts' emails, through write-back).
     let _ = crate::provider_accounts::list(state, AccountsListParams { kind: None, refresh: false }).await;
+    migrate_now(state)
+}
+
+/// Note this machine's own default accounts before anything can change them: at startup, before the
+/// network worker can apply a default another machine shared. Kept until the migration maps them to keys
+/// (it needs the terminal logins' emails, which only a probe tells).
+pub fn snapshot_before_migration(state: &AppState) -> Result<()> {
+    if state.store.meta_get(MIGRATED)?.is_some() || state.store.meta_get(SNAPSHOT)?.is_some() {
+        return Ok(());
+    }
+    let settings = state.settings.get();
+    let defaults: BTreeMap<ProviderKind, String> =
+        ProviderKind::ALL.into_iter().filter(|kind| has_identity(*kind)).map(|kind| (kind, local_default(&settings, kind))).collect();
+    state.store.meta_set(SNAPSHOT, &serde_json::to_string(&defaults)?)?;
+    Ok(())
+}
+
+/// [`migrate`] with the emails this machine already knows. Idempotent: it runs once per machine.
+pub fn migrate_now(state: &AppState) -> Result<()> {
+    if state.store.meta_get(MIGRATED)?.is_some() {
+        return Ok(());
+    }
     let terminal = terminal_emails(Some(&state.store));
     let settings = state.settings.get();
+    let snapshot: BTreeMap<ProviderKind, String> =
+        state.store.meta_get(SNAPSHOT)?.and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
     let mut next = settings.clone();
     let mut premigration: BTreeMap<ProviderKind, String> = BTreeMap::new();
     for kind in ProviderKind::ALL.into_iter().filter(|kind| has_identity(*kind)) {
-        if let Some(key_text) = key_of_instance(&settings, &terminal, kind, &local_default(&settings, kind)) {
+        let own = snapshot.get(&kind).cloned().unwrap_or_else(|| local_default(&settings, kind));
+        if let Some(key_text) = key_of_instance(&settings, &terminal, kind, &own) {
             premigration.insert(kind, key_text.clone());
             next.accounts_shared.defaults.entry(kind).or_insert(key_text);
         }
@@ -349,6 +376,7 @@ pub async fn migrate(state: &AppState) -> Result<()> {
     }
     state.store.meta_set(PREMIGRATION, &serde_json::to_string(&premigration)?)?;
     state.store.meta_set(MIGRATED, &chrono::Utc::now().to_rfc3339())?;
+    let _ = state.store.meta_delete_prefix(SNAPSHOT);
     Ok(())
 }
 
@@ -517,5 +545,97 @@ mod tests {
         assert!(validate(&shared).is_ok());
         shared.profiles.insert("codex:ME@example.com".into(), AccountProfile { name: "Me".into(), ..Default::default() });
         assert!(validate(&shared).is_err());
+    }
+}
+
+#[cfg(test)]
+mod state_tests {
+    use super::*;
+    use kybern_protocol::ProviderAccount;
+
+    struct Fixture {
+        state: AppState,
+        root: std::path::PathBuf,
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn fixture() -> Fixture {
+        let root = std::env::temp_dir().join(format!("kybern-accounts-shared-{}", uuid::Uuid::now_v7()));
+        let paths = crate::config::Paths::resolve(Some(root.join("data"))).unwrap();
+        let state = AppState::initialize(&paths).unwrap();
+        let mut settings = state.settings.get();
+        let claude = settings.providers.entry(ProviderKind::ClaudeCode).or_default();
+        for (id, name, email) in [("w1", "Work", "work@example.com"), ("p1", "Personal", "me@home.org")] {
+            claude.accounts.insert(
+                id.into(),
+                ProviderAccount {
+                    name: name.into(),
+                    directory: root.join(id).to_string_lossy().into_owned(),
+                    color: Some("green".into()),
+                    email: Some(email.into()),
+                    plan: None,
+                },
+            );
+        }
+        claude.default_account = Some("p1".into());
+        state.settings.set(settings).unwrap();
+        Fixture { state, root }
+    }
+
+    #[test]
+    fn a_local_write_already_fills_the_shared_values() {
+        let fixture = fixture();
+        let shared = fixture.state.settings.get().accounts_shared;
+        assert_eq!(shared.defaults[&ProviderKind::ClaudeCode], "claude-code:me@home.org");
+        assert_eq!(shared.profiles["claude-code:work@example.com"].name, "Work");
+        assert_eq!(shared.profiles["claude-code:me@home.org"].color.as_deref(), Some("green"));
+    }
+
+    #[test]
+    fn migration_keeps_what_another_machine_shared_and_lists_the_changed_default_once() {
+        let fixture = fixture();
+        let state = &fixture.state;
+        snapshot_before_migration(state).unwrap();
+        // Before the migration ran, another machine's sync made Work the default everywhere.
+        let mut settings = state.settings.get();
+        settings.accounts_shared.defaults.insert(ProviderKind::ClaudeCode, "claude-code:work@example.com".into());
+        state.settings.set(settings).unwrap();
+        assert_eq!(state.settings.get().providers[&ProviderKind::ClaudeCode].default_account.as_deref(), Some("w1"));
+        migrate_now(state).unwrap();
+        let after = state.settings.get();
+        assert_eq!(after.accounts_shared.defaults[&ProviderKind::ClaudeCode], "claude-code:work@example.com", "the shared default stays");
+        assert_eq!(premigration(&state.store)[&ProviderKind::ClaudeCode], "claude-code:me@home.org");
+        let offers = crate::accounts_offers::offers(state).offers;
+        let clash = offers.iter().find(|offer| offer.id == format!("clash:claude-code:{}", state.environment_id)).expect("a clash offer");
+        let clash = clash.clash.as_ref().unwrap();
+        assert_eq!((clash.was.as_str(), clash.now.as_str()), ("claude-code:me@home.org", "claude-code:work@example.com"));
+        // "Change": the old default everywhere; the clash goes away.
+        let mut settings = state.settings.get();
+        settings.accounts_shared.defaults.insert(ProviderKind::ClaudeCode, clash.was.clone());
+        state.settings.set(settings).unwrap();
+        assert!(crate::accounts_offers::offers(state).offers.iter().all(|offer| offer.clash.is_none()));
+        assert_eq!(state.settings.get().providers[&ProviderKind::ClaudeCode].default_account.as_deref(), Some("p1"));
+        // Once per machine.
+        migrate_now(state).unwrap();
+        assert_eq!(state.settings.get().accounts_shared.defaults[&ProviderKind::ClaudeCode], "claude-code:me@home.org");
+    }
+
+    #[test]
+    fn the_terminal_login_joins_the_account_with_its_email() {
+        let fixture = fixture();
+        let state = &fixture.state;
+        assert!(remember_terminal_email(&state.store, ProviderKind::ClaudeCode, Some("Shell@Example.com")));
+        assert!(!remember_terminal_email(&state.store, ProviderKind::ClaudeCode, Some("shell@example.com")), "unchanged");
+        let mut settings = state.settings.get();
+        settings.accounts_shared.defaults.insert(ProviderKind::ClaudeCode, "claude-code:shell@example.com".into());
+        state.settings.set(settings).unwrap();
+        // The shared default is this machine's terminal login: `default_account` is cleared, so resolve gives `default`.
+        let provider = &state.settings.get().providers[&ProviderKind::ClaudeCode];
+        assert_eq!(crate::provider_accounts::resolve(provider, None, None), "default");
     }
 }
