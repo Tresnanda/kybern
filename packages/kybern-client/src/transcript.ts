@@ -1,6 +1,7 @@
 import type { ProviderUsage } from "./types.ts"
 import { mediaSource } from "./responseImages.ts"
 import { hookWarningOf, hookWarningTitle, type HookWarning } from "./hookWarnings.ts"
+import { appendAccountNotice, foldAccountNotices } from "./accountNotices.ts"
 // Client-side transcript projection. Seeds from `threads.get`, then folds live
 // `ThreadEvent`s into blocks the views render directly.
 
@@ -184,7 +185,7 @@ export function seedFromGet(res: ThreadsGetResult, prev?: ThreadState): ThreadSt
     providerCommands: res.provider_commands ?? [],
     providerUsage: res.provider_usage ?? {},
     thread: res.thread,
-    blocks: settleIdleCompactions(foldHookNotices(res.transcript.map(entryToBlock).filter((b): b is Block => !!b))),
+    blocks: settleIdleCompactions(foldAccountNotices(foldHookNotices(res.transcript.map(entryToBlock).filter((b): b is Block => !!b)))),
     pendingApprovals: res.pending_approvals,
     pendingQuestions: res.pending_questions ?? [],
     checkpoints: prev?.checkpoints ?? [],
@@ -206,6 +207,8 @@ export function prependThreadHistory(base: ThreadState, page: ThreadsGetResult, 
   }
   let next = { ...base, blocks: [...byId.values()].sort((a, b) => a.seq - b.seq), nextBeforeSeq: page.next_before_seq ?? null, loadingEarlier: false }
   for (const event of events) next = { ...applyEvent(next, event), nextBeforeSeq: next.nextBeforeSeq, loadingEarlier: false }
+  // A wait on the older page and its end on the newer one are one line.
+  next.blocks = foldAccountNotices(next.blocks)
   const currentById = new Map(visible.blocks.map((block) => [key(block), block]))
   next.blocks = next.blocks.map((block) => {
     const current = currentById.get(key(block))
@@ -689,6 +692,15 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       if (block?.kind === "rotation") blocks = replaceAt(blocks, index, { ...block, handoff: ev.text, edited: true })
       break
     }
+    case "account_switched":
+      blocks = appendAccountNotice(blocks, noticeBlock(turnId || latestConversationTurnId(blocks), at, ev.seq, "info", ev.text, { kind: ev.kind, from: { ...ev.from }, to: { ...ev.to }, reason: ev.reason }, undefined))
+      break
+    case "account_wait":
+      blocks = appendAccountNotice(blocks, noticeBlock(turnId || latestConversationTurnId(blocks), at, ev.seq, "info", ev.text, { kind: ev.kind, until: ev.until, account: ev.account ? { ...ev.account } : null }, undefined))
+      break
+    case "account_wait_ended":
+      blocks = appendAccountNotice(blocks, noticeBlock(turnId || latestConversationTurnId(blocks), at, ev.seq, "info", ev.text, { kind: ev.kind, account: ev.account ? { ...ev.account } : null, cancelled: ev.cancelled }, undefined))
+      break
     case "provider_session_released": {
       // Only the releases that can surprise: idle and update releases are the
       // expected end of a quiet thread, and would add a row every cycle.

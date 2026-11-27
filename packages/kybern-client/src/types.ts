@@ -185,6 +185,14 @@ export interface ThreadTargetState {
   effective_permission_mode: PermissionMode;
   pending_permission_mode?: PermissionMode | null;
   quota_limited?: boolean;
+  /** The account with the most limit left that is eligible: a local instance id of the thread's agent. Absent from older daemons. */
+  suggested_account?: string | null;
+  /** The thread is waiting for its own account's limit to reset and continues on it at this time. */
+  waiting_until?: DateTime | null;
+  /** The account the wait continues on: the thread's own. */
+  waiting_account?: ProviderInstance | null;
+  /** The thread's account isn't set up here, is signed out or its lender is away: sends fail until it is used elsewhere. */
+  account_unavailable?: boolean;
 }
 
 export interface ProviderModel {
@@ -1373,6 +1381,12 @@ export type EventPayload =
   | { kind: "turn_started"; message_id: MessageId; message: UserMessage }
   | { kind: "turn_resumed" }
   | { kind: "session_transitioned"; from: ProviderInstance; to: ProviderInstance; native_resume: boolean; text: string }
+  /** The user moved the thread to another account (at a limit, or because its account is not on the machine). `text` is a ready sentence. */
+  | { kind: "account_switched"; from: ProviderInstance; to: ProviderInstance; reason: AccountSwitchReason; text: string }
+  /** The thread's account is out: it continues on that account at `until`. `threads.interrupt` cancels the wait. */
+  | { kind: "account_wait"; until: DateTime; account?: ProviderInstance | null; text: string }
+  /** The wait ended: the limit reset and the thread is continuing (`cancelled: false`), or the wait was cancelled. */
+  | { kind: "account_wait_ended"; account?: ProviderInstance | null; cancelled: boolean; text: string }
   | { kind: "provider_session_bound"; session_id: string; model: string | null }
   | { kind: "provider_session_released"; reason: SessionReleaseReason }
   /** `source` is empty when `media` holds the image (0.24+). */
@@ -2763,6 +2777,8 @@ export interface AccessSettings {
 export type UpdateTrack = "stable" | "dev";
 
 export interface Settings {
+  /** Account names, colours, defaults and offer answers shared by every machine. Absent from a daemon without `accounts.shared.v1`. */
+  accounts_shared?: AccountsShared;
   /** Machine-local Coordinator MCP allowlist. All servers default to off. */
   coordinator_mcp_servers?: Partial<Record<ProviderKind, string[]>>;
   default_provider: ProviderKind;
@@ -3112,6 +3128,47 @@ export interface UsageLimitsResult {
 
 export type AccountStatus = "signed_in" | "needs_sign_in" | "signed_out" | "unknown";
 export interface AccountIdentity { email?: string; plan?: string; organization?: string }
+export type AccountSwitchReason = "limit" | "unavailable";
+/** A daemon that stores and syncs `Settings.accounts_shared`, sets `AccountSummary.key` / `terminal`, answers `accounts.offers`
+ * and signs a signed-out terminal login in (`providers.accounts.login.start` with instance `default`). */
+export const ACCOUNTS_SHARED_FEATURE = "accounts.shared.v1";
+/** "Authorize only" sign-in: both daemons need it (the one on the computer with the browser, and the one being signed in). */
+export const LOGIN_HANDOFF_FEATURE = "accounts.login.handoff.v1";
+export interface LoginHandoffParams { machine_id: MachineId; login_id: string }
+/** `url`: the authorize page to open in this computer's browser; the callback is forwarded to the other machine. */
+export interface LoginHandoffResult { url: string; expires_at: DateTime }
+/** Name, colour and "Only when I choose" of one account, the same on every machine. */
+export interface AccountProfile { name?: string | null; color?: string | null; manual_only?: boolean }
+export type AccountOfferDismissal = "later" | "never";
+export interface AccountOfferState { state: AccountOfferDismissal; fingerprint: string }
+/** Account preferences every machine of the network shares. Keys are `<kind>:<email>`, lowercase. */
+export interface AccountsShared {
+  profiles?: Record<string, AccountProfile>;
+  /** The one default account of each agent, on every machine. */
+  defaults?: Partial<Record<ProviderKind, string>>;
+  /** Per-project accounts, keyed by repository identity. */
+  projects?: Record<string, Partial<Record<ProviderKind, string>>>;
+  offers?: Record<string, AccountOfferState>;
+}
+export type AccountOfferKind = "always_on" | "new_machine" | "terminal_login" | "migration_clash";
+export interface AccountOfferClash { kind: ProviderKind; machine_id: MachineId; was: string; now: string }
+/** One offer card (`accounts.offers`). Dismissed ones are returned too, so the Accounts page can list them. */
+export interface AccountOffer {
+  /** Stable: `always_on:<machine>`, `new_machine:<machine>`, `terminal_login:<machine>:<kind>`, `clash:<kind>:<machine>`. */
+  id: string;
+  kind: AccountOfferKind;
+  /** Changes when the situation does: a "later" dismissal stops counting then. */
+  fingerprint: string;
+  machine_id: MachineId;
+  machine_name: string;
+  provider?: ProviderKind | null;
+  /** The account keys involved. */
+  keys: string[];
+  /** `always_on`: the machines that would borrow. `new_machine`: the machines that already have those accounts. */
+  machines: MachineId[];
+  clash?: AccountOfferClash | null;
+  dismissed?: AccountOfferDismissal | null;
+}
 export interface AccountSummary {
   /** Instance "default" is the CLI account. */
   provider: ProviderInstance;
@@ -3126,6 +3183,10 @@ export interface AccountSummary {
   can_sign_out: boolean;
   /** Set when this account signs in through the login broker (design §9.4). */
   broker?: AccountBroker;
+  /** `<kind>:<email>` (lowercase), the same account on every machine. Absent without an email and on older daemons. */
+  key?: string | null;
+  /** The agent's own login in the shell (instance `default`). Absent on older daemons. */
+  terminal?: boolean;
 }
 export type AccountLoginMode = "browser" | "paste" | "device_code" | "terminal";
 export type AccountLoginPhase = "starting" | "waiting" | "verifying" | "signed_in" | "failed" | "canceled";
@@ -3154,6 +3215,8 @@ export interface AccountLogin {
   previous_email?: string;
   error?: string;
   expires_at: string;
+  /** The harness waits for a loopback redirect: another machine's daemon can catch it (`providers.accounts.login.handoff`). */
+  handoff?: { port: number; path: string } | null;
 }
 /** Params are an AccountLogin. */
 export const ACCOUNTS_LOGIN_CHANGED_NOTIFICATION = "providers.accounts.login.changed";
@@ -3974,6 +4037,8 @@ export interface MachineCard {
   last_seen_at?: DateTime | null;
   /** The member relaying to this machine when `status` is `relaying`. */
   relay_via?: MachineId | null;
+  /** The share of the last 7 days this machine was reachable (0–1). Absent until a day has been sampled, and on older daemons. */
+  online_ratio_7d?: number | null;
   harnesses?: HarnessSummary[];
   /** Capability name (`delegate`, `files`, ...) to whether the machine this card is served from may use it. */
   allow?: Record<string, boolean>;
@@ -4954,14 +5019,19 @@ export interface Methods {
   "providers.accounts.login.input": [{ id: string; code: string }, AccountLogin];
   "providers.accounts.login.cancel": [{ id: string }, AccountLogin];
   "providers.accounts.login.finish": [{ id: string; name: string; color?: string | null; make_default?: boolean }, ProviderInstance];
+  /** Called on the daemon of the computer with the browser. A failure (port busy, no handoff) falls back to a code. */
+  "providers.accounts.login.handoff": [LoginHandoffParams, LoginHandoffResult];
   "providers.accounts.update": [{ kind: ProviderKind; instance: string; name?: string | null; color?: string | null }, AccountSummary];
-  "providers.accounts.sign_out": [ProviderInstance, AccountSummary];
+  /** `confirm_terminal` signs the terminal login (`default`) out; without it the daemon refuses that instance. */
+  "providers.accounts.sign_out": [ProviderInstance & { confirm_terminal?: boolean }, AccountSummary];
+  "accounts.offers": [Empty, { offers: AccountOffer[] }];
   "providers.accounts.remove": [ProviderInstance, Empty];
   "providers.accounts.catalog": [{ provider: ProviderInstance; project_id?: ProjectId | null; force_refresh?: boolean }, ProviderStatus];
   "threads.target.get": [{ thread_id: ThreadId }, ThreadTargetState];
   "threads.target.set": [{ thread_id: ThreadId; target: SessionTarget; inherit_account?: boolean }, ThreadTargetState];
   "threads.permissions.apply": [{ thread_id: ThreadId }, Thread];
-  "threads.switch_continue": [{ thread_id: ThreadId; provider: ProviderInstance; message_id: MessageId }, ThreadsSendResult];
+  /** Without a `provider` the daemon uses its suggested account (`accounts.shared.v1`). */
+  "threads.switch_continue": [{ thread_id: ThreadId; provider?: ProviderInstance | null; message_id: MessageId }, ThreadsSendResult];
   "providers.list": [ProvidersListParams, ProvidersListResult];
   "harness_updates.list": [Empty, { updates: HarnessUpdate[] }];
   "harness_updates.run": [{ kind: ProviderKind }, HarnessUpdate];
