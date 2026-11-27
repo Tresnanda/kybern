@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.27.2
+
+<!-- kybern-release-title: Your terminal's Claude account is recognised -->
+<!-- kybern-release-summary: On a Mac, Kybern now knows which account your terminal's Claude Code uses, so it stops offering to set up an account the Mac already has. -->
+
+- Kybern now reads which account your terminal's Claude Code is signed in to on a Mac, and when its login is about to renew. Before, it showed "email unavailable", so the Accounts page treated it as a different account and offered to set up an account the Mac already had.
+
 ## 0.27.1
 
 <!-- kybern-release-title: Fix for a crash on start -->

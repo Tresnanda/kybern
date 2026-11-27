@@ -99,14 +99,48 @@ async fn claude_identity(context: &ProbeContext) -> (AccountStatus, Option<Accou
     let Ok(binary) = crate::binary::resolve(ProviderKind::ClaudeCode, context.binary.as_ref()) else {
         return (AccountStatus::Unknown, None);
     };
-    if let Some(oauth) = crate::claude_config::login_due_for_refresh(context).await {
-        return claude_identity_from_login(&oauth);
-    }
-    let Some((_, status)) = run_json(&binary, &["auth", "status", "--json"], context).await else {
-        return (AccountStatus::Unknown, None);
+    let (status, identity) = if let Some(oauth) = crate::claude_config::login_due_for_refresh(context).await {
+        claude_identity_from_login(&oauth)
+    } else {
+        let Some((_, status)) = run_json(&binary, &["auth", "status", "--json"], context).await else {
+            return (AccountStatus::Unknown, None);
+        };
+        let credentials_file = env_value(context, "CLAUDE_CONFIG_DIR").map(|dir| Path::new(&dir).join(".credentials.json").is_file());
+        claude_identity_from_status(&status, credentials_file.unwrap_or(false))
     };
-    let credentials_file = env_value(context, "CLAUDE_CONFIG_DIR").map(|dir| Path::new(&dir).join(".credentials.json").is_file());
-    claude_identity_from_status(&status, credentials_file.unwrap_or(false))
+    (status, identity.map(|identity| with_claude_config_account(identity, claude_config_file(context).as_deref())))
+}
+
+/// Claude Code's own config file: `<CLAUDE_CONFIG_DIR>/.claude.json`, or `~/.claude.json` for the terminal login.
+fn claude_config_file(context: &ProbeContext) -> Option<PathBuf> {
+    match env_value(context, "CLAUDE_CONFIG_DIR") {
+        Some(dir) => Some(Path::new(&dir).join(".claude.json")),
+        None => home_dir(context).map(|home| home.join(".claude.json")),
+    }
+}
+
+/// Fills a missing email and organisation from the `oauthAccount` Claude Code keeps in its config file. A
+/// login read from the Keychain or one due for a refresh carries no email; reading this file never touches
+/// the login (#107). Without the email the same account can't be matched across machines.
+pub fn with_claude_config_account(mut identity: AccountIdentity, config: Option<&Path>) -> AccountIdentity {
+    if identity.email.is_some() && identity.organization.is_some() {
+        return identity;
+    }
+    let Some(account) = config
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|config| config.get("oauthAccount").cloned())
+    else {
+        return identity;
+    };
+    let text = |key: &str| account.get(key).and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty()).map(str::to_string);
+    if identity.email.is_none() {
+        identity.email = text("emailAddress");
+    }
+    if identity.organization.is_none() {
+        identity.organization = text("organizationName");
+    }
+    identity
 }
 
 pub fn claude_identity_from_status(status: &Value, credentials_file: bool) -> (AccountStatus, Option<AccountIdentity>) {
@@ -499,6 +533,28 @@ pub fn redact(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_claude_login_without_an_email_takes_it_from_claude_codes_config() {
+        let dir = std::env::temp_dir().join(format!("kybern-claude-config-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = dir.join(".claude.json");
+        std::fs::write(&config, r#"{"oauthAccount":{"emailAddress":"me@example.com","organizationName":"Me's Organization"}}"#).unwrap();
+        // A Keychain login or one due for a refresh: plan only.
+        let filled = with_claude_config_account(AccountIdentity { plan: Some("Max".into()), ..Default::default() }, Some(&config));
+        assert_eq!(filled.email.as_deref(), Some("me@example.com"));
+        assert_eq!(filled.organization.as_deref(), Some("Me's Organization"));
+        assert_eq!(filled.plan.as_deref(), Some("Max"));
+        // What `claude auth status` said wins over the file.
+        let said = AccountIdentity { email: Some("other@example.com".into()), organization: Some("Other".into()), plan: None };
+        assert_eq!(with_claude_config_account(said.clone(), Some(&config)), said);
+        // No file or no account: unchanged.
+        let bare = AccountIdentity { plan: Some("Pro".into()), ..Default::default() };
+        assert_eq!(with_claude_config_account(bare.clone(), Some(&dir.join("missing.json"))), bare);
+        std::fs::write(&config, "{}").unwrap();
+        assert_eq!(with_claude_config_account(bare.clone(), Some(&config)), bare);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
     use super::*;
     use serde_json::json;
 
