@@ -184,9 +184,15 @@ pub enum BrokerError {
     NotForNew(String),
     /// The lender now lends a different account than the one this account is (another person's, or another
     /// login of the same person): it is never used.
-    WrongAccount { parties: Parties, email: String },
+    WrongAccount {
+        parties: Parties,
+        email: String,
+    },
     /// The lender moved to a machine that has no sign-in for this account's email (or the email is unknown).
-    Unmatched { parties: Parties, email: Option<String> },
+    Unmatched {
+        parties: Parties,
+        email: Option<String>,
+    },
     /// This machine is not in a network now: it was removed, or the network is turned off here.
     Left,
     Failed(String),
@@ -571,7 +577,9 @@ impl LoginBroker {
         let _ = self.settings.update(|current| {
             let provider = current.providers.get(&kind)?;
             let owned = provider.accounts.iter().any(|(id, account)| {
-                id != instance && account.email.as_deref().is_some_and(|other| same_email(other, &email)) && self.binding(kind, id).is_none()
+                id != instance
+                    && account.email.as_deref().is_some_and(|other| same_email(other, &email))
+                    && self.binding(kind, id).is_none()
             }) || crate::accounts_shared::terminal_email(&self.store, kind).is_some_and(|other| same_email(&other, &email));
             if !owned {
                 return None;
@@ -850,11 +858,9 @@ impl LoginBroker {
             loan.loan_id != result.loan_id && loan.provider == lease.kind && loan.local_instance.as_deref() == Some(lease.instance.as_str())
         }) {
             let _ = self.store.loan_release(&stale.loan_id);
-            let _ = tokio::time::timeout(
-                STATUS_WAIT,
-                self.hub.call(&stale.peer, PeerLoginRelease::NAME, json!({ "loan_id": stale.loan_id })),
-            )
-            .await;
+            let _ =
+                tokio::time::timeout(STATUS_WAIT, self.hub.call(&stale.peer, PeerLoginRelease::NAME, json!({ "loan_id": stale.loan_id })))
+                    .await;
         }
         if let Some(email) = &result.email {
             self.remember_email(lease.kind, &lease.instance, email, result.plan.as_deref());
@@ -1080,7 +1086,8 @@ impl LoginBroker {
             }
             ProviderKind::Codex => {
                 let provider = state.settings.get().providers.get(&kind).cloned().unwrap_or_default();
-                let env = crate::provider_accounts::environment(&provider, kind, account).map_err(|error| unavailable(error.to_string()))?;
+                let env =
+                    crate::provider_accounts::environment(&provider, kind, account).map_err(|error| unavailable(error.to_string()))?;
                 let read = || login_lend::read_codex(&env).map_err(|reason| unavailable(format!("{reason} ({name})")));
                 let mut stored = read()?;
                 if codex_expires_within(&stored, HARD_EXPIRY_MS) {
@@ -1088,8 +1095,12 @@ impl LoginBroker {
                     let _gate = self.refresh_gate.lock().await;
                     stored = read()?;
                     if codex_expires_within(&stored, HARD_EXPIRY_MS) {
-                        let _ = kybern_drivers::codex::refresh_account_login(state.settings.dir(), provider.binary.clone().map(std::path::PathBuf::from).as_ref(), &env)
-                            .await;
+                        let _ = kybern_drivers::codex::refresh_account_login(
+                            state.settings.dir(),
+                            provider.binary.clone().map(std::path::PathBuf::from).as_ref(),
+                            &env,
+                        )
+                        .await;
                         stored = read()?;
                     }
                 }
@@ -1225,11 +1236,8 @@ impl LoginBroker {
             .usage()
             .limits(UsageLimitsParams { cached: true, instances: vec![instance.clone()], ..Default::default() })
             .await;
-        let default = crate::provider_accounts::resolve(
-            &state.settings.get().providers.get(&instance.kind).cloned().unwrap_or_default(),
-            None,
-            None,
-        );
+        let default =
+            crate::provider_accounts::resolve(&state.settings.get().providers.get(&instance.kind).cloned().unwrap_or_default(), None, None);
         Ok(lent_usage(limits, &instance, &default))
     }
 
@@ -1301,7 +1309,9 @@ impl LoginBroker {
         let loans = self.store.loans_open(LoanRole::Lender).unwrap_or_default();
         let mut accounts: Vec<(ProviderKind, String)> = Vec::new();
         for loan in &loans {
-            if matches!(loan.provider, ProviderKind::ClaudeCode | ProviderKind::Codex) && !accounts.contains(&(loan.provider, loan.account.clone())) {
+            if matches!(loan.provider, ProviderKind::ClaudeCode | ProviderKind::Codex)
+                && !accounts.contains(&(loan.provider, loan.account.clone()))
+            {
                 accounts.push((loan.provider, loan.account.clone()));
             }
         }
@@ -1315,7 +1325,8 @@ impl LoginBroker {
                     let Some(mut stored) = login_lend::read_claude(&context).await else { continue };
                     let forced = claude_expires_within(&stored, REFRESH_FORCED_MS);
                     if claude_expires_within(&stored, REFRESH_AHEAD_MS) && !backing_off {
-                        let borrowers: Vec<&LoanRow> = loans.iter().filter(|loan| loan.provider == kind && loan.account == account).collect();
+                        let borrowers: Vec<&LoanRow> =
+                            loans.iter().filter(|loan| loan.provider == kind && loan.account == account).collect();
                         if forced || !self.borrowers_busy(&borrowers).await {
                             let _gate = self.refresh_gate.lock().await;
                             if let Some(again) = login_lend::read_claude(&context).await {
@@ -1733,7 +1744,9 @@ impl LoginBroker {
                 });
             }
             let offered: Vec<&LendableAccount> = lendable.iter().flatten().filter(|account| account.provider == loan.provider).collect();
-            let expected = self.account_email(loan.provider, &instance).or_else(|| self.published_email(state, &loan.peer, loan.provider, &loan.account));
+            let expected = self
+                .account_email(loan.provider, &instance)
+                .or_else(|| self.published_email(state, &loan.peer, loan.provider, &loan.account));
             let matched = expected
                 .as_deref()
                 .and_then(|want| offered.iter().find(|account| account.email.as_deref().is_some_and(|email| same_email(email, want))))
@@ -1759,7 +1772,7 @@ impl LoginBroker {
             }
         }
         let tick = self.ticks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if tick % UNMATCHED_EVERY == 0 {
+        if tick.is_multiple_of(UNMATCHED_EVERY) {
             self.recheck_unmatched(state, lendable).await;
         }
     }
@@ -1782,7 +1795,8 @@ impl LoginBroker {
     /// which lender and email it waits for. A turn running on the old token finishes; nothing new starts on it.
     async fn leave_unmatched(&self, state: &AppState, loan: &LoanRow, instance: &str, lender: &str, email: Option<&str>) {
         let _ = self.store.loan_release(&loan.loan_id);
-        let _ = tokio::time::timeout(STATUS_WAIT, self.hub.call(&loan.peer, PeerLoginRelease::NAME, json!({ "loan_id": loan.loan_id }))).await;
+        let _ =
+            tokio::time::timeout(STATUS_WAIT, self.hub.call(&loan.peer, PeerLoginRelease::NAME, json!({ "loan_id": loan.loan_id }))).await;
         lock(&self.leases).remove(&(loan.provider, instance.to_string()));
         let _ = self.set_binding(loan.provider, instance, None);
         self.set_unmatched(loan.provider, instance, Some((lender, email)));
@@ -1855,9 +1869,11 @@ impl LoginBroker {
             for loan in self.store.loans_open(LoanRole::Borrower).unwrap_or_default() {
                 if loan.provider == kind && loan.local_instance.as_deref() == Some(instance.as_str()) {
                     let _ = self.store.loan_release(&loan.loan_id);
-                    let _ =
-                        tokio::time::timeout(STATUS_WAIT, self.hub.call(&loan.peer, PeerLoginRelease::NAME, json!({ "loan_id": loan.loan_id })))
-                            .await;
+                    let _ = tokio::time::timeout(
+                        STATUS_WAIT,
+                        self.hub.call(&loan.peer, PeerLoginRelease::NAME, json!({ "loan_id": loan.loan_id })),
+                    )
+                    .await;
                 }
             }
             self.forget_email_if_owned(kind, &instance);
@@ -1881,7 +1897,9 @@ impl LoginBroker {
                 continue;
             }
             let _ = self.store.loan_release(&loan.loan_id);
-            let _ = tokio::time::timeout(STATUS_WAIT, self.hub.call(&loan.peer, PeerLoginRelease::NAME, json!({ "loan_id": loan.loan_id }))).await;
+            let _ =
+                tokio::time::timeout(STATUS_WAIT, self.hub.call(&loan.peer, PeerLoginRelease::NAME, json!({ "loan_id": loan.loan_id })))
+                    .await;
             lock(&self.leases).remove(&(loan.provider, instance.clone()));
             state.orchestrator.end_login_sessions(loan.provider, &instance, false).await;
         }
@@ -2291,11 +2309,7 @@ pub async fn deliver_secrets_put(state: &AppState, item: &OutboxItem) -> crate::
 #[async_trait]
 impl crate::usage::BoundUsage for LoginBroker {
     /// A bound account has no login of its own to read: the broker reads the plan limits and this asks for them.
-    async fn read(
-        &self,
-        kind: ProviderKind,
-        instance: &str,
-    ) -> Option<Result<ProviderLimits, kybern_drivers::claude::UsageUnread>> {
+    async fn read(&self, kind: ProviderKind, instance: &str) -> Option<Result<ProviderLimits, kybern_drivers::claude::UsageUnread>> {
         let account = self.binding(kind, instance)?;
         let unread = |detail: String| kybern_drivers::claude::UsageUnread { reason: LimitsStale::Unavailable, retry_at: None, detail };
         let Some(broker_id) = self.broker_id().filter(|id| *id != self.self_id()) else {
@@ -2332,7 +2346,7 @@ mod tests {
         let offline = BrokerError::Offline("VPS".into());
         assert_eq!(offline.message(ProviderKind::ClaudeCode), "Claude Code signs in through VPS, which is offline · Sign in here instead");
         assert_eq!(offline.state(), BrokerLoginState::BrokerOffline);
-        assert!(BrokerError::NoBroker.message(ProviderKind::Codex).contains("Choose a machine to share them"));
+        assert!(BrokerError::NoBroker.message(ProviderKind::Codex).contains("Choose one with Share this machine’s sign-ins"));
         assert!(BrokerError::Unsupported("VPS".into()).message(ProviderKind::Codex).contains("Update it"));
         assert_eq!(
             BrokerError::NotSignedIn("Claude is not signed in on VPS. Sign in on VPS first.".into()).state(),
@@ -2450,11 +2464,15 @@ mod tests {
         ] {
             let message = error.message(ProviderKind::ClaudeCode);
             assert!(!message.to_lowercase().contains("broker"), "{message}");
-            // Settings → Machines has no sign-in sharing controls: sharing is chosen on the Accounts page.
-            assert!(!message.contains("Settings → Machines"), "{message}");
+            // No screen has a Logins switch any more.
+            assert!(!message.contains("Turn on Logins"), "{message}");
         }
-        for error in [BrokerError::NoBroker, refused.clone(), BrokerError::NotLender(Parties { lender: "kdi-vps".into(), here: "MacBook".into() })] {
-            assert!(error.message(ProviderKind::ClaudeCode).contains("Settings → Accounts"), "{:?}", error);
+        // Settings → Machines has no sign-in sharing controls: sharing is chosen on the Accounts page.
+        for error in
+            [BrokerError::NoBroker, refused.clone(), BrokerError::NotLender(Parties { lender: "kdi-vps".into(), here: "MacBook".into() })]
+        {
+            let message = error.message(ProviderKind::ClaudeCode);
+            assert!(message.contains("Settings → Accounts") && !message.contains("Settings → Machines"), "{message}");
         }
         assert!(BrokerError::NoBroker.message(ProviderKind::ClaudeCode).contains("Share this machine’s sign-ins"));
     }

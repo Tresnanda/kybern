@@ -323,9 +323,9 @@ pub fn read_codex(env: &BTreeMap<String, String>) -> std::result::Result<CodexSt
 }
 
 pub fn codex_stored_from_json(value: &Value) -> std::result::Result<CodexStored, String> {
-    let tokens = value
-        .get("tokens")
-        .ok_or("Codex is signed in with an API key, which can't be shared. Sign in to Codex with ChatGPT there, or push the key instead.")?;
+    let tokens = value.get("tokens").ok_or(
+        "Codex is signed in with an API key, which can't be shared. Sign in to Codex with ChatGPT there, or push the key instead.",
+    )?;
     let access_token =
         tokens.get("access_token").and_then(Value::as_str).filter(|t| !t.is_empty()).ok_or("Codex is not signed in here.")?.to_string();
     let id_token = tokens.get("id_token").and_then(Value::as_str).map(str::to_string);

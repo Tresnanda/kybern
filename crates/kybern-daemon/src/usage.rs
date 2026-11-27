@@ -634,7 +634,13 @@ impl UsageMonitor {
             return Some(read.map(Got::Proxied));
         }
         let signed_out = instance != "default"
-            && self.inner.store.meta_get(&format!("account_signed_out:{kind}:{instance}")).ok().flatten().is_some_and(|flag| !flag.is_empty());
+            && self
+                .inner
+                .store
+                .meta_get(&format!("account_signed_out:{kind}:{instance}"))
+                .ok()
+                .flatten()
+                .is_some_and(|flag| !flag.is_empty());
         signed_out.then(|| {
             Err(UsageUnread { reason: LimitsStale::SignedOut, retry_at: None, detail: "the account is signed out on this machine".into() })
         })
