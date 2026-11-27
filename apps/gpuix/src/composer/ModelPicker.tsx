@@ -112,6 +112,8 @@ export interface ModelPickerProps {
   onProviderChange: (provider: ProviderInstance, choice?: { model?: string; effort?: string; pinAccount?: boolean }) => Promise<boolean>
   accounts: AccountSummary[]
   accountFollowsDefaults?: boolean
+  /** The thread already ran and keeps its account whatever the defaults become (`keepsAccount`). */
+  accountKept?: boolean
   accountInstance?: string
   onAccountChange?: (instance: string | null) => Promise<boolean>
   onReload: () => void
@@ -220,6 +222,7 @@ function ModelPickerPanel({
   onProviderChange,
   accounts,
   accountFollowsDefaults,
+  accountKept,
   accountInstance,
   onAccountChange,
   onReload,
@@ -438,7 +441,7 @@ function ModelPickerPanel({
       }),
     [accountInstance, accounts, canPickProvider, machineName, provider.kind, provider.instance, providers, showFavorites],
   )
-  const follow = followLine({ accounts, current: { kind: provider.kind, instance: accountInstance ?? provider.instance }, followsDefaults: accountFollowsDefaults })
+  const follow = followLine({ accounts, current: { kind: provider.kind, instance: accountInstance ?? provider.instance }, followsDefaults: accountFollowsDefaults, kept: accountKept })
 
   const focusInput = () => {
     if (inputRef.current) renderer?.focusElement?.(inputRef.current.id)

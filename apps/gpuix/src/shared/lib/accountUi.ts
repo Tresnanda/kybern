@@ -2,8 +2,9 @@
 // strip, its "follow defaults" line and the status glyph. No React and no `@/`
 // imports, so node tests load it directly.
 
-import type { AccountSummary, ProviderKind, ProviderLimits } from "../../../../../packages/kybern-client/src/types.ts"
+import type { AccountSummary, ProviderInstance, ProviderKind, ProviderLimits, Thread } from "../../../../../packages/kybern-client/src/types.ts"
 import { hasSignIn } from "../../../../../packages/kybern-client/src/machineAgents.ts"
+import { versionAtLeast } from "../../../../../packages/kybern-client/src/newChat.ts"
 import { CLI_ACCOUNT_NAME, CLI_INSTANCE, isCliInstance, withoutSignIn } from "./accounts.ts"
 
 /**
@@ -149,22 +150,45 @@ export function nextTabIndex(tabs: readonly { disabled?: boolean | undefined; [k
   return from
 }
 
+/** The first daemon that keeps a thread that already ran on its account when a default changes (#21). */
+const KEEPS_ACCOUNT_VERSION = "0.27.2"
+
+/**
+ * Whether the thread stays on its account whatever the defaults become: it ran with the selected agent, that account is
+ * still on its machine, and the machine's daemon holds it there. `account_override` stays false for such a thread.
+ */
+export function keepsAccount(
+  thread: Pick<Thread, "provider" | "provider_session_id">,
+  selected: ProviderInstance,
+  accounts: readonly AccountSummary[],
+  daemonVersion: string | null | undefined,
+): boolean {
+  const { kind, instance } = thread.provider
+  if (!thread.provider_session_id || selected.kind !== kind || !versionAtLeast(daemonVersion, KEEPS_ACCOUNT_VERSION)) return false
+  // A removed account lets the thread follow the defaults again.
+  return isCliInstance(instance) || accounts.some((a) => a.provider.kind === kind && a.provider.instance === instance)
+}
+
 export type FollowLine =
   | { state: "following"; name: string; color: string | null; text: string }
   | { state: "pinned"; name: string; color: string | null; text: string; action: "Follow defaults" }
+  /** The thread already ran: there are no defaults for it to go back to. */
+  | { state: "kept"; name: string; color: string | null; text: string }
 
 /**
  * The quiet line under the strip: only for an agent with more than one account
- * and only on a thread. `followsDefaults` is undefined for a draft.
+ * and only on a thread. `followsDefaults` is undefined for a draft; `kept` is `keepsAccount`.
  */
 export function followLine({
   accounts,
   current,
   followsDefaults,
+  kept,
 }: {
   accounts: readonly AccountSummary[]
   current: { kind: ProviderKind; instance: string }
   followsDefaults: boolean | undefined
+  kept?: boolean | undefined
 }): FollowLine | null {
   if (followsDefaults === undefined) return null
   const own = accountsOfKind(accounts, current.kind)
@@ -173,6 +197,7 @@ export function followLine({
   const cli = !account || isCliInstance(account.provider.instance)
   const name = cli ? CLI_ACCOUNT_NAME : account.name
   const color = cli ? null : account.color ?? null
+  if (kept) return { state: "kept", name, color, text: `This thread uses ${name}` }
   return followsDefaults
     ? { state: "following", name, color, text: `Following defaults · ${name}` }
     : { state: "pinned", name, color, text: `This thread uses ${name}`, action: "Follow defaults" }

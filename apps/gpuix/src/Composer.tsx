@@ -29,6 +29,7 @@ import { load as loadEnvironmentPreference, save as saveEnvironmentPreference } 
 // `views/Draft.tsx` do; the pickers and data live in `src/composer/`.
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { keepsAccount } from '@/lib/accountUi'
 import { formatEffort, PROVIDER_LABEL } from '@/lib/format'
 import { createComposerMentionReference, nextAttachmentLabel, type AttachmentReference } from '../../../packages/kybern-client/src/composerTokens.ts'
 import { findModel, modelQualifier, selectedVariant, selectorEffort, triggerTraits, variantSelector } from '../../../packages/kybern-client/src/models.ts'
@@ -93,6 +94,7 @@ import { PermissionPicker } from './composer/PermissionPicker.tsx'
 import { onlyFullAccess } from '../../../packages/kybern-client/src/permissionModes.ts'
 import { MachinePicker } from './composer/MachinePicker.tsx'
 import { chooseMachine, useMachineLists, useMachineTarget } from './composer/machineTarget.ts'
+import { infoOf, primaryId } from './accounts/store.ts'
 import { groupPathsKey } from './composer/groupPaths.ts'
 import { Leave, Pop, SwapOnChange, useLeavingList } from './composer/motion.tsx'
 import { Rise } from './motion/kit.tsx'
@@ -245,6 +247,7 @@ function ThreadComposer({ thread, placeholderEnter }: { thread: StateThread; pla
       providers={composerProviders}
       accounts={accounts}
       accountFollowsDefaults={target ? !target.account_override : undefined}
+      accountKept={keepsAccount(thread, provider, accounts, infoOf(thread.machineId ?? primaryId())?.version)}
       onAccountChange={coordinator ? running ? undefined : (instance) => switchHarness({ ...provider, instance: instance ?? 'default' }, thread.model ?? undefined, thread.effort ?? undefined) : (instance) => chooseTarget({ ...provider, instance: instance ?? 'default' }, target?.target.model ?? undefined, target?.target.effort ?? undefined, instance === null)}
       model={target?.target.model ?? thread.model ?? undefined}
       effort={target?.target.effort ?? thread.effort ?? undefined}
@@ -567,6 +570,7 @@ export interface ComposerViewProps {
   providers: ProviderStatus[]
   accounts: import('../../../packages/kybern-client/src/types.ts').AccountSummary[]
   accountFollowsDefaults?: boolean
+  accountKept?: boolean
   onAccountChange?: (instance: string | null) => Promise<void>
   model?: string | null
   effort?: string | null
@@ -1192,6 +1196,7 @@ export function ComposerView(input: ComposerViewProps) {
                 accounts={props.accounts}
                 accountInstance={provider.instance}
                 accountFollowsDefaults={props.accountFollowsDefaults}
+                accountKept={props.accountKept}
                 onAccountChange={props.onAccountChange ? (instance) => busyRun(() => props.onAccountChange!(instance)) : undefined}
                 onRegisterOpen={props.currentThreadId ? registerModelPicker : undefined}
                 onOpenChange={(open) => {
