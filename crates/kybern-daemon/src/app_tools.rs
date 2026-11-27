@@ -423,7 +423,7 @@ fn agent_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinition> {
                 "task": {"type":"string","description":"The complete brief. The agent sees nothing else."},
                 "title": {"type":["string","null"],"description":"Short thread title; defaults to the first line of the task."},
                 "role": {"enum":["implementation","research","review","design","test","general",null]},
-                "provider": {"enum":["claude-code","codex","opencode","pi","omp","cursor",null],"description":"Harness; defaults to yours."},
+                "provider": {"enum": ProviderKind::json_enum_or_null(),"description":"Harness; defaults to yours."},
                 "model": {"type":["string","null"],"description":"Exact model id for that harness (see kybern_agent_capabilities); defaults to yours on the same harness."},
                 "effort": {"type":["string","null"],"description":"Reasoning effort the model supports; defaults to yours on the same harness and model."},
                 "permission_mode": {"enum":["supervised","accept-edits","auto","full-access",null],"description":"Omit to inherit yours (supervised when the harness differs). It can never exceed your own."},
@@ -619,6 +619,16 @@ mod tests {
     use chrono::Utc;
     use kybern_protocol::{Checkpoint, PermissionMode, Project, ProviderInstance, ProviderKind, Thread, ThreadStatus};
     use uuid::Uuid;
+
+    #[test]
+    fn the_delegate_tool_offers_every_harness() {
+        let delegate = native_tool_definitions().into_iter().find(|tool| tool.name == "kybern_agent_delegate").expect("delegate tool");
+        let offered = delegate.input_schema["properties"]["provider"]["enum"].as_array().expect("provider enum").clone();
+        for kind in ProviderKind::ALL {
+            assert!(offered.contains(&kind.as_str().into()), "{} missing from kybern_agent_delegate", kind.as_str());
+        }
+        assert!(offered.contains(&Value::Null));
+    }
 
     #[test]
     fn markdown_links_escape_titles_that_would_end_the_link_early() {

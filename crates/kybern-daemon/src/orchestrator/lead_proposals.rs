@@ -45,7 +45,7 @@ pub(crate) fn tool_definitions() -> Vec<kybern_drivers::NativeToolDefinition> {
             "type": ["object", "null"], "additionalProperties": false,
             "description": format!("Default harness, model and effort for {label} children."),
             "properties": {
-                "provider": {"enum": ["claude-code", "codex", "opencode", "pi", "omp", "cursor", null]},
+                "provider": {"enum": kybern_protocol::ProviderKind::json_enum_or_null()},
                 "model": {"type": ["string", "null"], "description": "Exact model id of that harness (see kybern_agent_capabilities)."},
                 "effort": {"type": ["string", "null"]}
             }
