@@ -119,15 +119,38 @@ impl DaemonUpdates {
     }
 }
 
-/// Only the intended binary may complete a persisted attempt. A rollback keeps its identity and fails.
+/// Whether `version` is at least `target` (same version or newer in semver precedence).
+fn reached(version: &str, target: &str) -> bool {
+    version == target || newer(version, target)
+}
+
+/// Reconcile a persisted update attempt on startup. Running the target (or a newer) version
+/// completes the attempt, including upgrades from older daemons that did not record `update_id`
+/// or `target_version`; rolling back to an older version fails.
 fn reconcile_restart(record: &mut DaemonUpdate, version: &str) {
     let pending = matches!(record.status, Status::Checking | Status::Waiting | Status::Updating | Status::Restarting);
+    let wanted = record.target_version.as_deref().or(record.latest_version.as_deref()).map(str::to_string);
     if pending {
-        let completed =
-            record.status == Status::Restarting && record.update_id.is_some() && record.target_version.as_deref() == Some(version);
+        let completed = match wanted.as_deref() {
+            Some(target) => reached(version, target),
+            None => newer(version, &record.current_version),
+        };
         record.status = if completed { Status::Current } else { Status::Failed };
         record.message =
             if completed { format!("Updated to {version}") } else { "The requested version did not start. Retry the update.".into() };
+        if completed && record.target_version.is_none() {
+            record.target_version = wanted.or_else(|| Some(version.into()));
+        }
+        record.checked_at = Some(Utc::now());
+    } else if record.status == Status::Failed
+        && wanted.as_deref().is_some_and(|target| reached(version, target))
+        && (newer(version, &record.current_version) || record.message.starts_with("The requested version did not start"))
+    {
+        record.status = Status::Current;
+        record.message = format!("Updated to {version}");
+        if record.target_version.is_none() {
+            record.target_version = wanted;
+        }
         record.checked_at = Some(Utc::now());
     }
     record.current_version = version.into();
@@ -443,7 +466,15 @@ pub async fn tick(state: AppState) {
     let manual = state.daemon_updates.requested.load(Ordering::SeqCst);
     let settings = state.settings.get();
     let record = state.daemon_updates.get();
-    if !manual && (!settings.auto_update_daemon || !due(&record) || state.saving_power() || unsupported(&state).is_some()) {
+    // "Keep all machines on the same version" (`follow_updates`) implies automatic updates whenever
+    // another online member runs a newer version on this machine's track, regardless of local `auto_update_daemon`.
+    let follow = crate::network::updates::follow_version(&state);
+    let auto = settings.auto_update_daemon || follow.is_some();
+    let due_now = due(&record) || follow.as_deref().is_some_and(|version| !crate::network::updates::follow_attempted(&state, version));
+    if !manual && (!auto || !due_now || state.saving_power() || unsupported(&state).is_some()) {
+        return;
+    }
+    if !manual && !settings.auto_update_daemon && follow.is_some() && busy(&state, true).await.unwrap_or(true) {
         return;
     }
     let finish = |record: DaemonUpdate| {
@@ -452,10 +483,14 @@ pub async fn tick(state: AppState) {
     };
     let mut record = check(&state).await;
     let Some(latest) = record.latest_version.clone().filter(|_| record.status == Status::Available) else {
+        if !manual && let Some(version) = &follow {
+            let _ = crate::network::updates::mark_follow_attempted(&state, version);
+        }
         finish(record);
         return;
     };
-    if !manual && !state.settings.get().auto_update_daemon {
+    let still_auto = state.settings.get().auto_update_daemon || crate::network::updates::follow_version(&state).is_some();
+    if !manual && !still_auto {
         finish(record);
         return;
     }
@@ -482,6 +517,9 @@ pub async fn tick(state: AppState) {
             finish(record);
             return;
         }
+    }
+    if !manual && let Some(version) = &follow {
+        let _ = crate::network::updates::mark_follow_attempted(&state, version);
     }
     record.status = Status::Updating;
     record.busy_thread = None;
@@ -562,7 +600,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn restart_requires_an_attempt_and_exact_target() {
+    fn restart_succeeds_on_target_or_newer_and_fails_on_rollback() {
         let record = || DaemonUpdate {
             update_id: Some("attempt".into()),
             target_version: Some("0.23.0".into()),
@@ -574,19 +612,65 @@ mod tests {
             latest_version: Some("0.23.0".into()),
             checked_at: None,
         };
-        let mut success = record();
-        reconcile_restart(&mut success, "0.23.0");
-        assert_eq!(success.status, Status::Current);
-        assert_eq!(success.update_id.as_deref(), Some("attempt"));
-        for actual in ["0.22.1", "0.22.0", "0.24.0"] {
+        for actual in ["0.23.0", "0.24.0"] {
+            let mut success = record();
+            reconcile_restart(&mut success, actual);
+            assert_eq!(success.status, Status::Current, "actual {actual} reached target");
+            assert_eq!(success.update_id.as_deref(), Some("attempt"));
+            assert_eq!(success.current_version, actual);
+        }
+        for actual in ["0.22.1", "0.22.0"] {
             let mut wrong = record();
             reconcile_restart(&mut wrong, actual);
-            assert_eq!(wrong.status, Status::Failed);
+            assert_eq!(wrong.status, Status::Failed, "actual {actual} rolled back");
         }
-        let mut anonymous = record();
-        anonymous.update_id = None;
-        reconcile_restart(&mut anonymous, "0.23.0");
-        assert_eq!(anonymous.status, Status::Failed);
+        // Upgrading from a pre-0.23 daemon (e.g. 0.21.6 → 0.27.1) leaves update_id and target_version unset.
+        let mut legacy = DaemonUpdate {
+            update_id: None,
+            target_version: None,
+            download_percent: None,
+            busy_thread: None,
+            status: Status::Restarting,
+            message: "Restarting on 0.27.1".into(),
+            current_version: "0.21.6".into(),
+            latest_version: Some("0.27.1".into()),
+            checked_at: None,
+        };
+        reconcile_restart(&mut legacy, "0.27.1");
+        assert_eq!(legacy.status, Status::Current);
+        assert_eq!(legacy.target_version.as_deref(), Some("0.27.1"));
+        assert_eq!(legacy.message, "Updated to 0.27.1");
+
+        // An already-stuck false failure heals once the daemon runs the target (or newer).
+        let mut stuck = DaemonUpdate {
+            update_id: None,
+            target_version: None,
+            download_percent: None,
+            busy_thread: None,
+            status: Status::Failed,
+            message: "The requested version did not start. Retry the update.".into(),
+            current_version: "0.27.1".into(),
+            latest_version: Some("0.27.1".into()),
+            checked_at: None,
+        };
+        reconcile_restart(&mut stuck, "0.27.1");
+        assert_eq!(stuck.status, Status::Current);
+        assert_eq!(stuck.message, "Updated to 0.27.1");
+
+        // A feed-check failure on the same version stays Failed.
+        let mut check_failed = DaemonUpdate {
+            update_id: None,
+            target_version: None,
+            download_percent: None,
+            busy_thread: None,
+            status: Status::Failed,
+            message: "Unable to check the release feed: network error".into(),
+            current_version: "0.27.1".into(),
+            latest_version: Some("0.27.1".into()),
+            checked_at: None,
+        };
+        reconcile_restart(&mut check_failed, "0.27.1");
+        assert_eq!(check_failed.status, Status::Failed);
     }
 
     #[test]

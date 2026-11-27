@@ -780,9 +780,23 @@ impl Orchestrator {
         }
     }
 
+    /// Whether `thread_id` holds an inert inbound session (no child process), and whether a forwarded
+    /// tool call or unanswered approval is currently active on it.
+    pub(super) async fn inbound_session_active(&self, thread_id: ThreadId, live: &LiveSession) -> Option<bool> {
+        let in_flight = {
+            let sessions = self.inner.inbound.sessions.lock().unwrap_or_else(|error| error.into_inner());
+            sessions.get(&thread_id)?.in_flight
+        };
+        if in_flight > 0 {
+            return Some(true);
+        }
+        let pending_approval = live.daemon_approvals.lock().await.values().any(|entry| entry.decision.borrow().is_none());
+        Some(pending_approval)
+    }
+
     /// Retire the inbound sessions nobody has called for a while. A session with a call in flight, or an
     /// approval nobody answered yet, stays.
-    async fn inbound_sweep(&self) {
+    pub(super) async fn inbound_sweep(&self) {
         let stale: Vec<(ThreadId, TurnId, Instant)> = {
             let sessions = self.inner.inbound.sessions.lock().unwrap_or_else(|error| error.into_inner());
             sessions

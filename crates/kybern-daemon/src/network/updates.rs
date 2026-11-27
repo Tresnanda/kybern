@@ -242,6 +242,25 @@ pub async fn set_follow(state: &AppState, enabled: bool) -> Result<NetworkStatus
         .ok_or_else(|| JoinError::Unavailable("The machine network is unavailable on this machine.".into()))
 }
 
+/// The newest version an online member runs that this machine should follow under "Keep all machines on
+/// the same version" (`follow_updates`), or `None` when following is off or nothing is newer on our track.
+pub(crate) fn follow_version(state: &AppState) -> Option<String> {
+    let network = &state.network;
+    let membership = network.membership()?;
+    if !network.is_enabled() || !membership.self_is_member() || !membership.projection().follow_updates() {
+        return None;
+    }
+    newest_peer_version(state)
+}
+
+pub(crate) fn follow_attempted(state: &AppState, version: &str) -> bool {
+    state.store.meta_get(ATTEMPT_KEY).ok().flatten().as_deref() == Some(version)
+}
+
+pub(crate) fn mark_follow_attempted(state: &AppState, version: &str) -> Result<(), anyhow::Error> {
+    state.store.meta_set(ATTEMPT_KEY, version)
+}
+
 /// The newest version an online member runs that is newer than this machine's own and on its track.
 fn newest_peer_version(state: &AppState) -> Option<String> {
     let versions = state.network.peers.links().into_iter().filter_map(|link| state.network.peers.status(&link.machine_id).presence);

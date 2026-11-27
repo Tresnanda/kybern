@@ -559,6 +559,20 @@ impl Orchestrator {
         }
     }
 
+    /// A queued follow-up could never be delivered (for example, its target thread has no agent).
+    /// Marks any backing thread message failed and tells the sender. Returns whether one existed.
+    pub(super) fn messaging_queue_failed(&self, thread_id: ThreadId, message_id: MessageId) -> bool {
+        if let Ok(Some(record)) = self.inner.store.thread_message_get(message_id)
+            && record.to_thread_id == thread_id
+        {
+            if record.state == ThreadMessageState::Queued {
+                self.message_failed(record.id);
+            }
+            return true;
+        }
+        false
+    }
+
     /// A turn of `thread_id` ended. Every question it consumed that nobody answered
     /// explicitly gets the turn's final assistant text as its reply.
     pub(super) async fn messaging_turn_finished(&self, thread_id: ThreadId, turn_id: TurnId, outcome: &TurnOutcome) {

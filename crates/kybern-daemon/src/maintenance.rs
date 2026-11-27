@@ -27,13 +27,23 @@ pub async fn activity(state: &AppState) -> Result<DaemonActivity> {
     let idle_since = *state.idle_since.read().unwrap_or_else(|poisoned| poisoned.into_inner());
     let on_battery = *state.on_battery.read().unwrap_or_else(|poisoned| poisoned.into_inner());
     let idle_exit = state.settings.get().background.daemon_idle_exit();
+    let queued_messages = state
+        .store
+        .queue_list(None)?
+        .into_iter()
+        .filter(|queued| {
+            state.store.thread_get(queued.thread_id).ok().flatten().is_some_and(|thread| {
+                thread.status != kybern_protocol::ThreadStatus::Archived && crate::orchestrator::undeliverable_reason(&thread).is_none()
+            })
+        })
+        .count();
     Ok(DaemonActivity {
         connections: count(state.connections.load(Ordering::SeqCst)),
         live_sessions: count(sessions.live),
         idle_sessions: count(sessions.idle),
         running_threads: count(state.store.threads_running()?.len()),
         terminals: count(state.terminals.alive()),
-        queued_messages: count(state.store.queue_list(None)?.len()),
+        queued_messages: count(queued_messages),
         idle_since,
         idle_exit_at: idle_since
             .zip(idle_exit)

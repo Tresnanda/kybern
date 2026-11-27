@@ -241,6 +241,46 @@ async fn following_updates_is_a_network_setting_and_a_member_updates_itself_once
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn self_update_tick_runs_when_keep_in_step_is_on_even_with_auto_update_daemon_off() {
+    use axum::{Json, Router, routing::get};
+
+    let Some(cluster) = cluster(&[NodeSpec::owner("a"), NodeSpec::owner("b")]) else { return };
+    let a = cluster.start("a", true).await;
+    let b = cluster.start("b", true).await;
+    eventually("one network", WAIT, || converged(&[&a, &b], 2)).await;
+    all_linked(&[&a, &b]).await;
+    b.state.daemon_updates.allow_development.store(true, Ordering::SeqCst);
+
+    // Explicitly keep local auto_update_daemon OFF on `b`.
+    let mut settings = b.state.settings.get();
+    settings.auto_update_daemon = false;
+    b.state.settings.set(settings).unwrap();
+
+    // Serve a loopback release feed offering the current version (so check completes cleanly without downloading).
+    let body = serde_json::json!({ "announcement_tag": format!("v{}", crate::self_update::CURRENT_VERSION) });
+    let app = Router::new().route("/dist-manifest.json", get(move || async move { Json(body) }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    *b.state.daemon_updates.test_feeds.lock().unwrap() =
+        Some(crate::self_update::Feeds { stable: format!("{base}/dist-manifest.json"), dev: format!("{base}/missing.json") });
+
+    // Peer `a` advertises a newer version, while `follow_updates` is still off: tick does nothing.
+    heard_from(&b, &a).await;
+    b.state.network.peers.set_presence(&a.id(), presence("99.0.0", &[features::UPDATE_V1]));
+    crate::self_update::tick(b.state.clone()).await;
+    assert_eq!(b.state.daemon_updates.get().status, DaemonUpdateStatus::NotChecked, "tick stays idle while follow_updates is off");
+
+    // Turn "Keep all machines on the same version" on: tick checks despite auto_update_daemon = false.
+    admin(&a).await.call::<NetworkFollowUpdatesSet>(NetworkFollowUpdatesParams { enabled: true }).await.unwrap();
+    eventually("b sees follow_updates", WAIT, || b.membership().projection().follow_updates()).await;
+    crate::self_update::tick(b.state.clone()).await;
+    let after = b.state.daemon_updates.get();
+    assert_eq!(after.status, DaemonUpdateStatus::Current, "tick ran when keep-in-step is on: {after:?}");
+    assert!(after.checked_at.is_some());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_member_off_the_tailnet_dials_out_to_a_member_that_publishes_a_url() {
     let Some(mut cluster) = cluster(&[NodeSpec::owner("a"), NodeSpec::owner("b")]) else { return };
     // `b` is not on the tailnet at all: it has no Tailscale and no tailnet address.

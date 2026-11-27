@@ -566,3 +566,113 @@ async fn messaging_a_finished_remote_child_reopens_both_copies_and_notifies_agai
     eventually(|| async { (p.row(task).state == RemoteChildState::Completed && p.row(task).info.parent_notified).then_some(()) }).await;
     assert_eq!(p.row(task).info.result.as_deref(), Some("second remote result"));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn idle_inbound_session_is_not_counted_as_busy_and_undeliverable_queued_messages_resolve() {
+    use crate::computer::fake::{Fake, everything};
+    let Some(p) = Pair::new().await else { return };
+    p.set_mode(PermissionMode::FullAccess);
+
+    // Run a forwarded tool call on b so b creates an inbound thread and inert session.
+    let _ = p.on_b("kybern_list_terminals", json!({})).await.unwrap();
+    let inbound = p.inbound_on_b().into_iter().next().expect("inbound thread created on b");
+
+    // Even before SESSION_IDLE expires, the idle inert session must not keep the daemon busy.
+    let sessions = p.b.state.orchestrator.session_activity().await.unwrap();
+    assert_eq!((sessions.live, sessions.idle), (0, 0), "idle inbound session has no child process");
+    assert!(!crate::self_update::busy(&p.b.state, true).await.unwrap(), "idle inbound session must not block updates");
+
+    // Enqueueing a new message to the inbound thread is rejected immediately.
+    let new_msg = kybern_protocol::methods::QueuedMessage {
+        id: Uuid::now_v7(),
+        thread_id: inbound.id,
+        message: UserMessage::text("should be rejected"),
+    };
+    let err = p.b.state.orchestrator.enqueue(new_msg).unwrap_err().to_string();
+    assert!(err.contains("only records tool calls"), "{err}");
+
+    // Simulate a legacy pending queued_messages row (and backing thread_message) addressed to the inbound thread.
+    let sender = p
+        .b
+        .state
+        .orchestrator
+        .create_thread(methods::ThreadsCreateParams {
+            pin_account: false,
+            project_id: Some(inbound.project_id),
+            provider: ProviderInstance::default_for(ProviderKind::ClaudeCode),
+            model: None,
+            effort: None,
+            permission_mode: Some(PermissionMode::Auto),
+            use_worktree: Some(false),
+            base_branch: None,
+            title: Some("Sender".into()),
+            message: None,
+            thread_id: None,
+            message_id: None,
+            members: None,
+            base_branches: None,
+        })
+        .await
+        .unwrap();
+    let stuck_id = Uuid::now_v7();
+    let now = chrono::Utc::now();
+    let record = ThreadMessageRecord {
+        id: stuck_id,
+        operation_id: Uuid::now_v7(),
+        from_thread_id: Some(sender.id),
+        to_thread_id: inbound.id,
+        purpose: ThreadMessagePurpose::Message,
+        reply_to: None,
+        body: "stuck since Nov 10".into(),
+        delivery: ThreadMessageDelivery::Queue,
+        state: ThreadMessageState::Queued,
+        held_reason: None,
+        created_at: now,
+        updated_at: now,
+    };
+    p.b.state.store.thread_message_insert(&record).unwrap();
+    let stuck_queued = kybern_protocol::methods::QueuedMessage {
+        id: stuck_id,
+        thread_id: inbound.id,
+        message: UserMessage::text("stuck since Nov 10"),
+    };
+    p.b.state.orchestrator.emit(inbound.id, None, EventPayload::MessageQueued { message: stuck_queued }).unwrap();
+    assert_eq!(p.b.state.store.queue_list(Some(inbound.id)).unwrap().len(), 1);
+
+    // Even before drain_queues runs, activity and self_update::busy ignore the undeliverable row.
+    let activity = crate::maintenance::activity(&p.b.state).await.unwrap();
+    assert_eq!(activity.queued_messages, 0, "undeliverable queued message must not count in activity");
+    assert!(!crate::self_update::busy(&p.b.state, true).await.unwrap(), "undeliverable queued message must not block updates");
+
+    // drain_queues drops it definitively, marks the thread message failed, and notifies the sender.
+    assert!(!p.b.state.orchestrator.drain_queues().await.unwrap());
+    assert!(p.b.state.store.queue_list(Some(inbound.id)).unwrap().is_empty(), "undeliverable message was dropped");
+    assert_eq!(
+        p.b.state.store.thread_message_get(stuck_id).unwrap().unwrap().state,
+        ThreadMessageState::Failed,
+        "backing thread message failed definitively"
+    );
+    let sender_events = p.b.state.store.events_for_thread(sender.id).unwrap();
+    assert!(
+        sender_events.iter().any(|ev| matches!(&ev.payload, EventPayload::ThreadMessageUpdated { message } if message.id == stuck_id && message.state == ThreadMessageState::Failed)),
+        "sender thread was told the message failed"
+    );
+
+    // While a forwarded call IS waiting on an approval, session_activity counts it as busy (live=1, idle=0).
+    let computer = p.b.state.orchestrator.computer();
+    computer.use_backend(Fake::new(everything()));
+    let mut settings = p.b.state.settings.get();
+    settings.computer_use.enabled = true;
+    p.b.state.settings.set(settings).unwrap();
+    let call = p.on_b("kybern_computer_apps", json!({"launch": "Notes"}));
+    let check_busy = async {
+        let card = eventually(|| async { p.pending_on_b().into_iter().next() }).await;
+        let active = p.b.state.orchestrator.session_activity().await.unwrap();
+        assert_eq!((active.live, active.idle), (1, 0), "in-flight approval keeps inbound session busy");
+        assert!(crate::self_update::busy(&p.b.state, true).await.unwrap());
+        p.b.state.orchestrator.respond_approval(card.id, ApprovalDecision::Deny { reason: None }).await.unwrap();
+    };
+    let (_, ()) = tokio::join!(call, check_busy);
+    let after = p.b.state.orchestrator.session_activity().await.unwrap();
+    assert_eq!((after.live, after.idle), (0, 0), "once the call finishes, inbound session is idle again");
+}
