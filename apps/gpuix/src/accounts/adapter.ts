@@ -78,7 +78,7 @@ export async function setSharing(client: KybernClient, machineId: MachineId | nu
   if (!provider || machineId) return set(machineId, provider)
   // One agent to "each machine signs in": the daemon reads a cleared agent as "follow the network-wide lender", so while
   // one exists, pin every other agent to its current lender, clear that default, then clear this agent's own.
-  const status = await client.call('login.broker.status', {}) as { broker?: { machine_id?: string } | null; lenders_by_kind?: Partial<Record<ProviderKind, { machine_id?: string } | null>> }
+  const status = (await client.call('login.broker.status', {}) ?? {}) as { broker?: { machine_id?: string } | null; lenders_by_kind?: Partial<Record<ProviderKind, { machine_id?: string } | null>> }
   if (status.broker?.machine_id) {
     for (const kind of SHAREABLE_KINDS) {
       const lender = status.lenders_by_kind?.[kind]?.machine_id
