@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.27.3
+
+<!-- kybern-release-title: No false sign-in warnings on other machines' threads -->
+<!-- kybern-release-summary: A thread running on another machine no longer says its account isn't signed in on this computer, and the kybern command line keeps finding the daemon after the app updates. -->
+
+- A thread running on another machine no longer shows "This thread's account isn't signed in on <this computer>" when its account works fine where the thread runs.
+- On the Accounts page, a machine without a login for the shared default says **Not signed in** instead of "Uses Terminal login".
+- After the desktop app restarts its daemon (an update, for example), the old daemon no longer deletes the new one's `daemon.port`, so the `kybern` command line and other tools keep finding it.
+
 ## 0.27.2
 
 <!-- kybern-release-title: Accounts across machines you can rely on -->
