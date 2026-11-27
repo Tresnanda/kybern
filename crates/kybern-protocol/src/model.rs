@@ -56,6 +56,14 @@ impl ProviderKind {
         ProviderKind::GrokBuild,
     ];
 
+    /// Every harness name and `null`: the `enum` of an agent tool's optional `provider` parameter.
+    /// Strict clients (Claude Code) reject any harness missing here, so it is never written by hand.
+    pub fn json_enum_or_null() -> serde_json::Value {
+        let mut names: Vec<serde_json::Value> = Self::ALL.iter().map(|kind| kind.as_str().into()).collect();
+        names.push(serde_json::Value::Null);
+        names.into()
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             ProviderKind::ClaudeCode => "claude-code",
