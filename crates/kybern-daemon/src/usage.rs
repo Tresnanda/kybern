@@ -50,6 +50,8 @@ const INTEREST: Duration = Duration::from_secs(10 * 60);
 const WAIT: Duration = Duration::from_secs(16);
 /// Changes within this window share one write of the cache file.
 const PERSIST_DELAY: Duration = Duration::from_secs(2);
+/// The longest a failing account waits between background reads (each failure doubles the wait up to this).
+const MAX_BACKOFF: Duration = Duration::from_secs(30 * 60);
 
 /// How long a live read stays fresh. Claude and Cursor are HTTPS requests
 /// (Claude falls back to starting Claude Code for `/usage`); Codex starts its
@@ -107,8 +109,15 @@ type AccountKey = (ProviderKind, String);
 /// machine to read, so the broker that holds the real one reads them.
 #[async_trait::async_trait]
 pub trait BoundUsage: Send + Sync {
-    /// `None` when the account is not bound to the broker (read it locally).
-    async fn read(&self, kind: ProviderKind, instance: &str) -> Option<Result<(Vec<UsageLimit>, Option<String>), UsageUnread>>;
+    /// `None` when the account is not bound to the broker (read it locally). The entry is the lender's own, for the
+    /// lent account only, with its time, source and staleness: a proxied value is never stamped as read just now.
+    async fn read(&self, kind: ProviderKind, instance: &str) -> Option<Result<ProviderLimits, UsageUnread>>;
+}
+
+/// What one read gave: values read here, or the lender's entry for a borrowed account.
+enum Got {
+    Here(Vec<UsageLimit>, Option<String>),
+    Proxied(ProviderLimits),
 }
 
 #[derive(Default)]
@@ -141,6 +150,26 @@ struct Entry {
     /// The failure last written to the log, so a read failing the same way
     /// every minute is logged once.
     logged: Option<String>,
+    /// Reads that failed in a row: background reads back off (signed out, unreachable), a forced one still runs.
+    failures: u32,
+}
+
+impl Entry {
+    /// How long after the last attempt a background read is due: `base`, doubled for each failure in a row up to
+    /// [`MAX_BACKOFF`]; a signed-out account waits the longest.
+    fn due_after(&self, base: Duration) -> Duration {
+        if matches!(self.stale, Some((LimitsStale::SignedOut, _))) {
+            return MAX_BACKOFF.max(base);
+        }
+        if self.failures == 0 {
+            return base;
+        }
+        base.saturating_mul(1u32 << self.failures.min(8)).min(MAX_BACKOFF).max(base)
+    }
+
+    fn due(&self, base: Duration) -> bool {
+        self.attempted.is_none_or(|at| at.elapsed() >= self.due_after(base))
+    }
 }
 
 fn window_key(limit: &UsageLimit) -> String {
@@ -169,23 +198,42 @@ fn entry_limits(kind: ProviderKind, instance: Option<String>, entry: &Entry, now
 
 /// Record the outcome of a live read. A failed read keeps the last values and
 /// says why they are old; a successful one makes them current.
+#[cfg(test)]
 fn apply_read(entry: &mut Entry, kind: ProviderKind, read: Result<(Vec<UsageLimit>, Option<String>), UsageUnread>) {
+    apply_got(entry, kind, read.map(|(limits, plan)| Got::Here(limits, plan)));
+}
+
+fn apply_got(entry: &mut Entry, kind: ProviderKind, read: Result<Got, UsageUnread>) {
     entry.attempted = Some(Instant::now());
     match read {
-        Ok((limits, plan)) => {
+        Ok(Got::Here(limits, plan)) => {
             entry.limits = limits;
             entry.plan = plan.or(entry.plan.take());
             entry.updated_at = Some(Utc::now());
             entry.source = Some(LimitsSource::Live);
             entry.stale = None;
+            entry.failures = 0;
             if entry.logged.take().is_some() {
                 tracing::info!(provider = %kind, "account limits read again");
             }
+        }
+        // The lender's values, as old as they are there, with the lender's reason when they are stale.
+        Ok(Got::Proxied(lent)) => {
+            entry.limits = lent.limits;
+            entry.plan = lent.plan.or(entry.plan.take());
+            entry.updated_at = lent.updated_at;
+            entry.source = lent.source;
+            entry.stale = lent.stale.map(|reason| (reason, lent.retry_at));
+            entry.failures = 0;
+            entry.logged = None;
         }
         Err(unread) => {
             if entry.logged.as_deref() != Some(unread.detail.as_str()) {
                 tracing::info!(provider = %kind, reason = ?unread.reason, detail = %unread.detail, "could not read account limits; keeping the last values");
                 entry.logged = Some(unread.detail);
+            }
+            if unread.reason != LimitsStale::Throttled {
+                entry.failures = entry.failures.saturating_add(1);
             }
             entry.stale = Some((unread.reason, unread.retry_at));
         }
@@ -391,10 +439,11 @@ impl UsageMonitor {
             state.last_interest = Some(Instant::now());
             let due = LIVE
                 .into_iter()
-                .filter(|kind| {
-                    let attempted = state.providers.get(kind).and_then(|entry| entry.attempted);
-                    let spacing = if params.refresh { MIN_SPACING } else { fresh_for(*kind) };
-                    attempted.is_none_or(|at| at.elapsed() >= spacing)
+                .filter(|kind| match state.providers.get(kind) {
+                    // A forced read runs unless one just did; a background one backs off while reads fail.
+                    Some(entry) if params.refresh => entry.attempted.is_none_or(|at| at.elapsed() >= MIN_SPACING),
+                    Some(entry) => entry.due(fresh_for(*kind)),
+                    None => true,
                 })
                 // A background read already in flight answers a cached call.
                 .filter(|kind| !(params.cached && state.refreshing.contains(kind)))
@@ -457,9 +506,12 @@ impl UsageMonitor {
             if !LIVE.contains(&key.0) || !known || key.1 == crate::provider_accounts::resolve(&raw, None, None) || due.contains(&key) {
                 continue;
             }
-            let attempted = state.accounts.get(&key).and_then(|entry| entry.attempted);
-            let spacing = if params.refresh { MIN_SPACING } else { fresh_for(key.0) };
-            if attempted.is_some_and(|at| at.elapsed() < spacing) || (params.cached && state.accounts_refreshing.contains(&key)) {
+            let ready = match state.accounts.get(&key) {
+                Some(entry) if params.refresh => entry.attempted.is_none_or(|at| at.elapsed() >= MIN_SPACING),
+                Some(entry) => entry.due(fresh_for(key.0)),
+                None => true,
+            };
+            if !ready || (params.cached && state.accounts_refreshing.contains(&key)) {
                 continue;
             }
             if params.cached {
@@ -490,7 +542,7 @@ impl UsageMonitor {
         };
         let (global_due, accounts_due) = {
             let state = self.lock();
-            let stale = |entry: Option<&Entry>| entry.and_then(|entry| entry.attempted).is_none_or(|at| at.elapsed() >= fresh_for(kind));
+            let stale = |entry: Option<&Entry>| entry.is_none_or(|entry| entry.due(fresh_for(kind)));
             let global_due = instances.contains(&default) && stale(state.providers.get(&kind));
             let accounts_due = instances
                 .iter()
@@ -547,32 +599,21 @@ impl UsageMonitor {
         if !recent {
             self.lock().accounts_refreshing.insert(key.clone());
             let read = self.read_account(&key.0, &key.1).await;
+            if let Err(unread) = &read {
+                tracing::debug!(provider = %key.0, reason = ?unread.reason, "could not read a named account's limits");
+            }
             let mut state = self.lock();
             let entry = state.accounts.entry(key.clone()).or_default();
-            entry.attempted = Some(Instant::now());
-            match read {
-                Ok((limits, plan)) => {
-                    entry.limits = limits;
-                    entry.plan = plan.or(entry.plan.take());
-                    entry.updated_at = Some(Utc::now());
-                    entry.source = Some(LimitsSource::Live);
-                    entry.stale = None;
-                }
-                Err(unread) => {
-                    tracing::debug!(provider = %key.0, reason = ?unread.reason, "could not read a named account's limits");
-                    entry.stale = Some((unread.reason, unread.retry_at));
-                }
-            }
+            // A named account's failures are logged at debug level only.
+            entry.logged = read.as_ref().err().map(|unread| unread.detail.clone());
+            apply_got(entry, key.0, read);
         }
         self.lock().accounts_refreshing.remove(&key);
         self.publish();
     }
 
-    async fn read_account(&self, kind: &ProviderKind, instance: &str) -> Result<(Vec<UsageLimit>, Option<String>), UsageUnread> {
-        let bound = self.inner.bound.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
-        if let Some(bound) = bound
-            && let Some(read) = bound.read(*kind, instance).await
-        {
+    async fn read_account(&self, kind: &ProviderKind, instance: &str) -> Result<Got, UsageUnread> {
+        if let Some(read) = self.read_elsewhere(*kind, instance).await {
             return read;
         }
         let unavailable = |detail: &str| UsageUnread { reason: LimitsStale::Unavailable, retry_at: None, detail: detail.into() };
@@ -580,7 +621,29 @@ impl UsageMonitor {
         let provider = settings.providers.get(kind).cloned().unwrap_or_default();
         let env = crate::provider_accounts::environment(&provider, *kind, instance).map_err(|error| unavailable(&error.to_string()))?;
         let cwd = self.inner.settings.dir().to_path_buf();
-        self.read_with(*kind, provider.binary.map(Into::into), &cwd, &env).await
+        self.read_with(*kind, provider.binary.map(Into::into), &cwd, &env).await.map(|(limits, plan)| Got::Here(limits, plan))
+    }
+
+    /// An account that isn't read on this machine: a borrowed one is read from its lender, and one the user signed
+    /// out never starts its harness (no `claude -p` against a signed-out login). `None`: read it here.
+    async fn read_elsewhere(&self, kind: ProviderKind, instance: &str) -> Option<Result<Got, UsageUnread>> {
+        let bound = self.inner.bound.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+        if let Some(bound) = bound
+            && let Some(read) = bound.read(kind, instance).await
+        {
+            return Some(read.map(Got::Proxied));
+        }
+        let signed_out = instance != "default"
+            && self
+                .inner
+                .store
+                .meta_get(&format!("account_signed_out:{kind}:{instance}"))
+                .ok()
+                .flatten()
+                .is_some_and(|flag| !flag.is_empty());
+        signed_out.then(|| {
+            Err(UsageUnread { reason: LimitsStale::SignedOut, retry_at: None, detail: "the account is signed out on this machine".into() })
+        })
     }
 
     /// Fold limits a running turn reported. Values from a live read and from
@@ -711,7 +774,7 @@ impl UsageMonitor {
         let recent = self.lock().providers.get(&kind).and_then(|entry| entry.attempted).is_some_and(|at| at.elapsed() < spacing);
         if !recent {
             self.lock().refreshing.insert(kind);
-            let read = self.read(kind).await;
+            let read = self.read_default(kind).await;
             self.sync_accounts();
             if self.identity(kind) != identity {
                 self.lock().refreshing.remove(&kind);
@@ -720,11 +783,22 @@ impl UsageMonitor {
             }
             let mut state = self.lock();
             let entry = state.providers.entry(kind).or_default();
-            entry.attempted = Some(Instant::now());
-            apply_read(entry, kind, read);
+            apply_got(entry, kind, read);
         }
         self.lock().refreshing.remove(&kind);
         self.publish();
+    }
+
+    /// The default account's limits: a borrowed default from its lender (counted once, as the global entry).
+    async fn read_default(&self, kind: ProviderKind) -> Result<Got, UsageUnread> {
+        let default = {
+            let settings = self.inner.settings.get();
+            crate::provider_accounts::resolve(&settings.providers.get(&kind).cloned().unwrap_or_default(), None, None)
+        };
+        if let Some(read) = self.read_elsewhere(kind, &default).await {
+            return read;
+        }
+        self.read(kind).await.map(|(limits, plan)| Got::Here(limits, plan))
     }
 
     async fn read(&self, kind: ProviderKind) -> Result<(Vec<UsageLimit>, Option<String>), UsageUnread> {
@@ -744,6 +818,10 @@ impl UsageMonitor {
     ) -> Result<(Vec<UsageLimit>, Option<String>), UsageUnread> {
         let started = Instant::now();
         let unavailable = |detail: &str| UsageUnread { reason: LimitsStale::Unavailable, retry_at: None, detail: detail.into() };
+        // Tests never start a real harness to read a login's limits: they report them with `observe` instead.
+        if cfg!(test) {
+            return Err(unavailable("tests never read an account's limits live"));
+        }
         let read = match kind {
             ProviderKind::ClaudeCode => {
                 tokio::time::timeout(Duration::from_secs(20), kybern_drivers::claude::read_account_usage(home, binary.as_ref(), env))
@@ -1362,5 +1440,66 @@ mod persistence_tests {
         let saved: SavedLimits = serde_json::from_slice(&std::fs::read(file(&root)).unwrap()).unwrap();
         assert_eq!(saved.providers.len(), 1);
         assert_eq!(saved.providers[0].entry.limits[0].used_percent, 20.0, "the burst was written once, with its last values");
+    }
+
+    #[test]
+    fn failing_reads_back_off_and_a_signed_out_account_waits_longest() {
+        let base = Duration::from_secs(60);
+        let unread = |reason| UsageUnread { reason, retry_at: None, detail: "x".into() };
+        let mut entry = Entry::default();
+        assert_eq!(entry.due_after(base), base);
+        apply_got(&mut entry, ProviderKind::ClaudeCode, Err(unread(LimitsStale::Unavailable)));
+        assert_eq!(entry.due_after(base), base * 2);
+        for _ in 0..3 {
+            apply_got(&mut entry, ProviderKind::ClaudeCode, Err(unread(LimitsStale::Unavailable)));
+        }
+        assert_eq!(entry.due_after(base), base * 16);
+        for _ in 0..20 {
+            apply_got(&mut entry, ProviderKind::ClaudeCode, Err(unread(LimitsStale::Unavailable)));
+        }
+        assert_eq!(entry.due_after(base), MAX_BACKOFF);
+        // Two minutes after the last of several failures, a background read is not due yet; with none it is.
+        entry.attempted = Instant::now().checked_sub(Duration::from_secs(120));
+        assert!(!entry.due(base));
+        let mut fine = Entry { attempted: entry.attempted, ..Default::default() };
+        assert!(fine.due(base));
+        fine.stale = Some((LimitsStale::SignedOut, None));
+        assert_eq!(fine.due_after(base), MAX_BACKOFF, "a signed-out account waits the longest");
+        // A read that works starts over.
+        let limits = vec![UsageLimit { name: "5-hour".into(), used_percent: 1.0, window_minutes: Some(300), resets_at: None }];
+        apply_got(&mut entry, ProviderKind::ClaudeCode, Ok(Got::Here(limits, None)));
+        assert_eq!((entry.failures, entry.due_after(base)), (0, base));
+    }
+
+    #[tokio::test]
+    async fn a_signed_out_account_is_never_read_live() {
+        let monitor = super::tests::monitor();
+        monitor.inner.store.meta_set("account_signed_out:claude-code:a1", "1").unwrap();
+        match monitor.read_elsewhere(ProviderKind::ClaudeCode, "a1").await {
+            Some(Err(unread)) => assert_eq!(unread.reason, LimitsStale::SignedOut),
+            _ => panic!("a signed-out account would be read"),
+        }
+        assert!(monitor.read_elsewhere(ProviderKind::ClaudeCode, "a2").await.is_none(), "other accounts are read here");
+    }
+
+    #[test]
+    fn a_proxied_value_keeps_the_lenders_time_and_reason() {
+        let then = Utc::now() - chrono::Duration::hours(1);
+        let mut entry = Entry::default();
+        let lent = ProviderLimits {
+            provider: ProviderKind::ClaudeCode,
+            limits: vec![UsageLimit { name: "5-hour".into(), used_percent: 30.0, window_minutes: Some(300), resets_at: None }],
+            updated_at: Some(then),
+            source: Some(LimitsSource::Session),
+            plan: Some("Max".into()),
+            stale: Some(LimitsStale::FromLastRun),
+            retry_at: None,
+            instance: Some("lent".into()),
+        };
+        apply_got(&mut entry, ProviderKind::ClaudeCode, Ok(Got::Proxied(lent)));
+        assert_eq!(entry.updated_at, Some(then), "not stamped as read just now");
+        assert_eq!(entry.source, Some(LimitsSource::Session));
+        assert_eq!(entry.stale.map(|(reason, _)| reason), Some(LimitsStale::FromLastRun));
+        assert_eq!(entry.limits[0].used_percent, 30.0);
     }
 }

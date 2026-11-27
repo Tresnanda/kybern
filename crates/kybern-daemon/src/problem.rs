@@ -66,6 +66,9 @@ pub(crate) fn typed(error: &anyhow::Error) -> Option<Problem> {
         if let Some(problem) = cause.downcast_ref::<DriverError>().and_then(|driver| from_driver(driver, &detail)) {
             return Some(problem);
         }
+        if let Some(refusal) = cause.downcast_ref::<crate::network::broker::BorrowRefusal>() {
+            return Some((*refusal.problem).clone());
+        }
         if let Some(call) = cause.downcast_ref::<CallFailure>() {
             return from_call(call, detail);
         }

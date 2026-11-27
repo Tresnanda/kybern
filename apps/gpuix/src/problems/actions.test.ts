@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, mock, test } from 'bun:test'
 import { PROBLEM_ACTIONS, resolveAction } from './actions.ts'
 
 const action = (id: string, params?: Record<string, string>) => ({ id, label: `Label for ${id}`, ...(params ? { params } : {}) })
@@ -47,6 +47,32 @@ describe('problem actions', () => {
 
   test('sign_in, open_settings and update are always offered', () => {
     for (const id of ['sign_in', 'open_settings', 'update', 'open_machines']) expect(resolveAction(action(id), {})).not.toBeNull()
+  })
+
+  test('a failed turn never signs in Antigravity’s own login: it opens Accounts, or adds a new account', async () => {
+    const dialogs = { ...(await import('../dialogs/store.ts')) }
+    const settings = { ...(await import('../settings/SettingsScreen.tsx')) }
+    const opened: unknown[] = []
+    const tabs: string[] = []
+    mock.module('../dialogs/store.ts', () => ({ ...dialogs, showDialog: (dialog: unknown) => { opened.push(dialog) } }))
+    mock.module('../settings/SettingsScreen.tsx', () => ({ ...settings, openSettingsTab: (tab: string) => { tabs.push(tab) } }))
+    try {
+      const press = async (id: string, params: Record<string, string>) => {
+        resolveAction(action(id, params), {})!.onClick()
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+      await press('sign_in', { provider: 'antigravity', instance: 'default' })
+      expect([tabs, opened]).toEqual([['accounts'], []])
+      // A named account signs in again; "Use another account" names none, so the sheet adds one.
+      await press('sign_in', { provider: 'antigravity', instance: 'a1' })
+      await press('use_another_account', { provider: 'antigravity' })
+      // Claude Code's terminal login is signed in only while signed out, which the daemon checks.
+      await press('sign_in', { provider: 'claude', instance: 'default' })
+      expect(opened).toEqual([{ kind: 'account', provider: 'antigravity', instance: 'a1' }, { kind: 'account', provider: 'antigravity' }, { kind: 'account', provider: 'claude-code', instance: 'default' }])
+    } finally {
+      mock.module('../dialogs/store.ts', () => dialogs)
+      mock.module('../settings/SettingsScreen.tsx', () => settings)
+    }
   })
 
   test('a failed turn offers another account and an agent update only for an agent Kybern knows', () => {

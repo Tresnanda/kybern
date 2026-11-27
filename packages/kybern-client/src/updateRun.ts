@@ -14,8 +14,69 @@ export interface UpdateRow {
   progress?: number
 }
 export type UpdateRun = Record<string, UpdateRow>
+/** Restored runs older than this are not shown as current. */
+export const RESTORE_MAX_AGE_MS = 15 * 60 * 1000
 const active = new Set<UpdatePhase>(['checking', 'waiting', 'downloading', 'installing', 'restarting'])
 export const isUpdating = (row: UpdateRow) => active.has(row.phase)
+
+interface ParsedVersion { core: number[]; pre: (number | string)[] }
+function parseVersion(raw: string | null | undefined): ParsedVersion | null {
+  const trimmed = raw?.trim().replace(/^v/i, '')
+  if (!trimmed) return null
+  const [main, ...rest] = trimmed.split('-')
+  const core = main!.split('.').map(part => /^\d+$/.test(part) ? Number(part) : NaN)
+  if (!core.length || core.some(Number.isNaN)) return null
+  const preRaw = rest.join('-')
+  const pre = preRaw ? preRaw.split('.').map(part => /^\d+$/.test(part) ? Number(part) : part) : []
+  return { core, pre }
+}
+
+/** Semver precedence: >0 if a > b, <0 if a < b, 0 if equal, null if either is unparseable. */
+export function compareVersions(a: string | null | undefined, b: string | null | undefined): number | null {
+  const pa = parseVersion(a), pb = parseVersion(b)
+  if (!pa || !pb) return null
+  for (let i = 0; i < Math.max(pa.core.length, pb.core.length); i++) {
+    const diff = (pa.core[i] ?? 0) - (pb.core[i] ?? 0)
+    if (diff !== 0) return diff
+  }
+  if (pa.pre.length === 0 && pb.pre.length === 0) return 0
+  if (pa.pre.length === 0) return 1
+  if (pb.pre.length === 0) return -1
+  for (let i = 0; i < Math.max(pa.pre.length, pb.pre.length); i++) {
+    const x = pa.pre[i], y = pb.pre[i]
+    if (x === undefined) return -1
+    if (y === undefined) return 1
+    if (x === y) continue
+    if (typeof x === 'number' && typeof y === 'number') return x - y
+    if (typeof x === 'number') return -1
+    if (typeof y === 'number') return 1
+    return x < y ? -1 : 1
+  }
+  return 0
+}
+
+const reached = (actual: string | null | undefined, target: string | null | undefined): boolean => {
+  if (!actual || !target) return false
+  if (actual === target) return true
+  const cmp = compareVersions(actual, target)
+  return cmp !== null && cmp >= 0
+}
+
+const isNewer = (a: string | null | undefined, b: string | null | undefined): boolean => {
+  const cmp = compareVersions(a, b)
+  return cmp !== null && cmp > 0
+}
+
+function newestKnown(machines: readonly MachineCard[]): string | null {
+  let newest: string | null = null
+  for (const m of machines) {
+    for (const candidate of [m.version, m.update?.latest_version, m.update?.target_version]) {
+      if (!candidate || !parseVersion(candidate)) continue
+      if (!newest || isNewer(candidate, newest)) newest = candidate
+    }
+  }
+  return newest
+}
 
 /** Synchronous optimistic feedback precedes the request on every client. */
 export function beginUpdate(machines: readonly MachineCard[], now = Date.now(), previous: UpdateRun = {}): UpdateRun {
@@ -29,19 +90,31 @@ export function beginUpdate(machines: readonly MachineCard[], now = Date.now(), 
   return run
 }
 
-function progress(row: UpdateRow, update: DaemonUpdate): UpdateRow {
+function progress(row: UpdateRow, update: DaemonUpdate, actualVersion: string, newest: string | null): UpdateRow {
   const targetVersion = update.target_version ?? undefined
-  const base = { ...row, updateId: update.update_id ?? undefined, currentVersion: update.current_version, targetVersion, progress: undefined }
+  const base = { ...row, updateId: update.update_id ?? undefined, currentVersion: actualVersion, targetVersion: targetVersion ?? row.targetVersion, progress: undefined }
+  const expectedTarget = row.targetVersion ?? targetVersion
   switch (update.status) {
     case 'current': {
-      if (!targetVersion && row.phase !== 'restarting') return { ...base, phase: 'skipped', text: `Already on ${update.current_version}` }
-      const matched = !!update.update_id && (!row.updateId || row.updateId === update.update_id)
-        && !!targetVersion && (!row.targetVersion || row.targetVersion === targetVersion) && targetVersion === update.current_version
+      if (!targetVersion && row.phase !== 'restarting') return { ...base, phase: 'skipped', text: `Already on ${actualVersion}` }
+      const idMatches = !row.updateId || !update.update_id || row.updateId === update.update_id
+      const matched = idMatches && !!expectedTarget && reached(actualVersion, expectedTarget)
       return matched ? { ...base, phase: 'updated', text: 'Updated' }
         : { ...base, phase: 'failed', text: 'The requested version did not start. Retry the update.' }
     }
-    case 'failed': return { ...base, phase: 'failed', text: 'Unable to finish the update. Retry the update.' }
-    case 'unsupported': return { ...base, phase: 'skipped', text: update.message || 'Update from this machine' }
+    case 'failed': {
+      const targetReached = !!expectedTarget && reached(actualVersion, expectedTarget)
+      const restartFalseFail = !!update.latest_version && reached(actualVersion, update.latest_version)
+        && (update.message.includes('did not start') || (!!row.currentVersion && isNewer(actualVersion, row.currentVersion)))
+      if (targetReached || restartFalseFail) return { ...base, phase: 'updated', text: 'Updated' }
+      return { ...base, phase: 'failed', text: 'Unable to finish the update. Retry the update.' }
+    }
+    case 'unsupported': {
+      if (actualVersion && newest && reached(actualVersion, newest)) {
+        return { ...base, phase: 'skipped', text: `Already on ${actualVersion}` }
+      }
+      return { ...base, phase: 'skipped', text: update.message || 'Update from this machine' }
+    }
     case 'waiting': return { ...base, phase: 'waiting', text: update.busy_thread ? `Waiting for “${update.busy_thread}”` : 'Waiting for running work' }
     case 'restarting': return { ...base, phase: 'restarting', text: 'Restarting…' }
     case 'updating': {
@@ -57,18 +130,38 @@ function progress(row: UpdateRow, update: DaemonUpdate): UpdateRow {
 /** Presence is authoritative; an offline cached presence never completes or fails a restart. */
 export function reconcileUpdates(run: UpdateRun, machines: readonly MachineCard[], now = Date.now()): UpdateRun {
   const next = { ...run }
+  const newest = newestKnown(machines)
   for (const machine of machines) {
-    const update = machine.update
-    if (!update?.update_id || machine.status === 'offline') continue
     const old = next[machine.machine_id]
-    if (old?.previousId === update.update_id && !old.updateId) continue
-    if (old?.phase === 'restarting' && old.updateId !== update.update_id) continue
+    // Drop stale completed rows (from an earlier run or before this machine's current version).
+    if (old && !isUpdating(old)) {
+      const expired = now - old.startedAt > RESTORE_MAX_AGE_MS
+      const superseded = !!machine.version && isNewer(machine.version, old.currentVersion)
+      if (expired || superseded) delete next[machine.machine_id]
+    }
+    const current = next[machine.machine_id]
+    if (machine.status === 'offline') {
+      if (current && !isUpdating(current)) delete next[machine.machine_id]
+      continue
+    }
+    const update = machine.update
+    const actualVersion = machine.version || update?.current_version || current?.currentVersion || ''
+    // A machine that reached its target (e.g. upgraded from a pre-0.23 daemon without update_id) reads as updated.
+    if (!update?.update_id) {
+      if (current && update && (update.status === 'unsupported' || update.status === 'current' || update.status === 'failed')) {
+        next[machine.machine_id] = progress(current, update, actualVersion, newest)
+      } else if (current && isUpdating(current) && current.targetVersion && reached(actualVersion, current.targetVersion)) {
+        next[machine.machine_id] = { ...current, currentVersion: actualVersion, phase: 'updated', text: 'Updated', progress: undefined }
+      }
+      continue
+    }
+    if (current?.previousId === update.update_id && !current.updateId) continue
+    if (current?.phase === 'restarting' && current.updateId !== update.update_id) continue
     // A later attempt observed after navigation starts a fresh target contract.
-    const sameAttempt = old && (!old.updateId || old.updateId === update.update_id)
-    const row = (sameAttempt ? old : undefined) ?? { machineId: machine.machine_id, name: machine.name, phase: 'checking',
-      currentVersion: machine.version ?? '', startedAt: now, text: 'Checking…' }
-    next[machine.machine_id] = progress(row, update.status === 'current' && machine.version !== update.current_version
-      ? { ...update, status: 'failed' } : update)
+    const sameAttempt = current && (!current.updateId || current.updateId === update.update_id)
+    const row = (sameAttempt ? current : undefined) ?? { machineId: machine.machine_id, name: machine.name, phase: 'checking',
+      currentVersion: actualVersion, startedAt: now, text: 'Checking…' }
+    next[machine.machine_id] = progress(row, update, actualVersion, newest)
   }
   return next
 }
@@ -106,7 +199,7 @@ export function updateRunSummary(run: UpdateRun, now = Date.now()): string {
 }
 
 export const saveUpdateRun = (run: UpdateRun): string => JSON.stringify({ version: 1, rows: Object.values(run) })
-export function restoreUpdateRun(serialized: string | null): UpdateRun {
+export function restoreUpdateRun(serialized: string | null, now = Date.now()): UpdateRun {
   try {
     const value = JSON.parse(serialized ?? 'null')
     if (value?.version !== 1 || !Array.isArray(value.rows) || value.rows.length > 256) return {}
@@ -118,6 +211,7 @@ export function restoreUpdateRun(serialized: string | null): UpdateRun {
       if ([row.targetVersion, row.updateId, row.previousId].some(v => v !== undefined && typeof v !== 'string')) return {}
       if (row.progress !== undefined && (!Number.isFinite(row.progress) || row.progress < 0 || row.progress > 100)) return {}
       if (row.machineId === '__proto__' || row.machineId === 'constructor') return {}
+      if (now - row.startedAt > RESTORE_MAX_AGE_MS || row.startedAt > now + 60_000) continue
       run[row.machineId] = row
     }
     return run
@@ -134,8 +228,8 @@ export class UpdateRunStore {
   constructor(persist?: (value: string) => Promise<void>) { this.persist = persist }
   get = (): UpdateRun => this.run
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
-  hydrate(serialized: string | null) {
-    const saved = restoreUpdateRun(serialized)
+  hydrate(serialized: string | null, now = Date.now()) {
+    const saved = restoreUpdateRun(serialized, now)
     for (const id of this.touched) delete saved[id]
     this.publish({ ...saved, ...this.run })
   }

@@ -86,9 +86,19 @@ fn describe_choice(kind: Option<ProviderKind>, model: Option<&str>) -> String {
     }
 }
 
-/// Harnesses whose sessions accept a message inside a running turn.
+/// Harnesses whose sessions accept a message inside a running turn. Antigravity does on `agy acp`
+/// (agy 1.5+); its `-p` fallback can't, and its session answers a steer with a queued follow-up, which
+/// callers already handle (`SteerSent::queued`).
 pub(crate) fn harness_supports_steer(kind: ProviderKind) -> bool {
-    matches!(kind, ProviderKind::ClaudeCode | ProviderKind::Codex | ProviderKind::Cursor | ProviderKind::Pi | ProviderKind::Omp)
+    matches!(
+        kind,
+        ProviderKind::ClaudeCode
+            | ProviderKind::Codex
+            | ProviderKind::Cursor
+            | ProviderKind::Pi
+            | ProviderKind::Omp
+            | ProviderKind::Antigravity
+    )
 }
 
 /// Daemon-side state of the delegation engine.

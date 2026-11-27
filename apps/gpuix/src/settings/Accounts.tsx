@@ -40,7 +40,9 @@ import { OfferRows } from '../accounts/OfferCard.tsx'
 import { chipsFor } from '../accounts/chips.ts'
 import { MachineChip, TERMINAL_COMMANDS, type ChipActions } from '../accounts/MachineChip.tsx'
 import { copyText } from '../transcript/store.ts'
-import { leftOf, standings, type HarnessGroup, type UnifiedAccount } from '../accounts/unified.ts'
+import { isUpdating } from '../../../../packages/kybern-client/src/updateRun.ts'
+import { retryMachineUpdate, useUpdateRun } from '../machines/network.ts'
+import { leftOf, outdatedMachineLabel, outdatedMachines, standings, type HarnessGroup, type MachineAccounts, type UnifiedAccount } from '../accounts/unified.ts'
 
 /** Skeleton rows fade in after 150 ms (the fade's own `delay`, no timer), so a fast answer never flashes them. */
 const SKELETON_DELAY = PATCHED_NATIVE ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { delay: 0.15, duration: DURATION.quick, ease: [0.23, 1, 0.32, 1] as [number, number, number, number] } } : undefined
@@ -69,11 +71,10 @@ export function Accounts() {
   useSettingsModal(!!pending)
   // Read every machine's accounts and usage while this tab opens.
   useEffect(() => { void refreshAllAccounts(); askAccountLimits() }, [])
-  const here = view.machines[0]!
   const groups = useMemo(() => orderGroups(view, providers.map((p) => p.kind)), [view.groups, view.machines, providers])
   const listed = listedOffers(offers)
   const away = view.machines.filter((m) => !m.online).map((m) => m.name)
-  const outdated = view.machines.filter((m) => !m.isLocal && m.online && m.state === 'legacy').map((m) => m.name)
+  const outdated = useMemo(() => outdatedMachines(view.machines), [view.machines])
   const missing = providers.filter((p) => !withoutSignIn(p.kind) && view.machines.every((m) => m.providers?.find((x) => x.kind === p.kind)?.available === false))
   const chipActions: ChipActions = {
     signOut: (account, machineId) => setPending({ kind: 'signout', account, machine: machineId }),
@@ -85,13 +86,12 @@ export function Accounts() {
     ? <AccountDialog pending={pending} view={view} onClose={close} />
     : null
   return <>
-    {view.legacy && <PageBlock><div style={{ paddingBottom: 16 }}><Note>{`Update Kybern on ${here.name} to sign in from the app.`}</Note></div></PageBlock>}
     {listed.length > 0 && <OfferRows offers={listed} view={view} />}
     {groups.map((group) => <AgentSection key={group.kind} group={group} view={view} onPending={setPending} chipActions={chipActions}>{dialogFor(group.kind)}</AgentSection>)}
-    {!(view.loaded && providersLoaded) && groups.length === 0 && <PageBlock><div testId="accounts-loading" role="status" paintTransform={SKELETON_DELAY} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>{[0, 1].map((i) => <Skeleton key={i} height={72} radius={12} />)}</div></PageBlock>}
-    {(away.length > 0 || outdated.length > 0 || missing.length > 0) && <PageBlock><div testId="accounts-notes" style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingBottom: 30 }}>
+    {outdated.length > 0 && <OutdatedMachinesCard machines={outdated} />}
+    {!(view.loaded && providersLoaded) && groups.length === 0 && outdated.length === 0 && <PageBlock><div testId="accounts-loading" role="status" paintTransform={SKELETON_DELAY} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>{[0, 1].map((i) => <Skeleton key={i} height={72} radius={12} />)}</div></PageBlock>}
+    {(away.length > 0 || missing.length > 0) && <PageBlock><div testId="accounts-notes" style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingBottom: 30 }}>
       {away.length > 0 && <Note>{`${list(away)} ${away.length === 1 ? 'is' : 'are'} offline. Accounts there show when ${away.length === 1 ? 'it’s' : 'they’re'} back.`}</Note>}
-      {outdated.length > 0 && <Note>{`Update Kybern on ${list(outdated)} to manage accounts there.`}</Note>}
       {missing.length > 0 && <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline' }}><Note>{`${list(missing.map((p) => p.display_name))} ${missing.length === 1 ? 'isn’t' : 'aren’t'} installed. Set them up in `}</Note><TextLink testId="accounts-agent-providers" onClick={() => openSettingsTab('agents')}>Agent providers</TextLink><Note>.</Note></div>}
     </div></PageBlock>}
     {view.sharing && <Section title="Shared sign-ins"><Row title={`${view.sharing.machine} shares its sign-ins`}>
@@ -99,6 +99,25 @@ export function Accounts() {
       {pending?.kind === 'stop-sharing' && <ConfirmDialog testId="accounts-stop-sharing" title={`Stop sharing ${view.sharing.machine}’s sign-ins?`} body="Machines that use them ask you to sign in when their current sign-in ends." confirm="Stop sharing" onConfirm={() => shareSignIns(null, view.sharing!.machine)} onClose={close} />}
     </Row></Section>}
   </>
+}
+
+/** Each machine too old to send account keys, shown once with the per-machine update action. */
+function OutdatedMachinesCard({ machines }: { machines: readonly MachineAccounts[] }) {
+  const t = useTheme()
+  const g = useGlass()
+  const updateRun = useUpdateRun()
+  return <PageBlock><div testId="accounts-outdated" style={{ display: 'flex', flexDirection: 'column', paddingBottom: 30 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', ...settingsCardStyle(t, g), overflow: 'hidden' }}><GlassEdge radius={12} color={g.highlight} />
+      {machines.map((machine, index) => {
+        const row = updateRun[machine.machineId]
+        const updating = !!row && isUpdating(row)
+        return <div key={machine.machineId} testId={`accounts-outdated-${machine.machineId}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingLeft: 18, paddingRight: 14, paddingTop: 12, paddingBottom: 12, borderTopWidth: index === 0 ? 0 : 1, borderColor: t.v('--app-settings-card-border') }}>
+          <Label color={t.text} size={14} lineHeight={21} weight={500} truncate>{outdatedMachineLabel(machine.name)}</Label>
+          <Button testId={`accounts-update-${machine.machineId}`} size="sm" busy={updating} disabled={updating} onClick={() => void retryMachineUpdate(machine.machineId).catch((error) => toastProblem(error, { action: `update ${machine.name}`, machine: machine.name }))}>Update</Button>
+        </div>
+      })}
+    </div>
+  </div></PageBlock>
 }
 
 function AccountDialog({ pending, view, onClose }: { pending: Exclude<Pending, { kind: 'stop-sharing' }>; view: UnifiedView; onClose: () => void }) {
@@ -189,7 +208,7 @@ function AccountRow({ account, first, view, onPending, chipActions }: { account:
     projects > 0 ? (projects === 1 ? '1 project' : `${projects} projects`) : null,
     compaction ? idleCompactionDetail(compaction) : null,
   ].filter(Boolean).join(' · ')
-  const chips = chipsFor(account, view.machines)
+  const chips = chipsFor(account, view.machines, view.sharing?.machineId)
   const instance = here && !here.terminal ? here.instance : 'default'
   return <div testId={`account-row-${account.id}`} style={{ position: 'relative', display: 'flex', alignItems: 'flex-start', gap: 12, paddingLeft: 18, paddingRight: 12, paddingTop: 14, paddingBottom: 14, borderTopWidth: first ? 0 : 1, borderColor: t.v('--app-settings-card-border') }}>
     {flash && <FlashOverlay />}

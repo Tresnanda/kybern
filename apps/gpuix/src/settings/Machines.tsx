@@ -297,7 +297,21 @@ function Updates({ busy, following, machines }: { busy: boolean; following: bool
   const [error, setError] = useState('')
   const behind = machines.filter((card) => card.behind).length
   const updates = useUpdateRun()
-  const rows = machines.map(m => updates[m.machineId] ?? { machineId: m.machineId, name: m.name, phase: 'skipped' as const, currentVersion: m.version ?? '', startedAt: 0, text: m.behind ? 'Ready to update' : 'Check for updates' })
+  const rows = machines.map(m => {
+    const row = updates[m.machineId]
+    if (row && (!m.row.offline || row.phase === 'restarting')) {
+      return m.version && row.currentVersion !== m.version && !isUpdating(row) ? { ...row, currentVersion: m.version } : row
+    }
+    return {
+      machineId: m.machineId,
+      name: m.name,
+      phase: 'skipped' as const,
+      currentVersion: m.version ?? '',
+      startedAt: 0,
+      text: m.row.offline ? 'Offline' : m.behind ? 'Ready to update' : 'Check for updates',
+    }
+  })
+  const hasRun = machines.some(m => { const row = updates[m.machineId]; return !!row && (!m.row.offline || row.phase === 'restarting') })
   const active = rows.some(isUpdating)
   const [now, setNow] = useState(Date.now)
   const slowAt = Math.min(...rows.filter(isUpdating).map(r => r.startedAt)) + 180_000
@@ -306,7 +320,7 @@ function Updates({ busy, following, machines }: { busy: boolean; following: bool
     setError('')
     try { await updateAllMachines() } catch (e) { setError(problemLine(e, { action: 'update your machines' })) }
   }
-  return <UpdatesSection rows={rows} summary={error || (Object.keys(updates).length ? updateRunSummary(Object.fromEntries(rows.map(r => [r.machineId, r])), now) : behind ? `${behind} machines can update` : 'Check for updates on your machines.')} busy={busy} following={following} followBusy={net.busy === 'follow'} onUpdate={() => void run()} onRetry={id => void retryMachineUpdate(id).catch(e => toastProblem(e, { action: 'retry the update' }))} onFollow={enabled => void setFollowUpdates(enabled).catch(e => toastProblem(e, { action: 'change the setting' }))} />
+  return <UpdatesSection rows={rows} summary={error || (hasRun ? updateRunSummary(Object.fromEntries(rows.map(r => [r.machineId, r])), now) : behind ? `${behind} machines can update` : 'Check for updates on your machines.')} busy={busy} following={following} followBusy={net.busy === 'follow'} onUpdate={() => void run()} onRetry={id => void retryMachineUpdate(id).catch(e => toastProblem(e, { action: 'retry the update' }))} onFollow={enabled => void setFollowUpdates(enabled).catch(e => toastProblem(e, { action: 'change the setting' }))} />
 }
 
 /** "Keep this machine reachable when Kybern is closed" (ADE-119): the daemon starts at login while this machine is in a network. */

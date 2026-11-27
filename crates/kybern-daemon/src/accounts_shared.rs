@@ -21,6 +21,7 @@ use kybern_protocol::methods::AccountsListParams;
 use kybern_protocol::{AccountProfile, AccountsShared, ProjectKind, ProviderKind, Settings};
 use kybern_store::Store;
 
+use crate::settings::AccountChoice;
 use crate::state::AppState;
 
 const TERMINAL_EMAIL: &str = "accounts.terminal_email.";
@@ -163,35 +164,54 @@ fn local_default(settings: &Settings, kind: ProviderKind) -> String {
 
 /// Keep the shared account values and this machine's own account fields in step (see the module docs).
 /// `before` is what was saved, `after` what is about to be saved; `after` is changed in place.
+#[cfg(test)]
 pub fn normalize(before: &Settings, after: &mut Settings, terminal: &TerminalEmails, repos: &BTreeMap<String, String>) {
+    normalize_with(before, after, terminal, repos, AccountChoice::Shared);
+}
+
+/// [`normalize`] for a write whose own change of the local default or project accounts is `choice`.
+pub fn normalize_with(
+    before: &Settings,
+    after: &mut Settings,
+    terminal: &TerminalEmails,
+    repos: &BTreeMap<String, String>,
+    choice: AccountChoice,
+) {
     for kind in ProviderKind::ALL.into_iter().filter(|kind| has_identity(*kind)) {
-        normalize_default(before, after, terminal, kind);
-        normalize_projects(before, after, terminal, repos, kind);
+        normalize_default(before, after, terminal, kind, choice);
+        normalize_projects(before, after, terminal, repos, kind, choice);
         normalize_profiles(before, after, kind);
     }
 }
 
-fn normalize_default(before: &Settings, after: &mut Settings, terminal: &TerminalEmails, kind: ProviderKind) {
+/// A named account this machine has whose email isn't known yet (just added, or borrowed): chosen here on
+/// purpose, and a shared choice that didn't change doesn't replace it.
+fn unknown_named(settings: &Settings, terminal: &TerminalEmails, kind: ProviderKind, instance: &str) -> bool {
+    instance != "default" && key_of_instance(settings, terminal, kind, instance).is_none()
+}
+
+fn normalize_default(before: &Settings, after: &mut Settings, terminal: &TerminalEmails, kind: ProviderKind, choice: AccountChoice) {
     let shared_changed = before.accounts_shared.defaults.get(&kind) != after.accounts_shared.defaults.get(&kind);
     let local_changed = local_default(before, kind) != local_default(after, kind);
     if local_changed && !shared_changed {
-        // Chosen on this machine by a route that only knows the local fields.
-        match key_of_instance(after, terminal, kind, &local_default(after, kind)) {
-            Some(key_text) => {
+        if choice == AccountChoice::LocalOnly {
+            // This machine's own change (a first sign-in, the default account removed): every other machine
+            // keeps the shared default, and this one follows it below when it has that account.
+        } else {
+            // Chosen on this machine by a route that only knows the local fields. An account whose email is not
+            // known yet can't be followed elsewhere, and the shared default stays (other machines keep theirs).
+            if let Some(key_text) = key_of_instance(after, terminal, kind, &local_default(after, kind)) {
                 after.accounts_shared.defaults.insert(kind, key_text);
             }
-            // An account whose email is not known yet: other machines can't follow it, and keeping the old
-            // shared default would undo this choice on the next write.
-            None => {
-                after.accounts_shared.defaults.remove(&kind);
-            }
+            return;
         }
-        return;
     }
     let Some(key_text) = after.accounts_shared.defaults.get(&kind).cloned() else { return };
     // A default whose account isn't on this machine leaves the machine's own choice in place.
+    let current = local_default(after, kind);
     if let Some(instance) = instance_for_key(after, terminal, &key_text)
-        && local_default(after, kind) != instance
+        && current != instance
+        && (shared_changed || !unknown_named(after, terminal, kind, &current))
     {
         after.providers.entry(kind).or_default().default_account = (instance != "default").then_some(instance);
     }
@@ -203,6 +223,7 @@ fn normalize_projects(
     terminal: &TerminalEmails,
     repos: &BTreeMap<String, String>,
     kind: ProviderKind,
+    choice: AccountChoice,
 ) {
     let empty = BTreeMap::new();
     let local_before = before.providers.get(&kind).map_or(&empty, |provider| &provider.project_accounts).clone();
@@ -212,6 +233,10 @@ fn normalize_projects(
     // Local changes first: a project chosen or cleared here.
     let mut touched = std::collections::BTreeSet::new();
     for path in local_before.keys().chain(local_after.keys()) {
+        if choice == AccountChoice::LocalOnly {
+            // This machine's own change: the shared project choices stay for every other machine.
+            break;
+        }
         if local_before.get(path) == local_after.get(path) {
             continue;
         }
@@ -220,6 +245,10 @@ fn normalize_projects(
             continue;
         }
         touched.insert(repo.clone());
+        // An account whose email isn't known yet: chosen here, but the shared choice stays for the others.
+        if local_after.get(path).is_some_and(|instance| unknown_named(after, terminal, kind, instance)) {
+            continue;
+        }
         let next = local_after.get(path).and_then(|instance| key_of_instance(after, terminal, kind, instance));
         let kinds = after.accounts_shared.projects.entry(repo.clone()).or_default();
         match next {
@@ -242,7 +271,11 @@ fn normalize_projects(
         }
         match shared_of(after, repo) {
             Some(key_text) => {
-                if let Some(instance) = instance_for_key(after, terminal, &key_text) {
+                let unchanged = shared_of(before, repo).as_deref() == Some(key_text.as_str());
+                let chosen_here = local.get(path).is_some_and(|instance| unknown_named(after, terminal, kind, instance));
+                if let Some(instance) = instance_for_key(after, terminal, &key_text)
+                    && !(unchanged && chosen_here)
+                {
                     local.insert(path.clone(), instance);
                 }
             }
@@ -502,6 +535,81 @@ mod tests {
     }
 
     #[test]
+    fn a_local_only_change_keeps_the_shared_default_and_projects_for_everyone() {
+        let terminal = TerminalEmails::new();
+        let repos: BTreeMap<String, String> = [("/here/app".to_string(), "root:abc".to_string())].into();
+        let mut saved = settings_with(&[("w1", "Work", Some("work@example.com")), ("p1", "Personal", Some("me@home.org"))]);
+        saved.accounts_shared.defaults.insert(ProviderKind::ClaudeCode, "claude-code:work@example.com".into());
+        saved
+            .accounts_shared
+            .projects
+            .entry("root:abc".into())
+            .or_default()
+            .insert(ProviderKind::ClaudeCode, "claude-code:work@example.com".into());
+        let mut next = saved.clone();
+        normalize(&saved, &mut next, &terminal, &repos);
+        let saved = next;
+        assert_eq!(saved.providers[&ProviderKind::ClaudeCode].default_account.as_deref(), Some("w1"));
+        // Work is removed on this machine (#12): its default and project choice go here only.
+        let mut next = saved.clone();
+        let provider = next.providers.get_mut(&ProviderKind::ClaudeCode).unwrap();
+        provider.accounts.remove("w1");
+        provider.default_account = None;
+        provider.project_accounts.clear();
+        normalize_with(&saved, &mut next, &terminal, &repos, AccountChoice::LocalOnly);
+        assert_eq!(next.accounts_shared.defaults[&ProviderKind::ClaudeCode], "claude-code:work@example.com");
+        assert_eq!(next.accounts_shared.projects["root:abc"][&ProviderKind::ClaudeCode], "claude-code:work@example.com");
+        assert_eq!(crate::provider_accounts::resolve(&next.providers[&ProviderKind::ClaudeCode], None, None), "default");
+        // A first sign-in made the new account this machine's default (#2): the shared default stays.
+        let saved = next.clone();
+        let mut next = saved.clone();
+        next.providers.get_mut(&ProviderKind::ClaudeCode).unwrap().default_account = Some("p1".into());
+        normalize_with(&saved, &mut next, &terminal, &repos, AccountChoice::LocalOnly);
+        assert_eq!(next.accounts_shared.defaults[&ProviderKind::ClaudeCode], "claude-code:work@example.com");
+        assert_eq!(next.providers[&ProviderKind::ClaudeCode].default_account.as_deref(), Some("p1"), "it can't follow Work here");
+        // ...and once this machine has the shared account again, it follows it.
+        let saved = next.clone();
+        let mut next = saved.clone();
+        next.providers.get_mut(&ProviderKind::ClaudeCode).unwrap().accounts.insert("w2".into(), account("Work", Some("work@example.com")));
+        normalize(&saved, &mut next, &terminal, &repos);
+        assert_eq!(next.providers[&ProviderKind::ClaudeCode].default_account.as_deref(), Some("w2"));
+    }
+
+    #[test]
+    fn an_account_whose_email_isnt_known_never_deletes_the_shared_default() {
+        let terminal = TerminalEmails::new();
+        let repos = BTreeMap::new();
+        let mut saved = settings_with(&[("w1", "Work", Some("work@example.com")), ("b1", "Borrowed", None)]);
+        saved.accounts_shared.defaults.insert(ProviderKind::ClaudeCode, "claude-code:work@example.com".into());
+        let mut next = saved.clone();
+        normalize(&saved, &mut next, &terminal, &repos);
+        let saved = next;
+        // Chosen here by a route that only knows the local fields: an account with no email yet.
+        let mut next = saved.clone();
+        next.providers.get_mut(&ProviderKind::ClaudeCode).unwrap().default_account = Some("b1".into());
+        normalize(&saved, &mut next, &terminal, &repos);
+        assert_eq!(next.accounts_shared.defaults[&ProviderKind::ClaudeCode], "claude-code:work@example.com", "kept for every machine");
+        assert_eq!(next.providers[&ProviderKind::ClaudeCode].default_account.as_deref(), Some("b1"));
+        // The next unrelated write doesn't undo the choice made here.
+        let saved = next.clone();
+        let mut next = saved.clone();
+        next.generate_titles = !next.generate_titles;
+        normalize(&saved, &mut next, &terminal, &repos);
+        assert_eq!(next.providers[&ProviderKind::ClaudeCode].default_account.as_deref(), Some("b1"));
+        // Another machine choosing a default still moves this one, when it has that account.
+        let saved = next.clone();
+        let mut next = saved.clone();
+        next.accounts_shared.defaults.insert(ProviderKind::ClaudeCode, "claude-code:other@example.com".into());
+        normalize(&saved, &mut next, &terminal, &repos);
+        assert_eq!(next.providers[&ProviderKind::ClaudeCode].default_account.as_deref(), Some("b1"), "no login for that one here");
+        let saved = next.clone();
+        let mut next = saved.clone();
+        next.accounts_shared.defaults.insert(ProviderKind::ClaudeCode, "claude-code:work@example.com".into());
+        normalize(&saved, &mut next, &terminal, &repos);
+        assert_eq!(next.providers[&ProviderKind::ClaudeCode].default_account.as_deref(), Some("w1"));
+    }
+
+    #[test]
     fn project_choices_follow_the_repository() {
         let terminal = TerminalEmails::new();
         let repos: BTreeMap<String, String> = [("/here/app".to_string(), "root:abc".to_string())].into();
@@ -636,6 +744,22 @@ mod state_tests {
         // Once per machine.
         migrate_now(state).unwrap();
         assert_eq!(state.settings.get().accounts_shared.defaults[&ProviderKind::ClaudeCode], "claude-code:me@home.org");
+    }
+
+    #[test]
+    fn a_shared_default_this_machine_cant_follow_is_reported() {
+        let fixture = fixture();
+        let state = &fixture.state;
+        assert!(crate::provider_accounts::unfollowed_defaults(state, &state.settings.get(), None).is_empty());
+        // Another machine made an account this one has no login for the default.
+        let mut settings = state.settings.get();
+        settings.accounts_shared.defaults.insert(ProviderKind::ClaudeCode, "claude-code:else@where.com".into());
+        state.settings.set(settings).unwrap();
+        let unfollowed = crate::provider_accounts::unfollowed_defaults(state, &state.settings.get(), None);
+        assert_eq!(unfollowed.len(), 1);
+        assert_eq!(unfollowed[0].key, "claude-code:else@where.com");
+        assert_eq!((unfollowed[0].running_on.as_str(), unfollowed[0].has_account), ("p1", false));
+        assert!(crate::provider_accounts::unfollowed_defaults(state, &state.settings.get(), Some(ProviderKind::Codex)).is_empty());
     }
 
     #[test]

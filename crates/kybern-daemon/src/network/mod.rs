@@ -54,6 +54,8 @@ pub mod updates;
 pub mod wake_watch;
 pub mod well_known;
 
+#[cfg(all(test, unix))]
+mod accounts_e2e_tests;
 #[cfg(test)]
 mod accounts_sync_tests;
 #[cfg(all(test, unix))]
@@ -438,8 +440,10 @@ impl Network {
             features::PREFERENCES_SYNC_V1.to_string(),
             features::ACCOUNTS_SYNC_V1.to_string(),
             features::ACCOUNTS_LOGIN_HANDOFF_V1.to_string(),
+            features::ACCOUNTS_WRITE_V1.to_string(),
             features::SECRETS_STORE_V1.to_string(),
             features::LOGIN_BROKER_V1.to_string(),
+            features::LOGIN_BROKER_CHOICE_V1.to_string(),
             features::UPDATE_V1.to_string(),
             features::UPDATE_PROGRESS_V1.to_string(),
             features::APP_UPDATE_V1.to_string(),

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.27.2
+
+<!-- kybern-release-title: Accounts across machines you can rely on -->
+<!-- kybern-release-summary: Signing accounts in on your other machines works, sharing sign-ins is a choice you make and keeps working through sleep and restarts, adding an Antigravity account never replaces your own, and machines stay on the same version. -->
+
+- **Signing accounts in on your other machines works.** From your desktop, adding or signing in an account on another machine was refused ("This computer refused access"). Paired devices now carry a permission for account sign-ins only; pairing and exposing a machine still need the stronger one. A machine on an older Kybern shows **Update Kybern on \<machine\>** instead of failing.
+- **Adding an Antigravity account never replaces your own.** On a Mac, a second Antigravity account could sign in over the computer's own Antigravity login. Adding an account always makes a separate one now, and the computer's own login is only signed in when you ask for it and it is signed out.
+- **Share this machine's sign-ins** is a choice in each machine's menu on the Accounts page. Other machines borrow Claude Code and Codex sign-ins only from the machine you chose, or an always-on one you accepted; a laptop that sleeps is never picked for you. Moving or stopping sharing never signs anything out.
+- **Borrowed sign-ins keep working.** They recover when the lending machine wakes up, stay on their own account when the lender changes, follow your shared defaults, renew Codex logins ahead of expiry, don't interrupt a running turn when the lender's login renews, and show the lender's limits. A failed borrow says why, with **Sign in on \<machine\> instead**.
+- **Your accounts stay as they are.** Adding a first account or removing one on one machine no longer changes the default everywhere. Signing an account in again with the browser on someone else changes nothing until you choose **Keep**. A thread keeps its account when you change the default; only new threads follow it. A machine that can't use the shared default shows **\<machine\> · Uses \<account\>**.
+- **No more random Claude sign-outs on a Mac for added accounts**: Kybern reads their Keychain login and never runs Claude against a login about to renew. Kybern also reads which account your terminal's Claude Code uses, so it stops offering an account the Mac already has.
+- **Safer account data.** A settings save from one window or machine never undoes account changes that arrived in between, account folders are never removed at start-up unless Kybern made them for an unfinished sign-in, and a daemon that meets a permission name it doesn't know still starts.
+- **Sign-in is calmer.** Offers only suggest what makes sense on that machine, a changed-default card asks once, the sign-in sheet never spins forever, a dropped connection isn't called a wrong code, and Codex's sign-in port is released as soon as a sign-in ends.
+- **Keep all machines on the same version** now updates a machine once it is idle even when its own "Update the daemon automatically" setting is off, a sign-in in progress holds off an update, and a message that can never be delivered or an idle forwarded session no longer keeps a machine busy forever.
+- **Updates** in **Settings → Machines** no longer shows results from days earlier, uses each machine's live version, treats a desktop-managed machine on the newest version as up to date, and marks a machine already running the target (or a newer) version as updated.
+- Antigravity threads accept messages steered in from other threads and delegation.
+
 ## 0.27.1
 
 <!-- kybern-release-title: Fix for a crash on start -->

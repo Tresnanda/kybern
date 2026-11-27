@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { accountNeedsSignIn, cacheDotOpacity, cacheState, cacheValue, followLine, glyphAriaLabel, glyphTone, nextTabIndex, pickerTabs } from "../lib/accountUi.ts"
+import { accountNeedsSignIn, cacheDotOpacity, cacheState, cacheValue, followLine, glyphAriaLabel, glyphTone, keepsAccount, nextTabIndex, pickerTabs } from "../lib/accountUi.ts"
 
 const agents = [
   { kind: "claude-code", display_name: "Claude Code", available: true },
@@ -96,6 +96,32 @@ test("follow line states", () => {
   assert.equal(pinned.text, "This thread uses Work")
   assert.equal(pinned.action, "Follow defaults")
   assert.equal(followLine({ accounts, current: { kind: "claude-code", instance: "default" }, followsDefaults: true }).text, "Following defaults · CLI account")
+})
+
+test("a thread that already ran says which account it uses, with no defaults to go back to", () => {
+  const cur = { kind: "claude-code", instance: "work" }
+  for (const followsDefaults of [true, false]) {
+    const line = followLine({ accounts, current: cur, followsDefaults, kept: true })
+    assert.deepEqual(line, { state: "kept", name: "Work", color: "blue", text: "This thread uses Work" })
+  }
+  assert.equal(followLine({ accounts, current: cur, followsDefaults: undefined, kept: true }), null)
+})
+
+test("a thread keeps its account once it ran, on a daemon that holds it there", () => {
+  const work = { kind: "claude-code", instance: "work" }
+  const ran = { provider: work, provider_session_id: "s1" }
+  assert.equal(keepsAccount(ran, work, accounts, "0.27.2"), true)
+  // Picking another account of the same agent, not sent yet: the thread still has no defaults to follow.
+  assert.equal(keepsAccount(ran, { kind: "claude-code", instance: "default" }, accounts, "0.28.0"), true)
+  assert.equal(keepsAccount({ provider: { kind: "claude-code", instance: "default" }, provider_session_id: "s1" }, work, [], "0.27.2"), true)
+  // Never ran, or another agent is picked: it follows the defaults.
+  assert.equal(keepsAccount({ provider: work, provider_session_id: null }, work, accounts, "0.27.2"), false)
+  assert.equal(keepsAccount(ran, { kind: "codex", instance: "default" }, accounts, "0.27.2"), false)
+  // Its account was removed: it follows the defaults again.
+  assert.equal(keepsAccount({ provider: { kind: "claude-code", instance: "gone" }, provider_session_id: "s1" }, work, accounts, "0.27.2"), false)
+  // An older daemon moves the thread with the default; an unknown one is not assumed to hold it.
+  assert.equal(keepsAccount(ran, work, accounts, "0.27.1"), false)
+  assert.equal(keepsAccount(ran, work, accounts, undefined), false)
 })
 
 test("glyph tone thresholds", () => {

@@ -6,7 +6,7 @@ import { UpdateRunStore } from '../../../../packages/kybern-client/src/updateRun
 // user is at (any member answers for all of them), `machines.info` from each machine about itself, and the
 // actions of design §4.1. One store; it reads while something shows it and follows `network.changed`.
 import { useEffect, useSyncExternalStore } from 'react'
-import { NETWORK_CHANGED_NOTIFICATION, NETWORK_MACHINE_CHANGED_NOTIFICATION, OUTBOX_CHANGED_NOTIFICATION, type DoctorReport, type MachineId, type MachineInfo, type NetworkAddResult, type NetworkCodeCreateResult, type NetworkRemoveParams, type NetworkStatus, type NetworkUpdateAllResult, type OutboxItem } from '../../../../packages/kybern-client/src/types.ts'
+import { NETWORK_CHANGED_NOTIFICATION, NETWORK_MACHINE_CHANGED_NOTIFICATION, OUTBOX_CHANGED_NOTIFICATION, type DoctorReport, type MachineCard, type MachineId, type MachineInfo, type NetworkAddResult, type NetworkCodeCreateResult, type NetworkRemoveParams, type NetworkStatus, type NetworkUpdateAllResult, type OutboxItem } from '../../../../packages/kybern-client/src/types.ts'
 import { isNetworkStatus } from '../../../../packages/kybern-client/src/machines.ts'
 import { getClient } from '../state.ts'
 import { describe, problemLine } from '../problems/describe.ts'
@@ -171,11 +171,24 @@ export async function updateAllMachines(): Promise<NetworkUpdateAllResult> {
   } catch (e) { updateRuns.fail(members.map(m => m.machine_id)); throw e }
 }
 export async function retryMachineUpdate(id: string) {
-  const members = state.status?.members.filter(m => m.machine_id === id) ?? []
+  const existing = state.status?.members.filter(m => m.machine_id === id) ?? []
+  const conn = machineHub().set.connection(id)
+  const members: MachineCard[] = existing.length ? existing : [{
+    machine_id: id,
+    name: conn?.record.name ?? id,
+    os: conn?.info?.os ?? '',
+    status: 'online',
+    is_self: id === machineHub().localMachineId,
+    version: conn?.info?.version ?? null,
+    features: conn?.info?.features ?? [],
+    harnesses: [],
+    allow: {},
+  } as MachineCard]
   updateRuns.begin(members)
   try {
     const update = await machineHub().clientFor(id).call('daemon_update.run', {})
     updateRuns.reconcile(members.map(m => ({ ...m, update })))
+    return update
   } catch (e) { updateRuns.fail([id]); throw e }
 }
 /** "Keep all machines on the same version": a member that sees a newer version updates itself when idle. */

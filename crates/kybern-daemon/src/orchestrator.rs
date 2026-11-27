@@ -86,6 +86,20 @@ pub(crate) struct AdoptSession {
     pub announce_history: bool,
 }
 
+/// Why a thread can never accept a user or queued message, if it cannot.
+pub(crate) fn undeliverable_reason(thread: &Thread) -> Option<String> {
+    if thread.subagent.is_some() {
+        return Some(subagents::READ_ONLY_ERROR.into());
+    }
+    if thread.inbound.is_some() {
+        return Some(inbound::INBOUND_READ_ONLY.into());
+    }
+    if let Some(moved) = &thread.moved {
+        return Some(move_thread::moved_message(moved));
+    }
+    None
+}
+
 /// A rejected send, before any turn was accepted. Thread messaging may retry
 /// this condition; provider/startup failures must still surface for inspection.
 #[derive(Debug)]
@@ -1179,7 +1193,7 @@ impl Orchestrator {
     /// is not marked busy in the store.
     async fn session_parked(&self, thread_id: ThreadId, live: &LiveSession) -> Result<bool> {
         // A context refresh owns the session between its handoff turns.
-        if live.turn.lock().await.is_some() || self.is_rotating(thread_id) {
+        if live.turn.lock().await.as_ref().is_some_and(|turn| !turn.completed) || self.is_rotating(thread_id) {
             return Ok(false);
         }
         if live.tasks.lock().await.values().any(|task| task.status.is_active()) {
@@ -1225,8 +1239,20 @@ impl Orchestrator {
     pub async fn session_activity(&self) -> Result<SessionActivity> {
         let snapshot: Vec<(ThreadId, Arc<LiveSession>)> =
             self.inner.sessions.lock().await.iter().map(|(id, live)| (*id, live.clone())).collect();
-        let mut activity = SessionActivity { live: snapshot.len(), idle: 0 };
+        let mut activity = SessionActivity { live: 0, idle: 0 };
         for (thread_id, live) in &snapshot {
+            if live.is_released() {
+                continue;
+            }
+            if let Some(active) = self.inbound_session_active(*thread_id, live).await {
+                // An inbound thread uses an inert stand-in with no child process: count it only
+                // while a forwarded tool call or approval is actually in flight.
+                if active {
+                    activity.live += 1;
+                }
+                continue;
+            }
+            activity.live += 1;
             if self.session_parked(*thread_id, live).await? {
                 activity.idle += 1;
             }
@@ -1259,6 +1285,7 @@ impl Orchestrator {
     ) -> Result<Vec<SessionRelease>> {
         // Never in the way of the idle sweep: it logs its own failures and closes in the background.
         self.close_quiet_retained_sessions(now).await;
+        self.inbound_sweep().await;
         let (idle_limit, cap, idle_reason) = if saving_power {
             (Some(BackgroundSettings::BATTERY_SESSION_IDLE), None, SessionReleaseReason::Power)
         } else {
@@ -2216,7 +2243,9 @@ impl Orchestrator {
     pub async fn send_client_message(&self, params: methods::ThreadsSendParams) -> Result<methods::ThreadsSendResult> {
         let retryable = params.message_id.is_some();
         let message_id = params.message_id.unwrap_or_else(Uuid::now_v7);
-        // An account that is not usable on this machine fails before anything starts, naming one to use instead.
+        // An account that is not usable on this machine fails before anything starts, naming one to use instead. A
+        // borrowed account whose last borrow failed borrows once more first, so a stale failure never refuses it.
+        self.retry_borrow_before_send(params.thread_id).await;
         self.ensure_account_available(params.thread_id)?;
         let (turn_id, message_id, admission) = self.send_with_id(params.thread_id, message_id, params.message, false, retryable).await?;
         Ok(methods::ThreadsSendResult { turn_id, message_id, queued: admission == Admission::Queued })
@@ -2444,11 +2473,8 @@ impl Orchestrator {
     /// `enqueue` for a caller that holds the command gate.
     fn enqueue_admitted(&self, message: methods::QueuedMessage) -> Result<()> {
         let thread = self.inner.store.thread_get(message.thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
-        if thread.subagent.is_some() {
-            return Err(anyhow!(subagents::READ_ONLY_ERROR));
-        }
-        if let Some(moved) = &thread.moved {
-            return Err(anyhow!(move_thread::moved_message(moved)));
+        if let Some(reason) = undeliverable_reason(&thread) {
+            return Err(anyhow!(reason));
         }
         if thread.status == ThreadStatus::Archived {
             return Err(anyhow!("This chat is archived. Start a new chat to keep working."));
@@ -3011,11 +3037,39 @@ impl Orchestrator {
     /// subagent can outlive the turn that started it by hours; once that turn
     /// has ended, a follow-up starts the next turn exactly as a direct send
     /// would, and the tasks keep running on the same session.
+    fn drop_undeliverable_queued(&self, thread_id: ThreadId, message_id: MessageId, reason: &str) -> Result<()> {
+        let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
+        if !self.inner.store.queue_list(Some(thread_id))?.iter().any(|item| item.id == message_id) {
+            return Ok(());
+        }
+        self.emit(thread_id, None, EventPayload::MessageRemoved { message_id })?;
+        if !self.messaging_queue_failed(thread_id, message_id) {
+            let _ = self.emit(
+                thread_id,
+                None,
+                EventPayload::ProviderNotice {
+                    level: NoticeLevel::Warning,
+                    text: format!("Could not send queued message: {reason}"),
+                    data: None,
+                    problem: None,
+                },
+            );
+        }
+        tracing::warn!(%thread_id, %message_id, %reason, "dropped undeliverable queued message");
+        Ok(())
+    }
+
     pub async fn drain_queues(&self) -> Result<bool> {
         let mut waiting = false;
         for queued in self.inner.store.queue_list(None)? {
             let Some(thread) = self.inner.store.thread_get(queued.thread_id)? else { continue };
             if thread.status == ThreadStatus::Archived {
+                continue;
+            }
+            if let Some(reason) = undeliverable_reason(&thread) {
+                if let Err(error) = self.drop_undeliverable_queued(thread.id, queued.id, &reason) {
+                    tracing::warn!(thread_id = %thread.id, message_id = %queued.id, %error, "could not drop undeliverable queued message");
+                }
                 continue;
             }
             if self.is_rotating(thread.id) {
@@ -8886,6 +8940,8 @@ mod tests {
     #[tokio::test]
     async fn steer_fallback_queues_followup_and_delivers_on_next_turn() {
         assert!(super::delegation::harness_supports_steer(ProviderKind::Cursor));
+        // agy acp takes a message inside a running turn; its -p fallback answers with this same queued path.
+        assert!(super::delegation::harness_supports_steer(ProviderKind::Antigravity));
         let fixture = Fixture::new();
         let thread = fixture.thread(ThreadStatus::Idle);
         let messages = Arc::new(Mutex::new(Vec::new()));

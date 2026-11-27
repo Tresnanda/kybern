@@ -2,7 +2,10 @@
 // gets its own login (a copied login breaks both), or borrows a shared one where that is possible. Pure: planning and the
 // queue's state; `dialogs/Account.tsx` runs the steps.
 import { initialLoginMode } from '../shared/lib/accounts.ts'
-import type { AccountLogin, AccountLoginMode, AccountSummary, LendableAccount, MachineId, ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
+import { problemOf } from '../../../../packages/kybern-client/src/problem.ts'
+import type { ProblemView } from '../../../../packages/kybern-client/src/problems.ts'
+import { versionAtLeast } from '../../../../packages/kybern-client/src/newChat.ts'
+import { ACCOUNTS_WRITE_FEATURE, type AccountLogin, type AccountLoginMode, type AccountsShared, type AccountSummary, type DaemonUpdate, type LendableAccount, type MachineId, type ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
 import { LENDABLE_KINDS } from './offers.ts'
 import { keyOf, standings, isUsable, type MachineAccounts, type UnifiedAccount } from './unified.ts'
 
@@ -37,16 +40,13 @@ export interface SignInItem {
  */
 export function loginModeFor(item: Pick<SignInItem, 'kind' | 'ownLogin' | 'instance' | 'named'>, remote: boolean, handoff = false): AccountLoginMode {
   if (item.ownLogin) return 'terminal'
-  if (item.kind === 'antigravity') return item.instance === 'default' ? 'terminal' : 'paste'
+  if (item.kind === 'antigravity') return 'paste'
   if (remote && handoff) return 'browser'
   return initialLoginMode(item.kind, remote)
 }
 
 /** The code to fall back to when a handoff can't be done: Codex's device code, else a pasted code. */
 export const fallbackModeFor = (kind: ProviderKind): AccountLoginMode => initialLoginMode(kind, true)
-
-const antigravityOwnSignedIn = (accounts: readonly AccountSummary[]) =>
-  accounts.some((a) => a.provider.kind === 'antigravity' && a.provider.instance === 'default' && (a.status === 'signed_in' || (a.status === 'unknown' && !!a.identity)))
 
 export interface AddRequest {
   kind: ProviderKind
@@ -60,25 +60,34 @@ export interface AddRequest {
 }
 
 /** "Add account": one sign-in on each ticked machine. */
-export function planAdd({ kind, name, machines, computer, directory }: AddRequest): SignInItem[] {
+export function planAdd({ kind, name, machines, directory }: AddRequest): SignInItem[] {
   const label = name?.trim() || undefined
   return machines.map((machine) => {
     const item: SignInItem = { id: `${machine.machineId}:${kind}:new`, machineId: machine.machineId, machine: machine.name, kind, method: 'sign_in', ...(label ? { name: label } : {}) }
-    if (kind === 'antigravity') {
-      // The first Antigravity sign-in on this computer is its own `agy` login; every one after it is a named account.
-      if (machine.machineId === computer && !antigravityOwnSignedIn(machine.accounts)) item.ownLogin = true
-      else item.named = true
-    }
+    // Adding an account always makes a new one with its own profile. It never signs in the computer's own `agy` login:
+    // a Keychain Kybern can't read quietly looks signed out, and that sign-in replaced the person's own login (0.27.1).
+    if (kind === 'antigravity') item.named = true
     if (directory && machines.length === 1) item.directory = directory
     return item
   })
+}
+
+/**
+ * A computer's own `agy` login is signed in only when the person asked for that terminal login by name (`ownLogin`).
+ * Any other Antigravity sign-in that names no account of its own adds a new named one: a sign-in of the computer's own
+ * login would replace whoever is signed in there.
+ */
+export function keepOwnAntigravityLogin(item: SignInItem): SignInItem {
+  if (item.kind !== 'antigravity' || item.ownLogin || (item.instance && item.instance !== 'default')) return item
+  const { instance: _, ...rest } = item
+  return { ...rest, named: true }
 }
 
 /** Sign `account` in on one machine: its signed-out login there, else a new one. */
 export function planOnMachine(account: UnifiedAccount, machine: Pick<MachineAccounts, 'machineId' | 'name'>): SignInItem {
   const standing = standings(account).find((s) => s.machineId === machine.machineId)
   const named = standing?.presences.find((p) => !p.terminal)
-  const existing = named ?? standing?.presences[0]
+  const existing = named ?? (account.kind === 'antigravity' ? undefined : standing?.presences[0])
   const item: SignInItem = {
     id: `${machine.machineId}:${account.kind}:${existing?.instance ?? 'new'}:${account.id}`,
     machineId: machine.machineId,
@@ -94,9 +103,10 @@ export function planOnMachine(account: UnifiedAccount, machine: Pick<MachineAcco
   return item
 }
 
-/** The shared sign-in that can stand in for `account` on another machine, if the sharing machine has it. */
-export function lenderFor(account: Pick<UnifiedAccount, 'kind' | 'email' | 'presences'>, sharing: { machineId: MachineId; machine: string; lendable: readonly LendableAccount[] } | null, target: MachineId): SignInItem['lender'] | undefined {
-  if (!sharing || sharing.machineId === target || !LENDABLE_KINDS.includes(account.kind) || !account.email) return
+/** The shared sign-in that can stand in for `account` on another machine: only from a sharing machine that is usable for
+ *  new set-ups and has it. */
+export function lenderFor(account: Pick<UnifiedAccount, 'kind' | 'email' | 'presences'>, sharing: { machineId: MachineId; machine: string; usable: boolean; lendable: readonly LendableAccount[] } | null, target: MachineId): SignInItem['lender'] | undefined {
+  if (!sharing?.usable || sharing.machineId === target || !LENDABLE_KINDS.includes(account.kind) || !account.email) return
   const wanted = account.email.toLowerCase()
   const offered = sharing.lendable.find((a) => a.provider === account.kind && a.email?.toLowerCase() === wanted)
   return offered ? { machine: sharing.machine, account: offered.account } : undefined
@@ -115,11 +125,65 @@ export function planSetup(accounts: readonly UnifiedAccount[], machine: Pick<Mac
   return [...items.filter((item) => item.method === 'borrow'), ...items.filter((item) => item.method === 'sign_in')]
 }
 
+// ── Signing an account in again as someone else ──────────────────────────────
+
+/** The first daemon that changes nothing about an account signed in again as another email until `login.finish` keeps it
+ *  (#13). Older ones save the new email as the sign-in finishes, and refuse the call. */
+const HOLDS_FOR_KEEP_VERSION = '0.27.2'
+
+/** Whether "Keep" on this sign-in still has to tell its machine to save it. */
+export const awaitsKeep = (login: Pick<AccountLogin, 'instance' | 'previous_email' | 'duplicate_of'>, daemonVersion: string | null | undefined): boolean =>
+  !!login.instance && login.instance !== 'default' && !!login.previous_email && !login.duplicate_of && versionAtLeast(daemonVersion, HOLDS_FOR_KEEP_VERSION)
+
 /** The local account on a machine that already has this email, to borrow into rather than create another. */
 export function existingFor(accounts: readonly AccountSummary[], kind: ProviderKind, email: string | undefined): AccountSummary | undefined {
   if (!email) return
   const key = `${kind}:${email.toLowerCase()}`
   return accounts.find((a) => a.provider.kind === kind && a.provider.instance !== 'default' && keyOf(a) === key)
+}
+
+// ── Machines that must update first ──────────────────────────────────────────
+
+/**
+ * Whether the daemon behind a connection refuses account sign-ins and borrows from it. From 0.27.2 they need
+ * `accounts:write` (`accounts.write.v1`); an older daemon asks for `access:write`, which a connection to another machine
+ * doesn't carry. False while nothing is known about the daemon.
+ */
+export function needsAccountsUpdate(info: { features?: readonly string[]; scopes?: readonly string[] } | null | undefined): boolean {
+  if (!info) return false
+  return !info.features?.includes(ACCOUNTS_WRITE_FEATURE) && !info.scopes?.some((scope) => scope === 'accounts_write' || scope === 'access_write')
+}
+
+/** The same for a machine of the account lists: unknown until it has answered. This computer is never asked to. */
+export function signInNeedsUpdate(machine: Pick<MachineAccounts, 'machineId' | 'state' | 'features' | 'scopes'> | undefined, computer: MachineId | null): boolean {
+  if (!machine || machine.machineId === computer || (machine.state !== 'ready' && machine.state !== 'legacy')) return false
+  return needsAccountsUpdate(machine)
+}
+
+/** What "Update" on such a machine came to, in a sentence. */
+export function updateLine(update: Pick<DaemonUpdate, 'status'>, machine: string): string {
+  switch (update.status) {
+    case 'waiting': return `${machine} updates when its running work finishes.`
+    case 'current': return `${machine} has no newer version yet.`
+    case 'unsupported': return `Update Kybern on ${machine} itself.`
+    case 'failed': return `Couldn’t update ${machine}. Try again, or update Kybern on it.`
+    default: return `Updating Kybern on ${machine}…`
+  }
+}
+
+/**
+ * Whether a finished new sign-in becomes the default: only a machine's first usable account of the agent, and only while
+ * no default is shared by every machine (setting one on this machine would change it everywhere).
+ */
+export const makesDefault = (accounts: readonly AccountSummary[], kind: ProviderKind, shared: AccountsShared | null | undefined): boolean =>
+  !shared?.defaults?.[kind] && !accounts.some((a) => a.provider.kind === kind && a.status === 'signed_in')
+
+/** The primary action of a failed borrow's card, whatever failed: this machine signs in itself. The daemon names it
+ *  `sign_in_here` and words it; an error without it gets the same button. */
+export function signInHereAction(error: unknown, view: Pick<ProblemView, 'action' | 'secondary'>, machine: string): { id: 'sign_in_here'; label: string } {
+  const problem = problemOf(error)
+  const named = [view.action, view.secondary, problem?.action, problem?.secondary].find((action) => action?.id === 'sign_in_here')
+  return { id: 'sign_in_here', label: named?.label || `Sign in on ${machine} instead` }
 }
 
 // ── The queue ────────────────────────────────────────────────────────────────
@@ -143,7 +207,7 @@ export interface QueueState {
   color?: string
 }
 
-export const startQueue = (items: readonly SignInItem[]): QueueState => ({ items, index: 0, results: {} })
+export const startQueue = (items: readonly SignInItem[]): QueueState => ({ items: items.map(keepOwnAntigravityLogin), index: 0, results: {} })
 export const currentItem = (state: QueueState): SignInItem | null => state.items[state.index] ?? null
 export const queueDone = (state: QueueState) => state.index >= state.items.length
 
@@ -158,9 +222,9 @@ export function advance(state: QueueState, result: ItemResult, settled: Settled 
   const item = currentItem(state)
   if (!item) return state
   const next: QueueState = { ...state, index: state.index + 1, results: { ...state.results, [item.id]: result } }
-  // One account added to several machines keeps the first sign-in's email, name and colour.
-  const sameAccount = isOneAccount(state.items)
-  if (sameAccount) {
+  // One account added to several machines keeps the first sign-in's email, name and colour. A lone sign-in keeps what
+  // it ended on, which "Keep" can make another email than the one asked for.
+  if (isOneAccount(state.items) || state.items.length === 1) {
     next.email = state.email ?? settled.email
     next.name = state.name ?? settled.name
     next.color = state.color ?? settled.color

@@ -59,19 +59,42 @@ impl SettingsStore {
 
     pub fn set(&self, settings: Settings) -> Result<Settings> {
         let _writer = self.writer.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        self.write(settings)
+        self.write(settings, AccountChoice::Shared)
     }
 
     /// Change the current settings in place: `change` sees what is saved at that moment, and no other write
     /// lands between that read and this write. `None` from `change` writes nothing. A background writer uses
     /// this so it never overwrites an edit made since it last read the settings.
     pub fn update<T>(&self, change: impl FnOnce(&Settings) -> Option<(Settings, T)>) -> Result<Option<(Settings, T)>> {
-        let _writer = self.writer.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Some((next, out)) = change(&self.get()) else { return Ok(None) };
-        Ok(Some((self.write(next)?, out)))
+        self.update_with(|settings, _| Ok(change(settings)))
     }
 
-    fn write(&self, mut settings: Settings) -> Result<Settings> {
+    /// [`SettingsStore::update`] for a change that can fail, and that says how its own change of this machine's
+    /// default or project accounts reaches the shared values (`AccountChoice`, `Shared` unless `change` says).
+    pub fn update_with<T>(
+        &self,
+        change: impl FnOnce(&Settings, &mut AccountChoice) -> Result<Option<(Settings, T)>>,
+    ) -> Result<Option<(Settings, T)>> {
+        let _writer = self.writer.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut choice = AccountChoice::Shared;
+        let Some((next, out)) = change(&self.get(), &mut choice)? else { return Ok(None) };
+        Ok(Some((self.write(next, choice)?, out)))
+    }
+
+    /// Save a whole document a client sent, against the `base` it was edited from (#378). Account fields the
+    /// client left as they were in `base` keep their current value, so a default, name or account that arrived
+    /// from another machine (or another writer) since the client read the settings is never undone. Without a
+    /// `base` (an older client) the document is saved as sent.
+    pub fn replace(&self, client: Settings, base: Option<&Settings>) -> Result<Settings> {
+        let _writer = self.writer.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let next = match base {
+            Some(base) => merge_account_fields(&self.get(), base, client),
+            None => client,
+        };
+        self.write(next, AccountChoice::Shared)
+    }
+
+    fn write(&self, mut settings: Settings, choice: AccountChoice) -> Result<Settings> {
         // A credential a client just typed goes into the secret store; settings keep the reference.
         crate::secret_store::externalize(&mut settings)?;
         validate_orchestration(&settings.orchestration)?;
@@ -104,7 +127,7 @@ impl SettingsStore {
             let store = self.stamps.get();
             let terminal = crate::accounts_shared::terminal_emails(store);
             let repos = crate::accounts_shared::project_repo_keys(store);
-            crate::accounts_shared::normalize(&before, &mut settings, &terminal, &repos);
+            crate::accounts_shared::normalize_with(&before, &mut settings, &terminal, &repos, choice);
         }
         crate::accounts_shared::validate(&settings.accounts_shared)?;
         crate::provider_accounts::validate(&settings)?;
@@ -122,6 +145,66 @@ impl SettingsStore {
         let _ = self.changed.send(settings.clone());
         Ok(settings)
     }
+}
+
+/// How a write's own change of this machine's default or project accounts reaches `accounts_shared`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AccountChoice {
+    /// Chosen on this machine by a route that only knows the local fields (an older client, the CLI): every
+    /// machine follows it.
+    #[default]
+    Shared,
+    /// A change nobody made for the whole network (a machine's first sign-in, removing the default account):
+    /// it stays on this machine, and the shared default and project choices stay as they are.
+    LocalOnly,
+}
+
+/// `client` with its account fields three-way merged against `base` and `current`: an entry the client
+/// changed relative to `base` is the client's, any other is `current`'s. The fields are the shared account
+/// values (`accounts_shared`: each default, profile, project and offer answer) and each harness's accounts,
+/// default account and project accounts. Everything else is the client's, as before.
+pub fn merge_account_fields(current: &Settings, base: &Settings, mut client: Settings) -> Settings {
+    use std::collections::{BTreeMap, BTreeSet};
+    fn merge_map<K: Ord + Clone, V: PartialEq + Clone>(
+        current: &BTreeMap<K, V>,
+        base: &BTreeMap<K, V>,
+        client: &BTreeMap<K, V>,
+    ) -> BTreeMap<K, V> {
+        let keys: BTreeSet<&K> = current.keys().chain(base.keys()).chain(client.keys()).collect();
+        keys.into_iter()
+            .filter_map(|key| {
+                let theirs = client.get(key);
+                let chosen = if theirs != base.get(key) { theirs } else { current.get(key) };
+                chosen.map(|value| (key.clone(), value.clone()))
+            })
+            .collect()
+    }
+    let shared = &mut client.accounts_shared;
+    shared.defaults = merge_map(&current.accounts_shared.defaults, &base.accounts_shared.defaults, &shared.defaults);
+    shared.profiles = merge_map(&current.accounts_shared.profiles, &base.accounts_shared.profiles, &shared.profiles);
+    shared.projects = merge_map(&current.accounts_shared.projects, &base.accounts_shared.projects, &shared.projects);
+    shared.offers = merge_map(&current.accounts_shared.offers, &base.accounts_shared.offers, &shared.offers);
+    let kinds: BTreeSet<kybern_protocol::ProviderKind> =
+        current.providers.keys().chain(base.providers.keys()).chain(client.providers.keys()).copied().collect();
+    let empty = kybern_protocol::ProviderSettings::default();
+    for kind in kinds {
+        let now = current.providers.get(&kind).unwrap_or(&empty);
+        let was = base.providers.get(&kind).unwrap_or(&empty);
+        // A harness the client's document doesn't have (set up since it read the settings) keeps its settings.
+        let sent = client.providers.get(&kind);
+        let mut theirs = sent.cloned().unwrap_or_else(|| now.clone());
+        let accounts = merge_map(&now.accounts, &was.accounts, &theirs.accounts);
+        let projects = merge_map(&now.project_accounts, &was.project_accounts, &theirs.project_accounts);
+        let default =
+            if theirs.default_account != was.default_account { theirs.default_account.clone() } else { now.default_account.clone() };
+        theirs.accounts = accounts;
+        theirs.project_accounts = projects;
+        theirs.default_account = default;
+        if sent != Some(&theirs) && (sent.is_some() || theirs != empty) {
+            client.providers.insert(kind, theirs);
+        }
+    }
+    client
 }
 
 /// Delegation limits must stay in the ranges the settings screen offers.
@@ -237,6 +320,90 @@ mod profile_tests {
         assert_eq!(SettingsStore::load(&path).unwrap().get().coordinator_mcp_servers, settings.coordinator_mcp_servers);
         settings.coordinator_mcp_servers.insert(kybern_protocol::ProviderKind::Omp, vec!["*".into()]);
         assert!(store.set(settings).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod replace_tests {
+    use super::*;
+    use kybern_protocol::{AccountProfile, ProviderAccount, ProviderKind};
+
+    fn account(name: &str, email: &str, dir: &Path) -> ProviderAccount {
+        ProviderAccount {
+            name: name.into(),
+            directory: dir.join(name).to_string_lossy().into_owned(),
+            color: Some("blue".into()),
+            email: Some(email.into()),
+            plan: None,
+        }
+    }
+
+    /// #378: a client that read the settings, then saved its whole document after a sync (or another writer)
+    /// changed the accounts, keeps what arrived meanwhile and changes only what it changed.
+    #[test]
+    fn a_whole_document_save_never_undoes_accounts_that_arrived_meanwhile() {
+        let dir = std::env::temp_dir().join(format!("kybern-settings-replace-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = SettingsStore::load(&dir.join("settings.json")).unwrap();
+        let mut settings = store.get();
+        let claude = settings.providers.entry(ProviderKind::ClaudeCode).or_default();
+        claude.accounts.insert("w1".into(), account("Work", "work@example.com", &dir));
+        claude.accounts.insert("p1".into(), account("Personal", "me@home.org", &dir));
+        claude.default_account = Some("p1".into());
+        store.set(settings).unwrap();
+        // The client reads the settings...
+        let base = store.get();
+        assert_eq!(base.accounts_shared.defaults[&ProviderKind::ClaudeCode], "claude-code:me@home.org");
+        // ...meanwhile another machine's sync makes Work the default and renames it, and a sign-in adds an account.
+        store
+            .update(|current| {
+                let mut next = current.clone();
+                next.accounts_shared.defaults.insert(ProviderKind::ClaudeCode, "claude-code:work@example.com".into());
+                next.accounts_shared.profiles.insert(
+                    "claude-code:work@example.com".into(),
+                    AccountProfile { name: "Office".into(), color: Some("blue".into()), manual_only: false },
+                );
+                next.providers
+                    .get_mut(&ProviderKind::ClaudeCode)
+                    .unwrap()
+                    .accounts
+                    .insert("n1".into(), account("New", "new@example.com", &dir));
+                next.providers
+                    .entry(ProviderKind::Codex)
+                    .or_default()
+                    .accounts
+                    .insert("c1".into(), account("Codex", "c@example.com", &dir));
+                Some((next, ()))
+            })
+            .unwrap();
+        assert_eq!(store.get().providers[&ProviderKind::ClaudeCode].default_account.as_deref(), Some("w1"));
+        // ...and the client saves an unrelated change with the whole document it read.
+        let mut client = base.clone();
+        client.generate_titles = !base.generate_titles;
+        let saved = store.replace(client.clone(), Some(&base)).unwrap();
+        assert_eq!(saved.generate_titles, client.generate_titles, "the client's own change lands");
+        assert_eq!(saved.accounts_shared.defaults[&ProviderKind::ClaudeCode], "claude-code:work@example.com", "the synced default stays");
+        assert_eq!(saved.accounts_shared.profiles["claude-code:work@example.com"].name, "Office");
+        let claude = &saved.providers[&ProviderKind::ClaudeCode];
+        assert_eq!(claude.default_account.as_deref(), Some("w1"));
+        assert_eq!(claude.accounts["w1"].name, "Office");
+        assert!(claude.accounts.contains_key("n1"), "an account added meanwhile stays");
+        assert!(saved.providers[&ProviderKind::Codex].accounts.contains_key("c1"), "so does a harness set up meanwhile");
+
+        // What the client did change is the client's: here, Personal is the default again and New is removed.
+        let base = store.get();
+        let mut client = base.clone();
+        client.accounts_shared.defaults.insert(ProviderKind::ClaudeCode, "claude-code:me@home.org".into());
+        client.providers.get_mut(&ProviderKind::ClaudeCode).unwrap().accounts.remove("n1");
+        let saved = store.replace(client, Some(&base)).unwrap();
+        assert_eq!(saved.providers[&ProviderKind::ClaudeCode].default_account.as_deref(), Some("p1"));
+        assert!(!saved.providers[&ProviderKind::ClaudeCode].accounts.contains_key("n1"));
+
+        // Without a base (an older client) the document is saved as sent, as before.
+        let stale = base.clone();
+        let saved = store.replace(stale, None).unwrap();
+        assert!(saved.providers[&ProviderKind::ClaudeCode].accounts.contains_key("n1"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

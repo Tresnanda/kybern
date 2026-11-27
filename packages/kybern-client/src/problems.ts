@@ -14,7 +14,28 @@ export interface ProblemContext {
   goal?: string
   /** The machine the call ran on, when it isn't this one: "SatyaMas". */
   machine?: string
+  /**
+   * Using another machine's sign-in on `machine` (binding an account to the machine that shares sign-ins). With it, a
+   * refusal an older daemon words badly (a missing scope, a bare permission or offline error) still reads as a sentence
+   * naming both machines, with "Sign in on <machine> instead" (`sign_in_here`) as the fix.
+   */
+  borrow?: BorrowContext
 }
+
+export interface BorrowContext {
+  /** The machine being set up: the one to sign in on instead. */
+  machineId: string
+  machine: string
+  /** The machine whose sign-in it tried to use. */
+  lender?: string
+  provider?: ProviderKind
+  instance?: string
+}
+
+/** `Problem.subject` of a failure to use another machine's sign-in; its action is `sign_in_here`. */
+export const LOGIN_BORROW_SUBJECT = "login_borrow"
+/** "Sign in on <machine> instead": stop borrowing, sign the account in on `params.machine_id` itself. */
+export const SIGN_IN_HERE_ACTION = "sign_in_here"
 
 export interface ProblemViewAction {
   /** What the client does: `install_tool`, `sign_in`, `retry`, `open_machines`, `copy_detail`, `update`, … */
@@ -87,6 +108,11 @@ function copyFor(problem: Problem, message: string, context: ProblemContext): Co
   const goal = context.goal ?? context.action
   const plain = plainSentence(message)
   const subject = problem.subject
+  if (subject === LOGIN_BORROW_SUBJECT) return borrowCopy(problem, plain, context)
+  if (context.borrow) {
+    const legacy = legacyBorrowCopy(problem, message, context.borrow)
+    if (legacy) return legacy
+  }
   // A repository another machine added to a group, which this machine couldn't clone: the daemon words it,
   // since only it knows the repository, its host and why.
   if (subject === "group_member")
@@ -166,6 +192,48 @@ function copyFor(problem: Problem, message: string, context: ProblemContext): Co
         retryable: true,
       }
   }
+}
+
+const signInHere = (borrow: Pick<BorrowContext, "machineId" | "machine" | "provider" | "instance">): ProblemViewAction => ({
+  id: SIGN_IN_HERE_ACTION,
+  label: `Sign in on ${borrow.machine} instead`,
+  params: { machine_id: borrow.machineId, ...(borrow.provider ? { provider: borrow.provider } : {}), ...(borrow.instance ? { instance: borrow.instance } : {}) },
+})
+
+/** A daemon's `login_borrow` problem: its sentence, and "Sign in on <machine> instead" as the fix. */
+function borrowCopy(problem: Problem, plain: string | null, context: ProblemContext): Copy {
+  const daemonAction = problem.action?.id === SIGN_IN_HERE_ACTION ? problem.action : undefined
+  const params = (daemonAction?.params ?? {}) as { [key: string]: JsonValue }
+  const action: ProblemViewAction | undefined = daemonAction
+    ? { id: SIGN_IN_HERE_ACTION, label: daemonAction.label, params: { ...params, ...(context.borrow && !params.machine_id ? { machine_id: context.borrow.machineId } : {}) } }
+    : context.borrow
+      ? signInHere(context.borrow)
+      : undefined
+  const secondary = problem.secondary?.id === "retry" ? retry(problem.secondary.label) : copyDetail
+  return {
+    title: problem.title ?? `Couldn't ${context.action}`,
+    body: plainSentence(problem.hint ?? "") ?? plain ?? "Sign in on this machine instead, or try again.",
+    ...(action ? { action } : {}),
+    secondary,
+    retryable: true,
+  }
+}
+
+/** An older daemon's refusal while using another machine's sign-in, in words that name both machines. */
+function legacyBorrowCopy(problem: Problem, message: string, borrow: BorrowContext): Copy | null {
+  const lender = borrow.lender ?? "That machine"
+  const title = borrow.lender ? `Couldn't use ${borrow.lender}'s sign-in` : "Couldn't use the shared sign-in"
+  const detail = problem.detail ?? message
+  const action = signInHere(borrow)
+  if (/missing scope: (access|accounts):write/i.test(detail))
+    return { title, body: `${borrow.machine} needs a newer Kybern to use another machine's sign-ins. Update Kybern on ${borrow.machine} and try again, or sign in on ${borrow.machine} instead.`, action, secondary: copyDetail, retryable: true }
+  if (problem.kind === "permission")
+    return { title, body: `${lender} doesn't let other machines use its sign-ins. Choose Share this machine’s sign-ins for ${borrow.lender ?? "it"} in Settings → Accounts, or sign in on ${borrow.machine} instead.`, action, secondary: copyDetail, retryable: true }
+  if (problem.kind === "offline")
+    return { title, body: `${lender} is offline. Bring it online and try again, or sign in on ${borrow.machine} instead.`, action, secondary: retry(), retryable: true }
+  if (problem.kind === "update_needed")
+    return { title, body: `${lender} needs a newer Kybern to share its sign-ins. Update it, or sign in on ${borrow.machine} instead.`, action, secondary: copyDetail, retryable: false }
+  return null
 }
 
 function notFoundBody(subject: string | undefined, plain: string | null): string {

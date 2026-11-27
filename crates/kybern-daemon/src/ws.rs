@@ -803,7 +803,7 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
                 match progress {
                     Ok(progress) => {
                         // A paired phone sees a card's step, never the sign-in page, code or terminal.
-                        let progress = if ctx.principal.has(Scope::AccessWrite) { progress } else { redact_progress(progress) };
+                        let progress = if ctx.principal.has(Scope::AccountsWrite) { progress } else { redact_progress(progress) };
                         let _ = ctx.out.notify(kybern_protocol::methods::REQUESTS_PROGRESS_NOTIFICATION, progress).await;
                     }
                     // Clients also read `requests.progress`, so a missed step is recovered.
@@ -820,7 +820,7 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
                 match login {
                     Ok(login) => {
                         // A paired phone sees progress, never the sign-in page or code.
-                        let login = if ctx.principal.has(Scope::AccessWrite) { login } else { crate::account_login::for_observer(login) };
+                        let login = if ctx.principal.has(Scope::AccountsWrite) { login } else { crate::account_login::for_observer(login) };
                         let _ = ctx.out.notify(kybern_protocol::methods::ACCOUNTS_LOGIN_CHANGED_NOTIFICATION, login).await;
                     }
                     // Clients also poll `providers.accounts.login.get`, so a missed phase is recovered.
@@ -1138,7 +1138,7 @@ async fn handle_text(state: &AppState, ctx: &Arc<ConnectionCtx>, text: &str, ord
     let result = match scope_for(&req.method) {
         None => Err(RpcError::method_not_found(&req.method)),
         Some(Some(scope)) if !ctx.principal.has(scope) || !effective_scopes(state, &ctx.principal).contains(&scope) => {
-            Err(RpcError::forbidden(scope.as_str()))
+            Err(refused(state, scope))
         }
         Some(_) => crate::rpc::dispatch(state, ctx, &req.method, req.params).await,
     };
@@ -1387,4 +1387,23 @@ mod typed_notification_memory_tests {
         assert_eq!(out.budget.available_permits(), OUTBOX_BYTES);
         assert!(receiver.try_recv().is_err());
     }
+}
+
+/// A call the token's scopes don't cover. Signing accounts in on another machine (`accounts:write`) says which
+/// machine and what to do: a device token minted before 0.27.2, or for an older desktop, lacks the scope.
+fn refused(state: &AppState, scope: Scope) -> RpcError {
+    let error = RpcError::forbidden(scope.as_str());
+    if scope != Scope::AccountsWrite {
+        return error;
+    }
+    let name = state
+        .network
+        .membership()
+        .and_then(|membership| membership.projection().entry(&membership.machine_id()).map(|entry| entry.descriptor.name.clone()))
+        .unwrap_or_else(crate::rpc::hostname);
+    let hint = format!("This computer isn't allowed to change accounts on {name}. Update Kybern here and on {name}, then try again.");
+    let problem = kybern_protocol::rpc::Problem::new(kybern_protocol::rpc::ProblemKind::Permission, error.message.clone())
+        .with_subject("accounts_write")
+        .with_copy(format!("Couldn't change accounts on {name}"), hint);
+    error.with_problem(&problem)
 }

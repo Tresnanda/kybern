@@ -92,6 +92,10 @@ pub struct DaemonActivity {
     pub terminals: u32,
     /// Follow-ups waiting for their thread to become idle.
     pub queued_messages: u32,
+    /// Account sign-ins in progress that aren't terminals (a browser page, a code to paste or enter, an
+    /// authorize handoff), or signed in and waiting to be saved (0.27.2). A restart would lose them.
+    #[serde(default)]
+    pub sign_ins: u32,
     /// When the daemon last became fully idle, if it is idle now.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idle_since: Option<chrono::DateTime<chrono::Utc>>,
@@ -566,6 +570,23 @@ pub struct AccountsListParams {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AccountsListResult {
     pub accounts: Vec<AccountSummary>,
+    /// The harnesses whose shared default this machine doesn't run on (0.27.2): it has no login for that
+    /// account (or its login now has another email), so its threads use another account until it does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unfollowed_defaults: Vec<UnfollowedDefault>,
+}
+
+/// A shared default this machine can't follow (`AccountsListResult::unfollowed_defaults`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct UnfollowedDefault {
+    pub kind: ProviderKind,
+    /// The shared default's account key (`<kind>:<email>`).
+    pub key: String,
+    /// The account this machine runs new threads on instead (`default` is the terminal login).
+    pub running_on: String,
+    /// This machine has a login for that account, but runs another one by choice (an account it chose
+    /// whose email isn't known yet). `false`: it has no login for that account.
+    pub has_account: bool,
 }
 method!(AccountsList, "providers.accounts.list", Some(Scope::OrchestrationRead), AccountsListParams, AccountsListResult);
 
@@ -671,6 +692,13 @@ pub struct AccountLoginHandoffResult {
     pub expires_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// `providers.accounts.login.handoff.cancel`: stop catching a sign-in's redirect on this computer and let
+/// its port go. Nothing happens when no handoff of that sign-in is listening.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AccountLoginHandoffCancelParams {
+    pub login_id: String,
+}
+
 /// `peer.accounts.login.peek`: what the machine with the browser needs to catch a sign-in's redirect.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PeerLoginPeekParams {
@@ -721,17 +749,24 @@ pub struct AccountLoginFinishParams {
     pub make_default: bool,
 }
 // Sign-in stores credentials on the daemon machine, so paired devices can't start it.
-method!(AccountsLoginStart, "providers.accounts.login.start", Some(Scope::AccessWrite), AccountLoginStartParams, AccountLogin);
+method!(AccountsLoginStart, "providers.accounts.login.start", Some(Scope::AccountsWrite), AccountLoginStartParams, AccountLogin);
 method!(AccountsLoginGet, "providers.accounts.login.get", Some(Scope::OrchestrationRead), AccountLoginIdParams, AccountLogin);
-method!(AccountsLoginInput, "providers.accounts.login.input", Some(Scope::AccessWrite), AccountLoginInputParams, AccountLogin);
-method!(AccountsLoginCancel, "providers.accounts.login.cancel", Some(Scope::AccessWrite), AccountLoginIdParams, AccountLogin);
-method!(AccountsLoginFinish, "providers.accounts.login.finish", Some(Scope::AccessWrite), AccountLoginFinishParams, ProviderInstance);
+method!(AccountsLoginInput, "providers.accounts.login.input", Some(Scope::AccountsWrite), AccountLoginInputParams, AccountLogin);
+method!(AccountsLoginCancel, "providers.accounts.login.cancel", Some(Scope::AccountsWrite), AccountLoginIdParams, AccountLogin);
+method!(AccountsLoginFinish, "providers.accounts.login.finish", Some(Scope::AccountsWrite), AccountLoginFinishParams, ProviderInstance);
 method!(
     AccountsLoginHandoff,
     "providers.accounts.login.handoff",
     Some(Scope::AccessWrite),
     AccountLoginHandoffParams,
     AccountLoginHandoffResult
+);
+method!(
+    AccountsLoginHandoffCancel,
+    "providers.accounts.login.handoff.cancel",
+    Some(Scope::AccessWrite),
+    AccountLoginHandoffCancelParams,
+    Empty
 );
 method!(PeerAccountsLoginPeek, "peer.accounts.login.peek", Some(Scope::MachineLogins), PeerLoginPeekParams, PeerLoginPeek);
 method!(
@@ -768,7 +803,7 @@ impl From<ProviderInstance> for AccountsSignOutParams {
         Self { kind: instance.kind, instance: instance.instance, confirm_terminal: false }
     }
 }
-method!(AccountsSignOut, "providers.accounts.sign_out", Some(Scope::AccessWrite), AccountsSignOutParams, AccountSummary);
+method!(AccountsSignOut, "providers.accounts.sign_out", Some(Scope::AccountsWrite), AccountsSignOutParams, AccountSummary);
 
 // ---- accounts across machines: offers ----
 
@@ -829,9 +864,14 @@ pub struct AccountOffer {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct AccountsOffersResult {
     pub offers: Vec<AccountOffer>,
+    /// The machine that shares its sign-ins and whether a new machine's setup may borrow from it
+    /// (0.27.2+). When `usable_for_new` is false, plan a sign-in on the new machine instead of a borrow
+    /// and show `reason`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lender: Option<LenderStatus>,
 }
 method!(AccountsOffers, "accounts.offers", Some(Scope::OrchestrationRead), Empty, AccountsOffersResult);
-method!(AccountsRemove, "providers.accounts.remove", Some(Scope::AccessWrite), ProviderInstance, Empty);
+method!(AccountsRemove, "providers.accounts.remove", Some(Scope::AccountsWrite), ProviderInstance, Empty);
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AccountsCatalogParams {
@@ -2281,6 +2321,10 @@ method!(SettingsGet, "settings.get", Some(Scope::OrchestrationRead), Empty, Sett
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SettingsUpdateParams {
     pub settings: Settings,
+    /// The document `settings` was edited from (0.27.2). With it, account fields the client left as they were
+    /// keep what the daemon has now, so a default or name that another machine shared meanwhile is never undone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<Settings>,
 }
 method!(SettingsUpdate, "settings.update", Some(Scope::OrchestrationOperate), SettingsUpdateParams, Settings);
 
@@ -5351,7 +5395,7 @@ method!(PeerLoginReleaseAll, "peer.login.release_all", Some(Scope::MachineLogins
 method!(PeerLoginUsage, "peer.login.usage", Some(Scope::MachineLogins), PeerLoginUsageParams, UsageLimitsResult);
 method!(PeerSecretsPut, "peer.secrets.put", Some(Scope::MachineSecrets), PeerSecretsPutParams, Empty);
 method!(LoginBrokerStatusMethod, "login.broker.status", Some(Scope::OrchestrationRead), Empty, LoginBrokerStatus);
-method!(LoginBrokerBind, "login.broker.bind", Some(Scope::AccessWrite), LoginBrokerBindParams, LoginBrokerStatus);
+method!(LoginBrokerBind, "login.broker.bind", Some(Scope::AccountsWrite), LoginBrokerBindParams, LoginBrokerStatus);
 method!(LoginBrokerSet, "login.broker.set", Some(Scope::NetworkAdmin), LoginBrokerSetParams, LoginBrokerSetResult);
 method!(SecretsPush, "secrets.push", Some(Scope::AccessWrite), SecretsPushParams, SecretsPushResult);
 // Forwarded agent tools (M2, R2; payloads in forward.rs). Files and terminals also need their own scope on the target.
@@ -5488,6 +5532,7 @@ registry!(
     AccountsLoginCancel,
     AccountsLoginFinish,
     AccountsLoginHandoff,
+    AccountsLoginHandoffCancel,
     PeerAccountsLoginPeek,
     PeerAccountsLoginCallback,
     AccountsUpdate,

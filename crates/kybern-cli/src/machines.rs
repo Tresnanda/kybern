@@ -117,9 +117,10 @@ pub enum BrokerCmd {
     Set {
         /// A machine's name or id, or `none`.
         machine: String,
-        /// Leave the old broker signed in after the others moved to the new one.
+        /// Sign the old machine out of the accounts it shared, once the others moved to the new one.
+        /// Without it the old machine keeps its own sign-ins.
         #[arg(long)]
-        keep_old_signed_in: bool,
+        sign_out_old: bool,
     },
     /// Make an account on this machine sign in through the broker.
     Use {
@@ -556,18 +557,18 @@ pub async fn run(client: &Client, cmd: MachinesCmd, json: bool) -> Result<()> {
                 let status = client.call::<LoginBrokerStatusMethod>(Empty {}).await?;
                 if json { println!("{}", serde_json::to_string_pretty(&status)?) } else { render_broker(&status) }
             }
-            BrokerCmd::Set { machine, keep_old_signed_in } => {
+            BrokerCmd::Set { machine, sign_out_old } => {
                 let machine_id = if machine.eq_ignore_ascii_case("none") {
                     None
                 } else {
                     Some(resolve_machine(&status(client).await?.members, &machine)?.machine_id.clone())
                 };
-                let result = client.call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id, sign_out_old: !keep_old_signed_in }).await?;
+                let result = client.call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id, sign_out_old, via: None }).await?;
                 if json {
                     println!("{}", serde_json::to_string_pretty(&result)?)
                 } else {
                     render_broker(&result.status);
-                    println!("{} machine(s) use the new broker; {} offline.", result.rebound.len(), result.offline.len());
+                    println!("{} machine(s) use the new machine's sign-ins; {} offline.", result.rebound.len(), result.offline.len());
                     if let Some(note) = &result.note {
                         println!("{note}");
                     }

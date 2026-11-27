@@ -213,22 +213,62 @@ fn fresher_login(file: Option<Vec<u8>>, keychain: Option<Vec<u8>>) -> Option<Vec
     }
 }
 
-/// Claude Code's macOS login item, read the way Claude Code reads it. A
-/// custom config directory gets a hashed item name, which is not derived
-/// here, so those logins are treated as not due.
-#[cfg(target_os = "macos")]
+/// Claude Code's macOS login item, read the way Claude Code reads it: the
+/// plain service for the default config directory, and the per-directory
+/// hashed service (`Claude Code-credentials-<8 hex>`) for an account folder
+/// set through `CLAUDE_CONFIG_DIR` (#107: named accounts were never read).
 async fn keychain_login(context: &ProbeContext) -> Option<Vec<u8>> {
-    let custom_dir = ["CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR"].iter().any(|key| environment_value(context, key).is_some());
-    let account = environment_value(context, "USER").filter(|user| !user.is_empty() && !custom_dir)?;
+    let (account, service) = keychain_item(context)?;
+    #[cfg(test)]
+    if let Some(found) = test_keychain::find(&account, &service) {
+        return Some(found);
+    }
+    read_keychain(&account, &service).await
+}
+
+/// The Keychain account and service Claude Code keeps this context's login under. `None` when the
+/// item can't be named: no user, or a secure-storage override whose naming Kybern doesn't derive.
+fn keychain_item(context: &ProbeContext) -> Option<(String, String)> {
+    let non_empty = |key| environment_value(context, key).filter(|value| !value.trim().is_empty());
+    if non_empty("CLAUDE_SECURESTORAGE_CONFIG_DIR").is_some() {
+        return None;
+    }
+    let account = non_empty("USER")?;
+    let service = crate::login_lend::claude_keychain_service(non_empty("CLAUDE_CONFIG_DIR").as_deref());
+    Some((account, service))
+}
+
+#[cfg(target_os = "macos")]
+async fn read_keychain(account: &str, service: &str) -> Option<Vec<u8>> {
     let mut command = tokio::process::Command::new("/usr/bin/security").no_window();
-    command.args(["find-generic-password", "-a", &account, "-w", "-s", "Claude Code-credentials"]);
+    command.args(["find-generic-password", "-a", account, "-w", "-s", service]);
     let output = tokio::time::timeout(Duration::from_secs(2), crate::process_tree::output(&mut command)).await.ok()?.ok()?;
     output.status.success().then_some(output.stdout)
 }
 
 #[cfg(not(target_os = "macos"))]
-async fn keychain_login(_context: &ProbeContext) -> Option<Vec<u8>> {
+async fn read_keychain(_account: &str, _service: &str) -> Option<Vec<u8>> {
     None
+}
+
+/// Keychain items tests plant by account and service, so the macOS read path runs on every platform.
+#[cfg(test)]
+pub(crate) mod test_keychain {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    /// Secrets by (account, service).
+    type Items = HashMap<(String, String), Vec<u8>>;
+
+    static ITEMS: Mutex<Option<Items>> = Mutex::new(None);
+
+    pub(crate) fn plant(account: &str, service: &str, secret: &[u8]) {
+        ITEMS.lock().unwrap().get_or_insert_with(HashMap::new).insert((account.into(), service.into()), secret.to_vec());
+    }
+
+    pub(super) fn find(account: &str, service: &str) -> Option<Vec<u8>> {
+        ITEMS.lock().unwrap().as_ref()?.get(&(account.to_string(), service.to_string())).cloned()
+    }
 }
 
 pub(super) fn settings_paths(context: &ProbeContext) -> Vec<PathBuf> {
@@ -420,6 +460,38 @@ mod tests {
 
         write(serde_json::json!({ "accessToken": "a", "expiresAt": now - 1, "subscriptionType": "max" }));
         assert!(login_due_for_refresh(&context).await.is_none(), "no refresh token to lose");
+    }
+
+    #[tokio::test]
+    async fn a_named_accounts_keychain_login_due_for_refresh_is_read_without_running_claude() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("accounts/claude_code/work").to_string_lossy().into_owned();
+        let user = format!("kybern-test-{}", uuid::Uuid::now_v7());
+        let context = ProbeContext {
+            binary: None,
+            cwd: None,
+            env: [("CLAUDE_CONFIG_DIR".to_string(), dir.clone()), ("USER".to_string(), user.clone())].into(),
+        };
+        assert_eq!(keychain_item(&context), Some((user.clone(), crate::login_lend::claude_keychain_service(Some(&dir)))));
+        assert!(login_due_for_refresh(&context).await.is_none(), "no login anywhere");
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+        let login = serde_json::json!({
+            "claudeAiOauth": { "accessToken": "a", "refreshToken": "r", "expiresAt": now - 1, "subscriptionType": "max" }
+        });
+        // Planted under the account folder's hashed service, the way Claude Code saves a named account on macOS.
+        test_keychain::plant(&user, &crate::login_lend::claude_keychain_service(Some(&dir)), login.to_string().as_bytes());
+        assert_eq!(login_due_for_refresh(&context).await.unwrap()["subscriptionType"], "max");
+        assert!(login_needs_refresh(&context).await);
+
+        // The plain service belongs to the terminal login, never to a named account.
+        let other = temp.path().join("accounts/claude_code/other").to_string_lossy().into_owned();
+        test_keychain::plant(&user, "Claude Code-credentials", login.to_string().as_bytes());
+        let named = ProbeContext {
+            binary: None,
+            cwd: None,
+            env: [("CLAUDE_CONFIG_DIR".to_string(), other), ("USER".to_string(), user.clone())].into(),
+        };
+        assert!(login_due_for_refresh(&named).await.is_none());
     }
 
     #[test]

@@ -1,0 +1,48 @@
+[
+  {
+    "id": "l-handoff",
+    "kind": "claude-code",
+    "mode": "browser",
+    "phase": "waiting",
+    "url": "https://claude.com/cai/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A54321%2Fcallback&state=abc",
+    "expires_at": "2026-11-27T18:00:00Z",
+    "handoff": {
+      "port": 54321,
+      "path": "/callback"
+    }
+  },
+  {
+    "id": "l-done",
+    "kind": "claude-code",
+    "mode": "paste",
+    "phase": "signed_in",
+    "identity": {
+      "email": "me@home.org",
+      "plan": "Pro"
+    },
+    "suggested_name": "Home",
+    "suggested_color": "blue",
+    "expires_at": "2026-11-27T18:00:00Z"
+  },
+  {
+    "id": "l-failed",
+    "kind": "antigravity",
+    "instance": "default",
+    "mode": "terminal",
+    "phase": "failed",
+    "error": "Antigravity stopped before signing in. Try again, or show the terminal.",
+    "expires_at": "2026-11-27T18:00:00Z"
+  },
+  {
+    "id": "l-duplicate",
+    "kind": "claude-code",
+    "mode": "browser",
+    "phase": "signed_in",
+    "identity": {
+      "email": "work@example.com",
+      "plan": "Max"
+    },
+    "duplicate_of": "default",
+    "expires_at": "2026-11-27T18:00:00Z"
+  }
+]

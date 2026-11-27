@@ -1,0 +1,50 @@
+[
+  {
+    "target": {
+      "provider": {
+        "kind": "claude-code",
+        "instance": "default"
+      },
+      "model": "opus"
+    },
+    "native_session_id": "native-1",
+    "account_override": false,
+    "effective_permission_mode": "supervised",
+    "pending_permission_mode": null,
+    "quota_limited": false
+  },
+  {
+    "target": {
+      "provider": {
+        "kind": "claude-code",
+        "instance": "b2"
+      },
+      "model": "opus"
+    },
+    "account_override": true,
+    "effective_permission_mode": "supervised",
+    "pending_permission_mode": null,
+    "quota_limited": false,
+    "account_unavailable": true,
+    "suggested_account": "p1"
+  },
+  {
+    "target": {
+      "provider": {
+        "kind": "claude-code",
+        "instance": "default"
+      },
+      "model": "opus"
+    },
+    "account_override": false,
+    "effective_permission_mode": "supervised",
+    "pending_permission_mode": "accept-edits",
+    "quota_limited": true,
+    "suggested_account": "p1",
+    "waiting_until": "2026-11-27T15:00:00Z",
+    "waiting_account": {
+      "kind": "claude-code",
+      "instance": "default"
+    }
+  }
+]

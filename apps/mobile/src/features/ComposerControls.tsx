@@ -7,6 +7,7 @@ import Svg, { Circle } from "react-native-svg";
 import { router } from "expo-router";
 import { useComposerProviders } from "../state/machineProviders";
 import { setDraft, useDraft } from "../state/draft";
+import { accountLabel } from "../state/accountLabel";
 import type { CoordinatorSwitchHarnessParams, PermissionMode, ProviderStatus, Thread } from "../state/protocol";
 import { coordinatorEditsEnforced } from "../../../../packages/kybern-client/src/coordinator";
 import { PROVIDER_DISPLAY_NAME } from "../state/protocol";
@@ -192,9 +193,6 @@ export function ComposerControls({
   );
 }
 
-/** "Default", "Work": an account instance as a row value. */
-const accountLabel = (instance: string) =>
-  instance === "default" ? "Default" : instance.charAt(0).toUpperCase() + instance.slice(1);
 const effortWord = (effort: string | null | undefined) =>
   effort ? effort.charAt(0).toUpperCase() + effort.slice(1) : "Default";
 
@@ -220,6 +218,7 @@ export function ComposerOptions({
   const { colors } = useTheme();
   const kind = thread?.provider.kind ?? draft.provider;
   const instance = thread?.provider.instance ?? draft.instance ?? "default";
+  const ran = !!thread?.provider_session_id;
   const providers = useComposerProviders(thread);
   const provider = providers.find((p) => p.kind === kind);
   const model = thread ? thread.model : draft.model;
@@ -292,7 +291,7 @@ export function ComposerOptions({
         });
         await Promise.all([refresh(), loadThread(thread.id)]);
       }
-      showToast(next.kind === kind ? `Using the ${accountLabel(inst)} account` : `Switched to ${next.display_name}`);
+      showToast(next.kind === kind ? (ran && inst === "default" ? "Using the CLI account" : `Using the ${accountLabel(inst)} account`) : `Switched to ${next.display_name}`);
     });
     setModelQuery("");
   }
@@ -435,11 +434,11 @@ export function ComposerOptions({
           <ListRow
             title="Account"
             leading="person.crop.circle"
-            value={accountLabel(instance)}
+            value={accountLabel(instance, ran)}
             valueMenu={
               canSwitchAgent
                 ? accounts.map((item) => ({
-                    title: accountLabel(item),
+                    title: accountLabel(item, ran),
                     checked: item === instance,
                     onPress: () => void chooseTarget(provider!, item),
                   }))

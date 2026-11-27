@@ -29,6 +29,7 @@ expression: names
 - providers.accounts.login.cancel
 - providers.accounts.login.finish
 - providers.accounts.login.handoff
+- providers.accounts.login.handoff.cancel
 - peer.accounts.login.peek
 - peer.accounts.login.callback
 - providers.accounts.update

@@ -35,7 +35,8 @@ export function updateSettings(patch: Partial<Settings>): Promise<void> {
     if (getClient() !== client) return
     const before = confirmed ?? state.settings!
     try {
-      const saved = await client.call('settings.update', { settings: state.settings! })
+      // With the document it was edited from, so account values another machine shared meanwhile stay.
+      const saved = await client.call('settings.update', { settings: state.settings!, base: before })
       if (getClient() !== client) return
       revision++
       confirmed = saved

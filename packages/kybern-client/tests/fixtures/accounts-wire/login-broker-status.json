@@ -1,0 +1,98 @@
+[
+  {
+    "is_broker": false,
+    "providers": [],
+    "loans": [],
+    "lenders": []
+  },
+  {
+    "broker": {
+      "machine_id": "m-vps",
+      "name": "VPS",
+      "reachable": true
+    },
+    "is_broker": false,
+    "providers": [
+      {
+        "provider": "claude-code",
+        "state": "borrowing",
+        "local_account": "b1",
+        "broker_account": "s1",
+        "lendable": [
+          {
+            "provider": "claude-code",
+            "account": "s1",
+            "name": "Shared",
+            "email": "shared@example.com",
+            "plan": "Max"
+          }
+        ],
+        "sessions": 2
+      },
+      {
+        "provider": "codex",
+        "state": "broker_not_signed_in",
+        "lendable": [],
+        "message": "Codex isn't signed in on VPS yet",
+        "sessions": 0
+      }
+    ],
+    "loans": [],
+    "lenders": []
+  },
+  {
+    "broker": {
+      "machine_id": "m-pc",
+      "reachable": false
+    },
+    "is_broker": false,
+    "providers": [
+      {
+        "provider": "claude-code",
+        "state": "broker_offline",
+        "local_account": "b2",
+        "broker_account": "x",
+        "lendable": [],
+        "sessions": 0
+      }
+    ],
+    "loans": [],
+    "lenders": []
+  },
+  {
+    "broker": {
+      "machine_id": "m-vps",
+      "name": "VPS",
+      "reachable": true
+    },
+    "is_broker": true,
+    "providers": [
+      {
+        "provider": "claude-code",
+        "state": "lending",
+        "broker_account": "s1",
+        "lendable": [
+          {
+            "provider": "claude-code",
+            "account": "s1",
+            "name": "Shared",
+            "email": "shared@example.com",
+            "plan": "Max"
+          }
+        ],
+        "sessions": 0
+      }
+    ],
+    "loans": [
+      {
+        "loan_id": "loan-1",
+        "machine_id": "m-mac",
+        "provider": "claude-code",
+        "account": "s1",
+        "created_at": "2026-11-27T09:00:00Z",
+        "last_pushed_at": "2026-11-27T10:00:00Z"
+      }
+    ],
+    "lenders": []
+  }
+]

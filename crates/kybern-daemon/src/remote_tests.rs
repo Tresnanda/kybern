@@ -2413,7 +2413,7 @@ async fn project_coordinator_overrides_are_set_kept_and_cleared_over_rpc() {
     // Global defaults are validated the same way.
     let mut settings = client.call::<SettingsGet>(Empty {}).await.unwrap();
     settings.orchestration.role_defaults.insert(DelegationRole::General, RoleDefault { model: Some("m".into()), ..Default::default() });
-    assert!(client.call::<SettingsUpdate>(SettingsUpdateParams { settings }).await.is_err());
+    assert!(client.call::<SettingsUpdate>(SettingsUpdateParams { settings, base: None }).await.is_err());
 }
 
 /// A folder in the home folder for one test, removed when it ends.

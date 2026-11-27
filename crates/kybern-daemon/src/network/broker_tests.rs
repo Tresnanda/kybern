@@ -22,8 +22,8 @@ use super::harness::*;
 use super::manage::rename;
 
 /// A `claude` that signs in (`auth status`), logs out (`auth logout`) and refreshes (`-p`). The account's
-/// folder is `CLAUDE_CONFIG_DIR`; `FAKE_STATE` holds `valid` (the only token that works), a counter and a
-/// log of what was run.
+/// folder is `CLAUDE_CONFIG_DIR`, and its `.email` the account's email (broker@example.com without one);
+/// `FAKE_STATE` holds `valid` (the only token that works), a counter and a log of what was run.
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
 state="$FAKE_STATE"
 case "$1" in
@@ -34,7 +34,8 @@ case "$1" in
       exit 0
     fi
     if [ -f "$CLAUDE_CONFIG_DIR/.credentials.json" ]; then
-      echo '{"loggedIn":true,"authMethod":"claude.ai","email":"broker@example.com","subscriptionType":"max"}'
+      email=$(cat "$CLAUDE_CONFIG_DIR/.email" 2>/dev/null || echo broker@example.com)
+      echo "{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"email\":\"$email\",\"subscriptionType\":\"max\"}"
     else
       echo '{"loggedIn":false}'
     fi
@@ -339,11 +340,16 @@ async fn lending() -> Option<Lending> {
     c.state.settings.set(settings).unwrap();
     write_login(&broker_dir, &broker_state, "tok-0", 8 * 3600 * 1000);
 
-    // The register names the VPS, and it reaches everyone.
+    // The register names the VPS, chosen by hand (0.27.2), and it reaches everyone.
     let op = a.membership().set("broker", json!(c.id())).unwrap();
-    a.state.network.publish_ops(vec![op]);
+    let chosen = a.membership().set(super::broker::CHOICE_REGISTER, json!({ "machine_id": c.id(), "via": "manual" })).unwrap();
+    a.state.network.publish_ops(vec![op, chosen]);
     eventually("the broker register reaches everyone", WAIT, || {
-        [&a, &b, &c].iter().all(|node| node.membership().projection().broker() == Some(c.id().as_str()))
+        [&a, &b, &c].iter().all(|node| {
+            let projection = node.membership().projection();
+            projection.broker() == Some(c.id().as_str())
+                && projection.register(super::broker::CHOICE_REGISTER).is_some_and(|choice| choice.value["machine_id"] == json!(c.id()))
+        })
     })
     .await;
 
@@ -608,11 +614,24 @@ async fn the_broker_being_offline_falls_back_with_the_right_message_and_a_held_l
     l.b.state.orchestrator.login_rotated(ProviderKind::ClaudeCode, &l.local_account).await;
     l.send(thread, "after the drop").await;
     eventually("the turn fails with the fallback sentence", WAIT, || l.turns(thread, "turn_failed") == 1).await;
-    let failed = l.b.state.store.events_for_thread(thread).unwrap().into_iter().find_map(|event| match event.payload {
-        EventPayload::TurnFailed { error, .. } => Some(error),
-        _ => None,
-    });
-    assert_eq!(failed.as_deref(), Some("Claude Code signs in through vps, which is offline · Sign in here instead"));
+    let (failed, problem) =
+        l.b.state
+            .store
+            .events_for_thread(thread)
+            .unwrap()
+            .into_iter()
+            .find_map(|event| match event.payload {
+                EventPayload::TurnFailed { error, problem } => Some((error, problem)),
+                _ => None,
+            })
+            .unwrap();
+    assert_eq!(failed, "Claude Code signs in through vps, which is offline · Sign in here instead");
+    // The failed turn carries the fix: "Sign in on pc instead", for this account.
+    let problem = problem.expect("the turn says what failed");
+    assert_eq!((problem.kind, problem.subject.as_deref()), (ProblemKind::Offline, Some(LOGIN_BORROW_SUBJECT)));
+    let action = problem.action.unwrap();
+    assert_eq!((action.id.as_str(), action.label.as_str()), (SIGN_IN_HERE_ACTION, "Sign in on pc instead"));
+    assert_eq!(action.params.unwrap(), json!({ "machine_id": l.b.id(), "provider": "claude-code", "instance": l.local_account }));
 
     // "Sign in here instead": unbinding returns the account to a local sign-in.
     let status = at_b
@@ -659,14 +678,17 @@ async fn moving_the_broker_reissues_to_the_members_before_the_old_one_signs_out(
     // The new broker has to be signed in: an empty one is refused, with what to do.
     let refused = client(&l.a)
         .await
-        .call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id: Some(l.b.id()), sign_out_old: true })
+        .call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id: Some(l.b.id()), sign_out_old: true, via: None })
         .await
         .unwrap_err();
     assert!(format!("{refused:?}").contains("Sign in on pc first"), "{refused:?}");
 
     // Every online member re-borrows from the Mac; the VPS signs out after that.
-    let result =
-        client(&l.a).await.call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id: Some(l.a.id()), sign_out_old: true }).await.unwrap();
+    let result = client(&l.a)
+        .await
+        .call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id: Some(l.a.id()), sign_out_old: true, via: None })
+        .await
+        .unwrap();
     assert!(result.rebound.contains(&l.b.id()), "{result:?}");
     assert_eq!(result.old_signed_out, vec![ProviderKind::ClaudeCode], "{result:?}");
     let after = l.b.state.store.loans_open(kybern_store::LoanRole::Borrower).unwrap();
@@ -982,4 +1004,602 @@ async fn a_thread_on_a_borrowed_account_gets_no_model_helper_and_keeps_its_plain
     }
     let title = l.b.state.orchestrator.generate_title(&stored, &UserMessage::text("name this")).await.unwrap();
     assert_eq!(title, None);
+}
+
+/// A `broker` register from before 0.27.2 (no `broker.choice` for it) on a machine that isn't known to be always on.
+async fn make_legacy(l: &Lending) {
+    let op = l.a.membership().set(super::broker::CHOICE_REGISTER, json!({})).unwrap();
+    l.a.state.network.publish_ops(vec![op]);
+    eventually("the choice is gone everywhere", WAIT, || {
+        [&l.a, &l.b, &l.c].iter().all(|node| {
+            node.membership().projection().register(super::broker::CHOICE_REGISTER).is_some_and(|choice| choice.value == json!({}))
+        })
+    })
+    .await;
+}
+
+async fn new_local_account(node: &Node, name: &str) -> String {
+    crate::provider_accounts::create(
+        &node.state,
+        AccountsCreateParams { kind: ProviderKind::ClaudeCode, name: name.into(), directory: None },
+    )
+    .unwrap()
+    .instance
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_legacy_lender_that_isnt_always_on_takes_no_new_accounts_but_keeps_the_bound_ones() {
+    let Some(l) = lending().await else { return };
+    make_legacy(&l).await;
+    let at_b = client(&l.b).await;
+
+    // Status and offers both say new setups can't borrow from it, and why.
+    let status = at_b.call::<LoginBrokerStatusMethod>(Empty {}).await.unwrap();
+    let lender = status.lender.expect("the lender is reported");
+    assert_eq!((lender.machine_id.as_str(), lender.chosen, lender.usable_for_new), (l.c.id().as_str(), None, false));
+    let reason = lender.reason.expect("with a reason");
+    assert!(reason.starts_with("vps shared its sign-ins before Kybern 0.27.2"), "{reason}");
+    assert!(!reason.contains("broker"), "{reason}");
+    let offers = at_b.call::<AccountsOffers>(Empty {}).await.unwrap();
+    assert_eq!(offers.lender.map(|lender| lender.usable_for_new), Some(false));
+    // Every member is a candidate; the VPS is the lender.
+    let vps = status.lenders.iter().find(|candidate| candidate.machine_id == l.c.id()).expect("the VPS is listed");
+    assert!(vps.is_lender && vps.online && vps.supported && vps.can_share, "{vps:?}");
+    assert!(status.lenders.iter().any(|candidate| candidate.is_self && candidate.machine_id == l.b.id()));
+
+    // A new account is refused, with the sentence and "Sign in on pc instead".
+    let fresh = new_local_account(&l.b, "New").await;
+    let error = l
+        .broker(&l.b)
+        .bind(
+            &l.b.state,
+            LoginBrokerBindParams {
+                provider: ProviderKind::ClaudeCode,
+                instance: fresh.clone(),
+                broker_account: Some(l.broker_account.clone()),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, codes::FORBIDDEN);
+    assert_eq!(error.message, reason);
+    let problem = error.problem().expect("a problem");
+    assert_eq!(problem.subject.as_deref(), Some(LOGIN_BORROW_SUBJECT));
+    let action = problem.action.expect("a fix");
+    assert_eq!((action.id.as_str(), action.label.as_str()), (SIGN_IN_HERE_ACTION, "Sign in on pc instead"));
+    assert_eq!(action.params.unwrap()["machine_id"], json!(l.b.id()));
+    assert!(l.broker(&l.b).binding(ProviderKind::ClaudeCode, &fresh).is_none(), "the refused account stays unbound");
+
+    // The account bound before keeps borrowing.
+    let (thread, _) = l.thread().await;
+    l.send(thread, "still works").await;
+    eventually("the bound account's turn completes", WAIT, || l.turns(thread, "turn_completed") == 1).await;
+
+    // Picking the same machine again by hand makes it deliberate: new accounts may borrow from it now.
+    let result = client(&l.a)
+        .await
+        .call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id: Some(l.c.id()), sign_out_old: false, via: None })
+        .await
+        .unwrap();
+    assert_eq!(result.status.lender.as_ref().map(|lender| (lender.chosen, lender.usable_for_new)), Some((Some(LenderVia::Manual), true)));
+    eventually("the PC hears the choice", WAIT, || l.broker(&l.b).lender_status().is_some_and(|lender| lender.usable_for_new)).await;
+    at_b.call::<LoginBrokerBind>(LoginBrokerBindParams {
+        provider: ProviderKind::ClaudeCode,
+        instance: fresh.clone(),
+        broker_account: Some(l.broker_account.clone()),
+    })
+    .await
+    .unwrap();
+    assert_eq!(l.broker(&l.b).binding(ProviderKind::ClaudeCode, &fresh), Some(l.broker_account.clone()));
+    // The always-on offer is recorded as such.
+    let result = client(&l.a)
+        .await
+        .call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id: Some(l.c.id()), sign_out_old: false, via: Some(LenderVia::AlwaysOn) })
+        .await
+        .unwrap();
+    assert_eq!(result.status.lender.and_then(|lender| lender.chosen), Some(LenderVia::AlwaysOn));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lender_that_refuses_says_which_machine_and_what_to_do_while_the_account_is_set_up() {
+    let Some(l) = lending().await else { return };
+    // The VPS turns Logins off for the PC.
+    let op = l.c.membership().set(&format!("allow.{}.logins", l.c.id()), json!(false)).unwrap();
+    l.c.state.network.publish_ops(vec![op]);
+    eventually("the policy reaches the PC", WAIT, || l.b.membership().projection().allowed(&l.c.id()).get("logins") == Some(&false)).await;
+    let fresh = new_local_account(&l.b, "Refused").await;
+    let error = l
+        .broker(&l.b)
+        .bind(
+            &l.b.state,
+            LoginBrokerBindParams {
+                provider: ProviderKind::ClaudeCode,
+                instance: fresh.clone(),
+                broker_account: Some(l.broker_account.clone()),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, codes::FORBIDDEN);
+    assert_eq!(
+        error.message,
+        "vps doesn't let other machines use its sign-ins. Choose Share this machine’s sign-ins for vps in Settings → Accounts, or sign in on pc instead."
+    );
+    let problem = error.problem().unwrap();
+    assert_eq!((problem.kind, problem.subject.as_deref()), (ProblemKind::Permission, Some(LOGIN_BORROW_SUBJECT)));
+    assert_eq!(problem.action.unwrap().id, SIGN_IN_HERE_ACTION);
+    assert!(l.broker(&l.b).binding(ProviderKind::ClaudeCode, &fresh).is_none(), "a refused bind is undone");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stopping_sharing_signs_no_machine_out_unless_asked() {
+    let Some(l) = lending().await else { return };
+    let (thread, _) = l.thread().await;
+    l.send(thread, "hello").await;
+    eventually("the turn completes", WAIT, || l.turns(thread, "turn_completed") == 1).await;
+    // What a client sends for "Stop sharing": no `sign_out_old`.
+    let params: LoginBrokerSetParams = serde_json::from_value(json!({ "machine_id": null })).unwrap();
+    assert!(!params.sign_out_old);
+    let result = client(&l.a).await.call::<LoginBrokerSet>(params).await.unwrap();
+    assert!(result.old_signed_out.is_empty(), "{result:?}");
+    assert!(result.status.lender.is_none());
+    assert!(
+        !events_of(&l.broker_state).iter().any(|line| line.starts_with("logout")),
+        "the VPS was signed out: {:?}",
+        events_of(&l.broker_state)
+    );
+    assert!(l.broker_dir.join(".credentials.json").exists(), "the VPS keeps its own sign-in");
+    let choice = l.a.membership().projection().register(super::broker::CHOICE_REGISTER).map(|choice| choice.value.clone());
+    assert_eq!(choice, Some(json!({})), "the choice is cleared with the lender");
+}
+
+// ---- 0.27.2: borrowing keeps working and never lands on another account ----
+
+/// Wait for an async condition, polling (the harness' `eventually` takes a plain closure).
+async fn eventually_async<F, Fut>(what: &str, mut condition: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while !condition().await {
+        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for {what}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// A signed-in Claude account on `node` with `email`, its token `token`, and the node's fake state `state_dir`.
+fn claude_account(node: &Node, name: &str, email: &str, token: &str, state_dir: &Path) -> String {
+    let account = crate::provider_accounts::create(
+        &node.state,
+        AccountsCreateParams { kind: ProviderKind::ClaudeCode, name: name.into(), directory: None },
+    )
+    .unwrap();
+    let dir = PathBuf::from(node.state.settings.get().providers[&ProviderKind::ClaudeCode].accounts[&account.instance].directory.clone());
+    let mut settings = node.state.settings.get();
+    settings
+        .providers
+        .entry(ProviderKind::ClaudeCode)
+        .or_default()
+        .env
+        .insert("FAKE_STATE".into(), state_dir.to_string_lossy().into_owned());
+    node.state.settings.set(settings).unwrap();
+    write_login(&dir, state_dir, token, 8 * 3600 * 1000);
+    std::fs::write(dir.join(".email"), email).unwrap();
+    account.instance
+}
+
+fn email_of(node: &Node, kind: ProviderKind, instance: &str) -> Option<String> {
+    node.state.settings.get().providers.get(&kind)?.accounts.get(instance)?.email.clone()
+}
+
+async fn send_from_client(l: &Lending, thread: ThreadId, text: &str) -> anyhow::Result<ThreadsSendResult> {
+    l.b.state
+        .orchestrator
+        .send_client_message(ThreadsSendParams { thread_id: thread, message: UserMessage::text(text), message_id: None })
+        .await
+}
+
+async fn set_logins(node: &Node, allowed: bool, seen_by: &Node) {
+    let op = node.membership().set(&format!("allow.{}.logins", node.id()), json!(allowed)).unwrap();
+    node.state.network.publish_ops(vec![op]);
+    eventually("the policy reaches the borrower", WAIT, || {
+        seen_by.membership().projection().allowed(&node.id()).get("logins") == Some(&allowed)
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_borrow_is_tried_again_when_the_lender_is_back_and_before_a_send_is_refused() {
+    let Some(l) = lending().await else { return };
+    let (thread, _) = l.thread().await;
+    l.send(thread, "first").await;
+    eventually("first turn", WAIT, || l.turns(thread, "turn_completed") == 1).await;
+    let broker = l.broker(&l.b);
+    let state_of = || broker.account_view(ProviderKind::ClaudeCode, &l.local_account).unwrap().state;
+
+    // The VPS sleeps, and a renewal in the meantime fails: the account reads offline.
+    l.c.set_network_enabled(false);
+    eventually("the PC loses the VPS", WAIT, || l.b.state.network.peers.link(&l.c.id()).is_none()).await;
+    broker.renew(ProviderKind::ClaudeCode, &l.local_account, &l.broker_account).await.unwrap_err();
+    assert_eq!(state_of(), BrokerLoginState::BrokerOffline);
+    // It wakes up: the account reads as borrowing again, and the worker borrows again (no rotation, no push).
+    l.c.set_network_enabled(true);
+    eventually("the account reads as borrowing again", WAIT, || state_of() == BrokerLoginState::Borrowing).await;
+    eventually("the worker borrowed again", WAIT, || broker.lease_error_for_test(ProviderKind::ClaudeCode, &l.local_account).is_none())
+        .await;
+
+    // The VPS turns Logins off: a renewal is refused, and so is a send, after asking the VPS again.
+    set_logins(&l.c, false, &l.b).await;
+    broker.renew(ProviderKind::ClaudeCode, &l.local_account, &l.broker_account).await.unwrap_err();
+    let refused = send_from_client(&l, thread, "while refused").await.unwrap_err().to_string();
+    assert!(refused.contains("doesn't let other machines use its sign-ins"), "{refused}");
+    // Logins on again: the next send borrows once more instead of refusing on the old answer.
+    set_logins(&l.c, true, &l.b).await;
+    send_from_client(&l, thread, "allowed again").await.unwrap();
+    eventually("the turn runs", WAIT, || l.turns(thread, "turn_completed") == 2).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn moving_the_lender_keeps_each_account_on_its_own_email_and_never_another_persons() {
+    let Some(l) = lending().await else { return };
+    let (thread, _) = l.thread().await;
+    l.send(thread, "on the vps").await;
+    eventually("first turn", WAIT, || l.turns(thread, "turn_completed") == 1).await;
+    assert_eq!(email_of(&l.b, ProviderKind::ClaudeCode, &l.local_account).as_deref(), Some("broker@example.com"));
+
+    // The Mac is signed in to someone else's account only, and becomes the lender.
+    let mac_state = l.cluster.dir.path().join("mac-claude-state");
+    let other = claude_account(&l.a, "Other", "other@example.com", "mac-other-0", &mac_state);
+    client(&l.a)
+        .await
+        .call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id: Some(l.a.id()), sign_out_old: false, via: None })
+        .await
+        .unwrap();
+    let broker = l.broker(&l.b);
+    eventually("the PC leaves the account unbound", WAIT, || broker.binding(ProviderKind::ClaudeCode, &l.local_account).is_none()).await;
+    assert!(l.b.state.store.loans_open(kybern_store::LoanRole::Borrower).unwrap().is_empty(), "no loan of the other account");
+    let view = broker.account_view(ProviderKind::ClaudeCode, &l.local_account).expect("the account says why");
+    assert_eq!(view.state, BrokerLoginState::BrokerNotSignedIn);
+    let message = view.message.unwrap();
+    assert_eq!(
+        message,
+        "mac isn't signed in to broker@example.com, so pc can't use it through mac. Sign in to broker@example.com on mac, or sign in on pc instead."
+    );
+    let refused = send_from_client(&l, thread, "on whose account?").await.unwrap_err().to_string();
+    assert!(refused.contains("isn't signed in to broker@example.com"), "{refused}");
+    assert!(l.spawns().iter().all(|spawn| spawn.token != "mac-other-0"), "a session ran on another person's account");
+
+    // The Mac signs in to the same account: the PC binds to that one, not the other.
+    let same = claude_account(&l.a, "Same", "broker@example.com", "mac-0", &mac_state);
+    eventually("the PC binds to the same account", WAIT, || {
+        broker.binding(ProviderKind::ClaudeCode, &l.local_account).as_deref() == Some(&same)
+    })
+    .await;
+    assert_ne!(same, other);
+    send_from_client(&l, thread, "on the mac").await.unwrap();
+    eventually("second turn", WAIT, || l.turns(thread, "turn_completed") == 2).await;
+    assert_eq!(l.spawns().last().unwrap().token, "mac-0");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lender_that_lends_another_account_under_the_same_id_is_refused() {
+    let Some(l) = lending().await else { return };
+    // The VPS' account is signed in to someone else now; its id is the same.
+    std::fs::write(l.broker_dir.join(".email"), "other@example.com").unwrap();
+    l.c.state.account_identities.invalidate(&ProviderInstance { kind: ProviderKind::ClaudeCode, instance: l.broker_account.clone() });
+    let mut settings = l.c.state.settings.get();
+    settings.providers.get_mut(&ProviderKind::ClaudeCode).unwrap().accounts.get_mut(&l.broker_account).unwrap().email =
+        Some("other@example.com".into());
+    l.c.state.settings.set(settings).unwrap();
+    let error = l.broker(&l.b).renew(ProviderKind::ClaudeCode, &l.local_account, &l.broker_account).await.unwrap_err();
+    assert_eq!(
+        error,
+        "vps now shares a different Claude Code account than broker@example.com. Sign in to broker@example.com on vps, or sign in on pc instead."
+    );
+    assert_eq!(email_of(&l.b, ProviderKind::ClaudeCode, &l.local_account).as_deref(), Some("broker@example.com"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_machine_that_becomes_the_lender_stops_borrowing_itself() {
+    let Some(l) = lending().await else { return };
+    let (thread, _) = l.thread().await;
+    l.send(thread, "on the vps").await;
+    eventually("first turn", WAIT, || l.turns(thread, "turn_completed") == 1).await;
+    // The PC has its own login of the same account, and is chosen to share its sign-ins.
+    let mine = claude_account(&l.b, "Mine", "broker@example.com", "pc-0", &l.b.root.join("fake-claude"));
+    client(&l.a)
+        .await
+        .call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id: Some(l.b.id()), sign_out_old: false, via: None })
+        .await
+        .unwrap();
+    let broker = l.broker(&l.b);
+    eventually("the PC's borrowed account stops borrowing", WAIT, || {
+        broker.binding(ProviderKind::ClaudeCode, &l.local_account).is_none()
+            && l.b.state.store.loans_open(kybern_store::LoanRole::Borrower).unwrap().is_empty()
+    })
+    .await;
+    assert!(broker.account_view(ProviderKind::ClaudeCode, &l.local_account).is_none(), "the account still points at a lender");
+    // The shared account maps to the PC's own login, not to the empty one.
+    assert_eq!(email_of(&l.b, ProviderKind::ClaudeCode, &l.local_account), None);
+    let settings = l.b.state.settings.get();
+    let terminal = crate::accounts_shared::terminal_emails(Some(&l.b.state.store));
+    assert_eq!(
+        crate::accounts_shared::instance_for_key(&settings, &terminal, "claude-code:broker@example.com").as_deref(),
+        Some(mine.as_str())
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_borrowed_account_carries_the_lenders_email_so_shared_defaults_reach_it() {
+    let Some(l) = lending().await else { return };
+    assert_eq!(email_of(&l.b, ProviderKind::ClaudeCode, &l.local_account).as_deref(), Some("broker@example.com"));
+    let settings = l.b.state.settings.get();
+    let terminal = crate::accounts_shared::terminal_emails(Some(&l.b.state.store));
+    assert_eq!(
+        crate::accounts_shared::key_of_instance(&settings, &terminal, ProviderKind::ClaudeCode, &l.local_account).as_deref(),
+        Some("claude-code:broker@example.com"),
+        "picking it as the default here names the lender's account"
+    );
+    // The shared default (chosen on another machine) reaches the borrowed account here.
+    let mut settings = l.b.state.settings.get();
+    settings.accounts_shared.defaults.insert(ProviderKind::ClaudeCode, "claude-code:broker@example.com".into());
+    l.b.state.settings.set(settings).unwrap();
+    assert_eq!(l.b.state.settings.get().providers[&ProviderKind::ClaudeCode].default_account.as_deref(), Some(l.local_account.as_str()));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn binding_a_signed_out_account_to_a_lender_that_lends_it_clears_signed_out() {
+    let Some(l) = lending().await else { return };
+    let local = ProviderInstance { kind: ProviderKind::ClaudeCode, instance: l.local_account.clone() };
+    l.b.state.orchestrator.mark_account_signed_out(&local, true).unwrap();
+    assert!(l.b.state.orchestrator.account_marked_signed_out(&local));
+    client(&l.b)
+        .await
+        .call::<LoginBrokerBind>(LoginBrokerBindParams {
+            provider: ProviderKind::ClaudeCode,
+            instance: l.local_account.clone(),
+            broker_account: Some(l.broker_account.clone()),
+        })
+        .await
+        .unwrap();
+    assert!(!l.b.state.orchestrator.account_marked_signed_out(&local), "a borrow that worked is the account working here (#16)");
+}
+
+/// A `codex` whose app-server renews its login on `account/read { refreshToken: true }`: it logs the request and
+/// writes `$FAKE_STATE/codex-next-auth.json` over the account's `auth.json`.
+const FAKE_CODEX: &str = r#"#!/bin/sh
+[ "$1" = "app-server" ] || exit 0
+IFS= read -r init
+printf '{"id":1,"result":{}}\n'
+IFS= read -r initialized
+IFS= read -r request
+echo "$request" >> "$FAKE_STATE/codex-requests"
+case "$request" in
+  *account/read*refreshToken*true*) cat "$FAKE_STATE/codex-next-auth.json" > "$CODEX_HOME/auth.json";;
+esac
+printf '{"id":2,"result":{"account":null}}\n'
+"#;
+
+fn codex_jwt(claims: serde_json::Value) -> String {
+    use base64::Engine;
+    let part = |value: &serde_json::Value| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(value).unwrap());
+    format!("{}.{}.sig", part(&json!({"alg": "none"})), part(&claims))
+}
+
+fn codex_auth(marker: &str, lifetime_s: i64) -> (String, serde_json::Value) {
+    let access = codex_jwt(json!({"exp": chrono::Utc::now().timestamp() + lifetime_s, "marker": marker}));
+    let auth = json!({"auth_mode": "chatgpt", "tokens": {"id_token": codex_jwt(json!({"https://api.openai.com/auth": {"chatgpt_plan_type": "pro"}})),
+        "access_token": access, "refresh_token": "cx-refresh-SECRET", "account_id": "acct-9"}});
+    (access, auth)
+}
+
+/// A Codex account on the VPS with `auth`, its folder, and a PC account bound to it (or the bind's refusal).
+async fn codex_pair(l: &Lending, auth: Option<serde_json::Value>) -> (String, PathBuf, String, Result<LoginBrokerStatus, RpcError>) {
+    let account = crate::provider_accounts::create(
+        &l.c.state,
+        AccountsCreateParams { kind: ProviderKind::Codex, name: "Shared Codex".into(), directory: None },
+    )
+    .unwrap();
+    let dir = PathBuf::from(l.c.state.settings.get().providers[&ProviderKind::Codex].accounts[&account.instance].directory.clone());
+    let mut settings = l.c.state.settings.get();
+    settings.providers.get_mut(&ProviderKind::Codex).unwrap().accounts.get_mut(&account.instance).unwrap().email =
+        Some("codex@example.com".into());
+    l.c.state.settings.set(settings).unwrap();
+    if let Some(auth) = auth {
+        std::fs::write(dir.join("auth.json"), auth.to_string()).unwrap();
+    }
+    let local = crate::provider_accounts::create(
+        &l.b.state,
+        AccountsCreateParams { kind: ProviderKind::Codex, name: "Via VPS".into(), directory: None },
+    )
+    .unwrap();
+    let bound = l
+        .broker(&l.b)
+        .bind(
+            &l.b.state,
+            LoginBrokerBindParams {
+                provider: ProviderKind::Codex,
+                instance: local.instance.clone(),
+                broker_account: Some(account.instance.clone()),
+            },
+        )
+        .await;
+    (account.instance, dir, local.instance, bound)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lent_codex_login_is_renewed_by_codex_ahead_of_expiry_and_reaches_the_borrower() {
+    let Some(l) = lending().await else { return };
+    let codex = l.cluster.dir.path().join("bin").join("codex");
+    kybern_protocol::process::write_executable(&codex, FAKE_CODEX).unwrap();
+    let codex_state = l.cluster.dir.path().join("vps-codex-state");
+    std::fs::create_dir_all(&codex_state).unwrap();
+    let mut settings = l.c.state.settings.get();
+    let provider = settings.providers.entry(ProviderKind::Codex).or_default();
+    provider.binary = Some(codex.to_string_lossy().into_owned());
+    provider.env.insert("FAKE_STATE".into(), codex_state.to_string_lossy().into_owned());
+    l.c.state.settings.set(settings).unwrap();
+    // Two hours left: well within a day, so the lender has Codex renew it while someone borrows it.
+    let (_, auth) = codex_auth("cx-access-0", 2 * 3600);
+    let (new, next) = codex_auth("cx-access-1", 240 * 3600);
+    std::fs::write(codex_state.join("codex-next-auth.json"), next.to_string()).unwrap();
+    let (account, _, local, bound) = codex_pair(&l, Some(auth)).await;
+    bound.unwrap();
+    assert_eq!(email_of(&l.b, ProviderKind::Codex, &local).as_deref(), Some("codex@example.com"));
+    let source = l.broker(&l.b).acquire(ProviderKind::Codex, &local, &account).await.unwrap();
+    let token = |login: BorrowedLogin| match login {
+        BorrowedLogin::Codex { access_token, .. } => access_token,
+        other => panic!("{other:?}"),
+    };
+
+    l.broker(&l.c).watch_lent(&l.c.state).await;
+    eventually_async("the borrower holds the renewed token", || {
+        let source = source.clone();
+        let new = new.clone();
+        async move { source.current().await.ok().map(token).as_deref() == Some(new.as_str()) }
+    })
+    .await;
+    let requests = std::fs::read_to_string(codex_state.join("codex-requests")).unwrap_or_default();
+    assert!(requests.contains("account/read") && requests.contains("\"refreshToken\":true"), "{requests}");
+    // Renewed once: a fresh token is not renewed again.
+    l.broker(&l.c).watch_lent(&l.c.state).await;
+    assert_eq!(std::fs::read_to_string(codex_state.join("codex-requests")).unwrap_or_default().lines().count(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn binding_to_a_codex_login_that_cant_be_shared_is_refused_while_setting_up() {
+    let Some(l) = lending().await else { return };
+    // An API key, and a login kept in the system keyring (no auth.json): neither can be lent.
+    for (auth, words) in [(Some(json!({"auth_mode": "apikey", "OPENAI_API_KEY": "sk-test"})), "API key"), (None, "system keyring")] {
+        let (_, _, local, bound) = codex_pair(&l, auth).await;
+        let error = bound.unwrap_err();
+        assert!(error.message.contains(words) && error.message.contains("(vps)"), "{}", error.message);
+        let problem = error.problem().expect("a problem");
+        assert_eq!(problem.subject.as_deref(), Some(LOGIN_BORROW_SUBJECT));
+        assert_eq!(problem.action.unwrap().id, SIGN_IN_HERE_ACTION);
+        assert!(l.broker(&l.b).binding(ProviderKind::Codex, &local).is_none(), "the refused account stays unbound");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_borrowed_default_reads_its_limits_from_the_lender_with_the_lenders_time() {
+    let Some(l) = lending().await else { return };
+    let lent = ProviderInstance { kind: ProviderKind::ClaudeCode, instance: l.broker_account.clone() };
+    l.c.state
+        .orchestrator
+        .usage()
+        .observe_account(&lent, &[UsageLimit { name: "5-hour".into(), used_percent: 42.0, window_minutes: Some(300), resets_at: None }]);
+    let at_lender = l.c.state.orchestrator.usage().cached_limits(ProviderKind::ClaudeCode, std::slice::from_ref(&l.broker_account));
+    assert_eq!(at_lender[&l.broker_account][0].used_percent, 42.0);
+    // The PC's default is the borrowed account.
+    let mut settings = l.b.state.settings.get();
+    settings.providers.get_mut(&ProviderKind::ClaudeCode).unwrap().default_account = Some(l.local_account.clone());
+    l.b.state.settings.set(settings).unwrap();
+    let before = chrono::Utc::now();
+    let result = l.b.state.orchestrator.usage().limits(UsageLimitsParams { cached: false, refresh: true, ..Default::default() }).await;
+    let global =
+        result.providers.iter().find(|entry| entry.provider == ProviderKind::ClaudeCode).expect("the default's limits, from the lender");
+    assert_eq!(global.limits[0].used_percent, 42.0);
+    assert!(global.updated_at.is_some_and(|at| at < before), "the lender's time, not the time it was asked: {:?}", global.updated_at);
+    assert_eq!(global.source, Some(LimitsSource::Session));
+    // Counted once: the default is not listed again as an account entry.
+    assert_eq!(result.accounts.iter().filter(|entry| entry.provider == ProviderKind::ClaudeCode).count(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_restart_renews_the_same_loan_and_a_removed_account_lets_its_loan_go() {
+    let Some(l) = lending().await else { return };
+    let (thread, _) = l.thread().await;
+    l.send(thread, "hello").await;
+    eventually("the turn completes", WAIT, || l.turns(thread, "turn_completed") == 1).await;
+    let loan = l.c.state.store.loans_open(kybern_store::LoanRole::Lender).unwrap()[0].loan_id.clone();
+
+    // A restart: the PC's leases are gone, its loans in the store are not. The next borrow renews the same loan.
+    let broker = l.broker(&l.b);
+    broker.forget_leases_for_test();
+    broker.acquire(ProviderKind::ClaudeCode, &l.local_account, &l.broker_account).await.unwrap();
+    let lent: Vec<String> =
+        l.c.state.store.loans_open(kybern_store::LoanRole::Lender).unwrap().into_iter().map(|loan| loan.loan_id).collect();
+    assert_eq!(lent, vec![loan.clone()], "one loan on the lender, the same one");
+    let held: Vec<String> =
+        l.b.state.store.loans_open(kybern_store::LoanRole::Borrower).unwrap().into_iter().map(|loan| loan.loan_id).collect();
+    assert_eq!(held, vec![loan]);
+
+    // The account is removed here: its loan goes back, and the binding with it.
+    crate::provider_accounts::remove(&l.b.state, ProviderInstance { kind: ProviderKind::ClaudeCode, instance: l.local_account.clone() })
+        .await
+        .unwrap();
+    eventually("the loan is let go on both machines", WAIT, || {
+        l.b.state.store.loans_open(kybern_store::LoanRole::Borrower).unwrap().is_empty()
+            && l.c.state.store.loans_open(kybern_store::LoanRole::Lender).unwrap().is_empty()
+    })
+    .await;
+    assert!(
+        l.b.state.store.meta_get(&format!("login_broker:bind:claude-code:{}", l.local_account)).unwrap().unwrap_or_default().is_empty()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_lender_refreshes_ahead_of_expiry_only_once_a_running_turn_finished() {
+    let Some(l) = lending().await else { return };
+    let (thread, _) = l.thread().await;
+    let gate = Arc::new(tokio::sync::Notify::new());
+    *l.hold.0.lock().await = Some(gate.clone());
+    l.send(thread, "long task").await;
+    eventually("the turn is running", WAIT, || l.spawns().len() == 1 && !l.spawns()[0].sent.lock().unwrap().is_empty()).await;
+
+    // Four minutes left: due for a refresh, which would revoke the token the running turn uses. It waits.
+    write_login(&l.broker_dir, &l.broker_state, "tok-0", 4 * 60 * 1000);
+    let lender = l.broker(&l.c);
+    lender.watch_lent(&l.c.state).await;
+    assert!(!events_of(&l.broker_state).iter().any(|line| line.starts_with("refresh")), "{:?}", events_of(&l.broker_state));
+
+    // The turn finishes on the token it started with: no failure, no second send.
+    *l.hold.0.lock().await = None;
+    gate.notify_one();
+    eventually("the turn completes", WAIT, || l.turns(thread, "turn_completed") == 1).await;
+    assert_eq!((l.spawns().len(), l.turns(thread, "turn_failed")), (1, 0));
+    assert_eq!(l.spawns()[0].sent.lock().unwrap().len(), 1, "the message was sent once");
+    // Idle now: the refresh happens, and the next turn runs on the new token.
+    eventually_async("the lender refreshed", || {
+        let lender = lender.clone();
+        let state = l.c.state.clone();
+        let dir = l.broker_state.clone();
+        async move {
+            lender.watch_lent(&state).await;
+            events_of(&dir).iter().any(|line| line.starts_with("refresh"))
+        }
+    })
+    .await;
+    l.send(thread, "next").await;
+    eventually("the next turn", WAIT, || l.turns(thread, "turn_completed") == 2).await;
+    assert_eq!(l.spawns().last().unwrap().token, "tok-1");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sharing_a_machines_sign_ins_again_turns_its_logins_back_on() {
+    let Some(l) = lending().await else { return };
+    set_logins(&l.c, false, &l.b).await;
+    eventually("the Mac has heard of it too", WAIT, || l.a.membership().projection().allowed(&l.c.id()).get("logins") == Some(&false))
+        .await;
+    let fresh = new_local_account(&l.b, "Refused").await;
+    let bind = |instance: String| LoginBrokerBindParams {
+        provider: ProviderKind::ClaudeCode,
+        instance,
+        broker_account: Some(l.broker_account.clone()),
+    };
+    let error = l.broker(&l.b).bind(&l.b.state, bind(fresh.clone())).await.unwrap_err();
+    assert!(error.message.contains("Settings → Accounts") && !error.message.contains("Settings → Machines"), "{}", error.message);
+    // "Share this machine's sign-ins" for the VPS, picked again on the Mac.
+    client(&l.a)
+        .await
+        .call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id: Some(l.c.id()), sign_out_old: false, via: None })
+        .await
+        .unwrap();
+    eventually("the VPS lets its sign-ins be used again", WAIT, || {
+        l.b.membership().projection().allowed(&l.c.id()).get("logins") != Some(&false)
+    })
+    .await;
+    l.broker(&l.b).bind(&l.b.state, bind(fresh.clone())).await.unwrap();
 }

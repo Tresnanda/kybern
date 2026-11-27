@@ -19,7 +19,7 @@ const DELEGATED = process.env.ACCOUNTS_DEMO_DELEGATED === '1'
 const ids = ['mac', 'fedora', 'satya'] as const
 type Id = typeof ids[number]
 const NAMES: Record<Id, string> = { mac: 'MacBook Pro', fedora: 'fedora', satya: 'SatyaMas' }
-const FEATURES = ['network.v1', 'login.broker.v1', 'accounts.shared.v1', 'accounts.login.handoff.v1']
+const FEATURES = ['network.v1', 'login.broker.v1', 'accounts.shared.v1', 'accounts.login.handoff.v1', 'accounts.write.v1', 'antigravity.accounts.v1']
 const now = Date.now()
 const at = new Date(now).toISOString()
 const ago = (minutes: number) => new Date(now - minutes * 60_000).toISOString()

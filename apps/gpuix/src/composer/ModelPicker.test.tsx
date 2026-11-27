@@ -17,7 +17,7 @@ const { handleGpuixEvent } = await import(pathToFileURL(path.join(path.dirname(e
 
 /** Records the element tree (types, test ids, text) and the renderer calls under test, and delivers events. */
 function harness() {
-  const children = new Map<number, number[]>(), custom = new Map<number, Record<string, any>>(), types = new Map<number, string>()
+  const children = new Map<number, number[]>(), custom = new Map<number, Record<string, any>>(), types = new Map<number, string>(), words = new Map<number, string>()
   const focused: number[] = [], scrolled: [number, number, number | undefined][] = []
   let rootId = 0, created = 0
   const detach = (id: number) => { for (const list of children.values()) { const at = list.indexOf(id); if (at >= 0) list.splice(at, 1) } }
@@ -27,6 +27,7 @@ function harness() {
       for (const [op, id, a, b] of JSON.parse(json) as [string, number, any, any][]) {
         if (op === 'createElement') { children.set(id, []); custom.set(id, {}); types.set(id, a); created++ }
         else if (op === 'setCustomProp') custom.get(id)![a] = b
+        else if (op === 'setText') words.set(id, String(a ?? ''))
         else if (op === 'appendChild') { detach(a); children.get(id)!.push(a) }
         else if (op === 'insertBefore') { detach(a); const list = children.get(id)!; const at = list.indexOf(b); list.splice(at < 0 ? list.length : at, 0, a) }
         else if (op === 'removeChild') detach(a)
@@ -46,6 +47,8 @@ function harness() {
   return {
     renderer, focused, scrolled, types, children,
     created: () => created,
+    /** Everything on screen, as one string. */
+    text: () => walk(rootId).map((id) => words.get(id) ?? custom.get(id)?.text ?? '').filter(Boolean).join(' '),
     render: (node: ReactNode) => { flushSync(() => root.render(node)) },
     find: (testId: string) => walk(rootId).find(id => custom.get(id)?.testId === testId),
     parent,
@@ -119,6 +122,30 @@ test('onRegisterOpen exposes an opener that opens the model picker panel', () =>
   flushSync(() => opener!())
   expect(h.find('model-picker-panel')).toBeDefined()
   expect(opened).toBe(1)
+})
+
+test('a thread that already ran names its account and offers no defaults to follow', () => {
+  const providers: ProviderStatus[] = [{ kind: 'claude-code', display_name: 'Claude Code', available: true, supported_permission_modes: [], supports_fork: false, supports_model_switch: true, models: catalog(3), instances: ['default', 'work'] }]
+  const account = (instance: string, name: string) => ({ provider: { kind: 'claude-code' as const, instance }, name, status: 'signed_in' as const, is_default: instance === 'default', projects: [], managed: true, can_sign_out: true })
+  const panel = (kept: boolean, followsDefaults: boolean) => {
+    const h = harness()
+    h.render(
+      <ThemeProvider>
+        <ModelPicker provider={{ kind: 'claude-code', instance: 'work' }} providers={providers} canPickModel canPickProvider={false} canReload={false} loading={false} busy={false}
+          accounts={[account('default', 'CLI account'), account('work', 'Work')]} accountInstance="work" accountFollowsDefaults={followsDefaults} accountKept={kept}
+          onModelChange={async () => true} onEffortChange={async () => true} onProviderChange={async () => true} onReload={() => {}} label={() => null} />
+      </ThemeProvider>,
+    )
+    h.fire(h.find('model-picker')!, { eventType: 'mouseDown' })
+    h.fire(h.find('model-picker')!, { eventType: 'click' })
+    return h.text()
+  }
+  expect(panel(true, true)).toContain('This thread uses Work')
+  expect(panel(true, true)).not.toContain('Following defaults')
+  expect(panel(true, false)).not.toContain('Follow defaults')
+  // Not run yet: as before.
+  expect(panel(false, true)).toContain('Following defaults · Work')
+  expect(panel(false, false)).toContain('Follow defaults')
 })
 
 test('search results are one item each in the virtual list, and rows that stay listed are not rebuilt', () => {

@@ -138,6 +138,7 @@ export type Scope =
   | "review_write"
   | "access_read"
   | "access_write"
+  | "accounts_write"
   | "network_read"
   | "network_admin"
   | MachineScope;
@@ -1704,6 +1705,8 @@ export interface DaemonActivity {
   running_threads: number;
   terminals: number;
   queued_messages: number;
+  /** Sign-ins in progress that aren't terminals, or signed in and waiting to be saved (0.27.2; older daemons leave it out). */
+  sign_ins?: number;
   idle_since?: DateTime | null;
   idle_exit_at?: DateTime | null;
   /** Absent when the daemon cannot tell. */
@@ -3062,8 +3065,20 @@ export interface SecretsStoreResult {
   gitignore_updated: boolean;
 }
 
+/** A shared default this machine can't follow (0.27.2): it has no login for that account, or runs another one by
+ *  choice. Its new threads run on `running_on` until it can. */
+export interface UnfollowedDefault {
+  kind: ProviderKind;
+  key: string;
+  running_on: string;
+  has_account: boolean;
+}
+
 export interface SettingsUpdateParams {
   settings: Settings;
+  /** The document `settings` was edited from (0.27.2): account fields left as they were in it keep the daemon's
+   *  current value, so a default or name another machine shared meanwhile is never undone. Older daemons ignore it. */
+  base?: Settings;
 }
 
 export type UsageGroup = "provider" | "model" | "day" | "thread";
@@ -3132,9 +3147,13 @@ export type AccountSwitchReason = "limit" | "unavailable";
 /** A daemon that stores and syncs `Settings.accounts_shared`, sets `AccountSummary.key` / `terminal`, answers `accounts.offers`
  * and signs a signed-out terminal login in (`providers.accounts.login.start` with instance `default`). */
 export const ACCOUNTS_SHARED_FEATURE = "accounts.shared.v1";
+/** Account sign-ins and borrows need the `accounts:write` scope; a daemon from before it asks for `access:write`. */
+export const ACCOUNTS_WRITE_FEATURE = "accounts.write.v1";
 /** "Authorize only" sign-in: both daemons need it (the one on the computer with the browser, and the one being signed in). */
 export const LOGIN_HANDOFF_FEATURE = "accounts.login.handoff.v1";
 export interface LoginHandoffParams { machine_id: MachineId; login_id: string }
+/** Stop catching a sign-in's redirect on this computer and let its port go. */
+export interface LoginHandoffCancelParams { login_id: string }
 /** `url`: the authorize page to open in this computer's browser; the callback is forwarded to the other machine. */
 export interface LoginHandoffResult { url: string; expires_at: DateTime }
 /** Name, colour and "Only when I choose" of one account, the same on every machine. */
@@ -3152,6 +3171,12 @@ export interface AccountsShared {
 }
 export type AccountOfferKind = "always_on" | "new_machine" | "terminal_login" | "migration_clash";
 export interface AccountOfferClash { kind: ProviderKind; machine_id: MachineId; was: string; now: string }
+/** `accounts.offers`. `lender` (0.27.2+): the machine that shares sign-ins and whether a new machine's setup may borrow
+ * from it; when `usable_for_new` is false, plan sign-ins on the new machine and show `reason`. */
+export interface AccountsOffersResult {
+  offers: AccountOffer[];
+  lender?: LenderStatus;
+}
 /** One offer card (`accounts.offers`). Dismissed ones are returned too, so the Accounts page can list them. */
 export interface AccountOffer {
   /** Stable: `always_on:<machine>`, `new_machine:<machine>`, `terminal_login:<machine>:<kind>`, `clash:<kind>:<machine>`. */
@@ -5013,7 +5038,7 @@ export interface Methods {
   "providers.accounts.create": [{ kind: ProviderKind; name: string; directory?: string | null }, ProviderInstance];
   "providers.accounts.sign_in": [ProviderInstance, TerminalInfo];
   "providers.accounts.usage": [ProviderInstance, ProviderUsage];
-  "providers.accounts.list": [{ kind?: ProviderKind | null; refresh?: boolean }, { accounts: AccountSummary[] }];
+  "providers.accounts.list": [{ kind?: ProviderKind | null; refresh?: boolean }, { accounts: AccountSummary[]; unfollowed_defaults?: UnfollowedDefault[] }];
   "providers.accounts.login.start": [AccountLoginStartParams, AccountLogin];
   "providers.accounts.login.get": [{ id: string }, AccountLogin];
   "providers.accounts.login.input": [{ id: string; code: string }, AccountLogin];
@@ -5021,10 +5046,11 @@ export interface Methods {
   "providers.accounts.login.finish": [{ id: string; name: string; color?: string | null; make_default?: boolean }, ProviderInstance];
   /** Called on the daemon of the computer with the browser. A failure (port busy, no handoff) falls back to a code. */
   "providers.accounts.login.handoff": [LoginHandoffParams, LoginHandoffResult];
+  "providers.accounts.login.handoff.cancel": [LoginHandoffCancelParams, Empty];
   "providers.accounts.update": [{ kind: ProviderKind; instance: string; name?: string | null; color?: string | null }, AccountSummary];
   /** `confirm_terminal` signs the terminal login (`default`) out; without it the daemon refuses that instance. */
   "providers.accounts.sign_out": [ProviderInstance & { confirm_terminal?: boolean }, AccountSummary];
-  "accounts.offers": [Empty, { offers: AccountOffer[] }];
+  "accounts.offers": [Empty, AccountsOffersResult];
   "providers.accounts.remove": [ProviderInstance, Empty];
   "providers.accounts.catalog": [{ provider: ProviderInstance; project_id?: ProjectId | null; force_refresh?: boolean }, ProviderStatus];
   "threads.target.get": [{ thread_id: ThreadId }, ThreadTargetState];
@@ -5332,6 +5358,45 @@ export interface LoginBrokerStatus {
   is_broker: boolean;
   providers: BrokerProviderStatus[];
   loans: BrokerLoanView[];
+  /** The current lender and whether a new setup may borrow from it. Absent with no lender, and from daemons before
+   * 0.27.2 (`LOGIN_BROKER_CHOICE_FEATURE`): treat the lender in `broker` as usable then, as those daemons do. */
+  lender?: LenderStatus;
+  /** Every member, and whether "Share this machine's sign-ins" can pick it. Absent before 0.27.2. */
+  lenders?: LenderCandidate[];
+}
+/** `login.broker.status` / `accounts.offers` carry `lender` and `lenders`, `login.broker.set` takes `via`, and a failed
+ * borrow carries a `login_borrow` problem with a `sign_in_here` action. */
+export const LOGIN_BROKER_CHOICE_FEATURE = "login.broker.choice.v1";
+/** How the lender was chosen: by hand, or by accepting the `always_on` offer. */
+export type LenderVia = "manual" | "always_on";
+/**
+ * The machine that shares its sign-ins, as a new setup sees it. A lender chosen with `login.broker.set` on 0.27.2+ is
+ * always usable. A legacy one (`chosen` absent) only while it is always on; otherwise `usable_for_new` is false,
+ * `login.broker.bind` refuses new accounts, and `reason` is the sentence to show. Accounts already bound keep working.
+ */
+export interface LenderStatus {
+  machine_id: MachineId;
+  name: string;
+  chosen?: LenderVia;
+  /** Online at least 90% of the last week; absent until there is a day of samples. */
+  always_on?: boolean;
+  usable_for_new: boolean;
+  reason?: string;
+}
+/** One member, for "Share this machine's sign-ins". */
+export interface LenderCandidate {
+  machine_id: MachineId;
+  name: string;
+  is_self: boolean;
+  online: boolean;
+  /** Runs a Kybern that can lend (`login.broker.v1`); false while offline (unknown). */
+  supported: boolean;
+  always_on?: boolean;
+  is_lender: boolean;
+  /** It can be picked now; `login.broker.set` still refuses one with nothing signed in to lend. */
+  can_share: boolean;
+  /** Why it can't ("fedora is offline. Bring it online first."). */
+  reason?: string;
 }
 export interface LoginBrokerBindParams {
   provider: ProviderKind;
@@ -5342,8 +5407,10 @@ export interface LoginBrokerBindParams {
 export interface LoginBrokerSetParams {
   /** The new broker; absent clears it. */
   machine_id?: MachineId | null;
-  /** After the members re-borrowed, ask the old broker to sign out. Default true. */
+  /** After the members re-borrowed, ask the old lender to sign out of what it lent. Default false (0.27.2; before, true). */
   sign_out_old?: boolean;
+  /** How the lender was chosen; absent means "manual". Setting the current lender again records the choice. */
+  via?: LenderVia;
 }
 export interface LoginBrokerSetResult {
   status: LoginBrokerStatus;
@@ -5375,6 +5442,8 @@ export interface PeerLoginStatus {
   is_broker: boolean;
   lendable: LendableAccount[];
   borrowed_from: MachineId[];
+  /** Borrowed loans with a turn running on them now (the lender defers a refresh ahead of expiry). */
+  busy_loans?: string[];
 }
 export interface SecretsPushParams {
   name: string;

@@ -41,7 +41,7 @@ expression: scopes
 - - providers.accounts.list
   - "orchestration:read"
 - - providers.accounts.login.start
-  - "access:write"
+  - "accounts:write"
 - - providers.accounts.login.get
   - "orchestration:read"
 - - requests.progress
@@ -49,12 +49,14 @@ expression: scopes
 - - requests.act
   - "orchestration:operate"
 - - providers.accounts.login.input
-  - "access:write"
+  - "accounts:write"
 - - providers.accounts.login.cancel
-  - "access:write"
+  - "accounts:write"
 - - providers.accounts.login.finish
-  - "access:write"
+  - "accounts:write"
 - - providers.accounts.login.handoff
+  - "access:write"
+- - providers.accounts.login.handoff.cancel
   - "access:write"
 - - peer.accounts.login.peek
   - "machine:logins"
@@ -63,11 +65,11 @@ expression: scopes
 - - providers.accounts.update
   - "orchestration:operate"
 - - providers.accounts.sign_out
-  - "access:write"
+  - "accounts:write"
 - - accounts.offers
   - "orchestration:read"
 - - providers.accounts.remove
-  - "access:write"
+  - "accounts:write"
 - - threads.target.get
   - "orchestration:read"
 - - threads.target.set
@@ -579,7 +581,7 @@ expression: scopes
 - - login.broker.status
   - "orchestration:read"
 - - login.broker.bind
-  - "access:write"
+  - "accounts:write"
 - - login.broker.set
   - "network:admin"
 - - secrets.push

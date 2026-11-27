@@ -172,10 +172,13 @@ pub fn create(state: &AppState, params: AccountsCreateParams) -> Result<Provider
         }
         None => state.settings.dir().join("accounts").join(params.kind.as_str()).join(&id),
     };
-    let mut settings = state.settings.get();
-    let provider = settings.providers.entry(params.kind).or_default();
     ensure!(
-        !provider.accounts.values().any(|account| std::path::Path::new(&account.directory) == directory),
+        !state
+            .settings
+            .get()
+            .providers
+            .get(&params.kind)
+            .is_some_and(|provider| provider.accounts.values().any(|account| std::path::Path::new(&account.directory) == directory)),
         "This directory is already registered. Choose its existing account."
     );
     let created = !directory.exists();
@@ -187,18 +190,28 @@ pub fn create(state: &AppState, params: AccountsCreateParams) -> Result<Provider
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))?;
     }
-    let color = next_color(provider);
-    provider.accounts.insert(
-        id.clone(),
-        ProviderAccount {
-            name: params.name.trim().into(),
-            directory: directory.to_string_lossy().into_owned(),
-            color: Some(color),
-            ..Default::default()
-        },
-    );
-    crate::provider_assets::prepare(provider, params.kind)?;
-    if let Err(error) = state.settings.set(settings) {
+    // Only the new account is added, to the settings as saved at the write (#378).
+    let saved = state.settings.update_with(|current, _| {
+        let mut settings = current.clone();
+        let provider = settings.providers.entry(params.kind).or_default();
+        ensure!(
+            !provider.accounts.values().any(|account| std::path::Path::new(&account.directory) == directory),
+            "This directory is already registered. Choose its existing account."
+        );
+        let color = next_color(provider);
+        provider.accounts.insert(
+            id.clone(),
+            ProviderAccount {
+                name: params.name.trim().into(),
+                directory: directory.to_string_lossy().into_owned(),
+                color: Some(color),
+                ..Default::default()
+            },
+        );
+        crate::provider_assets::prepare(provider, params.kind)?;
+        Ok(Some((settings, ())))
+    });
+    if let Err(error) = saved {
         if created {
             let _ = std::fs::remove_dir(&directory);
         }
@@ -384,7 +397,30 @@ pub async fn list(state: &AppState, params: AccountsListParams) -> Result<Accoun
         // What the other machines see of this one (offers, "signed in on fedora").
         crate::network::accounts_sync::publish_holdings(state, &accounts);
     }
-    Ok(AccountsListResult { accounts })
+    let unfollowed_defaults = unfollowed_defaults(state, &state.settings.get(), params.kind);
+    Ok(AccountsListResult { accounts, unfollowed_defaults })
+}
+
+/// The shared defaults this machine doesn't run new threads on, so a client can say so instead of this machine
+/// silently running another account (#18).
+pub fn unfollowed_defaults(state: &AppState, settings: &Settings, only: Option<ProviderKind>) -> Vec<UnfollowedDefault> {
+    let terminal = crate::accounts_shared::terminal_emails(Some(&state.store));
+    settings
+        .accounts_shared
+        .defaults
+        .iter()
+        .filter(|(kind, _)| only.is_none_or(|only| only == **kind))
+        .filter_map(|(kind, key)| {
+            let running_on = resolve(&settings.providers.get(kind).cloned().unwrap_or_default(), None, None);
+            let here = crate::accounts_shared::instance_for_key(settings, &terminal, key);
+            (here.as_deref() != Some(running_on.as_str())).then(|| UnfollowedDefault {
+                kind: *kind,
+                key: key.clone(),
+                running_on,
+                has_account: here.is_some(),
+            })
+        })
+        .collect()
 }
 
 fn valid_name(name: &str) -> Result<String> {
@@ -399,19 +435,22 @@ pub async fn update(state: &AppState, params: AccountsUpdateParams) -> Result<Ac
     if let Some(color) = &params.color {
         validate_color(color)?;
     }
-    let mut settings = state.settings.get();
-    let account = settings
-        .providers
-        .get_mut(&params.kind)
-        .and_then(|provider| provider.accounts.get_mut(&params.instance))
-        .ok_or_else(|| anyhow!("That account no longer exists. Refresh Settings › Accounts."))?;
-    if let Some(name) = name {
-        account.name = name;
-    }
-    if let Some(color) = params.color {
-        account.color = Some(color);
-    }
-    state.settings.set(settings)?;
+    // Only this account's name and colour, against the settings as saved at the write (#378).
+    state.settings.update_with(|current, _| {
+        let mut settings = current.clone();
+        let account = settings
+            .providers
+            .get_mut(&params.kind)
+            .and_then(|provider| provider.accounts.get_mut(&params.instance))
+            .ok_or_else(|| anyhow!("That account no longer exists. Refresh Settings › Accounts."))?;
+        if let Some(name) = name {
+            account.name = name;
+        }
+        if let Some(color) = params.color {
+            account.color = Some(color);
+        }
+        Ok(Some((settings, ())))
+    })?;
     Ok(summary_for(state, params.kind, &params.instance, false).await)
 }
 
@@ -448,6 +487,17 @@ async fn harness_sign_out(state: &AppState, instance: &ProviderInstance) -> Resu
     Ok(())
 }
 
+/// Record a sign-out Kybern just did: the flag threads check, and the signed-out result in the identity cache.
+/// After the summary's own probe, so a probe that still reads a stale credential doesn't clear it at once.
+fn signed_out_now(state: &AppState, instance: &ProviderInstance, summary: &AccountSummary) -> Result<()> {
+    state.orchestrator.mark_account_signed_out(instance, true)?;
+    if let Ok(context) = context(state, instance) {
+        let digest = crate::account_identity::digest(&context.env);
+        state.account_identities.remember(instance, digest, (AccountStatus::SignedOut, summary.identity.clone()));
+    }
+    Ok(())
+}
+
 fn forget_account_caches(state: &AppState, instance: &ProviderInstance) {
     state.account_identities.invalidate(instance);
     state.orchestrator.usage().forget_account(instance.kind, &instance.instance);
@@ -469,11 +519,11 @@ async fn sign_out_terminal(state: &AppState, kind: ProviderKind) -> Result<Accou
         if running == 1 { "it" } else { "them" }
     );
     harness_sign_out(state, &instance).await.map_err(|error| anyhow!("Couldn't sign the terminal login out. {error}"))?;
-    state.orchestrator.mark_account_signed_out(&instance, true)?;
     forget_account_caches(state, &instance);
     state.provider_catalogs.invalidate().await;
     let mut summary = summary_for(state, kind, "default", true).await;
     summary.status = AccountStatus::SignedOut;
+    signed_out_now(state, &instance, &summary)?;
     Ok(summary)
 }
 
@@ -495,13 +545,13 @@ pub async fn sign_out(state: &AppState, params: AccountsSignOutParams) -> Result
         .map(|account| account.name.clone())
         .ok_or_else(|| anyhow!("That account no longer exists. Refresh Settings › Accounts."))?;
     harness_sign_out(state, &instance).await.map_err(|error| anyhow!("Couldn't sign {name} out. {error}"))?;
-    state.orchestrator.mark_account_signed_out(&instance, true)?;
     forget_account_caches(&state.clone(), &instance);
     state.provider_catalogs.invalidate().await;
     let mut summary = summary_for(state, instance.kind, &instance.instance, true).await;
     // A harness that keeps a stale credential file still counts as signed out.
     summary.status = AccountStatus::SignedOut;
     summary.can_sign_out = false;
+    signed_out_now(state, &instance, &summary)?;
     Ok(summary)
 }
 
@@ -527,15 +577,20 @@ pub async fn remove(state: &AppState, instance: ProviderInstance) -> Result<()> 
         // The harness may keep credentials outside the folder (macOS Keychain).
         let _ = harness_sign_out(state, &instance).await;
     }
-    let mut next = state.settings.get();
-    if let Some(provider) = next.providers.get_mut(&instance.kind) {
+    // Only this account and the local choices that pointed at it go, against the settings as saved at the write
+    // (#378). Removing it here is no choice for the network: every other machine keeps the shared default and
+    // project choices, and this one follows them where it can (#12).
+    state.settings.update_with(|current, choice| {
+        *choice = crate::settings::AccountChoice::LocalOnly;
+        let mut next = current.clone();
+        let Some(provider) = next.providers.get_mut(&instance.kind) else { return Ok(None) };
         provider.accounts.remove(&instance.instance);
         if provider.default_account.as_deref() == Some(instance.instance.as_str()) {
             provider.default_account = None;
         }
         provider.project_accounts.retain(|_, id| id != &instance.instance);
-    }
-    state.settings.set(next)?;
+        Ok(Some((next, ())))
+    })?;
     state.orchestrator.clear_account_overrides(&instance)?;
     if managed {
         remove_account_folder(instance.kind, Path::new(&account.directory));
@@ -608,6 +663,11 @@ pub async fn catalog(state: &AppState, params: AccountsCatalogParams) -> Result<
 }
 
 pub async fn usage(state: &AppState, instance: ProviderInstance) -> Result<ProviderUsage> {
+    // A signed-out account has no limits to read, and reading them starts its harness for nothing
+    // (Claude: a `claude -p` that fails each time).
+    if state.orchestrator.account_marked_signed_out(&instance) {
+        return Ok(ProviderUsage::default());
+    }
     let context = context(state, &instance)?;
     let cwd = context.cwd.as_deref().unwrap();
     let limits = match instance.kind {
@@ -886,6 +946,56 @@ exit 2
         assert_eq!(summary.status, AccountStatus::SignedOut);
         assert!(!work.join(".signed-in").exists());
         assert!(fixture.state.orchestrator.admit_signed_out_for_test(&claude("work")));
+    }
+
+    #[tokio::test]
+    async fn an_account_signed_in_again_by_another_route_is_no_longer_signed_out() {
+        let fixture = fixture();
+        let work = fixture.root.join("data/accounts/claude/work");
+        add(&fixture, "work", &work, None);
+        std::fs::write(work.join(".signed-in"), "dev@arunika.co").unwrap();
+        sign_out(&fixture.state, claude("work").into()).await.unwrap();
+        assert!(fixture.state.orchestrator.admit_signed_out_for_test(&claude("work")));
+        // A cached read right after the sign-out still says signed out.
+        list(&fixture.state, AccountsListParams { kind: Some(ProviderKind::ClaudeCode), refresh: false }).await.unwrap();
+        assert!(fixture.state.orchestrator.admit_signed_out_for_test(&claude("work")));
+        // Signed in from a shell (or `providers.accounts.sign_in`'s terminal, or a borrow): the next probe sees it.
+        std::fs::write(work.join(".signed-in"), "dev@arunika.co").unwrap();
+        let listed = list(&fixture.state, AccountsListParams { kind: Some(ProviderKind::ClaudeCode), refresh: true }).await.unwrap();
+        assert_eq!(listed.accounts[1].status, AccountStatus::SignedIn);
+        assert!(!fixture.state.orchestrator.admit_signed_out_for_test(&claude("work")), "threads may use it again");
+    }
+
+    #[tokio::test]
+    async fn removing_the_default_account_here_keeps_the_shared_default_and_projects() {
+        let fixture = fixture();
+        let work = fixture.root.join("data/accounts/claude/work");
+        add(&fixture, "work", &work, None);
+        let repo = "root:abc".to_string();
+        let mut settings = fixture.state.settings.get();
+        let provider = settings.providers.get_mut(&ProviderKind::ClaudeCode).unwrap();
+        provider.accounts.get_mut("work").unwrap().email = Some("work@example.com".into());
+        settings.accounts_shared.defaults.insert(ProviderKind::ClaudeCode, "claude-code:work@example.com".into());
+        settings
+            .accounts_shared
+            .projects
+            .entry(repo.clone())
+            .or_default()
+            .insert(ProviderKind::ClaudeCode, "claude-code:work@example.com".into());
+        fixture.state.settings.set(settings).unwrap();
+        assert_eq!(fixture.state.settings.get().providers[&ProviderKind::ClaudeCode].default_account.as_deref(), Some("work"));
+
+        remove(&fixture.state, claude("work")).await.unwrap();
+        let settings = fixture.state.settings.get();
+        assert_eq!(resolve(&settings.providers[&ProviderKind::ClaudeCode], None, None), "default", "this machine falls back");
+        assert_eq!(
+            settings.accounts_shared.defaults[&ProviderKind::ClaudeCode],
+            "claude-code:work@example.com",
+            "every other machine keeps it"
+        );
+        assert_eq!(settings.accounts_shared.projects[&repo][&ProviderKind::ClaudeCode], "claude-code:work@example.com");
+        let unfollowed = unfollowed_defaults(&fixture.state, &settings, None);
+        assert_eq!(unfollowed.len(), 1, "and this machine says it can't follow it");
     }
 
     #[tokio::test]

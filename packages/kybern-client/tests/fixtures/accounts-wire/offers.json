@@ -1,0 +1,59 @@
+{
+  "offers": [
+    {
+      "id": "always_on:m-vps",
+      "kind": "always_on",
+      "fingerprint": "fp-always_on:m-vps",
+      "machine_id": "m-vps",
+      "machine_name": "m-vps",
+      "keys": [
+        "claude-code:work@example.com"
+      ],
+      "machines": [
+        "m-mac",
+        "m-pc"
+      ]
+    },
+    {
+      "id": "new_machine:m-pc",
+      "kind": "new_machine",
+      "fingerprint": "fp-new_machine:m-pc",
+      "machine_id": "m-pc",
+      "machine_name": "m-pc",
+      "keys": [
+        "claude-code:work@example.com",
+        "claude-code:me@home.org"
+      ],
+      "machines": [
+        "m-mac"
+      ]
+    },
+    {
+      "id": "terminal_login:m-pc:claude-code",
+      "kind": "terminal_login",
+      "fingerprint": "fp-terminal_login:m-pc:claude-code",
+      "machine_id": "m-pc",
+      "machine_name": "m-pc",
+      "provider": "claude-code",
+      "keys": [],
+      "machines": []
+    },
+    {
+      "id": "clash:claude-code:m-pc",
+      "kind": "migration_clash",
+      "fingerprint": "fp-clash:claude-code:m-pc",
+      "machine_id": "m-pc",
+      "machine_name": "m-pc",
+      "provider": "claude-code",
+      "keys": [],
+      "machines": [],
+      "clash": {
+        "kind": "claude-code",
+        "machine_id": "m-pc",
+        "was": "claude-code:me@home.org",
+        "now": "claude-code:work@example.com"
+      },
+      "dismissed": "later"
+    }
+  ]
+}

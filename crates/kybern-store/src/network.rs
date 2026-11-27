@@ -314,6 +314,32 @@ impl Store {
     /// Give every active token that lacks `scope` that scope, for the tokens `keep` accepts (by
     /// label). Used when an upgrade adds a scope that paired clients should already hold. Returns
     /// how many tokens changed.
+    /// Add `scope` to every live token that already carries `required`. Idempotent.
+    pub fn tokens_add_scope_if(&self, scope: kybern_protocol::Scope, required: kybern_protocol::Scope) -> Result<usize> {
+        self.with(|c| {
+            let tx = c.unchecked_transaction()?;
+            let rows: Vec<(String, String)> = {
+                let mut st = tx.prepare("SELECT id, scopes FROM tokens WHERE revoked = 0")?;
+                let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                rows.collect::<Result<_, _>>()?
+            };
+            let mut changed = 0;
+            for (id, scopes) in rows {
+                // Kept as written, so a scope this build doesn't know survives the rewrite.
+                let mut raw: Vec<serde_json::Value> = serde_json::from_str(&scopes)?;
+                let parsed = crate::parse_scopes(&scopes)?;
+                if parsed.contains(&scope) || !parsed.contains(&required) {
+                    continue;
+                }
+                raw.push(serde_json::to_value(scope)?);
+                tx.execute("UPDATE tokens SET scopes = ?2 WHERE id = ?1", params![id, serde_json::to_string(&raw)?])?;
+                changed += 1;
+            }
+            tx.commit()?;
+            Ok(changed)
+        })
+    }
+
     pub fn tokens_add_scope(&self, scope: kybern_protocol::Scope, keep: impl Fn(&str) -> bool) -> Result<usize> {
         self.with(|c| {
             let tx = c.unchecked_transaction()?;
@@ -324,12 +350,14 @@ impl Store {
             };
             let mut changed = 0;
             for (id, label, scopes) in rows {
-                let mut parsed: Vec<kybern_protocol::Scope> = serde_json::from_str(&scopes)?;
+                // Kept as written, so a scope this build doesn't know survives the rewrite.
+                let mut raw: Vec<serde_json::Value> = serde_json::from_str(&scopes)?;
+                let parsed = crate::parse_scopes(&scopes)?;
                 if parsed.contains(&scope) || !keep(&label) {
                     continue;
                 }
-                parsed.push(scope);
-                tx.execute("UPDATE tokens SET scopes = ?2 WHERE id = ?1", params![id, serde_json::to_string(&parsed)?])?;
+                raw.push(serde_json::to_value(scope)?);
+                tx.execute("UPDATE tokens SET scopes = ?2 WHERE id = ?1", params![id, serde_json::to_string(&raw)?])?;
                 changed += 1;
             }
             tx.commit()?;
@@ -370,6 +398,47 @@ mod tests {
 
     use super::*;
     use crate::schema;
+
+    #[test]
+    fn a_scope_is_added_only_to_tokens_that_carry_the_required_one() {
+        let store = Store::open_in_memory().unwrap();
+        let operate = uuid::Uuid::now_v7();
+        let viewer = uuid::Uuid::now_v7();
+        store.token_insert(operate, "a", "desktop", &[Scope::OrchestrationRead, Scope::OrchestrationOperate]).unwrap();
+        store.token_insert(viewer, "b", "viewer", &[Scope::OrchestrationRead]).unwrap();
+        assert_eq!(store.tokens_add_scope_if(Scope::AccountsWrite, Scope::OrchestrationOperate).unwrap(), 1);
+        // Idempotent.
+        assert_eq!(store.tokens_add_scope_if(Scope::AccountsWrite, Scope::OrchestrationOperate).unwrap(), 0);
+        let tokens = store.tokens_list().unwrap();
+        let scopes = |id| tokens.iter().find(|t| t.id == id).unwrap().scopes.clone();
+        assert!(scopes(operate).contains(&Scope::AccountsWrite));
+        assert!(!scopes(viewer).contains(&Scope::AccountsWrite));
+    }
+
+    #[test]
+    fn a_token_with_a_scope_this_build_doesnt_know_still_reads_and_keeps_it() {
+        let store = Store::open_in_memory().unwrap();
+        let id = uuid::Uuid::now_v7();
+        store.token_insert(id, "h", "desktop", &[Scope::OrchestrationRead, Scope::OrchestrationOperate]).unwrap();
+        // Written by a newer daemon on the same data folder.
+        store
+            .with(|c| {
+                c.execute(
+                    "UPDATE tokens SET scopes = ?2 WHERE id = ?1",
+                    params![id.to_string(), r#"["orchestration_read","from_a_newer_daemon","orchestration_operate"]"#],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let token = store.token_lookup("h").unwrap().unwrap();
+        assert_eq!(token.scopes, vec![Scope::OrchestrationRead, Scope::OrchestrationOperate]);
+        assert_eq!(store.tokens_list().unwrap()[0].scopes, token.scopes);
+        assert_eq!(store.tokens_add_scope_if(Scope::AccountsWrite, Scope::OrchestrationOperate).unwrap(), 1);
+        assert_eq!(store.tokens_add_scope(Scope::NetworkAdmin, |_| true).unwrap(), 1);
+        let raw: String = store.with(|c| Ok(c.query_row("SELECT scopes FROM tokens", [], |r| r.get(0))?)).unwrap();
+        assert!(raw.contains("from_a_newer_daemon"), "a rewrite keeps the scope it doesn't know: {raw}");
+        assert_eq!(store.token_lookup("h").unwrap().unwrap().scopes.len(), 4);
+    }
 
     fn op(id: &str, kind: &str, lamport: u64) -> NetworkOpRecord {
         NetworkOpRecord {

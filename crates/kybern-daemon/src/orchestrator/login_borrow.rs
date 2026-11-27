@@ -41,7 +41,8 @@ impl Orchestrator {
         let Some(broker) = self.login_broker() else { return Ok(None) };
         let (kind, instance) = (thread.provider.kind, thread.provider.instance.as_str());
         let Some(account) = broker.binding(kind, instance) else { return Ok(None) };
-        let source = broker.acquire(kind, instance, &account).await.map_err(|text| anyhow!(text))?;
+        // The refusal keeps its `login_borrow` problem, so the failed turn offers "Sign in on <machine> instead".
+        let source = broker.acquire_or_problem(kind, instance, &account).await.map_err(anyhow::Error::new)?;
         if kind == ProviderKind::Omp {
             let login = source.current().await.map_err(|text| anyhow!(text))?;
             for (key, value) in login_lend::omp_env(&login).unwrap_or_default() {
@@ -100,6 +101,32 @@ impl Orchestrator {
             }
             let _ = self.emit(thread_id, None, EventPayload::ProviderSessionReleased { reason: SessionReleaseReason::Manual });
         }
+    }
+
+    /// Whether a live session of this local account has a turn running now. A lender asks before it refreshes the
+    /// login ahead of expiry, so the turn finishes on the token it started with.
+    pub async fn login_sessions_busy(&self, kind: ProviderKind, instance: &str) -> bool {
+        let candidates: Vec<(ThreadId, Arc<LiveSession>)> =
+            self.inner.sessions.lock().await.iter().map(|(id, live)| (*id, live.clone())).collect();
+        for (thread_id, live) in candidates {
+            let Ok(Some(thread)) = self.inner.store.thread_get(thread_id) else { continue };
+            if thread.provider.kind != kind || thread.provider.instance != instance {
+                continue;
+            }
+            if live.turn.lock().await.is_some() || !live.pending.lock().await.is_empty() || thread.status == ThreadStatus::Running {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Before a send is refused for a borrowed account whose last borrow failed, borrow once more: the lender may
+    /// be back online, or may let this machine borrow again.
+    pub(super) async fn retry_borrow_before_send(&self, thread_id: ThreadId) {
+        let Some(broker) = self.login_broker().cloned() else { return };
+        let Ok(Some(thread)) = self.inner.store.thread_get(thread_id) else { return };
+        let Ok(provider) = self.resolved_provider(&thread) else { return };
+        broker.retry_failed(provider.kind, &provider.instance).await;
     }
 
     /// A turn failed. If the lent login was rejected, plan to recover once: end the process gracefully, borrow

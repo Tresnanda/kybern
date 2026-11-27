@@ -190,11 +190,18 @@ async fn dispatch_part_2(state: &AppState, ctx: &ConnectionCtx, method: &str, sl
         AccountsCatalog::NAME => ok(crate::provider_accounts::catalog(state, parse(params)?).await.map_err(provider_err)?),
         AccountsUsage::NAME => ok(crate::provider_accounts::usage(state, parse(params)?).await.map_err(provider_err)?),
         AccountsList::NAME => ok(crate::provider_accounts::list(state, parse_or_default(params)?).await.map_err(bad)?),
-        AccountsLoginStart::NAME => ok(state.account_logins.start(state, parse(params)?).await.map_err(bad)?),
+        AccountsLoginStart::NAME => {
+            let p: AccountLoginStartParams = parse(params)?;
+            // Codex listens for its browser on one fixed port: a handoff still holding it here lets go first.
+            if p.kind == ProviderKind::Codex && p.mode == AccountLoginMode::Browser {
+                crate::login_handoff::release_port(crate::login_handoff::CODEX_CALLBACK_PORT).await;
+            }
+            ok(state.account_logins.start(state, p).await.map_err(bad)?)
+        }
         AccountsLoginGet::NAME => {
             let p: AccountLoginIdParams = parse(params)?;
             let login = state.account_logins.get(&p.id).map_err(bad)?;
-            ok(if ctx.principal.has(Scope::AccessWrite) { login } else { crate::account_login::for_observer(login) })
+            ok(if ctx.principal.has(Scope::AccountsWrite) { login } else { crate::account_login::for_observer(login) })
         }
         AccountsLoginInput::NAME => {
             let p: AccountLoginInputParams = parse(params)?;
@@ -216,6 +223,11 @@ async fn dispatch_part_3(state: &AppState, ctx: &ConnectionCtx, method: &str, sl
         }
         AccountsLoginFinish::NAME => ok(state.account_logins.finish(state, parse(params)?).await.map_err(bad)?),
         AccountsLoginHandoff::NAME => ok(crate::login_handoff::start(state, parse(params)?).await?),
+        AccountsLoginHandoffCancel::NAME => {
+            let p: AccountLoginHandoffCancelParams = parse(params)?;
+            crate::login_handoff::cancel(&p.login_id).await;
+            ok(Empty {})
+        }
         AccountsUpdate::NAME => ok(crate::provider_accounts::update(state, parse(params)?).await.map_err(bad)?),
         AccountsSignOut::NAME => ok(crate::provider_accounts::sign_out(state, parse(params)?).await.map_err(bad)?),
         AccountsOffers::NAME => ok(crate::accounts_offers::offers(state)),
@@ -894,7 +906,8 @@ async fn dispatch_part_11(state: &AppState, ctx: &ConnectionCtx, method: &str, s
                     Ok(()) => {}
                 }
             }
-            let updated = state.settings.set(p.settings).map_err(internal)?;
+            // Against the document the client edited, so account values that arrived meanwhile stay (#378).
+            let updated = state.settings.replace(p.settings, p.base.as_ref()).map_err(internal)?;
             if was_on
                 && !wants
                 && let Err(error) = crate::antigravity_mcp::turn_off(&updated).await
@@ -1349,12 +1362,12 @@ async fn dispatch_part_15(state: &AppState, ctx: &ConnectionCtx, method: &str, s
             let p: RequestsProgressParams = parse_or_default(params)?;
             let items = state.orchestrator.requests().list(p.thread_id);
             let items =
-                if ctx.principal.has(Scope::AccessWrite) { items } else { items.into_iter().map(crate::ws::redact_progress).collect() };
+                if ctx.principal.has(Scope::AccountsWrite) { items } else { items.into_iter().map(crate::ws::redact_progress).collect() };
             ok(RequestsProgressResult { items })
         }
         RequestsAct::NAME => {
             let p: RequestsActParams = parse(params)?;
-            let act = crate::requests::RequestAct { action: p.action, value: p.value, can_write: ctx.principal.has(Scope::AccessWrite) };
+            let act = crate::requests::RequestAct { action: p.action, value: p.value, can_write: ctx.principal.has(Scope::AccountsWrite) };
             state.orchestrator.requests().act(p.approval_id, act).map_err(bad)?;
             ok(Empty {})
         }

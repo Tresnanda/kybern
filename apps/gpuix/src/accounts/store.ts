@@ -6,29 +6,31 @@ import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import type { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 import {
   ACCOUNTS_LOGIN_CHANGED_NOTIFICATION, USAGE_LIMITS_CHANGED_NOTIFICATION,
-  type AccountOffer, type AccountSummary, type MachineId, type ProviderKind, type ProviderLimits, type ProviderStatus, type Settings, type UsageLimitsResult,
+  type AccountOffer, type AccountSummary, type MachineId, type ProviderKind, type ProviderLimits, type ProviderStatus, type Scope, type Settings, type UnfollowedDefault, type UsageLimitsResult,
 } from '../../../../packages/kybern-client/src/types.ts'
 import { errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
 import { machineHub, useMachines, type MachineRow } from '../machines/index.ts'
 import { useNav } from '../nav/store.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { getClient, useApp } from '../state.ts'
-import { askAccountLimits, mergeAccountLimits, refreshAccounts, useAccountLimitEntries, useAccounts, useAccountsFeed, useAccountsLegacy, useAccountsLoaded } from '../usage/accounts.ts'
-import { featuresOf, fetchDaemonOffers, readShared, supportsShared } from './adapter.ts'
+import { askAccountLimits, mergeAccountLimits, refreshAccounts, useAccountLimitEntries, useAccounts, useAccountsFeed, useAccountsLegacy, useAccountsLoaded, useUnfollowedDefaults } from '../usage/accounts.ts'
+import { featuresOf, fetchDaemonOffers, readShared, sharingFrom, supportsShared, type Sharing } from './adapter.ts'
 import { applyAnswers, computeOffers, LOGIN_SHARING_FEATURE, type Offer } from './offers.ts'
-import { unifyAccounts, type HarnessGroup, type MachineAccounts } from './unified.ts'
+import { keyOf, unifyAccounts, type HarnessGroup, type MachineAccounts } from './unified.ts'
 import type { LendableAccount } from '../../../../packages/kybern-client/src/types.ts'
 
 export interface RemoteSnapshot {
   state: MachineAccounts['state']
   accounts: AccountSummary[]
+  unfollowed?: UnfollowedDefault[]
   providers: ProviderStatus[] | null
   limits: ProviderLimits[]
   globalLimits: ProviderLimits[]
   features: string[]
+  scopes?: Scope[]
 }
 
-export interface Sharing { machineId: MachineId; machine: string }
+export type { Sharing }
 
 interface State {
   remote: Readonly<Record<MachineId, RemoteSnapshot>>
@@ -75,6 +77,10 @@ export function clientOf(machineId: MachineId): KybernClient {
 /** The machine whose daemon runs on this computer, where the browser can hand a sign-in straight back. */
 export const computerId = (): MachineId | null => (activeEnvironment().local ? primaryId() : null)
 
+/** What one machine's daemon says about itself and this connection (`daemon.info`), once it has answered. */
+export const infoOf = (machineId: MachineId) =>
+  (machineId === primaryId() ? getClient()?.info : machineHub().connections().find((c) => c.record.machineId === machineId)?.info) ?? null
+
 const snapshot = (machineId: MachineId): RemoteSnapshot => state.remote[machineId] ?? { state: 'reading', accounts: [], providers: null, limits: [], globalLimits: [], features: [] }
 const patchRemote = (machineId: MachineId, patch: Partial<RemoteSnapshot>) => emit({ remote: { ...state.remote, [machineId]: { ...snapshot(machineId), ...patch } } })
 
@@ -87,18 +93,24 @@ export function readMachine(machineId: MachineId, { probe = false, refresh = fal
   const run = (async () => {
     let client: KybernClient
     try { client = machineHub().clientFor(machineId) } catch { patchRemote(machineId, { state: 'unreachable' }); return }
-    const features = machineHub().connections().find((c) => c.record.machineId === machineId)?.info?.features ?? featuresOf(client)
-    if (!state.remote[machineId]) patchRemote(machineId, { features })
+    const info = machineHub().connections().find((c) => c.record.machineId === machineId)?.info
+    const features = info?.features ?? featuresOf(client)
+    const scopes = (info ?? client.info)?.scopes
+    if (!state.remote[machineId]) patchRemote(machineId, { features, scopes })
     const [accounts, providers, limits] = await Promise.allSettled([
       client.call('providers.accounts.list', probe ? { refresh: true } : {}),
       client.call('providers.list', {}),
       client.call('usage.limits', { cached: true, all_accounts: true, ...(refresh ? { refresh: true } : {}) }),
     ])
-    if (accounts.status === 'rejected') { patchRemote(machineId, { state: isMethodNotFound(accounts.reason) ? 'legacy' : 'unreachable', features }); return }
+    if (accounts.status === 'rejected') { patchRemote(machineId, { state: isMethodNotFound(accounts.reason) ? 'legacy' : 'unreachable', features, scopes }); return }
+    const list = accounts.value.accounts ?? []
+    const legacy = features.length > 0 && !supportsShared(features) && !list.some((account) => !!keyOf(account))
     patchRemote(machineId, {
-      state: 'ready',
+      state: legacy ? 'legacy' : 'ready',
       features,
-      accounts: accounts.value.accounts ?? [],
+      scopes,
+      accounts: legacy ? [] : list,
+      unfollowed: legacy ? [] : accounts.value.unfollowed_defaults ?? [],
       ...(providers.status === 'fulfilled' ? { providers: providers.value.providers ?? null } : {}),
       ...(limits.status === 'fulfilled' ? { limits: mergeAccountLimits(snapshot(machineId).limits, limits.value.accounts), globalLimits: limits.value.providers ?? [] } : {}),
     })
@@ -142,12 +154,11 @@ export function refreshOfferInputs(): Promise<void> {
       ])
       if (getClient() !== client) { extrasAgain = true; continue }
       const members = network.status === 'fulfilled' ? network.value?.members ?? [] : []
-      const broker = sharing.status === 'fulfilled' ? sharing.value?.broker : undefined
       emit({
         ...(settings.status === 'fulfilled' ? { settings: settings.value } : {}),
         daemonOffers: offers.status === 'fulfilled' ? offers.value : state.daemonOffers,
         ratios: Object.fromEntries(members.map((member) => [member.machine_id, member.online_ratio_7d])),
-        sharing: broker ? { machineId: broker.machine_id, machine: broker.name ?? members.find((m) => m.machine_id === broker.machine_id)?.name ?? 'your other machine' } : null,
+        sharing: sharing.status === 'fulfilled' ? sharingFrom(sharing.value, members) : null,
         extrasRead: true,
       })
     } while (extrasAgain)
@@ -160,13 +171,21 @@ export function refreshOfferInputs(): Promise<void> {
  *  (`network.status` also ticks the daemon's discovery). A change of settings, a sign-in or a page opening reads them. */
 let inputsFor: { client: KybernClient; machines: number } | null = null
 
+/** The shared and local default accounts in a settings document, to see whether either changed. */
+const defaultsOf = (settings: Settings | null) => JSON.stringify([settings?.accounts_shared?.defaults, Object.entries(settings?.providers ?? {}).map(([kind, provider]) => [kind, provider.default_account])])
+
 /** Follow the machine this window is at. */
 function watchPrimary(client: KybernClient) {
   if (primary === client) return
   primary = client
   client.onNotification('settings.changed', (params) => {
     const settings = (params as { settings?: Settings })?.settings
-    if (settings && getClient() === client) emit({ settings })
+    if (settings && getClient() === client) {
+      const moved = defaultsOf(settings) !== defaultsOf(state.settings)
+      emit({ settings })
+      // Which shared defaults this machine follows comes with its account list.
+      if (moved) void refreshAccounts()
+    }
     void refreshOfferInputs()
   })
   client.onNotification(ACCOUNTS_LOGIN_CHANGED_NOTIFICATION, (params) => { if ((params as { phase?: string }).phase === 'signed_in') void refreshOfferInputs() })
@@ -232,6 +251,7 @@ export interface UnifiedView {
 /** Every account of every machine, merged. Mount `useUnifiedFeed` with it. */
 export function useUnifiedAccounts(rows: readonly MachineRow[]): UnifiedView {
   const accounts = useAccounts()
+  const unfollowed = useUnfollowedDefaults()
   const legacy = useAccountsLegacy()
   const loaded = useAccountsLoaded()
   const limits = useAccountLimitEntries()
@@ -246,6 +266,8 @@ export function useUnifiedAccounts(rows: readonly MachineRow[]): UnifiedView {
   const local = primaryId()
   const features = featuresOf(getClient())
   const featureKey = features.join(',')
+  const scopes = getClient()?.info?.scopes
+  const scopeKey = scopes?.join(',')
   const machines = useMemo(() => {
     const here: MachineAccounts = {
       machineId: local,
@@ -254,10 +276,12 @@ export function useUnifiedAccounts(rows: readonly MachineRow[]): UnifiedView {
       online,
       state: legacy ? 'legacy' : loaded ? 'ready' : 'reading',
       accounts,
+      unfollowed,
       providers: providersLoaded ? providers : null,
       limits,
       globalLimits,
       features,
+      scopes,
     }
     return [here, ...others(rows, local).map((row): MachineAccounts => {
       const read = remote[row.machineId]
@@ -268,13 +292,15 @@ export function useUnifiedAccounts(rows: readonly MachineRow[]): UnifiedView {
         online: !row.offline,
         state: row.offline ? 'unreachable' : read?.state ?? 'reading',
         accounts: read?.accounts ?? [],
+        unfollowed: read?.unfollowed,
         providers: read?.providers ?? null,
         limits: read?.limits ?? [],
         globalLimits: read?.globalLimits ?? [],
         features: read?.features ?? [],
+        scopes: read?.scopes,
       }
     })]
-  }, [local, rows, online, legacy, loaded, accounts, providers, providersLoaded, limits, globalLimits, featureKey, remote])
+  }, [local, rows, online, legacy, loaded, accounts, unfollowed, providers, providersLoaded, limits, globalLimits, featureKey, scopeKey, remote])
   const shared = useMemo(() => readShared(settings, features), [settings, featureKey, prefs])
   const groups = useMemo(() => unifyAccounts(machines, { shared }), [machines, shared])
   return { machines, groups, shared, supportsShared: supportsShared(features), primaryId: local, legacy, loaded: loaded && machines.every((m) => m.state !== 'reading'), sharing }
@@ -319,9 +345,11 @@ export function useOffers(view: UnifiedView): { offers: Offer[]; ready: boolean 
   const daemon = select((s) => s.daemonOffers)
   const ratios = select((s) => s.ratios)
   const extrasRead = select((s) => s.extrasRead)
+  // The harnesses with threads, for offers worked out here (the daemon's own offers need none of it).
+  const threadKinds = useApp((s) => (daemon ? '' : [...new Set(s.threads.map((thread) => thread.provider.kind))].sort().join(',')))
   const offers = useMemo(
-    () => applyAnswers(daemon ?? computeOffers({ groups: view.groups, machines: view.machines, ratios, sharing: view.sharing?.machineId ?? null }), view.shared.offers),
-    [daemon, view.groups, view.machines, view.shared, view.sharing, ratios],
+    () => applyAnswers(daemon ?? computeOffers({ groups: view.groups, machines: view.machines, ratios, sharing: view.sharing?.machineId ?? null, threadKinds: threadKinds.split(',') }), view.shared.offers),
+    [daemon, view.groups, view.machines, view.shared, view.sharing, ratios, threadKinds],
   )
   return { offers, ready: extrasRead && view.loaded }
 }

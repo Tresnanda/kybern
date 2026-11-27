@@ -1,14 +1,17 @@
 // Settings › Agent providers › Antigravity (ADE-111). This computer's own login, two ways in: a Gemini API key first (the provider
-// environment `GEMINI_API_KEY`, which the daemon keeps in its secret store), then Google sign-in through `agy` in a terminal,
-// behind the one-time notice. More Google accounts are added in Settings › Accounts, each with a profile of its own.
+// environment `GEMINI_API_KEY`, which the daemon keeps in its secret store), then its terminal login: Google sign-in through
+// `agy` in a terminal, behind the one-time notice, asked for by name. More Google accounts are added in Settings › Accounts,
+// each with a profile of its own.
 import { toastProblem } from '../problems/toast.ts'
 import { useState } from 'react'
 import { GEMINI_API_KEY_ENV } from '../../../../packages/kybern-client/src/antigravity.ts'
-import { showDialog } from '../dialogs/store.ts'
+import { signInTerminals } from '../accounts/actions.ts'
+import { primaryId } from '../accounts/store.ts'
 import { Button } from '../kit/Button.tsx'
 import { Switch } from '../kit/Switch.tsx'
 import { TextField } from '../kit/Field.tsx'
 import { useNav } from '../nav/store.ts'
+import { activeEnvironment } from '../shell/environment.ts'
 import { toast } from '../shell/toasts.tsx'
 import { updateProviderSettings, useAccounts } from '../usage/accounts.ts'
 import { Row, Section } from './controls.tsx'
@@ -22,8 +25,9 @@ export function AntigravitySetup() {
   const [busy, setBusy] = useState(false)
   if (!available) return null
   const hasKey = !!settings?.providers.antigravity?.env[GEMINI_API_KEY_ENV]
-  const email = accounts.find((a) => a.status === 'signed_in')?.identity?.email
-  const signedIn = accounts.some((a) => a.status === 'signed_in')
+  const own = accounts.find((a) => a.provider.instance === 'default' && a.status === 'signed_in')
+  const email = own?.identity?.email
+  const signedIn = !!own
 
   const writeKey = async (value: string | null) => {
     setBusy(true)
@@ -63,8 +67,8 @@ export function AntigravitySetup() {
           </div>
         )}
       </Row>
-      <Row title="Sign in with Google" description={signedIn ? (email ? `Signed in as ${email}` : 'Signed in') : 'Opens Antigravity in a terminal so you can finish in your browser.'}>
-        <Button testId="antigravity-signin" variant={signedIn ? 'secondary' : 'primary'} onClick={() => showDialog({ kind: 'account', provider: 'antigravity' })}>
+      <Row title="Terminal login" description={signedIn ? (email ? `Signed in as ${email}` : 'Signed in') : 'Opens Antigravity in a terminal so you can finish in your browser.'}>
+        <Button testId="antigravity-signin" variant={signedIn ? 'secondary' : 'primary'} onClick={() => signInTerminals('antigravity', [{ machineId: primaryId(), machine: activeEnvironment().name }])}>
           {signedIn ? 'Sign in again' : 'Sign in with Google'}
         </Button>
       </Row>
