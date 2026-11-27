@@ -70,10 +70,27 @@ export const supportsPerKind = (features: readonly string[] | undefined | null) 
 /** Choose the sharing machine, or clear it with null. Neither signs the previous one out of its own accounts. `via` says
  *  the always-on offer chose it; without it the daemon records a choice by hand (0.27.2; older daemons ignore it).
  *  `provider` sets or clears the lender of that agent only (`login.broker.per_kind.v1`); without it, every agent's. */
-export function setSharing(client: KybernClient, machineId: MachineId | null, via?: 'always_on', provider?: ProviderKind) {
-  const params: LoginBrokerSetParams & { via?: 'always_on'; provider?: ProviderKind } = { machine_id: machineId, sign_out_old: false, ...(via ? { via } : {}), ...(provider ? { provider } : {}) }
-  return client.call('login.broker.set', params)
+export async function setSharing(client: KybernClient, machineId: MachineId | null, via?: 'always_on', provider?: ProviderKind) {
+  const set = (machine: MachineId | null, kind?: ProviderKind) => {
+    const params: LoginBrokerSetParams & { via?: 'always_on'; provider?: ProviderKind } = { machine_id: machine, sign_out_old: false, ...(via && machine ? { via } : {}), ...(kind ? { provider: kind } : {}) }
+    return client.call('login.broker.set', params)
+  }
+  if (!provider || machineId) return set(machineId, provider)
+  // One agent to "each machine signs in": the daemon reads a cleared agent as "follow the network-wide lender", so while
+  // one exists, pin every other agent to its current lender, clear that default, then clear this agent's own.
+  const status = await client.call('login.broker.status', {}) as { broker?: { machine_id?: string } | null; lenders_by_kind?: Partial<Record<ProviderKind, { machine_id?: string } | null>> }
+  if (status.broker?.machine_id) {
+    for (const kind of SHAREABLE_KINDS) {
+      const lender = status.lenders_by_kind?.[kind]?.machine_id
+      if (kind !== provider && lender) await set(lender, kind)
+    }
+    await set(null)
+  }
+  return set(null, provider)
 }
+
+/** The agents another machine can lend sign-ins for. */
+export const SHAREABLE_KINDS: readonly ProviderKind[] = ['claude-code', 'codex', 'omp']
 
 type Members = readonly Pick<MachineCard, 'machine_id' | 'name' | 'online_ratio_7d'>[]
 interface KindLender { machine_id?: unknown; name?: unknown; usable_for_new?: unknown; reason?: unknown }
