@@ -65,6 +65,23 @@ pub struct SavedToolResult {
     pub stream_omitted: bool,
 }
 
+/// A token's stored scopes. A name this build doesn't know (written by a newer daemon, or one an older
+/// build used) is skipped, never an error: one unknown scope must not stop the daemon from starting or
+/// a client from connecting. Run an older daemon on a newer data folder and it simply lacks that scope.
+pub(crate) fn parse_scopes(text: &str) -> Result<Vec<kybern_protocol::Scope>> {
+    let names: Vec<serde_json::Value> = serde_json::from_str(text)?;
+    Ok(names
+        .into_iter()
+        .filter_map(|name| match serde_json::from_value(name.clone()) {
+            Ok(scope) => Some(scope),
+            Err(_) => {
+                tracing::debug!(%name, "skipping a token scope this daemon doesn't know");
+                None
+            }
+        })
+        .collect())
+}
+
 fn snake(value: impl serde::Serialize) -> Result<String> {
     Ok(serde_json::to_value(value)?.as_str().ok_or_else(|| anyhow::anyhow!("enum did not serialize as a string"))?.to_owned())
 }
@@ -420,7 +437,7 @@ impl Store {
                 Some((id, label, scopes, created_at, revoked)) => Ok(Some(TokenRecord {
                     id: id.parse()?,
                     label,
-                    scopes: serde_json::from_str(&scopes)?,
+                    scopes: parse_scopes(&scopes)?,
                     created_at: created_at.parse()?,
                     revoked,
                 })),
@@ -458,7 +475,7 @@ impl Store {
                 out.push(methods::TokenInfo {
                     id: id.parse()?,
                     label,
-                    scopes: serde_json::from_str(&scopes)?,
+                    scopes: parse_scopes(&scopes)?,
                     created_at: created.parse()?,
                     last_used_at: last.map(|l| l.parse()).transpose()?,
                     revoked,

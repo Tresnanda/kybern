@@ -325,12 +325,14 @@ impl Store {
             };
             let mut changed = 0;
             for (id, scopes) in rows {
-                let mut parsed: Vec<kybern_protocol::Scope> = serde_json::from_str(&scopes)?;
+                // Kept as written, so a scope this build doesn't know survives the rewrite.
+                let mut raw: Vec<serde_json::Value> = serde_json::from_str(&scopes)?;
+                let parsed = crate::parse_scopes(&scopes)?;
                 if parsed.contains(&scope) || !parsed.contains(&required) {
                     continue;
                 }
-                parsed.push(scope);
-                tx.execute("UPDATE tokens SET scopes = ?2 WHERE id = ?1", params![id, serde_json::to_string(&parsed)?])?;
+                raw.push(serde_json::to_value(scope)?);
+                tx.execute("UPDATE tokens SET scopes = ?2 WHERE id = ?1", params![id, serde_json::to_string(&raw)?])?;
                 changed += 1;
             }
             tx.commit()?;
@@ -348,12 +350,14 @@ impl Store {
             };
             let mut changed = 0;
             for (id, label, scopes) in rows {
-                let mut parsed: Vec<kybern_protocol::Scope> = serde_json::from_str(&scopes)?;
+                // Kept as written, so a scope this build doesn't know survives the rewrite.
+                let mut raw: Vec<serde_json::Value> = serde_json::from_str(&scopes)?;
+                let parsed = crate::parse_scopes(&scopes)?;
                 if parsed.contains(&scope) || !keep(&label) {
                     continue;
                 }
-                parsed.push(scope);
-                tx.execute("UPDATE tokens SET scopes = ?2 WHERE id = ?1", params![id, serde_json::to_string(&parsed)?])?;
+                raw.push(serde_json::to_value(scope)?);
+                tx.execute("UPDATE tokens SET scopes = ?2 WHERE id = ?1", params![id, serde_json::to_string(&raw)?])?;
                 changed += 1;
             }
             tx.commit()?;
@@ -409,6 +413,31 @@ mod tests {
         let scopes = |id| tokens.iter().find(|t| t.id == id).unwrap().scopes.clone();
         assert!(scopes(operate).contains(&Scope::AccountsWrite));
         assert!(!scopes(viewer).contains(&Scope::AccountsWrite));
+    }
+
+    #[test]
+    fn a_token_with_a_scope_this_build_doesnt_know_still_reads_and_keeps_it() {
+        let store = Store::open_in_memory().unwrap();
+        let id = uuid::Uuid::now_v7();
+        store.token_insert(id, "h", "desktop", &[Scope::OrchestrationRead, Scope::OrchestrationOperate]).unwrap();
+        // Written by a newer daemon on the same data folder.
+        store
+            .with(|c| {
+                c.execute(
+                    "UPDATE tokens SET scopes = ?2 WHERE id = ?1",
+                    params![id.to_string(), r#"["orchestration_read","from_a_newer_daemon","orchestration_operate"]"#],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let token = store.token_lookup("h").unwrap().unwrap();
+        assert_eq!(token.scopes, vec![Scope::OrchestrationRead, Scope::OrchestrationOperate]);
+        assert_eq!(store.tokens_list().unwrap()[0].scopes, token.scopes);
+        assert_eq!(store.tokens_add_scope_if(Scope::AccountsWrite, Scope::OrchestrationOperate).unwrap(), 1);
+        assert_eq!(store.tokens_add_scope(Scope::NetworkAdmin, |_| true).unwrap(), 1);
+        let raw: String = store.with(|c| Ok(c.query_row("SELECT scopes FROM tokens", [], |r| r.get(0))?)).unwrap();
+        assert!(raw.contains("from_a_newer_daemon"), "a rewrite keeps the scope it doesn't know: {raw}");
+        assert_eq!(store.token_lookup("h").unwrap().unwrap().scopes.len(), 4);
     }
 
     fn op(id: &str, kind: &str, lamport: u64) -> NetworkOpRecord {
