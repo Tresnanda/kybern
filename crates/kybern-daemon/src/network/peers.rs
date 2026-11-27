@@ -852,6 +852,18 @@ pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, para
     let network = &state.network;
     match method {
         PeerPreferencesSync::NAME => ok(super::preferences::serve(state, parse(params)?).await?),
+        PeerAccountsSync::NAME => ok(super::accounts_sync::serve(state, parse(params)?).await?),
+        // Authorize-only sign-in: the machine with the browser reads the page and hands the redirect back.
+        PeerAccountsLoginPeek::NAME => {
+            let request: PeerLoginPeekParams = parse(params)?;
+            ok(state.account_logins.peek(&request.login_id).map_err(|error| RpcError::invalid_params(error.to_string()))?)
+        }
+        PeerAccountsLoginCallback::NAME => {
+            let request: PeerLoginCallbackParams = parse(params)?;
+            tracing::info!(target: SESSION_TARGET, machine = %link.machine_id, "a member handed back a sign-in redirect");
+            let answer = state.account_logins.callback(&request.login_id, &request.path_and_query).await;
+            ok(answer.map_err(|error| RpcError::invalid_params(error.to_string()))?)
+        }
         PeerGroupsSync::NAME => ok(super::group_sync::serve(state, parse(params)?).await?),
         PeerGroupBundle::NAME => ok(super::group_sync::serve_bundle(state, &link.machine_id, parse(params)?).await?),
         PeerItemEdit::NAME => super::item_edits::serve(state, &link.machine_id, parse(params)?),
@@ -892,7 +904,8 @@ pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, para
         | PeerMovePrepare::NAME
         | PeerMoveCommit::NAME
         | PeerMoveGet::NAME
-        | PeerMoveAbort::NAME => state.orchestrator.peer_dispatch(&link.machine_id, method, params).await,
+        | PeerMoveAbort::NAME
+        | PeerAccountsList::NAME => state.orchestrator.peer_dispatch(&link.machine_id, method, params).await,
         // Adding a project to this machine from another one.
         PeerProvisionProbeMethod::NAME
         | PeerProvisionPrepare::NAME
@@ -1290,6 +1303,7 @@ const SEEN_REFRESH: chrono::Duration = chrono::Duration::seconds(60);
 pub(super) fn touch_seen(state: &AppState, machine_id: &str) {
     if let Some(seen) = state.network.peers.refresh_seen(machine_id) {
         let _ = state.store.network_machine_touch(machine_id, seen);
+        super::online::mark(&state.store, machine_id, seen);
     }
 }
 
@@ -1463,6 +1477,10 @@ pub async fn run(state: AppState) {
             }
         };
         network.peers.set_pass_started(None);
+        // This machine was online for this slot of the week (`online_ratio_7d`).
+        if let Some(me) = network.machine_id() {
+            super::online::mark(&state.store, &me, chrono::Utc::now());
+        }
         let spaces = async {
             super::list_cache::refresh(&state).await;
             super::spaces::reconcile(&state).await;
@@ -1471,6 +1489,7 @@ pub async fn run(state: AppState) {
             for link in network.peers.links() {
                 super::spaces::sync(&state, &link, false).await;
                 super::preferences::sync(&state, &link).await;
+                super::accounts_sync::sync(&state, &link).await;
                 super::group_sync::sync(&state, &link).await;
             }
             super::group_sync::reconcile(&state).await;

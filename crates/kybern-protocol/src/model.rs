@@ -56,6 +56,14 @@ impl ProviderKind {
         ProviderKind::GrokBuild,
     ];
 
+    /// Every harness name and `null`: the `enum` of an agent tool's optional `provider` parameter.
+    /// Strict clients (Claude Code) reject any harness missing here, so it is never written by hand.
+    pub fn json_enum_or_null() -> serde_json::Value {
+        let mut names: Vec<serde_json::Value> = Self::ALL.iter().map(|kind| kind.as_str().into()).collect();
+        names.push(serde_json::Value::Null);
+        names.into()
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             ProviderKind::ClaudeCode => "claude-code",
@@ -2784,6 +2792,73 @@ pub struct Settings {
     pub compaction: CompactionSettings,
     /// How long a thread goes without a turn before it moves to its project's Older group.
     pub older_after: OlderAfter,
+    /// Accounts across machines: the same on every machine of the network, kept in step by the
+    /// daemons themselves (`peer.accounts.sync`). Each daemon maps a key to its own login by email.
+    #[serde(default, skip_serializing_if = "AccountsShared::is_empty")]
+    pub accounts_shared: AccountsShared,
+}
+
+/// What every machine agrees on about the provider accounts. A key is `<kind>:<email>`, lowercase
+/// (`claude-code:me@example.com`); storage stays per machine.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct AccountsShared {
+    /// Name, colour and "Only when I choose" of each account, by key.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub profiles: BTreeMap<String, AccountProfile>,
+    /// The one default account of each harness, for every machine.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub defaults: BTreeMap<ProviderKind, String>,
+    /// Per-project choices by repository identity (`RepoIdentity::key`), then harness.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub projects: BTreeMap<String, BTreeMap<ProviderKind, String>>,
+    /// Offers the user put off or turned down, by offer id (`accounts.offers`).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub offers: BTreeMap<String, OfferDismissal>,
+}
+
+impl AccountsShared {
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+
+    /// The key an account has across machines: `<kind>:<email>`, lowercase.
+    pub fn key(kind: ProviderKind, email: &str) -> String {
+        format!("{}:{}", kind.as_str(), email.trim().to_lowercase())
+    }
+
+    /// Whether the account with this email is marked "Only when I choose".
+    pub fn manual_only(&self, kind: ProviderKind, email: Option<&str>) -> bool {
+        email.is_some_and(|email| self.profiles.get(&Self::key(kind, email)).is_some_and(|profile| profile.manual_only))
+    }
+}
+
+/// How an account looks and is used, the same on every machine.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AccountProfile {
+    pub name: String,
+    /// Palette key, as `ProviderAccount::color`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// "Only when I choose": never picked for a new thread or an automatic switch.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub manual_only: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OfferDismissalState {
+    /// "Not now": hidden until the offer's fingerprint changes.
+    Later,
+    /// "Never": hidden for good.
+    Never,
+}
+
+/// An offer the user dismissed, with the fingerprint of the situation it was dismissed in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct OfferDismissal {
+    pub state: OfferDismissalState,
+    pub fingerprint: String,
 }
 
 /// "Move inactive threads to Older": how long a top-level thread goes without a turn before the daemon moves it to
@@ -3186,6 +3261,7 @@ impl Default for Settings {
             network: NetworkSettings::default(),
             compaction: CompactionSettings::default(),
             older_after: OlderAfter::default(),
+            accounts_shared: AccountsShared::default(),
         }
     }
 }

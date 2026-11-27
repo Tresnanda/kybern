@@ -74,6 +74,7 @@ import { startStarPrompt } from './shell/starPromptApp.ts'
 import { AppUpdateSurface } from './platform/UpdateSurface.tsx'
 import { HarnessUpdatesFollower } from './harnessUpdates/store.ts'
 import { NetworkIntroSurface } from './machines/NetworkIntro.tsx'
+import { AccountOffersSurface } from './accounts/OfferCard.tsx'
 import { TranscriptReleased } from './platform/TranscriptReleased.tsx'
 import { installWindowSurface, useTranscriptReleased } from './platform/surface.ts'
 import { useApp, usePaneAccess, usePaneCompact } from './state.ts'
@@ -279,6 +280,7 @@ function Workspace() {
       <AppUpdateSurface />
       <HarnessUpdatesFollower />
       <NetworkIntroSurface />
+      <AccountOffersSurface />
       <SidebarDragLayer />
       <ResizeCaptureLayer />
       <DockResizeCapture />

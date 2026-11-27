@@ -81,6 +81,7 @@ const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(req, s) { if (s
   calls.push(request.method)
   switch (request.method) {
     case 'daemon.info': result = { protocol_version: PROTOCOL_VERSION, environment_id: 'requests-fixture', version: 'fixture' }; break
+    case 'providers.accounts.list': result = { accounts: [{ provider: { kind: 'claude-code', instance: 'default' }, name: 'CLI account', status: 'signed_in', is_default: true, projects: [], managed: false, can_sign_out: false }, { provider: { kind: 'claude-code', instance: 'second' }, name: 'Work account', status: 'signed_in', is_default: false, projects: [], managed: true, can_sign_out: true }] }; break
     case 'projects.list': result = { projects: [] }; break
     case 'threads.list': result = { threads: params.parent_thread_id && mode === 'activity' ? [child(), { ...thread('helper', 'Check the docs'), parent_thread_id: parent().id }] : [] }; break
     case 'threads.messages.list': result = { messages: mode === 'activity' ? [held()] : [] }; break

@@ -18,3 +18,6 @@ export function antigravityInstallCommand(platform: string): string {
 
 /** The environment variable that signs Antigravity in with a Gemini API key. */
 export const GEMINI_API_KEY_ENV = "GEMINI_API_KEY";
+
+/** `daemon.info` feature: the daemon takes named Antigravity accounts (`AccountLoginStartParams.named`). */
+export const ANTIGRAVITY_ACCOUNTS_FEATURE = "antigravity.accounts.v1";

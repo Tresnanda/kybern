@@ -1,4 +1,14 @@
-//! Share only reusable provider assets. Auth, sessions and plugin runtime data stay local.
+//! Share reusable provider assets between a harness's accounts on one machine. Auth and plugin
+//! runtime data stay in each account's folder.
+//!
+//! Conversations are shared too, so a thread that switches account resumes its own native
+//! session: Claude Code's `projects/` and Codex's sessions, archived sessions, shell snapshots,
+//! writer locks and session index link to the terminal login's (`~/.claude`, `~/.codex`), and
+//! named Codex accounts open its databases through `CODEX_SQLITE_HOME`. `auth.json`,
+//! `auth.lock`, `.credentials.json` and `models_cache.json` stay private. Nothing in the terminal
+//! login's folder is replaced or linked; it only gains the named accounts' conversations. Moving an account's
+//! existing conversations into the shared folder never overwrites or deletes one: a file the
+//! shared folder already has stays in the account's `*.kybern-local-*` backup.
 use anyhow::{Result, ensure};
 use kybern_protocol::{ProviderKind, ProviderSettings, Settings};
 use std::{
@@ -24,9 +34,7 @@ pub fn prepare(provider: &ProviderSettings, kind: ProviderKind) -> Result<()> {
         return Ok(());
     }
     let _guard = PREPARE.lock().map_err(|_| anyhow::anyhow!("Account asset preparation interrupted. Restart Kybern and try again."))?;
-    let home =
-        provider.env.get("HOME").map(PathBuf::from).or_else(|| directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf()));
-    let Some(home) = home else {
+    let Some(home) = home_of(provider) else {
         return Ok(());
     };
     let (shared, assets) = layout(kind, &provider.env, &home);
@@ -45,13 +53,18 @@ pub fn prepare(provider: &ProviderSettings, kind: ProviderKind) -> Result<()> {
         if !account_root.is_dir() {
             continue;
         }
-        for (local, global, directory) in &assets {
+        for (local, global, asset) in &assets {
             // Sharing is a convenience: an account whose assets cannot be linked
             // still signs in and runs, with its own account-local copies.
             let local = account_root.join(local);
-            if let Err(error) = link_asset(&local, &shared.join(global), *directory) {
+            if let Err(error) = link_asset(&local, &shared.join(global), *asset) {
                 tracing::warn!(provider = %kind, local = %local.display(), error = format!("{error:#}"), "Could not share account asset; the account keeps its own copy");
             }
+        }
+        if kind == ProviderKind::Codex
+            && let Err(error) = keep_codex_login_in_file(account_root)
+        {
+            tracing::warn!(account = %account_root.display(), error = format!("{error:#}"), "Could not pin the Codex account's login to its auth.json");
         }
         if kind == ProviderKind::ClaudeCode {
             // Only booleans naming plugins are copied. Never share settings.json:
@@ -62,58 +75,156 @@ pub fn prepare(provider: &ProviderSettings, kind: ProviderKind) -> Result<()> {
     Ok(())
 }
 
-type Asset = (&'static str, &'static str, bool);
+/// How a shared asset is linked and how an account's own copy is merged into the shared one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AssetKind {
+    /// A folder: entries the shared folder lacks move into it.
+    Dir,
+    /// A JSON registry: missing keys and array entries are added.
+    Registry,
+    /// A JSON Lines file: lines the shared file lacks are appended.
+    Lines,
+}
+use AssetKind::{Dir, Lines, Registry};
+
+type Asset = (&'static str, &'static str, AssetKind);
+
+fn configured(env: &BTreeMap<String, String>, key: &str, fallback: PathBuf) -> PathBuf {
+    env.get(key).cloned().or_else(|| std::env::var(key).ok()).filter(|value| !value.is_empty()).map(PathBuf::from).unwrap_or(fallback)
+}
+
 fn layout(kind: ProviderKind, env: &BTreeMap<String, String>, home: &Path) -> (PathBuf, Vec<Asset>) {
-    let configured = |key: &str, fallback: PathBuf| {
-        env.get(key).cloned().or_else(|| std::env::var(key).ok()).filter(|value| !value.is_empty()).map(PathBuf::from).unwrap_or(fallback)
-    };
-    let skills = vec![("skills", "skills", true)];
+    let configured = |key: &str, fallback: PathBuf| configured(env, key, fallback);
+    let skills = vec![("skills", "skills", Dir)];
     match kind {
         ProviderKind::ClaudeCode => (
             configured("CLAUDE_CONFIG_DIR", home.join(".claude")),
             vec![
-                ("skills", "skills", true),
-                ("commands", "commands", true),
-                ("plugins/cache", "plugins/cache", true),
-                ("plugins/marketplaces", "plugins/marketplaces", true),
-                ("plugins/installed_plugins.json", "plugins/installed_plugins.json", false),
-                ("plugins/known_marketplaces.json", "plugins/known_marketplaces.json", false),
+                ("skills", "skills", Dir),
+                ("commands", "commands", Dir),
+                ("plugins/cache", "plugins/cache", Dir),
+                ("plugins/marketplaces", "plugins/marketplaces", Dir),
+                ("plugins/installed_plugins.json", "plugins/installed_plugins.json", Registry),
+                ("plugins/known_marketplaces.json", "plugins/known_marketplaces.json", Registry),
+                // Conversations, so `--resume` finds a thread's session on every account.
+                ("projects", "projects", Dir),
             ],
         ),
-        ProviderKind::Codex => {
-            (configured("CODEX_HOME", home.join(".codex")), vec![("skills", "skills", true), ("plugins/cache", "plugins/cache", true)])
-        }
+        ProviderKind::Codex => (
+            configured("CODEX_HOME", home.join(".codex")),
+            vec![
+                ("skills", "skills", Dir),
+                ("plugins/cache", "plugins/cache", Dir),
+                // Conversation history; the databases are shared through CODEX_SQLITE_HOME.
+                ("sessions", "sessions", Dir),
+                ("archived_sessions", "archived_sessions", Dir),
+                ("shell_snapshots", "shell_snapshots", Dir),
+                // One writer per conversation across accounts.
+                ("thread-writer-locks", "thread-writer-locks", Dir),
+                ("session_index.jsonl", "session_index.jsonl", Lines),
+            ],
+        ),
         // Cursor already discovers skills from regular HOME; these links also
         // cover content put inside an imported isolated account directory.
         ProviderKind::Cursor => (home.join(".cursor"), skills),
-        // Kybern links nothing into `agy`'s storage.
-        ProviderKind::Antigravity => (home.join(".gemini/antigravity-cli"), vec![]),
+        // A named account's profile is `<account>/.gemini`: it shares the person's skills and
+        // global rules with `~/.gemini`, never the login, conversations or MCP servers.
+        ProviderKind::Antigravity => (
+            home.join(".gemini"),
+            vec![
+                (".gemini/config/skills", "config/skills", Dir),
+                (".gemini/antigravity-cli/skills", "antigravity-cli/skills", Dir),
+                (".gemini/config/skills.json", "config/skills.json", Registry),
+                (".gemini/GEMINI.md", "GEMINI.md", Registry),
+                (".gemini/AGENTS.md", "AGENTS.md", Registry),
+            ],
+        ),
         ProviderKind::GrokBuild => {
             let configured = env.get("GROK_HOME").cloned().or_else(|| std::env::var("GROK_HOME").ok());
             (kybern_drivers::binary::grok_home(Some(home), configured.as_deref()).unwrap_or_else(|| home.join(".grok")), vec![])
         }
-        ProviderKind::Pi => (
-            configured("PI_CODING_AGENT_DIR", home.join(".pi/agent")),
-            vec![("skills", "skills", true), ("extensions", "extensions", true)],
-        ),
+        ProviderKind::Pi => {
+            (configured("PI_CODING_AGENT_DIR", home.join(".pi/agent")), vec![("skills", "skills", Dir), ("extensions", "extensions", Dir)])
+        }
         ProviderKind::Omp => {
             let profile = kybern_drivers::omp_profile::resolve(env).ok().filter(|value| !value.is_empty());
             let root = profile
                 .map(|profile| home.join(".omp/profiles").join(profile).join("agent"))
                 .unwrap_or_else(|| configured("PI_CODING_AGENT_DIR", home.join(".omp/agent")));
-            (root, vec![("skills", "skills", true), ("extensions", "extensions", true)])
+            (root, vec![("skills", "skills", Dir), ("extensions", "extensions", Dir)])
         }
         ProviderKind::Opencode => (
             configured("XDG_CONFIG_HOME", home.join(".config")).join("opencode"),
-            vec![("config/opencode/skills", "skills", true), ("config/opencode/plugins", "plugins", true)],
+            vec![("config/opencode/skills", "skills", Dir), ("config/opencode/plugins", "plugins", Dir)],
         ),
     }
+}
+
+fn home_of(provider: &ProviderSettings) -> Option<PathBuf> {
+    provider.env.get("HOME").map(PathBuf::from).or_else(|| directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf()))
+}
+
+/// The folder an account of `kind` keeps its conversations in, resolved through links. Two
+/// accounts whose folders resolve to the same place resume each other's native sessions.
+/// `None` for harnesses whose conversations are not shared, and when the folder is missing.
+pub fn conversation_store(provider: &ProviderSettings, kind: ProviderKind, instance: &str) -> Option<PathBuf> {
+    let child = match kind {
+        ProviderKind::ClaudeCode => "projects",
+        ProviderKind::Codex => "sessions",
+        _ => return None,
+    };
+    let root = if instance == "default" {
+        layout(kind, &provider.env, &home_of(provider)?).0
+    } else {
+        PathBuf::from(&provider.accounts.get(instance)?.directory)
+    };
+    root.join(child).canonicalize().ok()
+}
+
+/// Where named Codex accounts open Codex's databases (threads, logs, memories): the terminal
+/// login's, so every account sees the same conversations. Codex reads `CODEX_SQLITE_HOME`,
+/// then `sqlite_home` in its config, then `CODEX_HOME`.
+pub fn codex_shared_sqlite_home(provider: &ProviderSettings) -> Option<PathBuf> {
+    if let Some(home) =
+        provider.env.get("CODEX_SQLITE_HOME").cloned().or_else(|| std::env::var("CODEX_SQLITE_HOME").ok()).filter(|v| !v.is_empty())
+    {
+        return Some(PathBuf::from(home));
+    }
+    let shared = layout(ProviderKind::Codex, &provider.env, &home_of(provider)?).0;
+    let configured = std::fs::read_to_string(shared.join("config.toml"))
+        .ok()
+        .and_then(|text| text.parse::<toml_edit::DocumentMut>().ok())
+        .and_then(|document| document.get("sqlite_home").and_then(|item| item.as_str()).map(PathBuf::from))
+        .filter(|path| path.is_absolute());
+    Some(configured.unwrap_or(shared))
+}
+
+/// A named Codex account keeps its login in its own `auth.json`: with conversations shared, a
+/// keyring login would be the only thing telling two accounts apart. Set only when the account's
+/// `config.toml` does not choose a store itself.
+fn keep_codex_login_in_file(account_root: &Path) -> Result<()> {
+    let path = account_root.join("config.toml");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error.into()),
+    };
+    let mut document = text.parse::<toml_edit::DocumentMut>()?;
+    if document.contains_key("cli_auth_credentials_store") {
+        return Ok(());
+    }
+    document["cli_auth_credentials_store"] = toml_edit::value("file");
+    let temporary = path.with_extension(format!("{}.tmp", uuid::Uuid::now_v7()));
+    std::fs::write(&temporary, document.to_string())?;
+    std::fs::rename(temporary, &path)?;
+    Ok(())
 }
 
 fn present(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok()
 }
-fn link_asset(local: &Path, shared: &Path, directory: bool) -> Result<()> {
+fn link_asset(local: &Path, shared: &Path, kind: AssetKind) -> Result<()> {
+    let directory = kind == Dir;
     if let (Ok(local), Ok(shared)) = (local.canonicalize(), shared.canonicalize())
         && local == shared
     {
@@ -147,7 +258,7 @@ fn link_asset(local: &Path, shared: &Path, directory: bool) -> Result<()> {
             anyhow::Error::from(error).context(format!("Unable to share {}. Check folder permissions, then try again.", local.display()))
         );
     }
-    let result = migrate_asset(local, shared, directory, &replacement);
+    let result = migrate_asset(local, shared, kind, &replacement);
     if present(&replacement) {
         if cfg!(windows) && directory {
             let _ = std::fs::remove_dir(&replacement);
@@ -187,7 +298,7 @@ fn create_link(target: &Path, link: &Path, directory: bool) -> std::io::Result<(
     }
 }
 
-fn migrate_asset(local: &Path, shared: &Path, directory: bool, replacement: &Path) -> Result<()> {
+fn migrate_asset(local: &Path, shared: &Path, kind: AssetKind, replacement: &Path) -> Result<()> {
     let parent = local.parent().unwrap();
     // Preserve conflicting originals before linking. Move unique entries rather
     // than duplicating potentially large plugin caches. Imported symlink targets
@@ -195,7 +306,11 @@ fn migrate_asset(local: &Path, shared: &Path, directory: bool, replacement: &Pat
     if present(local) {
         let backup = parent.join(format!("{}.kybern-local-{}", local.file_name().unwrap().to_string_lossy(), uuid::Uuid::now_v7()));
         std::fs::rename(local, &backup)?;
-        let migration = if directory { merge_directory(&backup, shared, local) } else { merge_registry(&backup, shared, local) };
+        let migration = match kind {
+            Dir => merge_directory(&backup, shared, local),
+            Registry => merge_registry(&backup, shared, local),
+            Lines => merge_lines(&backup, shared),
+        };
         if let Err(error) = migration {
             std::fs::rename(&backup, local)?;
             return Err(error);
@@ -267,6 +382,32 @@ fn normalize_path(path: PathBuf) -> PathBuf {
         }
     }
     normalized
+}
+/// Append the lines of `source` that `target` lacks, keeping `target`'s order.
+fn merge_lines(source: &Path, target: &Path) -> Result<()> {
+    let local = std::fs::read_to_string(source)?;
+    let shared = match std::fs::read_to_string(target) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error.into()),
+    };
+    let known = shared.lines().collect::<std::collections::HashSet<_>>();
+    let missing = local.lines().filter(|line| !line.trim().is_empty() && !known.contains(line)).collect::<Vec<_>>();
+    if missing.is_empty() && present(target) {
+        return Ok(());
+    }
+    let mut text = shared.clone();
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    for line in missing {
+        text.push_str(line);
+        text.push('\n');
+    }
+    let temporary = target.with_extension(format!("{}.tmp", uuid::Uuid::now_v7()));
+    std::fs::write(&temporary, text)?;
+    std::fs::rename(temporary, target)?;
+    Ok(())
 }
 fn merge_registry(source: &Path, target: &Path, original: &Path) -> Result<()> {
     // Installation registries contain objects and arrays. Preserve current values,
@@ -423,8 +564,8 @@ mod tests {
             let provider = scratch.provider();
             prepare(&provider, kind).unwrap();
             let (shared, assets) = layout(kind, &provider.env, &scratch.0.join("home"));
-            for (local, global, directory) in assets {
-                if !directory {
+            for (local, global, asset) in assets {
+                if asset != Dir {
                     continue;
                 }
                 assert_eq!(
@@ -461,7 +602,6 @@ mod tests {
         scratch.put("one/skills/new/SKILL.md", "local addition");
         scratch.put("one/.credentials.json", "account one secret");
         scratch.put("two/.credentials.json", "account two secret");
-        scratch.put("one/projects/session.jsonl", "account one session");
         scratch.put("one/plugins/data/secret", "account one plugin secret");
         scratch.put("two/plugins/data/secret", "account two plugin secret");
         prepare(&provider, ProviderKind::ClaudeCode).unwrap();
@@ -475,8 +615,111 @@ mod tests {
         assert_eq!(std::fs::read_to_string(backup.join("review/SKILL.md")).unwrap(), "local conflict");
         assert_eq!(std::fs::read_to_string(scratch.0.join("one/.credentials.json")).unwrap(), "account one secret");
         assert_eq!(std::fs::read_to_string(scratch.0.join("two/.credentials.json")).unwrap(), "account two secret");
-        assert!(!scratch.0.join("two/projects/session.jsonl").exists());
         assert_eq!(std::fs::read_to_string(scratch.0.join("two/plugins/data/secret")).unwrap(), "account two plugin secret");
+        assert_eq!(std::fs::read_to_string(scratch.0.join("one/plugins/data/secret")).unwrap(), "account one plugin secret");
+    }
+
+    fn is_link(path: &Path) -> bool {
+        std::fs::symlink_metadata(path).unwrap().file_type().is_symlink()
+    }
+
+    #[test]
+    fn claude_accounts_share_conversations_and_keep_their_logins() {
+        let scratch = Scratch::new();
+        let provider = scratch.provider();
+        scratch.put("home/.claude/projects/-repo/terminal.jsonl", "terminal session");
+        scratch.put("home/.claude/.credentials.json", "terminal secret");
+        scratch.put("one/.credentials.json", "account one secret");
+        scratch.put("one/.claude.json", "{\"oauthAccount\":\"one\"}");
+        scratch.put("one/projects/-repo/one.jsonl", "account one session");
+        // The same session file on both sides: the shared copy wins, the account's stays in its backup.
+        scratch.put("home/.claude/projects/-repo/both.jsonl", "shared copy");
+        scratch.put("one/projects/-repo/both.jsonl", "account copy");
+        prepare(&provider, ProviderKind::ClaudeCode).unwrap();
+        for id in ["one", "two"] {
+            assert!(is_link(&scratch.0.join(id).join("projects")), "{id}");
+            assert_eq!(std::fs::read_to_string(scratch.0.join(id).join("projects/-repo/terminal.jsonl")).unwrap(), "terminal session");
+            assert_eq!(std::fs::read_to_string(scratch.0.join(id).join("projects/-repo/one.jsonl")).unwrap(), "account one session");
+        }
+        assert_eq!(std::fs::read_to_string(scratch.0.join("home/.claude/projects/-repo/one.jsonl")).unwrap(), "account one session");
+        assert_eq!(std::fs::read_to_string(scratch.0.join("home/.claude/projects/-repo/both.jsonl")).unwrap(), "shared copy");
+        let backup = std::fs::read_dir(scratch.0.join("one"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.file_name().unwrap().to_string_lossy().starts_with("projects.kybern-local-"))
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(backup.join("-repo/both.jsonl")).unwrap(), "account copy");
+        // Logins never move or link.
+        assert!(!is_link(&scratch.0.join("one/.credentials.json")));
+        assert_eq!(std::fs::read_to_string(scratch.0.join("one/.credentials.json")).unwrap(), "account one secret");
+        assert!(!scratch.0.join("two/.credentials.json").exists());
+        assert!(!is_link(&scratch.0.join("one/.claude.json")));
+        assert!(!is_link(&scratch.0.join("home/.claude/projects")), "the terminal login keeps its own folder");
+        // Idempotent: nothing is moved or backed up again.
+        let entries = |id: &str| std::fs::read_dir(scratch.0.join(id)).unwrap().count();
+        let before = (entries("one"), entries("two"));
+        prepare(&provider, ProviderKind::ClaudeCode).unwrap();
+        assert_eq!((entries("one"), entries("two")), before);
+        // Every account (and the terminal login) resolves to the same conversation store.
+        let stores = ["default", "one", "two"].map(|id| conversation_store(&provider, ProviderKind::ClaudeCode, id).unwrap());
+        assert!(stores.iter().all(|store| *store == stores[0]));
+        assert_eq!(conversation_store(&provider, ProviderKind::Cursor, "one"), None);
+    }
+
+    #[test]
+    fn codex_accounts_share_history_and_keep_auth_private() {
+        let scratch = Scratch::new();
+        let provider = scratch.provider();
+        scratch.put("home/.codex/sessions/2026/11/27/rollout-terminal.jsonl", "terminal rollout");
+        scratch.put("home/.codex/session_index.jsonl", "{\"id\":\"terminal\"}\n");
+        scratch.put("home/.codex/auth.json", "terminal auth");
+        scratch.put("one/sessions/2026/11/26/rollout-one.jsonl", "account one rollout");
+        scratch.put("one/archived_sessions/rollout-old.jsonl", "archived");
+        scratch.put("one/shell_snapshots/snap.sh", "snapshot");
+        scratch.put("one/session_index.jsonl", "{\"id\":\"one\"}\n{\"id\":\"terminal\"}\n");
+        scratch.put("one/auth.json", "account one auth");
+        scratch.put("one/auth.lock", "");
+        scratch.put("one/models_cache.json", "{}");
+        scratch.put("two/auth.json", "account two auth");
+        prepare(&provider, ProviderKind::Codex).unwrap();
+        for id in ["one", "two"] {
+            let root = scratch.0.join(id);
+            for shared in ["sessions", "archived_sessions", "shell_snapshots", "thread-writer-locks", "session_index.jsonl"] {
+                assert!(is_link(&root.join(shared)), "{id}: {shared}");
+            }
+            assert_eq!(std::fs::read_to_string(root.join("sessions/2026/11/27/rollout-terminal.jsonl")).unwrap(), "terminal rollout");
+            assert_eq!(std::fs::read_to_string(root.join("sessions/2026/11/26/rollout-one.jsonl")).unwrap(), "account one rollout");
+            assert_eq!(std::fs::read_to_string(root.join("archived_sessions/rollout-old.jsonl")).unwrap(), "archived");
+            assert!(!is_link(&root.join("auth.json")), "{id}");
+        }
+        // The index gained the account's line once; the terminal's order stays.
+        assert_eq!(
+            std::fs::read_to_string(scratch.0.join("home/.codex/session_index.jsonl")).unwrap(),
+            "{\"id\":\"terminal\"}\n{\"id\":\"one\"}\n"
+        );
+        assert_eq!(std::fs::read_to_string(scratch.0.join("one/auth.json")).unwrap(), "account one auth");
+        assert_eq!(std::fs::read_to_string(scratch.0.join("two/auth.json")).unwrap(), "account two auth");
+        assert_eq!(std::fs::read_to_string(scratch.0.join("home/.codex/auth.json")).unwrap(), "terminal auth");
+        assert!(!is_link(&scratch.0.join("one/auth.lock")) && !is_link(&scratch.0.join("one/models_cache.json")));
+        assert!(!scratch.0.join("two/models_cache.json").exists());
+        // Each account keeps its login in its own auth.json, and an explicit choice stays.
+        assert!(std::fs::read_to_string(scratch.0.join("two/config.toml")).unwrap().contains("cli_auth_credentials_store = \"file\""));
+        scratch.put("one/config.toml", "model = \"x\"\ncli_auth_credentials_store = \"keyring\"\n");
+        prepare(&provider, ProviderKind::Codex).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(scratch.0.join("one/config.toml")).unwrap(),
+            "model = \"x\"\ncli_auth_credentials_store = \"keyring\"\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.0.join("home/.codex/session_index.jsonl")).unwrap(),
+            "{\"id\":\"terminal\"}\n{\"id\":\"one\"}\n"
+        );
+        let stores = ["default", "one", "two"].map(|id| conversation_store(&provider, ProviderKind::Codex, id).unwrap());
+        assert!(stores.iter().all(|store| *store == stores[0]));
+        // Named accounts open the terminal login's databases.
+        assert_eq!(codex_shared_sqlite_home(&provider).unwrap(), scratch.0.join("home/.codex"));
+        scratch.put("home/.codex/config.toml", &format!("sqlite_home = \"{}\"\n", scratch.0.join("db").display()));
+        assert_eq!(codex_shared_sqlite_home(&provider).unwrap(), scratch.0.join("db"));
     }
     #[test]
     fn plugin_registry_union_and_enablement_preserve_account_settings() {

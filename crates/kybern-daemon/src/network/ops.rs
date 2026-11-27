@@ -784,6 +784,7 @@ impl Projection {
             added_by: entry.added_by.clone(),
             added_via: entry.added_via,
             added_at: Some(entry.added_at),
+            online_ratio_7d: None,
         })
     }
 }

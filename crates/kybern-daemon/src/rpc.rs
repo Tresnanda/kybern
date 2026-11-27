@@ -79,7 +79,12 @@ async fn dispatch_part_1(state: &AppState, ctx: &ConnectionCtx, method: &str, sl
                 started_at: state.started_at,
                 machine_id: state.environment_id.clone(),
                 network_protocol: NETWORK_PROTOCOL,
-                features: state.network.features(),
+                features: {
+                    let mut features = state.network.features();
+                    features.push(kybern_protocol::features::ANTIGRAVITY_ACCOUNTS_V1.to_string());
+                    features.push(kybern_protocol::features::ACCOUNTS_SHARED_V1.to_string());
+                    features
+                },
             };
             ok(info)
         }
@@ -210,15 +215,17 @@ async fn dispatch_part_3(state: &AppState, ctx: &ConnectionCtx, method: &str, sl
             ok(state.account_logins.cancel(state, &p.id).await.map_err(bad)?)
         }
         AccountsLoginFinish::NAME => ok(state.account_logins.finish(state, parse(params)?).await.map_err(bad)?),
+        AccountsLoginHandoff::NAME => ok(crate::login_handoff::start(state, parse(params)?).await?),
         AccountsUpdate::NAME => ok(crate::provider_accounts::update(state, parse(params)?).await.map_err(bad)?),
         AccountsSignOut::NAME => ok(crate::provider_accounts::sign_out(state, parse(params)?).await.map_err(bad)?),
+        AccountsOffers::NAME => ok(crate::accounts_offers::offers(state)),
         AccountsRemove::NAME => {
             crate::provider_accounts::remove(state, parse(params)?).await.map_err(bad)?;
             ok(Empty {})
         }
         ThreadsTargetGet::NAME => {
             let p: ThreadsInterruptParams = parse(params)?;
-            ok(state.orchestrator.thread_target(p.thread_id).map_err(bad)?)
+            ok(state.orchestrator.thread_target_fresh(p.thread_id).await.map_err(bad)?)
         }
         ThreadsTargetSet::NAME => ok(state.orchestrator.set_thread_target(parse(params)?).await.map_err(bad)?),
         ThreadsPermissionsApply::NAME => {

@@ -1464,3 +1464,83 @@ async fn a_group_child_s_files_outside_its_repositories_block_cleanup_and_surviv
     assert_eq!(std::fs::read_to_string(saved.join("AGENTS.md")).unwrap(), "# acme\nlearned\n");
     assert!(!saved.join("api").exists(), "member worktrees stay with git");
 }
+
+fn add_named_account(t: &Delegating, kind: ProviderKind, id: &str, name: &str) {
+    let mut settings = t.fixture.orchestrator.inner.settings.get();
+    let provider = settings.providers.entry(kind).or_default();
+    // A scratch home: preparing accounts links into it, never into the real ~/.claude or ~/.codex.
+    provider.env.insert("HOME".into(), t.fixture.root.join("home").to_string_lossy().into_owned());
+    provider.binary = Some(t.fixture.root.join("missing-binary").to_string_lossy().into_owned());
+    let directory = t.fixture.root.join("accounts").join(id);
+    std::fs::create_dir_all(&directory).unwrap();
+    provider.accounts.insert(
+        id.into(),
+        ProviderAccount {
+            name: name.into(),
+            directory: directory.to_string_lossy().into_owned(),
+            email: Some(format!("{id}@example.com")),
+            ..Default::default()
+        },
+    );
+    t.fixture.orchestrator.inner.settings.set(settings).unwrap();
+}
+
+#[tokio::test]
+async fn a_child_runs_on_the_account_the_parent_names_and_only_one_signed_in_here() {
+    let t = Delegating::new().await;
+    add_named_account(&t, ProviderKind::ClaudeCode, "work", "Work");
+    let work = ProviderInstance { kind: ProviderKind::ClaudeCode, instance: "work".into() };
+
+    // Capabilities list the accounts with name, key and default, and never a limit.
+    let capabilities = t.tool("kybern_agent_capabilities", json!({})).await.unwrap();
+    let accounts = capabilities["accounts"].as_array().unwrap();
+    let listed = accounts.iter().find(|account| account["instance"] == "work").unwrap();
+    assert_eq!((listed["name"].as_str(), listed["key"].as_str()), (Some("Work"), Some("claude-code:work@example.com")));
+    assert_eq!(listed["is_default"], false);
+    assert!(accounts.iter().any(|account| account["instance"] == "default" && account["is_default"] == true));
+    let text = capabilities["accounts"].to_string();
+    assert!(!text.contains("percent") && !text.contains("limit"), "{text}");
+
+    // By name or key: the child is pinned to it.
+    for query in ["Work", "claude-code:work@example.com"] {
+        let result = t.delegate(json!({"task": format!("job on {query}"), "account": query})).await;
+        let child = t.delegation(&result["task_id"]);
+        assert_eq!(t.fixture.store.meta_get(&format!("account_override:{}", child.id)).unwrap().as_deref(), Some("work"));
+        assert_eq!(t.fixture.orchestrator.thread_target(child.id).unwrap().target.provider, work);
+    }
+    // Without one, the child follows the default account.
+    let result = t.delegate(json!({"task": "job on the default"})).await;
+    let child = t.delegation(&result["task_id"]);
+    assert_eq!(t.fixture.orchestrator.thread_target(child.id).unwrap().target.provider.instance, "default");
+
+    let unknown = t.tool("kybern_agent_delegate", json!({"task": "x", "account": "Nope"})).await.unwrap_err().to_string();
+    assert!(unknown.contains("no account \"Nope\"") && unknown.contains("Accounts here: Claude Code terminal login, Work"), "{unknown}");
+    t.fixture.orchestrator.mark_account_signed_out(&work, true).unwrap();
+    let signed_out = t.tool("kybern_agent_delegate", json!({"task": "x", "account": "Work"})).await.unwrap_err().to_string();
+    assert!(signed_out.contains("Work is signed out"), "{signed_out}");
+}
+
+#[tokio::test]
+async fn a_child_out_of_limit_waits_for_its_own_reset_and_says_so() {
+    let t = Delegating::new().await;
+    add_named_account(&t, ProviderKind::Codex, "spare", "Spare");
+    let result = t.delegate(json!({"task": "limited job", "provider": "codex"})).await;
+    t.end_parent_turn().await;
+    let child = t.delegation(&result["task_id"]);
+    let default = ProviderInstance { kind: ProviderKind::Codex, instance: "default".into() };
+    t.fixture.orchestrator.inner.usage.observe_account(
+        &default,
+        &[UsageLimit { name: "5 hours".into(), used_percent: 100.0, window_minutes: Some(300), resets_at: Some(chrono::Utc::now().timestamp() + 3600) }],
+    );
+    let agent = t.agent("limited job").await;
+    agent.tx.send(DriverEvent::TurnFailed { error: "You've hit your usage limit for the 5-hour window.".into(), problem: None }).await.unwrap();
+    let info = eventually(|| async {
+        let info = t.fixture.store.thread_get(child.id).unwrap().unwrap().delegation.unwrap();
+        info.error.as_deref().is_some_and(|error| error.contains("waits for its reset")).then_some(info)
+    })
+    .await;
+    assert_eq!(info.status, DelegationStatus::Running, "it continues later on the same account");
+    assert!(t.queued_results().is_empty(), "no failure was reported");
+    let wait = eventually(|| async { t.fixture.orchestrator.pending_wait(child.id).unwrap() }).await;
+    assert_eq!(wait.account, default, "never another account");
+}

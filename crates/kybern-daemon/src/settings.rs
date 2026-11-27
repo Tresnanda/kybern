@@ -81,6 +81,15 @@ impl SettingsStore {
                 kybern_drivers::omp_profile::normalize(profile)?;
             }
         }
+        // Shared accounts and this machine's own account fields follow each other (`accounts_shared`).
+        {
+            let before = self.current.read().unwrap().clone();
+            let store = self.stamps.get();
+            let terminal = crate::accounts_shared::terminal_emails(store);
+            let repos = crate::accounts_shared::project_repo_keys(store);
+            crate::accounts_shared::normalize(&before, &mut settings, &terminal, &repos);
+        }
+        crate::accounts_shared::validate(&settings.accounts_shared)?;
         crate::provider_accounts::validate(&settings)?;
         let _cache_guard = crate::network::list_cache::CACHE_LOCK.lock().unwrap();
         let before = self.current.read().unwrap().clone();

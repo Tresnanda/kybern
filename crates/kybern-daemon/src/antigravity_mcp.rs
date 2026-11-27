@@ -9,6 +9,10 @@
 //!
 //! The file is only ever changed through `agy`'s own CLI; Kybern reads it to see
 //! whether the entry is there and whose it is.
+//!
+//! A named Antigravity account has a profile of its own (`<account>/.gemini`), with its own
+//! file; `agy mcp` reaches it with `HOME` set to the account folder. Turning the tools on or
+//! off covers the machine's profile and every named account's.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -83,12 +87,16 @@ pub fn read_entry(home: &Path) -> Entry {
     }
 }
 
-/// One `agy mcp …` run, serialized so two sessions never write the file at once.
-async fn agy_mcp(agy: &Path, args: &[&std::ffi::OsStr]) -> Result<(), Failure> {
+/// One `agy mcp …` run, serialized so two sessions never write the file at once. `account` is a
+/// named account's home, whose `.gemini` is its profile; `None` is the machine's own.
+async fn agy_mcp(agy: &Path, account: Option<&Path>, args: &[&std::ffi::OsStr]) -> Result<(), Failure> {
     static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _guard = LOCK.lock().await;
     let mut command = Command::new(agy).no_window();
     command.arg("mcp").args(args).stdin(std::process::Stdio::null()).kill_on_drop(true);
+    if let Some(home) = account {
+        command.env("HOME", home).env("USERPROFILE", home);
+    }
     match tokio::time::timeout(COMMAND_TIMEOUT, command.output()).await {
         Ok(Ok(output)) if output.status.success() => Ok(()),
         Ok(Ok(output)) => {
@@ -105,13 +113,17 @@ async fn agy_mcp(agy: &Path, args: &[&std::ffi::OsStr]) -> Result<(), Failure> {
 /// on one machine do not rewrite each other's entry.
 pub async fn ensure(agy: &Path, cli: &Path) -> Result<(), Failure> {
     let home = home().ok_or_else(|| Failure::Other("Kybern can't find your home folder.".into()))?;
-    match read_entry(&home) {
+    ensure_in(agy, cli, &home, None).await
+}
+
+async fn ensure_in(agy: &Path, cli: &Path, home: &Path, account: Option<&Path>) -> Result<(), Failure> {
+    match read_entry(home) {
         Entry::Foreign => return Err(Failure::Foreign),
         Entry::Ours { command } if command.is_file() => return Ok(()),
         Entry::Ours { .. } | Entry::Missing => {}
     }
-    agy_mcp(agy, &["add".as_ref(), SERVER.as_ref(), "--".as_ref(), cli.as_os_str(), BRIDGE_ARG.as_ref()]).await?;
-    match read_entry(&home) {
+    agy_mcp(agy, account, &["add".as_ref(), SERVER.as_ref(), "--".as_ref(), cli.as_os_str(), BRIDGE_ARG.as_ref()]).await?;
+    match read_entry(home) {
         Entry::Ours { .. } => Ok(()),
         Entry::Foreign => Err(Failure::Foreign),
         Entry::Missing => Err(Failure::Other("Antigravity didn't save the kybern entry. Turn this on again.".into())),
@@ -121,10 +133,23 @@ pub async fn ensure(agy: &Path, cli: &Path) -> Result<(), Failure> {
 /// Remove the entry, only when it is Kybern's.
 pub async fn remove(agy: &Path) -> Result<(), Failure> {
     let Some(home) = home() else { return Ok(()) };
-    match read_entry(&home) {
-        Entry::Ours { .. } => agy_mcp(agy, &["remove".as_ref(), SERVER.as_ref()]).await,
+    remove_in(agy, &home, None).await
+}
+
+async fn remove_in(agy: &Path, home: &Path, account: Option<&Path>) -> Result<(), Failure> {
+    match read_entry(home) {
+        Entry::Ours { .. } => agy_mcp(agy, account, &["remove".as_ref(), SERVER.as_ref()]).await,
         Entry::Missing | Entry::Foreign => Ok(()),
     }
+}
+
+/// Every named Antigravity account's home folder that exists.
+fn account_homes(settings: &kybern_protocol::Settings) -> Vec<PathBuf> {
+    settings
+        .providers
+        .get(&kybern_protocol::ProviderKind::Antigravity)
+        .map(|provider| provider.accounts.values().map(|account| PathBuf::from(&account.directory)).filter(|home| home.is_dir()).collect())
+        .unwrap_or_default()
 }
 
 fn agy_binary(settings: &kybern_protocol::Settings) -> Result<PathBuf, Failure> {
@@ -138,12 +163,21 @@ pub async fn turn_on(settings: &kybern_protocol::Settings) -> Result<(), Failure
     let agy = agy_binary(settings)?;
     let cli = crate::askpass::find_cli()
         .ok_or_else(|| Failure::Other("Kybern can't find its command-line tool, so Antigravity can't start the bridge.".into()))?;
-    ensure(&agy, &cli).await
+    ensure(&agy, &cli).await?;
+    for account in account_homes(settings) {
+        ensure_in(&agy, &cli, &account, Some(&account)).await?;
+    }
+    Ok(())
 }
 
 /// Turning it off: take the entry out when it is Kybern's.
 pub async fn turn_off(settings: &kybern_protocol::Settings) -> Result<(), Failure> {
-    remove(&agy_binary(settings)?).await
+    let agy = agy_binary(settings)?;
+    remove(&agy).await?;
+    for account in account_homes(settings) {
+        remove_in(&agy, &account, Some(&account)).await?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -92,7 +92,18 @@ pub fn digest(env: &std::collections::BTreeMap<String, String>) -> String {
 
 fn write_back(state: &AppState, instance: &ProviderInstance, identity: &Option<AccountIdentity>) {
     let Some(identity) = identity else { return };
-    if instance.instance == "default" || (identity.email.is_none() && identity.plan.is_none()) {
+    if instance.instance == "default" {
+        // The terminal login merges into the shared account with its email; a newly learned email can
+        // make it this machine's login for the shared default, so the settings are mapped again.
+        if identity.email.is_some()
+            && crate::accounts_shared::remember_terminal_email(&state.store, instance.kind, identity.email.as_deref())
+            && let Err(error) = state.settings.set(state.settings.get())
+        {
+            tracing::debug!(%error, "could not map the shared accounts after a terminal login changed");
+        }
+        return;
+    }
+    if identity.email.is_none() && identity.plan.is_none() {
         return;
     }
     let mut settings = state.settings.get();

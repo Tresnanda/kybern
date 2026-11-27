@@ -156,10 +156,12 @@ VERSION = open(version_file).read().strip() if os.path.exists(version_file) else
 if args[:1] == ["--version"]:
     print(VERSION); sys.exit(0)
 log_dir = os.environ["FAKE_AGY_LOG"]
+# Like agy: the profile is `--gemini-dir` when given, else `~/.gemini`.
+GEMINI = args[args.index("--gemini-dir") + 1] if "--gemini-dir" in args else os.path.join(os.environ["HOME"], ".gemini")
 if args[:1] == ["models"]:
     print("Fetching available models...\ngemini-3.8-flash-high\tGemini 3.8 Flash (High)\ngemini-3.8-flash-low\tGemini 3.8 Flash (Low)"); sys.exit(0)
 with open(os.path.join(log_dir, "calls.jsonl"), "a") as f:
-    f.write(json.dumps({"argv": args, "mcp_url": os.environ.get("KYBERN_MCP_URL"), "mcp_auth": os.environ.get("KYBERN_MCP_AUTHORIZATION")}) + "\n")
+    f.write(json.dumps({"argv": args, "home": os.environ.get("HOME"), "mcp_url": os.environ.get("KYBERN_MCP_URL"), "mcp_auth": os.environ.get("KYBERN_MCP_AUTHORIZATION")}) + "\n")
 if args[:1] != ["acp"]:
     sys.stdin.readline()
     print(json.dumps({"event": "init", "conversation_id": "print-1", "init": {"model": "gemini-3.8-flash-low"}}))
@@ -213,7 +215,7 @@ def modes():
         available.append({"id": "auto", "name": "Auto"})
     return {"currentModeId": "default", "availableModes": available}
 def steps(sid, rows):
-    root = os.path.join(os.environ["HOME"], ".gemini", "antigravity-cli", "conversations")
+    root = os.path.join(GEMINI, "antigravity-cli", "conversations")
     os.makedirs(root, exist_ok=True)
     db = sqlite3.connect(os.path.join(root, sid + ".db"))
     db.execute("CREATE TABLE IF NOT EXISTS steps (idx integer PRIMARY KEY, step_type integer NOT NULL DEFAULT 0, step_payload blob)")
@@ -255,7 +257,7 @@ def prompt(mid, sid, text):
         permission(sid, "c2", "write_file", "edit", "File b.txt", raw, locations=[{"path": path}])
         done(sid, "c2", "write_file", {})
     elif text == "mcp":
-        cache = os.path.join(os.environ["HOME"], ".gemini/antigravity-cli/mcp/kybern/kybern_thread_read.json")
+        cache = os.path.join(GEMINI, "antigravity-cli/mcp/kybern/kybern_thread_read.json")
         tool(sid, "c3", "view_file", "read", "Read schema", {"AbsolutePath": cache})
         done(sid, "c3", "view_file", {"output": "{}"})
         raw = {"ServerName": "kybern", "ToolName": "kybern_thread_read", "Arguments": "{\"thread_id\": \"t1\"}"}
@@ -354,9 +356,16 @@ def handle(msg):
         caps = {"loadSession": True, "promptCapabilities": {"image": True, "audio": False, "embeddedContext": True}}
         if not os.environ.get("FAKE_AGY_NO_APPEND"):
             caps["_meta"] = {"antigravity": {"tier": True, "systemPrompt": {"append": True}}}
+        if not os.environ.get("FAKE_AGY_NO_LOGOUT"):
+            caps["auth"] = {"logout": {}}
         send({"id": mid, "result": {"protocolVersion": 1, "agentCapabilities": caps, "agentInfo": {"name": "Antigravity ACP Server", "version": VERSION}, "authMethods": []}})
     elif method == "session/new":
         send({"id": mid, "result": {"sessionId": "s-new", "modes": modes(), "configOptions": options()}})
+    elif method == "logout":
+        token = os.path.join(GEMINI, "antigravity-cli", "antigravity-oauth-token")
+        if os.path.exists(token):
+            os.remove(token)
+        send({"id": mid, "result": {}})
     elif method == "session/load":
         sid = params["sessionId"]
         update(sid, {"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "old question"}})
@@ -560,6 +569,71 @@ mod session {
             let Err(error) = spawn(&driver, fake.config(PermissionMode::Supervised, &env)).await else { panic!("Supervised needs ACP") };
             assert!(error.to_string().contains("Full access"), "{error}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_named_account_runs_on_its_own_profile_and_never_on_print() {
+        use crate::antigravity::account::HOME_ENV;
+        let fake = Fake::new();
+        let account = fake.root.path().join("account");
+        std::fs::create_dir_all(&account).unwrap();
+        let account_env = [(HOME_ENV, account.to_str().unwrap())];
+        let driver = AntigravityDriver::default();
+        let crate::SpawnedSession { session, mut events } =
+            spawn(&driver, fake.config(PermissionMode::Supervised, &account_env)).await.unwrap();
+        assert_eq!(texts(&send(&*session, &mut events, "hello").await), "new answer");
+        let session_call = fake.calls().into_iter().rfind(|call| call["argv"][0] == "acp").unwrap();
+        let argv: Vec<&str> = session_call["argv"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        let profile = account.join(".gemini");
+        assert_eq!(argv[3..], ["--gemini-dir", profile.to_str().unwrap()], "{argv:?}");
+        assert!(profile.join("antigravity-cli/conversations/s-new.db").is_file(), "the conversation is in the account's profile");
+        // The session's tools see the person's own home, not the account folder.
+        assert_eq!(session_call["home"].as_str().map(PathBuf::from), std::env::var_os("HOME").map(PathBuf::from));
+        session.close().await.unwrap();
+
+        // A title one-shot runs `-p` with the account folder as its home.
+        let env: BTreeMap<String, String> = fake.config(PermissionMode::FullAccess, &account_env).env.into_iter().collect();
+        driver.one_shot(fake.root.path(), "title", Some(&fake.binary), &env).await.unwrap();
+        let print_call = fake.calls().into_iter().rfind(|call| call["argv"][0] != "acp").unwrap();
+        assert_eq!(print_call["home"].as_str().map(PathBuf::from), Some(account.clone()));
+
+        // `-p` can't reach the account's profile, so an agy without ACP is refused even in Full access.
+        for (version, extra) in [("1.4.12", None), ("1.5.14", Some((crate::antigravity::PRINT_MODE_ENV, "1")))] {
+            let fake = Fake::new();
+            std::fs::write(fake.root.path().join("version"), version).unwrap();
+            let env: Vec<(&str, &str)> = account_env.iter().copied().chain(extra).collect();
+            let Err(error) = spawn(&AntigravityDriver::default(), fake.config(PermissionMode::FullAccess, &env)).await else {
+                panic!("{version}: a named account never runs on -p")
+            };
+            assert!(error.to_string().contains("named Antigravity account"), "{version}: {error}");
+            assert!(fake.calls().iter().all(|call| call["argv"][0] == "acp"), "{version}: {:?}", fake.calls());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_named_account_signs_out_through_acps_logout_on_its_own_profile() {
+        use crate::antigravity::account::{HOME_ENV, sign_out};
+        let fake = Fake::new();
+        let account = fake.root.path().join("account");
+        let token = account.join(".gemini/antigravity-cli/antigravity-oauth-token");
+        std::fs::create_dir_all(token.parent().unwrap()).unwrap();
+        std::fs::write(&token, "{}").unwrap();
+        let account_env = [(HOME_ENV, account.to_str().unwrap())];
+        let env: BTreeMap<String, String> = fake.config(PermissionMode::FullAccess, &account_env).env.into_iter().collect();
+        sign_out(&fake.binary, &env).await.unwrap();
+        assert!(!token.exists(), "agy removed the account's login");
+        assert_eq!(fake.sent("logout").len(), 1);
+
+        // An agy without `auth.logout` is asked nothing, and the sentence says to update it.
+        let old = Fake::new();
+        let mut env: BTreeMap<String, String> = old.config(PermissionMode::FullAccess, &account_env).env.into_iter().collect();
+        env.insert("FAKE_AGY_NO_LOGOUT".into(), "1".into());
+        let error = sign_out(&old.binary, &env).await.unwrap_err();
+        assert!(error.contains("agy update"), "{error}");
+        assert!(old.sent("logout").is_empty());
+        // This computer's own login is never signed out from Kybern.
+        let machine: BTreeMap<String, String> = fake.config(PermissionMode::FullAccess, &[]).env.into_iter().collect();
+        assert!(sign_out(&fake.binary, &machine).await.unwrap_err().contains("own Antigravity login"));
     }
 
     #[tokio::test]

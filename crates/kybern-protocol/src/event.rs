@@ -246,6 +246,37 @@ pub enum EventPayload {
         native_resume: bool,
         text: String,
     },
+    /// The person moved the thread to another account of the same harness: its limit
+    /// ran out (`limit`, `threads.switch_continue`) or its account is not usable on this
+    /// machine (`unavailable`, `threads.target.set`). Kybern never switches by itself
+    /// (provider terms). Undo is a normal `threads.target.set` back to `from`.
+    AccountSwitched {
+        from: ProviderInstance,
+        to: ProviderInstance,
+        reason: AccountSwitchReason,
+        /// The line clients show, with the account names.
+        #[serde(default)]
+        text: String,
+    },
+    /// The thread's own account is out of limit: the thread continues on it by itself at
+    /// `until` (its reset, plus a small margin), unless the person switches account first.
+    /// Cancelled with `threads.interrupt` or a new message.
+    AccountWait {
+        until: DateTime<Utc>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        account: Option<ProviderInstance>,
+        #[serde(default)]
+        text: String,
+    },
+    /// A wait from `AccountWait` ended: cancelled (Stop, or a new message), or
+    /// the limit reset and the thread continues now.
+    AccountWaitEnded {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        account: Option<ProviderInstance>,
+        cancelled: bool,
+        #[serde(default)]
+        text: String,
+    },
     ProviderUsageUpdated {
         usage: ProviderUsage,
     },
@@ -382,6 +413,9 @@ impl EventPayload {
             Self::TurnFailed { .. } => "turn_failed",
             Self::ProviderCommandsUpdated { .. } => "provider_commands_updated",
             Self::SessionTransitioned { .. } => "session_transitioned",
+            Self::AccountSwitched { .. } => "account_switched",
+            Self::AccountWait { .. } => "account_wait",
+            Self::AccountWaitEnded { .. } => "account_wait_ended",
             Self::ProviderUsageUpdated { .. } => "provider_usage_updated",
             Self::IdleCompactionStarted { .. } => "idle_compaction_started",
             Self::ProviderNotice { .. } => "provider_notice",
@@ -407,6 +441,16 @@ pub struct RecoveredAssistantBlock {
     pub before_tool_call_id: Option<String>,
     pub seq: EventSeq,
     pub at: DateTime<Utc>,
+}
+
+/// Why a thread moved to another account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountSwitchReason {
+    /// The account ran out of its 5-hour or weekly limit.
+    Limit,
+    /// The account is not signed in on this machine, or the machine it borrows from is unreachable.
+    Unavailable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

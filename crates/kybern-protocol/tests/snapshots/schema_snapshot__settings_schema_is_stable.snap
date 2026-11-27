@@ -242,6 +242,10 @@ expression: schema_for!(Settings)
       "description": "How long a thread goes without a turn before it moves to its project's Older group.",
       "$ref": "#/$defs/OlderAfter",
       "default": "seven_days"
+    },
+    "accounts_shared": {
+      "description": "Accounts across machines: the same on every machine of the network, kept in step by the\ndaemons themselves (`peer.accounts.sync`). Each daemon maps a key to its own login by email.",
+      "$ref": "#/$defs/AccountsShared"
     }
   },
   "$defs": {
@@ -808,6 +812,144 @@ expression: schema_for!(Settings)
         "three_days",
         "seven_days",
         "thirty_days"
+      ]
+    },
+    "AccountsShared": {
+      "description": "What every machine agrees on about the provider accounts. A key is `<kind>:<email>`, lowercase\n(`claude-code:me@example.com`); storage stays per machine.",
+      "type": "object",
+      "properties": {
+        "profiles": {
+          "description": "Name, colour and \"Only when I choose\" of each account, by key.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/AccountProfile"
+          }
+        },
+        "defaults": {
+          "description": "The one default account of each harness, for every machine.",
+          "type": "object",
+          "properties": {
+            "antigravity": {
+              "type": "string"
+            },
+            "claude-code": {
+              "type": "string"
+            },
+            "codex": {
+              "type": "string"
+            },
+            "cursor": {
+              "type": "string"
+            },
+            "grok-build": {
+              "type": "string"
+            },
+            "omp": {
+              "type": "string"
+            },
+            "opencode": {
+              "type": "string"
+            },
+            "pi": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "projects": {
+          "description": "Per-project choices by repository identity (`RepoIdentity::key`), then harness.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "antigravity": {
+                "type": "string"
+              },
+              "claude-code": {
+                "type": "string"
+              },
+              "codex": {
+                "type": "string"
+              },
+              "cursor": {
+                "type": "string"
+              },
+              "grok-build": {
+                "type": "string"
+              },
+              "omp": {
+                "type": "string"
+              },
+              "opencode": {
+                "type": "string"
+              },
+              "pi": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "offers": {
+          "description": "Offers the user put off or turned down, by offer id (`accounts.offers`).",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/OfferDismissal"
+          }
+        }
+      }
+    },
+    "AccountProfile": {
+      "description": "How an account looks and is used, the same on every machine.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "color": {
+          "description": "Palette key, as `ProviderAccount::color`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "manual_only": {
+          "description": "\"Only when I choose\": never picked for a new thread or an automatic switch.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "OfferDismissal": {
+      "description": "An offer the user dismissed, with the fingerprint of the situation it was dismissed in.",
+      "type": "object",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/OfferDismissalState"
+        },
+        "fingerprint": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "state",
+        "fingerprint"
+      ]
+    },
+    "OfferDismissalState": {
+      "oneOf": [
+        {
+          "description": "\"Not now\": hidden until the offer's fingerprint changes.",
+          "type": "string",
+          "const": "later"
+        },
+        {
+          "description": "\"Never\": hidden for good.",
+          "type": "string",
+          "const": "never"
+        }
       ]
     }
   }

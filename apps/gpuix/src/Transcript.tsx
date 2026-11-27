@@ -23,6 +23,8 @@ import { Presence } from './motion/Presence.tsx'
 import { PATCHED_NATIVE } from './native/local-build.ts'
 import { chunkGap, CodeChunk, CodeHeader, lineChunks, markdownParts, partGap, Prose, textChunks } from './transcript/markdown.tsx'
 import { ThreadImage } from './transcript/ThreadImage.tsx'
+import { AccountNoticeRow } from './transcript/AccountNotice.tsx'
+import { accountNotice } from '../../../packages/kybern-client/src/accountNotices.ts'
 import { MermaidBlock } from './transcript/MermaidBlock.tsx'
 import { MessageRail, type RailItem } from './transcript/rail.tsx'
 import { createTranscriptNavigation } from './shared/lib/transcriptNavigation.ts'
@@ -227,6 +229,11 @@ export function Transcript() {
       result.push({ key: `${key}:footer`, turn, estimate: 35, node: <Row><TurnFooter group={turn} threadId={threadId!} isLast={i === turns.length - 1} /></Row> })
       // Context refreshes (Coordinator): each is its own row after the turn it followed, settling in place.
       for (const block of turn.work) if (block.kind === 'rotation') result.push({ key: `${key}:${block.id}`, turn, estimate: 34, node: <Row><RotationRow block={block} threadId={threadId!} /></Row> })
+      // Account switches and waits, likewise one row each after the turn.
+      for (const block of turn.work) {
+        const account = block.kind === 'notice' ? accountNotice(block.data) : null
+        if (block.kind === 'notice' && account) result.push({ key: `${key}:${block.id}`, turn, estimate: 30, node: <Row><AccountNoticeRow threadId={threadId!} text={block.text} notice={account} /></Row> })
+      }
       return remember()
     })
     for(const key of rowCache.keys()) if(!keep.has(key)) rowCache.delete(key)

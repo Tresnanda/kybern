@@ -90,6 +90,8 @@ classify!(SETTINGS_FIELDS, every_settings_field_is_classified, Settings, {
     network => PerMachine,
     compaction => Shared,
     older_after => Shared,
+    // The same on every machine, but kept in step by its own exchange (`network::accounts_sync`), never by a patch.
+    accounts_shared => PerMachine,
 });
 
 classify!(PROVIDER_FIELDS, every_provider_field_is_classified, ProviderSettings, {
@@ -540,6 +542,10 @@ mod tests {
             title_provider: Some(ProviderKind::Codex),
             preview_allowed_folders: vec!["/tmp".into()],
             coordinator_mcp_servers: [(ProviderKind::Omp, vec!["memory".into()])].into(),
+            accounts_shared: AccountsShared {
+                defaults: [(ProviderKind::Codex, "codex:me@example.com".to_string())].into(),
+                ..Default::default()
+            },
             ..Settings::default()
         };
         let mut provider = ProviderSettings::default();

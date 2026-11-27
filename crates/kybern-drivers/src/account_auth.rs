@@ -74,7 +74,9 @@ fn grok_identity(context: &ProbeContext) -> (AccountStatus, Option<AccountIdenti
 /// Who is signed in to `agy` on this machine. Only the email and the plan label
 /// leave this function: the stored token is read for its claims and dropped.
 async fn antigravity_identity(context: &ProbeContext) -> (AccountStatus, Option<AccountIdentity>) {
-    if let Some(login) = crate::antigravity::read_login(home_dir(context).as_deref()).await {
+    // A named account's login is a file in its own profile; the machine's is in the keyring or `~/.gemini`.
+    let home = crate::antigravity::account::account_home(&context.env).or_else(|| home_dir(context));
+    if let Some(login) = crate::antigravity::read_login(home.as_deref()).await {
         return (AccountStatus::SignedIn, Some(AccountIdentity { email: login.email.clone(), plan: None, organization: None }));
     }
     if env_value(context, "GEMINI_API_KEY").is_some() {

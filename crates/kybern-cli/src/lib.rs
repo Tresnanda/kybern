@@ -256,13 +256,14 @@ enum Cmd {
         #[arg(long)]
         inherit: bool,
     },
-    /// Continue an interrupted usage-limited task on an explicitly selected account.
+    /// Continue an interrupted usage-limited task on another account. Without
+    /// `--provider`/`--account` it uses the suggested account (most limit left).
     SwitchContinue {
         thread: ThreadId,
-        #[arg(long)]
-        provider: ProviderKind,
-        #[arg(long)]
-        account: String,
+        #[arg(long, requires = "account")]
+        provider: Option<ProviderKind>,
+        #[arg(long, requires = "provider")]
+        account: Option<String>,
         #[arg(long)]
         message_id: Option<MessageId>,
     },
@@ -1004,10 +1005,25 @@ enum AccountsCmd {
         account: String,
         color: String,
     },
+    /// Sign an account out. `default` (the terminal login) needs --confirm-terminal: it also signs out
+    /// your terminal on this machine.
     SignOut {
         #[arg(long)]
         provider: ProviderKind,
         account: String,
+        #[arg(long)]
+        confirm_terminal: bool,
+    },
+    /// Offers about accounts across machines: always-on machines, machines missing accounts, signed-out
+    /// terminal logins and defaults the first run changed.
+    Offers,
+    /// Catch the browser sign-in of a login running on another machine here and print the page to open.
+    Handoff {
+        /// The machine the login runs on (its id).
+        #[arg(long)]
+        machine: String,
+        /// The login's id (from `accounts login` on that machine).
+        login: String,
     },
     Remove {
         #[arg(long)]
@@ -1805,9 +1821,19 @@ pub async fn run() -> Result<()> {
                     .await?;
                 println!("{}", serde_json::to_string_pretty(&summary)?);
             }
-            AccountsCmd::SignOut { provider, account } => {
-                let summary = client.call::<AccountsSignOut>(ProviderInstance { kind: provider, instance: account }).await?;
+            AccountsCmd::SignOut { provider, account, confirm_terminal } => {
+                let summary =
+                    client.call::<AccountsSignOut>(AccountsSignOutParams { kind: provider, instance: account, confirm_terminal }).await?;
                 println!("{}", serde_json::to_string_pretty(&summary)?);
+            }
+            AccountsCmd::Offers => {
+                let offers = client.call::<AccountsOffers>(Empty {}).await?;
+                println!("{}", serde_json::to_string_pretty(&offers)?);
+            }
+            AccountsCmd::Handoff { machine, login } => {
+                let handoff =
+                    client.call::<AccountsLoginHandoff>(AccountLoginHandoffParams { machine_id: machine, login_id: login }).await?;
+                println!("{}", serde_json::to_string_pretty(&handoff)?);
             }
             AccountsCmd::Remove { provider, account } => {
                 client.call::<AccountsRemove>(ProviderInstance { kind: provider, instance: account }).await?;
@@ -1908,7 +1934,7 @@ pub async fn run() -> Result<()> {
                     &client
                         .call::<ThreadsSwitchContinue>(ThreadsSwitchContinueParams {
                             thread_id: thread,
-                            provider: ProviderInstance { kind: provider, instance: account },
+                            provider: provider.zip(account).map(|(kind, instance)| ProviderInstance { kind, instance }),
                             message_id: message_id.unwrap_or_else(uuid::Uuid::now_v7)
                         })
                         .await?

@@ -400,7 +400,7 @@ fn agent_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinition> {
     vec![
         NativeToolDefinition {
             name: "kybern_agent_capabilities".into(),
-            description: "List the agent harnesses installed on this machine with their models, reasoning efforts and default model, whether each accepts steering messages mid-turn, plus your delegation limits and how many agents you have running. Read-only. Call it before choosing a provider or model for kybern_agent_delegate.".into(),
+            description: "List the agent harnesses installed on this machine with their models, reasoning efforts and default model, whether each accepts steering messages mid-turn, the signed-in accounts per harness on this machine and the others (name, key, default), plus your delegation limits and how many agents you have running. Read-only. Call it before choosing a provider, model or account for kybern_agent_delegate.".into(),
             input_schema: object(json!({}), &[]),
         },
         NativeToolDefinition {
@@ -412,6 +412,7 @@ fn agent_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinition> {
                 "The agent sees only the task text you write, not this conversation: include the goal, the files or areas involved, constraints, what to verify and what to report. Give it a concise role (implementation, research, review, design, test or general). ",
                 "Agents are one-shot: for another round, delegate again with the full brief, the prior findings and any responses; do not rely on the old thread's memory. ",
                 "provider, model and effort default to yours; call kybern_agent_capabilities to see the choices. A child never gets more permissions than you have. ",
+                "account picks the signed-in account the child runs on, on the machine that runs it; omit it for that harness's default account. Pass only an account the user named, or omit it: never spread children across accounts to stretch usage limits, which provider terms forbid. A child that runs out of limit waits for its own account's reset and continues; it never switches account. ",
                 "workspace \"shared\" (default) works in your checkout and branch. The agent must not commit, stash, reset, checkout or rebase, and you integrate its edits; list owns globs (such as src/api/**) for the paths it may edit so Kybern warns it when it strays onto a sibling's. ",
                 "Choose workspace \"worktree\" for parallel implementers that edit overlapping code: the agent gets its own git worktree and branch (kybern/<id>) seeded from your current checkout (including uncommitted changes), commits there, and its result carries the branch, base commit, commit and diffstat. If your checkout is clean, merge the branch; otherwise apply only the agent's changes with `git diff <base>..<head> | git apply --3way` so Kybern's snapshot commit never lands in your history. ",
                 "The number of agents running at once and the depth of delegation are limited in Settings. ",
@@ -423,9 +424,10 @@ fn agent_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinition> {
                 "task": {"type":"string","description":"The complete brief. The agent sees nothing else."},
                 "title": {"type":["string","null"],"description":"Short thread title; defaults to the first line of the task."},
                 "role": {"enum":["implementation","research","review","design","test","general",null]},
-                "provider": {"enum":["claude-code","codex","opencode","pi","omp","cursor",null],"description":"Harness; defaults to yours."},
+                "provider": {"enum": ProviderKind::json_enum_or_null(),"description":"Harness; defaults to yours."},
                 "model": {"type":["string","null"],"description":"Exact model id for that harness (see kybern_agent_capabilities); defaults to yours on the same harness."},
                 "effort": {"type":["string","null"],"description":"Reasoning effort the model supports; defaults to yours on the same harness and model."},
+                "account": {"type":["string","null"],"description":"An account the user named: its name or <kind>:<email> key from kybern_agent_capabilities, signed in on the machine that runs the agent. Omit for the default account."},
                 "permission_mode": {"enum":["supervised","accept-edits","auto","full-access",null],"description":"Omit to inherit yours (supervised when the harness differs). It can never exceed your own."},
                 "workspace": {"enum":["shared","worktree",null],"description":"shared (default) or worktree (git projects only)."},
                 "owns": {"type":["array","null"],"items":{"type":"string"},"description":"Shared workspace only: globs relative to the checkout root this agent owns, such as src/api/**."},
@@ -619,6 +621,16 @@ mod tests {
     use chrono::Utc;
     use kybern_protocol::{Checkpoint, PermissionMode, Project, ProviderInstance, ProviderKind, Thread, ThreadStatus};
     use uuid::Uuid;
+
+    #[test]
+    fn the_delegate_tool_offers_every_harness() {
+        let delegate = native_tool_definitions().into_iter().find(|tool| tool.name == "kybern_agent_delegate").expect("delegate tool");
+        let offered = delegate.input_schema["properties"]["provider"]["enum"].as_array().expect("provider enum").clone();
+        for kind in ProviderKind::ALL {
+            assert!(offered.contains(&kind.as_str().into()), "{} missing from kybern_agent_delegate", kind.as_str());
+        }
+        assert!(offered.contains(&Value::Null));
+    }
 
     #[test]
     fn markdown_links_escape_titles_that_would_end_the_link_early() {

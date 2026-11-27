@@ -1,21 +1,18 @@
-// Settings › Accounts (`views/settings/AccountsSettings.tsx`): every signed-in account of each
-// installed agent, with its email, plan, usage and status. The CLI account (the agent's own
-// sign-in) comes first; named accounts follow in creation order.
+// Settings › Accounts: every account of every machine in one list, grouped by agent and merged by identity
+// (`accounts/unified.ts`). Each row says where the account is signed in (machine chips), what is left of its limits, and
+// carries its actions; shared sign-ins close the page.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ACCOUNT_COLORS, ACCOUNT_COLOR_LABELS, isAccountColor, isCliInstance, isNameValid, withoutSignIn } from '../shared/lib/accounts.ts'
-import { bindingLimit, limitFamily, PROVIDER_NAMES, windowLabel } from '../shared/lib/providerUsage.ts'
-import type { AccountSummary, ProviderKind, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
-import { Icon } from '../icons.tsx'
+import { ACCOUNT_COLORS, ACCOUNT_COLOR_LABELS, isAccountColor, isNameValid, withoutSignIn } from '../shared/lib/accounts.ts'
+import { limitFamily, bindingLimit, PROVIDER_NAMES, windowLabel } from '../shared/lib/providerUsage.ts'
+import type { ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
 import { goPage } from '../nav/history.ts'
 import { N } from '../nav/glyphs.ts'
 import { toastProblem } from '../problems/toast.ts'
-import { Dialog, Menu, MenuItem, MenuSeparator, MenuSub, Tip } from '../nav/overlay.tsx'
+import { Dialog, Menu, MenuCheckboxItem, MenuItem, MenuLabel, MenuSeparator, MenuSub, Tip } from '../nav/overlay.tsx'
 import { useNav } from '../nav/store.ts'
 import { showDialog } from '../dialogs/store.ts'
-import { CloseX } from '../dialogs/Account.tsx'
-import { activeEnvironment } from '../shell/environment.ts'
+import { CloseX, MachineChecks } from '../dialogs/Account.tsx'
 import { toast } from '../shell/toasts.tsx'
-import { copyText } from '../transcript/store.ts'
 import { getClient, useApp } from '../state.ts'
 import { motion, useGpuix, type PublicInstance } from '@gpuix/react'
 import { nativeCapabilities } from '../native/api.ts'
@@ -23,85 +20,101 @@ import { EASE } from '../motion/kit.tsx'
 import { ink, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { GlassEdge } from '../kit/GlassEdge.tsx'
 import { settingsCardStyle, useGlass } from '../platform/glass.ts'
-import { FONT_MONO } from '../theme.ts'
-import { markdownTheme } from '../transcript/kit.tsx'
 import { AccountAvatar, AccountDot, AccountUsageRing } from '../usage/AccountMark.tsx'
-import { askAccountLimits, makeDefaultAccount, refreshAccounts, setUsageAnchor, updateProviderSettings, useAccountFlash, useAccountLimitEntries, useAccounts, useAccountsFeed, useAccountsLegacy, useAccountsLoaded } from '../usage/accounts.ts'
-import { limitsForAccount } from '../shared/lib/accountUi.ts'
+import { askAccountLimits, setUsageAnchor, updateProviderSettings, useAccountFlash } from '../usage/accounts.ts'
 import { Checkbox } from '../kit/Checkbox.tsx'
 import { Skeleton } from '../kit/Skeleton.tsx'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { DURATION } from '../motion/tokens.ts'
-import { PageBlock, selectOwnsEscape, useSettingsModal } from './controls.tsx'
+import { PageBlock, Row, Section, selectOwnsEscape, useSettingsModal } from './controls.tsx'
 import { Button } from '../kit/Button.tsx'
 import { IconButton } from '../kit/IconButton.tsx'
-import { S } from './glyphs.ts'
 import { openSettingsTab } from './SettingsScreen.tsx'
 import { useSettings } from './store.ts'
 import { AccountIdleCompaction } from './Compaction.tsx'
 import { idleCompactionDetail } from '../../../../packages/kybern-client/src/compaction.ts'
-import { requestAntigravitySignIn } from '../antigravity/notice.ts'
-import { LoginBrokerSection } from './LoginBroker.tsx'
+import { refreshAllAccounts, useAccountsEverywhere, useOffers, type UnifiedView } from '../accounts/store.ts'
+import { canSignInTerminal, canStyle, makeDefault, removeFrom, setProfile, shareSignIns, signInTerminals, signOutOn, signOutTerminalOn } from '../accounts/actions.ts'
+import { listedOffers } from '../accounts/offers.ts'
+import { OfferRows } from '../accounts/OfferCard.tsx'
+import { chipsFor } from '../accounts/chips.ts'
+import { MachineChip, TERMINAL_COMMANDS, type ChipActions } from '../accounts/MachineChip.tsx'
+import { copyText } from '../transcript/store.ts'
+import { leftOf, standings, type HarnessGroup, type UnifiedAccount } from '../accounts/unified.ts'
 
 /** Skeleton rows fade in after 150 ms (the fade's own `delay`, no timer), so a fast answer never flashes them. */
 const SKELETON_DELAY = PATCHED_NATIVE ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { delay: 0.15, duration: DURATION.quick, ease: [0.23, 1, 0.32, 1] as [number, number, number, number] } } : undefined
 
-/** What to run in a terminal to sign the CLI account in again; Kybern picks the sign-in up on its own. */
-const CLI_SIGN_IN_COMMAND: Record<ProviderKind, string> = {
-  'claude-code': 'claude auth login',
-  codex: 'codex login',
-  cursor: 'cursor-agent login',
-  omp: 'omp login',
-  opencode: 'opencode auth login',
-  pi: 'pi',
-  antigravity: 'agy',
-  'grok-build': 'grok login',
-}
+const list = (names: readonly string[]) => new Intl.ListFormat('en', { style: 'long', type: 'conjunction' }).format(names)
 
-/** Agents whose identity the daemon can read; others keep an unknown status without a loading placeholder. */
-const IDENTITY_KINDS: ProviderKind[] = ['claude-code', 'codex', 'cursor', 'antigravity']
-
-const agentLabel = (kind: ProviderKind, providers: ProviderStatus[]) => providers.find((p) => p.kind === kind)?.display_name ?? PROVIDER_NAMES[kind] ?? kind
-
-function openAddAccount(request: { provider?: ProviderKind; instance?: string } = {}) { showDialog({ kind: 'account', ...request }) }
-
-/** The heading's end-aligned action. Hidden for older daemons, which cannot add accounts from the browser. */
+/** The heading's end-aligned action. Hidden for older daemons, which cannot add accounts from the app. */
 export function AccountsHeaderAction() {
-  const t = useTheme()
-  const legacy = useAccountsLegacy()
-  if (legacy) return null
-  return <Button testId="account-add" icon={N.plus} label="Add account" onClick={() => openAddAccount()}>Add account</Button>
+  const view = useAccountsEverywhere()
+  if (view.legacy) return null
+  return <Button testId="account-add" icon={N.plus} label="Add account" onClick={() => showDialog({ kind: 'account' })}>Add account</Button>
 }
+
+type Pending =
+  | { kind: 'remove' | 'signout'; account: UnifiedAccount; machine?: string }
+  | { kind: 'terminal'; account: UnifiedAccount; machineId: string; machine: string }
+  | { kind: 'projects'; account: UnifiedAccount }
+  | { kind: 'stop-sharing' }
 
 export function Accounts() {
-  const t = useTheme()
+  const view = useAccountsEverywhere()
+  const { offers } = useOffers(view)
   const providers = useNav((s) => s.providers)
   const providersLoaded = useNav((s) => s.providersLoaded)
-  const projects = useApp((s) => s.projects)
-  const { settings } = useSettings()
-  const accounts = useAccounts()
-  const legacy = useAccountsLegacy()
-  const loaded = useAccountsLoaded()
-  const [removing, setRemoving] = useState<AccountSummary | null>(null)
-  const [assigning, setAssigning] = useState<AccountSummary | null>(null)
-  const host = activeEnvironment().name
-  useSettingsModal(!!removing || !!assigning)
-  useAccountsFeed()
-  // Read accounts and their usage while this tab is open.
-  useEffect(() => { void refreshAccounts(); askAccountLimits() }, [])
-  // omp, OpenCode and pi have no account: they are listed only to manage a profile (its own folder) added
-  // before Kybern stopped offering them, so nothing a user set up disappears.
-  const installed = providers.filter((p) => p.available && accounts.some((a) => a.provider.kind === p.kind && (!withoutSignIn(p.kind) || !isCliInstance(a.provider.instance))))
-  const missing = providers.filter((p) => !p.available && !withoutSignIn(p.kind))
+  const [pending, setPending] = useState<Pending | null>(null)
+  useSettingsModal(!!pending)
+  // Read every machine's accounts and usage while this tab opens.
+  useEffect(() => { void refreshAllAccounts(); askAccountLimits() }, [])
+  const here = view.machines[0]!
+  const groups = useMemo(() => orderGroups(view, providers.map((p) => p.kind)), [view.groups, view.machines, providers])
+  const listed = listedOffers(offers)
+  const away = view.machines.filter((m) => !m.online).map((m) => m.name)
+  const outdated = view.machines.filter((m) => !m.isLocal && m.online && m.state === 'legacy').map((m) => m.name)
+  const missing = providers.filter((p) => !withoutSignIn(p.kind) && view.machines.every((m) => m.providers?.find((x) => x.kind === p.kind)?.available === false))
+  const chipActions: ChipActions = {
+    signOut: (account, machineId) => setPending({ kind: 'signout', account, machine: machineId }),
+    signOutTerminal: (account, machineId, machine) => setPending({ kind: 'terminal', account, machineId, machine }),
+  }
+  const close = () => setPending(null)
+  // A dialog sits in the list item that opened it: one at the end of this long page could be culled by the virtual list.
+  const dialogFor = (kind: ProviderKind) => pending && pending.kind !== 'stop-sharing' && pending.account.kind === kind
+    ? <AccountDialog pending={pending} view={view} onClose={close} />
+    : null
   return <>
-    {legacy && <PageBlock><Note>{`Update Kybern on ${host} to sign in from the browser.`}</Note></PageBlock>}
-    {!legacy && <LoginBrokerSection />}
-    {installed.map((provider) => <AgentSection key={provider.kind} provider={provider} accounts={accounts.filter((a) => a.provider.kind === provider.kind)} readOnly={legacy} onRemove={setRemoving} onAssign={setAssigning} />)}
-    {!(loaded && providersLoaded) && installed.length === 0 && <PageBlock><div testId="accounts-loading" role="status" paintTransform={SKELETON_DELAY} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>{[0, 1].map((i) => <Skeleton key={i} height={56} radius={12} />)}</div></PageBlock>}
-    {missing.length > 0 && <PageBlock><div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', paddingBottom: 30 }}><Note>{`${listAgents(missing)} ${missing.length === 1 ? 'isn’t' : 'aren’t'} installed. Set them up in `}</Note><TextLink testId="accounts-agent-providers" onClick={() => openSettingsTab('agents')}>Agent providers</TextLink><Note>.</Note></div></PageBlock>}
-    {removing && <RemoveDialog account={removing} onClose={() => setRemoving(null)} />}
-    {assigning && <ProjectsDialog account={assigning} accounts={accounts} projects={projects} projectAccounts={settings?.providers[assigning.provider.kind]?.project_accounts} onClose={() => setAssigning(null)} />}
+    {view.legacy && <PageBlock><div style={{ paddingBottom: 16 }}><Note>{`Update Kybern on ${here.name} to sign in from the app.`}</Note></div></PageBlock>}
+    {listed.length > 0 && <OfferRows offers={listed} view={view} />}
+    {groups.map((group) => <AgentSection key={group.kind} group={group} view={view} onPending={setPending} chipActions={chipActions}>{dialogFor(group.kind)}</AgentSection>)}
+    {!(view.loaded && providersLoaded) && groups.length === 0 && <PageBlock><div testId="accounts-loading" role="status" paintTransform={SKELETON_DELAY} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>{[0, 1].map((i) => <Skeleton key={i} height={72} radius={12} />)}</div></PageBlock>}
+    {(away.length > 0 || outdated.length > 0 || missing.length > 0) && <PageBlock><div testId="accounts-notes" style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingBottom: 30 }}>
+      {away.length > 0 && <Note>{`${list(away)} ${away.length === 1 ? 'is' : 'are'} offline. Accounts there show when ${away.length === 1 ? 'it’s' : 'they’re'} back.`}</Note>}
+      {outdated.length > 0 && <Note>{`Update Kybern on ${list(outdated)} to manage accounts there.`}</Note>}
+      {missing.length > 0 && <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline' }}><Note>{`${list(missing.map((p) => p.display_name))} ${missing.length === 1 ? 'isn’t' : 'aren’t'} installed. Set them up in `}</Note><TextLink testId="accounts-agent-providers" onClick={() => openSettingsTab('agents')}>Agent providers</TextLink><Note>.</Note></div>}
+    </div></PageBlock>}
+    {view.sharing && <Section title="Shared sign-ins"><Row title={`${view.sharing.machine} shares its sign-ins`}>
+      <Button testId="accounts-stop-sharing-open" size="sm" onClick={() => setPending({ kind: 'stop-sharing' })}>Stop sharing…</Button>
+      {pending?.kind === 'stop-sharing' && <ConfirmDialog testId="accounts-stop-sharing" title={`Stop sharing ${view.sharing.machine}’s sign-ins?`} body="Machines that use them ask you to sign in when their current sign-in ends." confirm="Stop sharing" onConfirm={() => shareSignIns(null, view.sharing!.machine)} onClose={close} />}
+    </Row></Section>}
   </>
+}
+
+function AccountDialog({ pending, view, onClose }: { pending: Exclude<Pending, { kind: 'stop-sharing' }>; view: UnifiedView; onClose: () => void }) {
+  switch (pending.kind) {
+    case 'remove': return <MachinesDialog mode="remove" account={pending.account} view={view} onClose={onClose} />
+    case 'signout': return <MachinesDialog mode="signout" account={pending.account} only={pending.machine} view={view} onClose={onClose} />
+    case 'terminal': return <TerminalSignOutDialog account={pending.account} machineId={pending.machineId} machine={pending.machine} onClose={onClose} />
+    case 'projects': return <ProjectsDialog account={pending.account} view={view} onClose={onClose} />
+  }
+}
+
+/** The agents in the order the agent list has them, then any only another machine has. */
+function orderGroups(view: UnifiedView, order: ProviderKind[]): HarnessGroup[] {
+  const rank = (kind: ProviderKind) => { const i = order.indexOf(kind); return i < 0 ? order.length : i }
+  // omp, OpenCode and pi have no account: they are listed only for profiles set up before Kybern stopped offering them.
+  return view.groups.filter((group) => group.accounts.length > 0 || group.signedOutTerminals.some((entry) => entry.online)).sort((a, b) => rank(a.kind) - rank(b.kind))
 }
 
 function Note({ children }: { children: string }) {
@@ -113,52 +126,90 @@ function TextLink({ children, onClick, testId }: { children: string; onClick: ()
   return <div testId={testId} role="button" tabIndex={0} onClick={onClick} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') onClick() }} style={{ display: 'flex', cursor: 'pointer' }}><Label color={t.textSecondary} size={12} lineHeight={19.2} style={{ textDecoration: 'underline' }}>{children}</Label></div>
 }
 
-function listAgents(missing: ProviderStatus[]): string {
-  const names = missing.map((p) => p.display_name)
-  return typeof Intl !== 'undefined' && 'ListFormat' in Intl ? new Intl.ListFormat('en', { style: 'long', type: 'conjunction' }).format(names) : names.join(', ')
-}
-
-function AgentSection({ provider, accounts, readOnly, onRemove, onAssign }: { provider: ProviderStatus; accounts: AccountSummary[]; readOnly: boolean; onRemove: (account: AccountSummary) => void; onAssign: (account: AccountSummary) => void }) {
+function AgentSection({ group, view, onPending, chipActions, children }: { group: HarnessGroup; view: UnifiedView; onPending: (next: Pending) => void; chipActions: ChipActions; children?: ReactNode }) {
   const t = useTheme()
   const g = useGlass()
-  return <PageBlock><div testId={`accounts-${provider.kind}`} style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 30 }}>
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 2 }}><ProviderMark kind={provider.kind} size={14} /><Label color={t.text} size={14} lineHeight={19.6} weight={600}>{provider.display_name}</Label></div>
-    {!readOnly && withoutSignIn(provider.kind) && <div style={{ display: 'flex' }}><Note>{`${provider.display_name} uses the providers set up in it. Each profile below keeps its own setup and sessions in its own folder.`}</Note></div>}
-    {!readOnly && !withoutSignIn(provider.kind) && accounts.length > 1 && <div style={{ display: 'flex' }}><Note>Accounts share skills and installed plugin files. Sign-ins, sessions and connections stay separate. Conflicting local files are kept in backups.</Note></div>}
-    <div style={{ display: 'flex', flexDirection: 'column', ...settingsCardStyle(t, g), overflow: 'hidden' }}><GlassEdge radius={12} color={g.highlight} />
-      {accounts.map((account, index) => <AccountRow key={account.provider.instance} first={index === 0} account={account} readOnly={readOnly} onRemove={onRemove} onAssign={onAssign} />)}
-      {!readOnly && provider.kind !== 'antigravity' && !withoutSignIn(provider.kind) && <div style={{ display: 'flex', alignItems: 'center', minHeight: 44, paddingLeft: 12, paddingRight: 12, borderTopWidth: accounts.length ? 1 : 0, borderColor: t.v('--app-settings-card-border') }}><Button testId={`account-add-${provider.kind}`} variant="ghost" icon={N.plus} label={`Add ${provider.display_name} account`} onClick={() => openAddAccount({ provider: provider.kind })}>{`Add ${provider.display_name} account`}</Button></div>}
-    </div>
+  const providers = useNav((s) => s.providers)
+  const name = providers.find((p) => p.kind === group.kind)?.display_name ?? PROVIDER_NAMES[group.kind] ?? group.kind
+  return <PageBlock><div testId={`accounts-${group.kind}`} style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 30 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 2 }}><ProviderMark kind={group.kind} size={14} /><Label color={t.text} size={14} lineHeight={19.6} weight={600}>{name}</Label></div>
+    {group.accounts.length > 0 && <div style={{ display: 'flex', flexDirection: 'column', ...settingsCardStyle(t, g), overflow: 'hidden' }}><GlassEdge radius={12} color={g.highlight} />
+      {group.accounts.map((account, index) => <AccountRow key={account.id} first={index === 0} account={account} view={view} onPending={onPending} chipActions={chipActions} />)}
+    </div>}
+    <SignedOutTerminals group={group} view={view} />
+    {children}
   </div></PageBlock>
+}
+
+/** The shells' own logins that are signed out and name no account: one line under the agent, with the sign-in. */
+function SignedOutTerminals({ group, view }: { group: HarnessGroup; view: UnifiedView }) {
+  const t = useTheme()
+  const [open, setOpen] = useState(false)
+  useSettingsModal(open)
+  const entries = group.signedOutTerminals.filter((entry) => entry.online)
+  if (!entries.length) return null
+  const able = entries.filter((entry) => canSignInTerminal(group.kind, view.machines.find((m) => m.machineId === entry.machineId)?.features ?? []))
+  const several = view.machines.length > 1
+  const where = entries.map((entry) => entry.machine).join(', ')
+  const command = TERMINAL_COMMANDS[group.kind]?.signIn
+  const link = <Label color={t.text} size={12} lineHeight={19.2} weight={500} style={{ textDecoration: 'underline' }}>Sign in</Label>
+  const id = `accounts-terminal-signin-${group.kind}`
+  return <div testId={`accounts-terminal-out-${group.kind}`} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', columnGap: 4, paddingLeft: 2 }}>
+    <Label color={t.textSecondary} size={12} lineHeight={19.2}>{`Terminal login signed out${several ? ` on ${where}` : ''} ·`}</Label>
+    {able.length > 0
+      ? <div testId={id} role="button" aria-label={`Sign in the terminal${several ? ` on ${able.map((entry) => entry.machine).join(', ')}` : ''}`} tabIndex={0} onClick={() => signInTerminals(group.kind, able)} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') signInTerminals(group.kind, able) }} style={{ display: 'flex', cursor: 'pointer' }}>{link}</div>
+      // A daemon too old to sign it in from here: the command to run there.
+      : command && <Menu testId={`${id}-how`} align="start" minWidth={220} onOpenChange={setOpen} trigger={() => <div testId={id} role="button" aria-label="How to sign in the terminal" tabIndex={0} style={{ display: 'flex', cursor: 'pointer' }}>{link}</div>}>
+        <MenuLabel>{`Run in a terminal${several ? ` on ${where}` : ''}`}</MenuLabel>
+        <MenuItem id="copy" testId={`${id}-copy`} label={`Copy ${command}`} onSelect={() => { void copyText(command); toast.success(`Copied ${command}`) }} />
+      </Menu>}
+  </div>
 }
 
 // ── Row ──────────────────────────────────────────────────────────────────────
 
-function AccountRow({ account, first, readOnly, onRemove, onAssign }: { account: AccountSummary; first: boolean; readOnly: boolean; onRemove: (account: AccountSummary) => void; onAssign: (account: AccountSummary) => void }) {
+/** The login this computer uses for the account: its named one, else its terminal one. */
+const loginHere = (account: UnifiedAccount, view: UnifiedView) => {
+  const here = account.presences.filter((p) => p.machineId === view.primaryId)
+  return here.find((p) => !p.terminal) ?? here[0]
+}
+
+function AccountRow({ account, first, view, onPending, chipActions }: { account: UnifiedAccount; first: boolean; view: UnifiedView; onPending: (next: Pending) => void; chipActions: ChipActions }) {
   const t = useTheme()
-  const { kind, instance } = account.provider
-  const cli = isCliInstance(instance)
-  const flash = useAccountFlash(kind, instance)
+  const here = loginHere(account, view)
+  const flash = useAccountFlash(account.kind, here?.instance ?? '')
   const [renaming, setRenaming] = useState(false)
-  const email = account.identity?.email
-  const plan = account.identity?.plan
-  const projectCount = account.projects.length
-  const through = account.broker ? (account.broker.state === 'borrowing' ? `Signs in through ${account.broker.machine_name}` : account.broker.message ?? `Signs in through ${account.broker.machine_name}`) : null
-  const ownCompaction = useSettings().settings?.providers[kind]?.idle_compaction?.[instance]
-  const detail = [through ?? email ?? (withoutSignIn(kind) ? null : 'Email unavailable'), through ? null : plan, projectCount > 0 ? (projectCount === 1 ? '1 project' : `${projectCount} projects`) : null, cli ? 'Same as your terminal' : null, ownCompaction ? idleCompactionDetail(ownCompaction) : null].filter(Boolean).join(' · ')
-  return <div testId={`account-row-${kind}-${instance}`} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 12, minHeight: 56, paddingLeft: 18, paddingRight: 18, paddingTop: 12, paddingBottom: 12, borderTopWidth: first ? 0 : 1, borderColor: t.v('--app-settings-card-border') }}>
+  const settings = useSettings().settings
+  const compaction = here ? settings?.providers[account.kind]?.idle_compaction?.[here.instance] : undefined
+  const projects = here ? here.projects.length : 0
+  const detail = [
+    account.email && account.email !== account.name ? account.email : null,
+    account.plan,
+    account.manualOnly ? 'Only when I choose' : null,
+    projects > 0 ? (projects === 1 ? '1 project' : `${projects} projects`) : null,
+    compaction ? idleCompactionDetail(compaction) : null,
+  ].filter(Boolean).join(' · ')
+  const chips = chipsFor(account, view.machines)
+  const instance = here && !here.terminal ? here.instance : 'default'
+  return <div testId={`account-row-${account.id}`} style={{ position: 'relative', display: 'flex', alignItems: 'flex-start', gap: 12, paddingLeft: 18, paddingRight: 12, paddingTop: 14, paddingBottom: 14, borderTopWidth: first ? 0 : 1, borderColor: t.v('--app-settings-card-border') }}>
     {flash && <FlashOverlay />}
-    <AccountAvatar kind={kind} color={account.color} instance={instance} size={32} />
-    <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, minWidth: 0 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-        {renaming ? <RenameField account={account} onDone={() => setRenaming(false)} /> : <Label color={t.text} size={14} lineHeight={21} weight={500} truncate>{account.name}</Label>}
-        {account.is_default && !renaming && <div style={{ display: 'flex', alignItems: 'center', height: 16, paddingLeft: 3, paddingRight: 3, borderRadius: 4, backgroundColor: t.buttonSecondary, flexShrink: 0 }}><Label color={t.textSecondary} size={11} lineHeight={14} weight={500}>Default</Label></div>}
+    <AccountAvatar kind={account.kind} color={account.color} instance={account.color ? 'named' : instance} size={32} />
+    <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, minWidth: 0, gap: 8 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 32, justifyContent: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+          {renaming ? <RenameField account={account} view={view} onDone={() => setRenaming(false)} /> : <Label color={t.text} size={14} lineHeight={21} weight={500} truncate>{account.name}</Label>}
+          {account.isDefault && !renaming && <div testId={`account-default-${account.id}`} style={{ display: 'flex', alignItems: 'center', height: 16, paddingLeft: 4, paddingRight: 4, borderRadius: 4, backgroundColor: t.buttonSecondary, flexShrink: 0 }}><Label color={t.textSecondary} size={11} lineHeight={14} weight={500}>Default</Label></div>}
+        </div>
+        {detail && <Label color={t.textSecondary} size={13} lineHeight={19.5} truncate>{detail}</Label>}
       </div>
-      <Label color={t.textSecondary} size={14} lineHeight={21.7} truncate>{detail}</Label>
+      {chips.length > 0 && <div testId={`account-chips-${account.id}`} style={{ display: 'flex', flexWrap: 'wrap', gap: 6, minWidth: 0 }}>
+        {chips.map((chip) => <MachineChip key={chip.machineId} chip={chip} account={account} view={view} actions={chipActions} />)}
+      </div>}
     </div>
-    <UsageCell account={account} />
-    <StatusCell account={account} cli={cli} />
-    {!readOnly && <AccountMenu account={account} onRename={() => setRenaming(true)} onRemove={onRemove} onAssign={onAssign} />}
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4, height: 32, flexShrink: 0 }}>
+      <UsageCell account={account} view={view} />
+      {!view.legacy && <AccountMenu account={account} view={view} onRename={() => setRenaming(true)} onPending={onPending} />}
+    </div>
   </div>
 }
 
@@ -169,22 +220,20 @@ function FlashOverlay() {
   return <motion.div initial={{ opacity: 1 }} animate={{ opacity: 0 }} transition={{ duration: 0.6, ease: [...EASE.smoothOut] as [number, number, number, number] }} style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, backgroundColor: t.v('--color-background-accent'), pointerEvents: 'none' }} />
 }
 
-function RenameField({ account, onDone }: { account: AccountSummary; onDone: () => void }) {
+function RenameField({ account, view, onDone }: { account: UnifiedAccount; view: UnifiedView; onDone: () => void }) {
   const t = useTheme()
   const [draft, setDraft] = useState(account.name)
   const [error, setError] = useState(false)
   const canceled = useRef(false)
   const saving = useRef(false)
   const save = async () => {
-    const client = getClient()
-    if (canceled.current || saving.current || !client) return
+    if (canceled.current || saving.current) return
     const name = draft.trim()
     if (name === account.name) return onDone()
     if (!isNameValid(name)) { setError(true); return }
     saving.current = true
     try {
-      await client.call('providers.accounts.update', { kind: account.provider.kind, instance: account.provider.instance, name })
-      await refreshAccounts()
+      await setProfile(view, account, { name })
       toast.success(`Renamed to ${name}`)
       onDone()
     } catch (problem) {
@@ -203,118 +252,47 @@ function RenameField({ account, onDone }: { account: AccountSummary; onDone: () 
   </div>
 }
 
-function UsageCell({ account }: { account: AccountSummary }) {
+function UsageCell({ account, view }: { account: UnifiedAccount; view: UnifiedView }) {
   const t = useTheme()
-  const { kind, instance } = account.provider
-  const entries = useAccountLimitEntries()
-  const global = useNav((s) => s.limits)
-  // The default account's limits are the global entry, labelled only once the agent has named accounts.
-  const entry = limitsForAccount(account, entries, global)
-  const binding = entry ? bindingLimit(entry.limits, Date.now()) : null
-  if (!binding) return null
-  const left = Math.max(0, Math.min(100, Math.round(100 - binding.used)))
+  const now = Date.now()
+  const left = leftOf(account, now)
+  if (left === null) return null
+  const binding = bindingLimit(account.limit!.entry.limits, now)!
   const window = windowLabel(binding.limit).toLowerCase()
   const family = limitFamily(binding.limit)
-  return <Tip label={`${left}% of the ${window} limit left${family ? ` for ${family}` : ''} · Open usage`} side="top" size={64}>
-    <Button testId={`account-usage-${kind}-${instance}`} variant="ghost" size="sm" label={`${left}% left`} onClick={() => { setUsageAnchor(kind, instance); goPage('usage') }}>
+  const from = account.limit!.machineId === view.primaryId ? '' : ` · read on ${view.machines.find((m) => m.machineId === account.limit!.machineId)?.name}`
+  const here = loginHere(account, view)
+  return <Tip label={`${Math.round(left)}% of the ${window} limit left${family ? ` for ${family}` : ''}${from}`} side="top" size={64}>
+    <Button testId={`account-usage-${account.id}`} variant="ghost" size="sm" label={`${Math.round(left)}% left`} onClick={() => { if (here) setUsageAnchor(account.kind, here.instance); goPage('usage') }}>
       <AccountUsageRing left={left} />
-      <Label color={t.textSecondary} size={12} lineHeight={16} weight={500}>{`${left}%`}</Label>
+      <Label color={t.textSecondary} size={12} lineHeight={16} weight={500}>{`${Math.round(left)}% left`}</Label>
     </Button>
   </Tip>
 }
 
-function StatusCell({ account, cli }: { account: AccountSummary; cli: boolean }) {
-  const t = useTheme()
-  const { kind, instance } = account.provider
-  const legacy = useAccountsLegacy()
-  const wrap = (children: ReactNode) => <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, minWidth: 104, flexShrink: 0 }}>{children}</div>
-  const muted = (text: string) => <Label color={t.textSecondary} size={13} lineHeight={19.5}>{text}</Label>
-  if (withoutSignIn(kind)) return wrap(null)
-  const signIn = kind === 'antigravity' ? <Button testId="account-signin-antigravity" onClick={() => requestAntigravitySignIn(() => openAddAccount({ provider: kind }))}>Sign in</Button> : cli ? <HowToSignIn kind={kind} /> : <Button testId={`account-signin-${kind}-${instance}`} onClick={() => openAddAccount({ provider: kind, instance })}>Sign in</Button>
-  switch (account.status) {
-    case 'signed_in': return wrap(muted('Signed in'))
-    case 'needs_sign_in': return wrap(<><div style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Icon source={S.triangleAlert} size={12} color={t.warning} /><Label color={t.warning} size={13} lineHeight={19.5}>Needs sign-in</Label></div>{signIn}</>)
-    case 'signed_out': return wrap(<>{muted('Signed out')}{signIn}</>)
-    default:
-      if (legacy) return wrap(cli ? null : signIn)
-      if (account.identity) return wrap(muted('Signed in'))
-      return IDENTITY_KINDS.includes(kind) ? wrap(<div role="status" aria-label="Checking the sign-in" style={{ width: 56, height: 10, borderRadius: 4, backgroundColor: t.buttonSecondary }} />) : wrap(null)
-  }
-}
-
-function HowToSignIn({ kind }: { kind: ProviderKind }) {
-  const t = useTheme()
-  const command = CLI_SIGN_IN_COMMAND[kind]
-  const [done, setDone] = useState(false)
-  useEffect(() => { if (!done) return; const timer = setTimeout(() => setDone(false), 1400); return () => clearTimeout(timer) }, [done])
-  // Escape closes the menu only, never the Settings page behind it (the desktop skips Escape from a `role="menu"`).
-  const [open, setOpen] = useState(false)
-  useSettingsModal(open)
-  const description = useMemo(() => howToTheme(t), [t])
-  const copy = () => { void copyText(command); setDone(true) }
-  // `PopoverPopup` (`w-72`, 18px radius, 16px padding): title, a description with the command as inline code, then
-  // the command on its own row with `CopyButton` (24px, icon only).
-  return <Menu testId={`account-how-${kind}`} align="end" width={288} fit="switch" panel={{ borderRadius: 18, padding: 16 }} onOpenChange={setOpen} trigger={() => <Button>How to sign in</Button>}>
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <Label color={t.text} size={14} lineHeight={21} weight={500}>How to sign in</Label>
-      <markdown style={{ userSelect: 'text' }} source={`Run \`${command}\` in your terminal. Kybern picks it up automatically.`} theme={description} />
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, height: 34, paddingLeft: 10, paddingRight: 4, borderWidth: 1, borderColor: t.border, borderRadius: 10 }}>
-        <Label color={t.text} size={13} lineHeight={19.5} font={FONT_MONO} truncate>{command}</Label>
-        <IconButton testId="account-copy-command" size="sm" icon={done ? N.check : S.copy} label={done ? 'Copied' : 'Copy command'} color={done ? t.v('--success') : undefined} onClick={copy} />
-      </div>
-    </div>
-  </Menu>
-}
-
-/** `PopoverDescription`: 14/20 muted text; its `<code>` is foreground on `button-secondary`, 4px radius, 2×4px padding, 0.92em. */
-function howToTheme(t: ReturnType<typeof useTheme>) {
-  const base = markdownTheme(t, 'muted')
-  return { ...base, text: t.textSecondary, codeText: t.text, codeWash: t.buttonSecondary, markdown: { ...base.markdown, inlineCodePaddingX: 4, inlineCodePaddingY: 2, inlineCodeSizeRatio: 0.92 }, metrics: { ...base.metrics, mdTextSize: 14, mdLineHeight: 20, mdInlineCodeRadius: 4 } }
-}
-
 // ── Menu ─────────────────────────────────────────────────────────────────────
 
-function AccountMenu({ account, onRename, onRemove, onAssign }: { account: AccountSummary; onRename: () => void; onRemove: (account: AccountSummary) => void; onAssign: (account: AccountSummary) => void }) {
-  const t = useTheme()
-  const { kind, instance } = account.provider
-  const cli = isCliInstance(instance)
-  const id = `${kind}-${instance}`
-  const signOut = async () => {
-    const client = getClient()
-    if (!client) return
-    try {
-      await client.call('providers.accounts.sign_out', account.provider)
-      await refreshAccounts()
-      toast.success(`${account.name} signed out`)
-    } catch (error) {
-      toastProblem(error, { action: `sign ${account.name} out` })
-    }
-  }
-  const setColor = async (color: string) => {
-    const client = getClient()
-    if (!client) return
-    try {
-      await client.call('providers.accounts.update', { kind, instance, color })
-      await refreshAccounts()
-    } catch (error) {
-      toastProblem(error, { action: 'change the color' })
-    }
-  }
+function AccountMenu({ account, view, onRename, onPending }: { account: UnifiedAccount; view: UnifiedView; onRename: () => void; onPending: (next: Pending) => void }) {
   const [open, setOpen] = useState(false)
   useSettingsModal(open)
-  return <Menu testId={`account-actions-${id}`} align="end" minWidth={192} onOpenChange={setOpen} trigger={() => <IconButton icon={N.ellipsis} label="Account actions" active={open} />}>
-    {!cli && <MenuItem id="rename" testId={`account-actions-${id}-rename`} label="Rename…" onSelect={onRename} />}
-    {!cli && !withoutSignIn(kind) && <MenuItem id="signin" testId={`account-actions-${id}-signin`} label="Sign in again" onSelect={() => openAddAccount({ provider: kind, instance })} />}
-    {!cli && !withoutSignIn(kind) && account.can_sign_out && account.status === 'signed_in' && <MenuItem id="sign_out" testId={`account-actions-${id}-sign_out`} label="Sign out" onSelect={() => void signOut()} />}
-    {!cli && <MenuSeparator />}
-    {!account.is_default && <MenuItem id="default" testId={`account-actions-${id}-default`} label="Make default" onSelect={() => void makeDefaultAccount(account)} />}
-    <MenuItem id="projects" testId={`account-actions-${id}-projects`} label="Use for projects…" onSelect={() => onAssign(account)} />
-    <AccountIdleCompaction kind={kind} instance={instance} testId={`account-actions-${id}-idle-compaction`} />
-    {!cli && <MenuSub id="color" testId={`account-actions-${id}-color`} label="Color">
-      {ACCOUNT_COLORS.map((color) => <MenuItem key={color} id={`color-${color}`} testId={`account-actions-${id}-color-${color}`} label={ACCOUNT_COLOR_LABELS[color]} checked={isAccountColor(account.color) && account.color === color} iconNode={<AccountDot color={color} size={8} />} onSelect={() => void setColor(color)} />)}
+  const id = account.id
+  const here = loginHere(account, view)
+  const named = account.presences.filter((p) => !p.terminal)
+  const signedIn = named.some((p) => p.online && p.state === 'signed_in' && p.canSignOut)
+  const styled = !account.terminalOnly && canStyle(view, account)
+  const color = (value: string) => void setProfile(view, account, { color: value }).catch((error) => toastProblem(error, { action: 'change the color' }))
+  return <Menu testId={`account-actions-${id}`} align="end" minWidth={208} onOpenChange={setOpen} trigger={() => <IconButton icon={N.ellipsis} label={`${account.name} actions`} active={open} />}>
+    {!account.isDefault && <MenuItem id="default" testId={`account-actions-${id}-default`} label="Make default" onSelect={() => void makeDefault(view, account)} />}
+    {styled && <MenuItem id="rename" testId={`account-actions-${id}-rename`} label="Rename…" onSelect={onRename} />}
+    {styled && <MenuSub id="color" testId={`account-actions-${id}-color`} label="Color">
+      {ACCOUNT_COLORS.map((value) => <MenuItem key={value} id={`color-${value}`} testId={`account-actions-${id}-color-${value}`} label={ACCOUNT_COLOR_LABELS[value]} checked={isAccountColor(account.color) && account.color === value} iconNode={<AccountDot color={value} size={8} />} onSelect={() => color(value)} />)}
     </MenuSub>}
-    {!cli && <MenuSeparator />}
-    {!cli && <MenuItem id="remove" testId={`account-actions-${id}-remove`} label="Remove…" destructive onSelect={() => onRemove(account)} />}
+    {account.key && <MenuCheckboxItem id="manual" testId={`account-actions-${id}-manual`} label="Only when I choose" checked={account.manualOnly} onCheckedChange={(manual_only) => void setProfile(view, account, { manual_only }).catch((error) => toastProblem(error, { action: 'save that choice' }))} />}
+    {here && <MenuItem id="projects" testId={`account-actions-${id}-projects`} label="Use for projects…" onSelect={() => onPending({ kind: 'projects', account })} />}
+    {here && <AccountIdleCompaction kind={account.kind} instance={here.instance} testId={`account-actions-${id}-idle-compaction`} />}
+    {(signedIn || named.length > 0) && <MenuSeparator />}
+    {signedIn && <MenuItem id="sign_out" testId={`account-actions-${id}-sign_out`} label="Sign out…" onSelect={() => onPending({ kind: 'signout', account })} />}
+    {named.length > 0 && <MenuItem id="remove" testId={`account-actions-${id}-remove`} label="Remove…" destructive onSelect={() => onPending({ kind: 'remove', account })} />}
   </Menu>
 }
 
@@ -326,55 +304,77 @@ function DialogShell({ children, onClose, testId, width = 448 }: { children: Rea
 function DialogFooter({ children }: { children: ReactNode }) {
   return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, paddingLeft: 16, paddingRight: 16, paddingTop: 12, paddingBottom: 12 }}>{children}</div>
 }
-
-function RemoveDialog({ account, onClose }: { account: AccountSummary; onClose: () => void }) {
+function DialogText({ title, body }: { title: string; body?: string }) {
   const t = useTheme()
-  const providers = useNav((s) => s.providers)
+  return <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 16, paddingRight: 16, paddingTop: 16, paddingBottom: 8 }}>
+    <Label color={t.text} size={18} lineHeight={22.5} weight={600}>{title}</Label>
+    {body && <Label color={t.textSecondary} size={14} lineHeight={19.25}>{body}</Label>}
+  </div>
+}
+
+function ConfirmDialog({ testId, title, body, confirm, onConfirm, onClose }: { testId: string; title: string; body: string; confirm: string; onConfirm: () => Promise<unknown>; onClose: () => void }) {
   const [busy, setBusy] = useState(false)
-  const agent = agentLabel(account.provider.kind, providers)
-  const remove = async () => {
-    const client = getClient()
-    if (!client) return
-    setBusy(true)
-    try {
-      await client.call('providers.accounts.remove', account.provider)
-      await refreshAccounts()
-      toast.success(`${account.name} removed`)
-      onClose()
-    } catch (error) {
-      // The daemon says when a turn is still running ("Work is running in 2 threads. Stop them, then remove it.").
-      toastProblem(error, { action: `remove ${account.name}` })
-    } finally {
-      setBusy(false)
-    }
-  }
-  return <DialogShell testId="account-remove" onClose={() => { if (!busy) onClose() }}>
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 16, paddingRight: 16, paddingTop: 16, paddingBottom: 8 }}>
-      <Label color={t.text} size={18} lineHeight={22.5} weight={600}>{`Remove ${account.name}?`}</Label>
-      <Label color={t.textSecondary} size={14} lineHeight={19.25}>{account.managed ? `Kybern signs ${account.name} out and deletes its folder. Threads that used ${account.name} switch to ${agent}’s default account on their next message.` : `Kybern stops using ${account.name}. The folder and its sign-in stay at ${account.directory ?? 'its folder'}.`}</Label>
-    </div>
-    <DialogFooter><Button testId="account-remove-cancel" size="lg" onClick={onClose}>Cancel</Button><Button testId="account-remove-confirm" size="lg" variant="destructive" disabled={busy} onClick={() => void remove()}>Remove account</Button></DialogFooter>
+  const run = async () => { setBusy(true); try { await onConfirm(); onClose() } finally { setBusy(false) } }
+  return <DialogShell testId={testId} onClose={() => { if (!busy) onClose() }}>
+    <DialogText title={title} body={body} />
+    <DialogFooter><Button testId={`${testId}-cancel`} size="lg" onClick={onClose}>Cancel</Button><Button testId={`${testId}-confirm`} size="lg" variant="destructive" busy={busy} disabled={busy} onClick={() => void run()}>{confirm}</Button></DialogFooter>
   </DialogShell>
 }
 
-function ProjectsDialog({ account, accounts, projects, projectAccounts, onClose }: { account: AccountSummary; accounts: AccountSummary[]; projects: { id: string; name: string; path: string }[]; projectAccounts: Record<string, string> | undefined; onClose: () => void }) {
+function TerminalSignOutDialog({ account, machineId, machine, onClose }: { account: UnifiedAccount; machineId: string; machine: string; onClose: () => void }) {
+  const agent = PROVIDER_NAMES[account.kind] ?? account.kind
+  return <ConfirmDialog testId="account-terminal-signout" title={`Sign out the terminal login on ${machine}?`} body={`${agent} in ${machine}’s own terminal signs out too.`} confirm="Sign out" onConfirm={() => signOutTerminalOn(account.kind, machineId, machine)} onClose={onClose} />
+}
+
+/** Remove or sign out: which machines, all ticked. A terminal login is signed out from its own chip, never here. */
+function MachinesDialog({ mode, account, only, view, onClose }: { mode: 'remove' | 'signout'; account: UnifiedAccount; only?: string; view: UnifiedView; onClose: () => void }) {
+  const eligible = standings({ presences: account.presences.filter((p) => !p.terminal && (mode === 'remove' || (p.state === 'signed_in' && p.canSignOut))) })
+  const rows = eligible.map((standing) => ({ machine: { machineId: standing.machineId, name: standing.machine }, blocker: standing.online ? null : 'Offline' }))
+  const [unticked, setUnticked] = useState<ReadonlySet<string>>(() => new Set(only ? rows.filter((r) => r.machine.machineId !== only).map((r) => r.machine.machineId) : []))
+  const [busy, setBusy] = useState(false)
+  const targets = rows.filter((row) => !row.blocker && !unticked.has(row.machine.machineId)).map((row) => row.machine.machineId)
+  const managed = account.presences.some((p) => !p.terminal && p.managed && targets.includes(p.machineId))
+  const terminals = account.presences.filter((p) => p.terminal && p.state === 'signed_in').map((p) => p.machine)
+  const where = view.machines.length > 1 && rows.length === 1 ? ` on ${rows[0]!.machine.name}` : ''
+  const body = mode === 'signout' ? undefined
+    : [managed ? 'Kybern signs it out and deletes its folder.' : 'Kybern stops using it. Its folder and sign-in stay.', terminals.length ? `The terminal login on ${list(terminals)} stays signed in.` : null].filter(Boolean).join(' ')
+  const run = async () => {
+    setBusy(true)
+    const done = mode === 'remove' ? await removeFrom(account, targets) : await signOutOn(account, targets)
+    setBusy(false)
+    if (done) onClose()
+  }
+  return <DialogShell testId={`account-${mode}`} onClose={() => { if (!busy) onClose() }}>
+    <DialogText title={mode === 'remove' ? `Remove ${account.name}${where}?` : `Sign out ${account.name}${where}?`} body={body} />
+    {rows.length > 1 && <div style={{ display: 'flex', flexDirection: 'column', paddingLeft: 16, paddingRight: 16, paddingTop: 4, paddingBottom: 4 }}><MachineChecks rows={rows} unticked={unticked} onToggle={(id) => setUnticked((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next })} /></div>}
+    <DialogFooter><Button testId={`account-${mode}-cancel`} size="lg" onClick={onClose}>Cancel</Button><Button testId={`account-${mode}-confirm`} size="lg" variant="destructive" busy={busy} disabled={busy || !targets.length} onClick={() => void run()}>{mode === 'remove' ? 'Remove account' : 'Sign out'}</Button></DialogFooter>
+  </DialogShell>
+}
+
+function ProjectsDialog({ account, view, onClose }: { account: UnifiedAccount; view: UnifiedView; onClose: () => void }) {
   const t = useTheme()
-  const { kind, instance } = account.provider
-  const stored = projectAccounts ?? {}
-  const [checked, setChecked] = useState(() => new Set(projects.filter((p) => stored[p.path] === instance).map((p) => p.path)))
+  const projects = useApp((s) => s.projects)
+  const { settings } = useSettings()
+  const kind = account.kind
+  // Project choices belong to the machine this window is at, where the projects are.
+  const instance = loginHere(account, view)!.instance
+  const local = useMemo(() => projects.filter((p) => !(p as { machineId?: string }).machineId), [projects])
+  const stored = settings?.providers[kind]?.project_accounts ?? {}
+  const [checked, setChecked] = useState(() => new Set(local.filter((p) => stored[p.path] === instance).map((p) => p.path)))
   const [saving, setSaving] = useState(false)
   const otherName = (path: string) => {
     const other = stored[path]
     if (!other || other === instance) return null
-    return accounts.find((a) => a.provider.kind === kind && a.provider.instance === other)?.name ?? null
+    return view.groups.find((g) => g.kind === kind)?.accounts.find((a) => a.presences.some((p) => p.machineId === view.primaryId && p.instance === other))?.name ?? null
   }
-  const sorted = useMemo(() => [...projects].sort((a, b) => a.name.localeCompare(b.name)), [projects])
+  const sorted = useMemo(() => [...local].sort((a, b) => a.name.localeCompare(b.name)), [local])
   const save = async () => {
+    if (!getClient()) return
     setSaving(true)
     try {
       await updateProviderSettings(kind, (current) => {
         const next = { ...current.project_accounts }
-        for (const project of projects) {
+        for (const project of local) {
           if (checked.has(project.path)) next[project.path] = instance
           else if (next[project.path] === instance) delete next[project.path]
         }
@@ -389,10 +389,7 @@ function ProjectsDialog({ account, accounts, projects, projectAccounts, onClose 
   }
   const toggle = (path: string) => setChecked((prev) => { const next = new Set(prev); if (next.has(path)) next.delete(path); else next.add(path); return next })
   return <DialogShell testId="account-projects" onClose={onClose}>
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 16, paddingRight: 48, paddingTop: 16, paddingBottom: 4 }}>
-      <Label color={t.text} size={18} lineHeight={22.5} weight={600}>{`Use ${account.name} for projects`}</Label>
-      <Label color={t.textSecondary} size={14} lineHeight={19.25}>{`These projects use ${account.name} instead of the default. Their worktrees do too.`}</Label>
-    </div>
+    <DialogText title={`Use ${account.name} for projects`} body={`These projects use ${account.name} instead of the default. Their worktrees do too.`} />
     <CloseX onClose={onClose} />
     <div testId="account-projects-list" aria-label="Projects" style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 288, overflowY: 'scroll', paddingLeft: 16, paddingRight: 16, paddingTop: 4, paddingBottom: 12 }}>
       {sorted.map((project) => {
@@ -408,4 +405,3 @@ function ProjectsDialog({ account, accounts, projects, projectAccounts, onClose 
     <DialogFooter><Button testId="account-projects-cancel" size="lg" variant="ghost" onClick={onClose}>Cancel</Button><Button testId="account-projects-save" size="lg" variant="primary" disabled={saving} onClick={() => void save()}>Save</Button></DialogFooter>
   </DialogShell>
 }
-

@@ -120,8 +120,12 @@ fn main() {
     method::<AccountsLoginInput>(&mut methods);
     method::<AccountsLoginCancel>(&mut methods);
     method::<AccountsLoginFinish>(&mut methods);
+    method::<AccountsLoginHandoff>(&mut methods);
+    method::<PeerAccountsLoginPeek>(&mut methods);
+    method::<PeerAccountsLoginCallback>(&mut methods);
     method::<AccountsUpdate>(&mut methods);
     method::<AccountsSignOut>(&mut methods);
+    method::<AccountsOffers>(&mut methods);
     method::<AccountsRemove>(&mut methods);
     method::<ThreadsTargetGet>(&mut methods);
     method::<ThreadsTargetSet>(&mut methods);
@@ -300,6 +304,7 @@ fn main() {
     method::<EventsRange>(&mut methods);
     method::<NetworkCachedLists>(&mut methods);
     method::<PeerPreferencesSync>(&mut methods);
+    method::<PeerAccountsSync>(&mut methods);
     method::<PeerGroupsSync>(&mut methods);
     method::<PeerGroupBundle>(&mut methods);
     method::<PeerListSnapshot>(&mut methods);
@@ -338,6 +343,7 @@ fn main() {
     method::<OutboxCancel>(&mut methods);
     method::<OutboxEnqueue>(&mut methods);
     method::<PeerDelegate>(&mut methods);
+    method::<PeerAccountsList>(&mut methods);
     method::<PeerDelegationGet>(&mut methods);
     method::<PeerDelegationCancel>(&mut methods);
     method::<PeerGitBundle>(&mut methods);

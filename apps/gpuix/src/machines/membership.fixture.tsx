@@ -1,4 +1,4 @@
-// ADE-100: real native sidebar/broker/provision consumers and authenticated loopback fixture sockets.
+// ADE-100: real native sidebar/provision consumers and authenticated loopback fixture sockets.
 // Run membership.check.ts; all files and credentials stay in the runner's scratch directory.
 import '../native/local-build.ts'
 import { generateKeyPairSync, sign } from 'node:crypto'
@@ -11,7 +11,6 @@ import { Label, ThemeProvider, useTheme } from '../ui.tsx'
 import { Button } from '../kit/Button.tsx'
 import { onWindowKeyDown } from '../nav/keys.ts'
 import { MachineFilter } from '../sidebar/MachineFilter.tsx'
-import { LoginBrokerSection } from '../settings/LoginBroker.tsx'
 import { provisionContextOf } from '../provision/targets.ts'
 import { machineHub, useMachines } from './index.ts'
 import { setNetworkEnabled, useNetwork } from './network.ts'
@@ -25,13 +24,12 @@ const ids = ['mac', 'kdi', 'instabox', 'satya', 'later']
 const names = ['MacBook Pro', 'os-kdi', 'instabox', 'SatyaMas', 'Later machine']
 const keys = ids.map(() => generateKeyPairSync('ed25519'))
 const cards = ids.map((machine_id, i): MachineCard => ({ machine_id, name: names[i]!, os: i === 3 ? 'windows' : 'linux',
-  is_self: i === 0, status: 'online', features: ['network.v1', 'login.broker.v1'],
+  is_self: i === 0, status: 'online', features: ['network.v1'],
   signing_key: keys[i]!.publicKey.export({ type: 'spki', format: 'der' }).subarray(-32).toString('base64'),
 } as MachineCard))
 let enabled = false
 let joined = false
 let removed = false
-let brokerChanges = 0
 const members = () => cards.filter((card) => (card.machine_id !== 'later' || joined) && (card.machine_id !== 'satya' || !removed))
 const network = (id: string): NetworkStatus => ({ enabled, removed: false, self_machine: cards.find((c) => c.machine_id === id)!, members: members(), found: [], broker: null, outbox: { queued: 0, failed: 0 }, tailscale: { installed: true, running: true } } as NetworkStatus)
 const project = { id: 'fixture-project', name: 'Kybern fixture', path: '/fixture/project', is_git: true, repo: { root_commit: 'fixture-root' }, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z' }
@@ -52,7 +50,7 @@ const server = Bun.serve<{ id: string }>({ port: 0, hostname: '127.0.0.1', fetch
     const request = JSON.parse(String(raw)), id = ws.data.id
     let result: unknown = {}
     switch (request.method) {
-      case 'daemon.info': result = { protocol_version: PROTOCOL_VERSION, environment_id: id, machine_id: id, hostname: names[ids.indexOf(id)], version: '0.20.0', features: ['network.v1', 'login.broker.v1'] }; break
+      case 'daemon.info': result = { protocol_version: PROTOCOL_VERSION, environment_id: id, machine_id: id, hostname: names[ids.indexOf(id)], version: '0.20.0', features: ['network.v1'] }; break
       case 'projects.list': result = { projects: id === 'mac' ? [project] : [] }; break
       case 'threads.list': result = { threads: [] }; break
       case 'tasks.list': result = { tasks: [] }; break
@@ -62,8 +60,6 @@ const server = Bun.serve<{ id: string }>({ port: 0, hostname: '127.0.0.1', fetch
       case 'network.routes': result = { routes: [route(request.params.machine_id)] }; break
       case 'network.client_grant': result = { token: 'fixture', scopes: [], routes: [route(request.params.machine_id)], signing_key: cards.find((c) => c.machine_id === request.params.machine_id)?.signing_key }; break
       case 'outbox.list': result = { items: [] }; break
-      case 'login.broker.status': result = { broker: null, is_broker: false, providers: [], loans: [] }; break
-      case 'login.broker.set': brokerChanges++; break
     }
     ws.send(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }))
     if (request.method === 'network.set_enabled') notify()
@@ -90,10 +86,8 @@ function Fixture() {
       <Button testId="fixture-remove" onClick={() => { removed = true; notify() }}>Remove SatyaMas</Button>
     </div>
     <div style={{ width: 304 }}><MachineFilter /></div>
-    <LoginBrokerSection />
     <div testId="fixture-members"><Label color={t.text}>{`Members: ${machines.filter((m) => m.member).map((m) => m.name).join(', ')}`}</Label></div>
     <div testId="fixture-targets"><Label color={t.text}>{`Provision: ${context?.targets.map((m) => m.machineName).join(', ') ?? ''}`}</Label></div>
-    <div testId="fixture-broker-changes"><Label color={t.text}>{`Broker changes: ${brokerChanges}`}</Label></div>
   </div>
 }
 render(<ThemeProvider><Fixture /></ThemeProvider>, { title: 'Membership refresh', width: Number(process.env.MEMBERSHIP_WIDTH ?? 1000), height: 700, focus: false, onKeyDown: onWindowKeyDown })

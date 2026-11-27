@@ -541,9 +541,18 @@ pub struct AccountSummary {
     pub managed: bool,
     #[serde(default)]
     pub can_sign_out: bool,
-    /// Set when this account signs in through the login broker (design §9.4).
+    /// Set when this account signs in through the login broker (design §9.4). A lender that cannot
+    /// be reached shows as `state: broker_offline` with the lender's `machine_name`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub broker: Option<AccountBroker>,
+    /// The account across machines, `<kind>:<email>` lowercase (`Settings.accounts_shared`). `None`
+    /// while the email is unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// The harness's own login on this machine (instance `default`: `~/.claude`, `~/.codex`, …), which
+    /// the user's terminal uses too.
+    #[serde(default)]
+    pub terminal: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -593,6 +602,11 @@ pub struct AccountLoginStartParams {
     /// omp only: upstream provider id passed to `omp login <provider>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream: Option<String>,
+    /// Antigravity only: a new named account with a profile of its own, in any mode. Without it, a new
+    /// Antigravity sign-in in Terminal mode is this computer's own login, as older clients mean it.
+    /// Daemons that list `antigravity.accounts.v1` in `daemon.info` take it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub named: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -627,6 +641,65 @@ pub struct AccountLogin {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     pub expires_at: chrono::DateTime<chrono::Utc>,
+    /// Set while the harness (Claude Code or Codex, browser mode) waits for its loopback redirect, so the
+    /// machine with the browser can catch it for this one (`providers.accounts.login.handoff`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<LoginHandoff>,
+}
+
+/// The loopback address a harness's sign-in redirects to on its own machine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct LoginHandoff {
+    pub port: u16,
+    /// The redirect's path (`/callback`, `/auth/callback`).
+    pub path: String,
+}
+
+/// `providers.accounts.login.handoff`, sent to the daemon on the computer with the browser: catch the
+/// sign-in redirect of `login_id`, which runs on `machine_id`, and hand it to that machine.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AccountLoginHandoffParams {
+    pub machine_id: crate::MachineId,
+    pub login_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AccountLoginHandoffResult {
+    /// The https sign-in page to open in this computer's browser.
+    pub url: String,
+    /// The redirect is caught until then.
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// `peer.accounts.login.peek`: what the machine with the browser needs to catch a sign-in's redirect.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerLoginPeekParams {
+    pub login_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerLoginPeek {
+    pub url: String,
+    pub handoff: LoginHandoff,
+    /// The OAuth `state` of the page, checked before a redirect is forwarded.
+    pub state: String,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// `peer.accounts.login.callback`: the redirect the browser made, path and query only.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerLoginCallbackParams {
+    pub login_id: String,
+    pub path_and_query: String,
+}
+
+/// What the harness answered the replayed redirect with.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerLoginCallbackResult {
+    pub status: u16,
+    /// An https page the harness sends the browser on to (its "signed in" page).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -653,6 +726,21 @@ method!(AccountsLoginGet, "providers.accounts.login.get", Some(Scope::Orchestrat
 method!(AccountsLoginInput, "providers.accounts.login.input", Some(Scope::AccessWrite), AccountLoginInputParams, AccountLogin);
 method!(AccountsLoginCancel, "providers.accounts.login.cancel", Some(Scope::AccessWrite), AccountLoginIdParams, AccountLogin);
 method!(AccountsLoginFinish, "providers.accounts.login.finish", Some(Scope::AccessWrite), AccountLoginFinishParams, ProviderInstance);
+method!(
+    AccountsLoginHandoff,
+    "providers.accounts.login.handoff",
+    Some(Scope::AccessWrite),
+    AccountLoginHandoffParams,
+    AccountLoginHandoffResult
+);
+method!(PeerAccountsLoginPeek, "peer.accounts.login.peek", Some(Scope::MachineLogins), PeerLoginPeekParams, PeerLoginPeek);
+method!(
+    PeerAccountsLoginCallback,
+    "peer.accounts.login.callback",
+    Some(Scope::MachineLogins),
+    PeerLoginCallbackParams,
+    PeerLoginCallbackResult
+);
 /// Sent to every client that may read orchestration state whenever a sign-in changes phase. Params are an `AccountLogin`.
 pub const ACCOUNTS_LOGIN_CHANGED_NOTIFICATION: &str = "providers.accounts.login.changed";
 
@@ -666,7 +754,83 @@ pub struct AccountsUpdateParams {
     pub color: Option<String>,
 }
 method!(AccountsUpdate, "providers.accounts.update", Some(Scope::OrchestrationOperate), AccountsUpdateParams, AccountSummary);
-method!(AccountsSignOut, "providers.accounts.sign_out", Some(Scope::AccessWrite), ProviderInstance, AccountSummary);
+/// `providers.accounts.sign_out`. The terminal login (instance `default`) is signed out only with
+/// `confirm_terminal`, after the user confirmed it on that machine.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AccountsSignOutParams {
+    pub kind: ProviderKind,
+    pub instance: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub confirm_terminal: bool,
+}
+impl From<ProviderInstance> for AccountsSignOutParams {
+    fn from(instance: ProviderInstance) -> Self {
+        Self { kind: instance.kind, instance: instance.instance, confirm_terminal: false }
+    }
+}
+method!(AccountsSignOut, "providers.accounts.sign_out", Some(Scope::AccessWrite), AccountsSignOutParams, AccountSummary);
+
+// ---- accounts across machines: offers ----
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountOfferKind {
+    /// A reliably online machine has accounts others lack, for harnesses that can be lent: let the other
+    /// machines use its sign-ins.
+    AlwaysOn,
+    /// A machine lacks accounts the others have: "Use your accounts on <machine>?"
+    NewMachine,
+    /// A terminal login is signed out: sign it in.
+    TerminalLogin,
+    /// The first run with shared accounts changed a machine's default ("fedora's default was Personal,
+    /// now Work everywhere").
+    MigrationClash,
+}
+
+/// A default that changed when a machine's accounts were merged into the shared ones.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AccountClash {
+    pub kind: ProviderKind,
+    pub machine_id: crate::MachineId,
+    /// The key that machine used before.
+    pub was: String,
+    /// The key every machine uses now.
+    pub now: String,
+}
+
+/// One card the app may show. Dismissing it writes `accounts_shared.offers[id] = { state, fingerprint }`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AccountOffer {
+    /// Stable for the situation: `always_on:<machine>`, `new_machine:<machine>`,
+    /// `terminal_login:<machine>:<kind>`, `clash:<kind>:<machine>`.
+    pub id: String,
+    pub kind: AccountOfferKind,
+    /// Changes when the situation changes (another account, another machine); a "later" dismissal with
+    /// an older fingerprint no longer hides the offer.
+    pub fingerprint: String,
+    /// The machine the offer is about.
+    pub machine_id: crate::MachineId,
+    pub machine_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<ProviderKind>,
+    /// Account keys involved: the accounts to lend (always on) or the ones missing (new machine).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keys: Vec<String>,
+    /// Always on: the machines that would borrow. New machine: the machines that have the missing accounts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub machines: Vec<crate::MachineId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clash: Option<AccountClash>,
+    /// Set when the user dismissed this offer in its current situation. Dismissed offers are still listed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dismissed: Option<crate::OfferDismissalState>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AccountsOffersResult {
+    pub offers: Vec<AccountOffer>,
+}
+method!(AccountsOffers, "accounts.offers", Some(Scope::OrchestrationRead), Empty, AccountsOffersResult);
 method!(AccountsRemove, "providers.accounts.remove", Some(Scope::AccessWrite), ProviderInstance, Empty);
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -700,6 +864,23 @@ pub struct ThreadTargetState {
     /// The latest settled turn was interrupted by a confirmed account limit.
     #[serde(default)]
     pub quota_limited: bool,
+    /// The resolved account is not usable on this machine: it is not set up here, signed out,
+    /// or borrowed from a machine that does not answer. Sends fail until the person picks
+    /// another account (`suggested_account`, one tap) or signs this one in.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub account_unavailable: bool,
+    /// While `quota_limited` or `account_unavailable`: the account (an instance of the thread's
+    /// harness on this machine) with the most limit left in the window that ran out. Skips
+    /// accounts that are not usable here, marked "Only when I choose", or at 90% or more of their
+    /// weekly limit. Only ever offered; Kybern does not switch by itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_account: Option<String>,
+    /// The thread waits for its own account's limit to reset and continues on it at this time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_until: Option<chrono::DateTime<chrono::Utc>>,
+    /// The account the wait continues on: always the thread's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_account: Option<ProviderInstance>,
 }
 method!(ThreadsTargetGet, "threads.target.get", Some(Scope::OrchestrationRead), ThreadsInterruptParams, ThreadTargetState);
 method!(ThreadsTargetSet, "threads.target.set", Some(Scope::OrchestrationOperate), ThreadTargetParams, ThreadTargetState);
@@ -707,7 +888,9 @@ method!(ThreadsPermissionsApply, "threads.permissions.apply", Some(Scope::Orches
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsSwitchContinueParams {
     pub thread_id: ThreadId,
-    pub provider: ProviderInstance,
+    /// Omit to continue on `ThreadTargetState::suggested_account`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<ProviderInstance>,
     /// Idempotent continuation request. Retrying cannot send a second prompt.
     pub message_id: MessageId,
 }
@@ -5036,6 +5219,9 @@ pub struct TaskItemsChangedNotification {
 
 method!(NetworkCachedLists, "network.cached_lists", Some(Scope::NetworkRead), NetworkCachedListsParams, NetworkCachedListsResult);
 method!(PeerPreferencesSync, "peer.preferences.sync", Some(Scope::MachineSettings), PeerSpacesSyncParams, PeerSpacesSyncResult);
+// The shared account registers (`Settings.accounts_shared` and what each machine holds), exchanged like
+// `peer.preferences.sync`: signed field registers, last writer wins.
+method!(PeerAccountsSync, "peer.accounts.sync", Some(Scope::MachineSettings), PeerSpacesSyncParams, PeerSpacesSyncResult);
 // Group project member lists (signed registers, `groups.sync.v1`): a repository added to or removed from a group
 // on one machine reaches that group on every machine.
 method!(PeerGroupsSync, "peer.groups.sync", Some(Scope::MachineSettings), PeerSpacesSyncParams, PeerSpacesSyncResult);
@@ -5123,6 +5309,26 @@ method!(PeerDelegationGet, "peer.delegation.get", Some(Scope::MachineDelegate), 
 method!(PeerDelegationCancel, "peer.delegation.cancel", Some(Scope::MachineDelegate), PeerDelegationCancelParams, PeerDelegationView);
 method!(PeerGitBundle, "peer.git.bundle", Some(Scope::MachineDelegate), PeerGitBundleParams, PeerGitBundleResult);
 method!(PeerGitImport, "peer.git.import", Some(Scope::MachineDelegate), PeerGitImportParams, PeerGitImportResult);
+/// One signed-in account of a harness on a machine, for choosing a delegated child's account.
+/// Never carries limits: a parent may only pick an account the user named, or the default.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct DelegationAccount {
+    pub provider: crate::ProviderKind,
+    /// This machine's instance id (`default` is the terminal login).
+    pub instance: String,
+    pub name: String,
+    /// `<kind>:<email>`, the same on every machine, when the email is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// The account new threads of this harness use here.
+    #[serde(default)]
+    pub is_default: bool,
+}
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PeerAccountsListResult {
+    pub accounts: Vec<DelegationAccount>,
+}
+method!(PeerAccountsList, "peer.accounts.list", Some(Scope::MachineDelegate), Empty, PeerAccountsListResult);
 // Outbox delivery of a composer's new thread and message: the same parameters as `threads.create` and
 // `threads.send`, which already take a client-chosen `thread_id` and `message_id`, so a repeat is the first.
 method!(PeerThreadCreate, "peer.thread.create", Some(Scope::MachineDelegate), ThreadsCreateParams, Thread);
@@ -5281,8 +5487,12 @@ registry!(
     AccountsLoginInput,
     AccountsLoginCancel,
     AccountsLoginFinish,
+    AccountsLoginHandoff,
+    PeerAccountsLoginPeek,
+    PeerAccountsLoginCallback,
     AccountsUpdate,
     AccountsSignOut,
+    AccountsOffers,
     AccountsRemove,
     ThreadsTargetGet,
     ThreadsTargetSet,
@@ -5461,6 +5671,7 @@ registry!(
     NetworkCachedLists,
     PeerListSnapshot,
     PeerPreferencesSync,
+    PeerAccountsSync,
     PeerGroupsSync,
     PeerGroupBundle,
     NetworkStatusMethod,
@@ -5502,6 +5713,7 @@ registry!(
     PeerDelegationCancel,
     PeerGitBundle,
     PeerGitImport,
+    PeerAccountsList,
     PeerThreadCreate,
     PeerThreadSend,
     ThreadsForkNote,

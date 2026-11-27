@@ -18,7 +18,7 @@ import {
   staleFix,
   updatedAgo,
 } from '@/lib/providerUsage'
-import type { ProviderKind, ProviderLimits } from '../../../../packages/kybern-client/src/types.ts'
+import type { ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
 import { ink, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import type { Theme } from '../theme.ts'
@@ -33,9 +33,11 @@ import { openSettingsTab } from '../settings/SettingsScreen.tsx'
 import { resolveAction } from '../problems/actions.ts'
 import { showDialog } from '../dialogs/store.ts'
 import { RailUpdateButton } from '../platform/UpdateSurface.tsx'
-import { CardAccounts, useCardEntry } from '../usage/CardAccounts.tsx'
+import { CardAccounts, useCardRefresh } from '../usage/CardAccounts.tsx'
 import { AccountDot } from '../usage/AccountMark.tsx'
-import { useAccountsFeed, useDefaultAccount } from '../usage/accounts.ts'
+import { useAccountsEverywhere, type UnifiedView } from '../accounts/store.ts'
+import { railEntries, type RailEntry } from '../accounts/unified.ts'
+import { signInOn } from '../accounts/actions.ts'
 import { pressTransform } from '../motion/press.ts'
 import { DURATION, EASE } from '../motion/kit.tsx'
 import { ringValue } from '../motion/success.ts'
@@ -177,28 +179,30 @@ function toneColor(t: Theme, tone: ReturnType<typeof limitTone>) {
   return tone === 'critical' ? t.v('--destructive') : tone === 'warning' ? t.warning : ink(t, 0.62)
 }
 
-/** One ring per provider, filled with what is left of its tightest limit; hovering opens its card. */
+/** One ring per agent, filled with what is left of its default account's tightest limit, read on whichever machine has it;
+ *  hovering opens its card. */
 function RailUsage() {
-  const providers = useNav((s) => s.limits)
-  useAccountsFeed()
+  const own = useNav((s) => s.limits)
+  const view = useAccountsEverywhere()
   // One shared card (`RailUsage.tsx`: 80 ms open, 100 ms close): moving to the next ring carries it over
   // without replaying it. The controller keeps one card visible app-wide and applies every leave.
   const { ctl, state } = useHover<ProviderKind>({ delay: 80, closeDelay: 100, hoverable: true })
   const now = Date.now()
-  const glance = providers.flatMap((entry) => (entry.limits.length > 0 ? [{ entry, used: bindingLimit(entry.limits, now)?.used ?? null }] : []))
+  const glance = railEntries(view.groups, own, view.primaryId)
   if (glance.length === 0) return null
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-      {glance.map(({ entry, used }) => (
+      {glance.map((rail) => (
         <UsageRing
-          key={entry.provider}
-          entry={entry}
-          used={used}
+          key={rail.kind}
+          rail={rail}
+          view={view}
+          used={bindingLimit(rail.entry.limits, now)?.used ?? null}
           now={now}
-          open={state.active === entry.provider}
+          open={state.active === rail.kind}
           instant={state.instant}
-          onEnter={() => ctl.enter(entry.provider)}
-          onLeave={() => ctl.leave(entry.provider)}
+          onEnter={() => ctl.enter(rail.kind)}
+          onLeave={() => ctl.leave(rail.kind)}
           onCardEnter={() => ctl.popupEnter()}
           onCardLeave={() => ctl.popupLeave()}
         />
@@ -208,7 +212,8 @@ function RailUsage() {
 }
 
 function UsageRing({
-  entry,
+  rail,
+  view,
   used,
   now,
   open,
@@ -218,8 +223,9 @@ function UsageRing({
   onCardLeave,
   instant,
 }: {
+  rail: RailEntry
+  view: UnifiedView
   instant: boolean
-  entry: ProviderLimits
   used: number | null
   now: number
   open: boolean
@@ -229,6 +235,7 @@ function UsageRing({
   onCardLeave: () => void
 }) {
   const t = useTheme()
+  const entry = rail.entry
   const left = used === null ? null : 100 - used
   const stale = used === null || limitsStale(entry, now)
   const svg = ringSvg(left)
@@ -238,8 +245,8 @@ function UsageRing({
   return (
     <div style={{ display: 'flex', position: 'relative' }}>
       <div
-        testId={`rail-usage-${entry.provider}`}
-        aria-label={`${used === null ? `${PROVIDER_NAMES[entry.provider] ?? entry.provider}: not read since reset` : `${PROVIDER_NAMES[entry.provider] ?? entry.provider}: ${Math.round(100 - used)}% left`}`}
+        testId={`rail-usage-${rail.kind}`}
+        aria-label={`${used === null ? `${PROVIDER_NAMES[rail.kind] ?? rail.kind}: not read since reset` : `${PROVIDER_NAMES[rail.kind] ?? rail.kind}: ${Math.round(100 - used)}% left`}`}
         onMouseEnter={onEnter}
         onMouseLeave={onLeave}
         onClick={() => goPage('usage')}
@@ -260,9 +267,9 @@ function UsageRing({
           <svg source={svg.track} style={{ position: 'absolute', left: 0, top: 0, width: 24, height: 24, color: ink(t, 0.12), pointerEvents: 'none' }} />
           {svg.arc && <svg source={svg.arc.source} {...(svg.arc.paintAnimation ? { paintAnimation: svg.arc.paintAnimation } : {})} style={{ position: 'absolute', left: 0, top: 0, width: 24, height: 24, color: toneColor(t, limitTone(used)), pointerEvents: 'none' }} />}
           <div style={{ position: 'absolute', left: 0, top: 0, width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
-            <ProviderMark kind={entry.provider} size={11} />
+            <ProviderMark kind={rail.kind} size={11} />
           </div>
-          <DefaultDot kind={entry.provider} />
+          <DefaultDot color={rail.account?.color} />
         </div>
       </div>
       {open && (
@@ -277,7 +284,7 @@ function UsageRing({
           onMouseLeave={onCardLeave}
           style={{ ...popoverStyle(t), display: 'flex', flexDirection: 'column', width: 320, padding: 16, gap: 12 }}
         >
-          <UsageCard entry={entry} />
+          <UsageCard rail={rail} view={view} />
         </PopupLayer>
       )}
     </div>
@@ -285,33 +292,39 @@ function UsageRing({
 }
 
 /** A colored default account also wears its dot beside the ring (`DefaultRing`). */
-function DefaultDot({ kind }: { kind: ProviderKind }) {
-  const color = useDefaultAccount(kind)?.color
+function DefaultDot({ color }: { color?: string }) {
   return color ? <div style={{ position: 'absolute', right: -4, top: -4, pointerEvents: 'none' }}><AccountDot color={color} /></div> : null
 }
 
 /** A clickable row of the usage card: padded and pulled back by the same amount, so the text does not move and a held row has a body to darken. */
 const cardRow = { cursor: 'pointer', borderRadius: 6, paddingLeft: 6, paddingRight: 6, paddingTop: 2, paddingBottom: 2, marginLeft: -6, marginRight: -6, marginTop: -2, marginBottom: -2 } as const
 
-/** A provider's limits (`AccountsUsageCard`, default account only). Opening re-reads them. */
-function UsageCard({ entry: global }: { entry: ProviderLimits }) {
+/** An agent's accounts and its default account's limits (`AccountsUsageCard`). Opening re-reads them. */
+function UsageCard({ rail, view }: { rail: RailEntry; view: UnifiedView }) {
   const t = useTheme()
-  const entry = useCardEntry(global.provider, global)
-  const refreshing = useNav((s) => s.limitsRefreshing.includes(entry.provider))
+  const { entry, kind, account } = rail
+  const refreshing = useNav((s) => s.limitsRefreshing.includes(kind))
   const now = Date.now()
   useEffect(() => {
     askLimits(true)
-  }, [entry.provider])
-  const name = PROVIDER_NAMES[entry.provider] ?? entry.provider
+  }, [kind])
+  useCardRefresh(kind, view)
+  const name = PROVIDER_NAMES[kind] ?? kind
   const caption = staleCaption(entry, now)
-  const signIn = refreshing ? null : resolveAction(staleFix(entry), {}, 'usage-card-sign-in')
+  // A sign-in that lapsed is fixed on the machine the limits were read from.
+  const away = rail.machineId !== view.primaryId ? view.machines.find((m) => m.machineId === rail.machineId) : undefined
+  const fix = refreshing ? undefined : staleFix(entry)
+  const signIn = fix && away && account
+    ? { testId: 'usage-card-sign-in', label: `Sign in on ${away.name}`, onClick: () => signInOn(account, { machineId: away.machineId, name: away.name }) }
+    : fix ? resolveAction(fix, {}, 'usage-card-sign-in') : null
   const ago = updatedAgo(entry.updated_at, now)
-  const freshness = refreshing ? 'Updating…' : ago ? (limitsStale(entry, now) ? `Last updated ${ago}` : `Updated ${ago}`) : ''
+  const read = ago && away ? `${ago} on ${away.name}` : ago
+  const freshness = refreshing ? 'Updating…' : read ? (limitsStale(entry, now) ? `Last updated ${read}` : `Updated ${read}`) : ''
   const small = muted(t, 1)
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <ProviderMark kind={entry.provider} size={14} />
+        <ProviderMark kind={kind} size={14} />
         <Label color={t.text} size={14} weight={500} truncate style={{ flexGrow: 1 }}>
           {name}
         </Label>
@@ -319,7 +332,7 @@ function UsageCard({ entry: global }: { entry: ProviderLimits }) {
           <Label color={small}>Usage details</Label>
         </div>
       </div>
-      <CardAccounts kind={entry.provider} global={global} />
+      <CardAccounts kind={kind} />
       {entry.limits.map((limit) => {
         const used = limitUsed(limit, now)
         const left = used === null ? null : 100 - used
@@ -378,7 +391,7 @@ function UsageCard({ entry: global }: { entry: ProviderLimits }) {
         <div testId="usage-card-accounts" onClick={() => openSettingsTab('accounts')} style={{ ...cardRow, ...pressRow(t, t.buttonSecondaryHover) }}>
           <Label color={small}>Manage accounts…</Label>
         </div>
-        <div onClick={() => showDialog({ kind: 'account', provider: entry.provider })} style={{ ...cardRow, display: 'flex', alignItems: 'center', gap: 4, ...pressRow(t, t.buttonSecondaryHover) }}>
+        <div testId="usage-card-add" onClick={() => showDialog({ kind: 'account', provider: kind })} style={{ ...cardRow, display: 'flex', alignItems: 'center', gap: 4, ...pressRow(t, t.buttonSecondaryHover) }}>
           <Icon source={N.plus} size={12} color={small} />
           <Label color={small}>Add account</Label>
         </div>

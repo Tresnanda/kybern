@@ -505,6 +505,7 @@ pub(crate) fn models_signed_out(stdout: &[u8], stderr: &[u8]) -> bool {
 async fn models_say_signed_out(binary: &Path, env: &BTreeMap<String, String>, home: &Path) -> bool {
     let mut command = crate::binary::command(binary).no_window();
     command.arg("models").current_dir(home).envs(env);
+    super::account::print_home(&mut command, env);
     crate::no_browser::quiet(&mut command, env);
     match crate::process_tree::output_within(&mut command, MODELS_CHECK_TIMEOUT, models_signed_out).await {
         Ok(output) => models_signed_out(&output.stdout, &output.stderr),
@@ -530,6 +531,7 @@ pub(crate) async fn run_agy_usage(binary: Option<&PathBuf>, env: &BTreeMap<Strin
     let Ok(binary) = crate::binary::resolve(kybern_protocol::ProviderKind::Antigravity, binary) else { return AgyUsage::Failed };
     let mut command = crate::binary::command(&binary).no_window();
     command.args(["-p", "/usage", "--output-format", "json"]).current_dir(home).envs(env);
+    super::account::print_home(&mut command, env);
     crate::no_browser::quiet(&mut command, env);
     let Ok(output) = crate::process_tree::output_within(&mut command, AGY_USAGE_TIMEOUT, agy_signed_out).await else {
         return AgyUsage::Failed;
@@ -598,7 +600,10 @@ pub async fn read_account_usage(
     env: &BTreeMap<String, String>,
 ) -> Result<(Vec<UsageLimit>, Option<String>), UsageUnread> {
     // A key from the environment has no plan limits to read.
-    let home = env.get("HOME").or_else(|| env.get("USERPROFILE")).map(PathBuf::from).unwrap_or_else(|| home.to_path_buf());
+    // A named account's login is in its own profile.
+    let home = super::account::account_home(env)
+        .or_else(|| env.get("HOME").or_else(|| env.get("USERPROFILE")).map(PathBuf::from))
+        .unwrap_or_else(|| home.to_path_buf());
     let key = AccountKey::new(&home, binary);
     if let Some(pause) = pause_of(&key)
         && pause.cause == PauseCause::Failed

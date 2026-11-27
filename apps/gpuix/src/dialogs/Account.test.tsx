@@ -1,6 +1,6 @@
-// Issue #347: the Add an account picker lists Antigravity alongside the other sign-in agents,
-// enables it when this computer is signed out (routing through the one-time Google notice into
-// the single-account sign-in), and disables it with a one-line reason when already signed in.
+// The Add an account picker lists Antigravity alongside the other sign-in agents (issue #347). Its
+// first sign-in is this computer's own login, through the one-time Google notice; once that is
+// signed in, picking it again adds a named account with a profile of its own.
 import { afterEach, describe, expect, mock, test } from 'bun:test'
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
@@ -19,7 +19,7 @@ mock.module('../antigravity/notice.ts', () => ({
   },
 }))
 
-const { ANTIGRAVITY_ONE_ACCOUNT_REASON, accountPickerOptions, isAntigravitySignedIn } = await import('./accountPicker.ts')
+const { accountPickerOptions, addsNamedAntigravityAccount, antigravityAccountsBlocked, isAntigravitySignedIn } = await import('./accountPicker.ts')
 const { Account, PickStep } = await import('./Account.tsx')
 const { ThemeProvider } = await import('../ui.tsx')
 const { setNav } = await import('../nav/store.ts')
@@ -142,48 +142,52 @@ afterEach(() => {
 
 describe('accountPickerOptions', () => {
   test('lists Antigravity alongside Claude Code, Codex and Cursor, and still hides Grok Build and non-account agents', () => {
-    const options = accountPickerOptions(ALL_PROVIDERS, [])
+    const options = accountPickerOptions(ALL_PROVIDERS)
     expect(options.map((o) => o.kind)).toEqual(['claude-code', 'codex', 'cursor', 'antigravity'])
+    expect(options.every((o) => !o.disabled && o.disabledReason === undefined)).toBe(true)
   })
 
-  test('enables Antigravity when this computer is signed out or needs sign-in', () => {
+  test('adds a named Antigravity account only once this computer’s own login is signed in', () => {
     for (const accounts of [[], [account('antigravity', 'signed_out')], [account('antigravity', 'needs_sign_in')], [account('antigravity', 'unknown')]]) {
-      const agy = accountPickerOptions(ALL_PROVIDERS, accounts).find((o) => o.kind === 'antigravity')!
-      expect(agy.disabled).toBe(false)
-      expect(agy.disabledReason).toBeUndefined()
+      expect(addsNamedAntigravityAccount(accounts)).toBe(false)
     }
-  })
-
-  test('disables Antigravity with the one-line reason when this computer is already signed in', () => {
-    const signedIn = accountPickerOptions(ALL_PROVIDERS, [account('antigravity', 'signed_in')]).find((o) => o.kind === 'antigravity')!
-    expect(signedIn.disabled).toBe(true)
-    expect(signedIn.disabledReason).toBe(ANTIGRAVITY_ONE_ACCOUNT_REASON)
-    expect(signedIn.disabledReason).toBe('Antigravity allows one account per computer.')
+    expect(addsNamedAntigravityAccount([account('antigravity', 'signed_in')])).toBe(true)
+    // A named account doesn't sign this computer in.
+    const named = account('antigravity', 'signed_in', { provider: { kind: 'antigravity', instance: 'a1' }, name: 'Work' })
+    expect(isAntigravitySignedIn([named, account('antigravity', 'signed_out')])).toBe(false)
+    // A daemon without login records can't add one.
+    expect(addsNamedAntigravityAccount([account('antigravity', 'signed_in')], true)).toBe(false)
 
     // Matches Settings › Accounts StatusCell: unknown status with a read identity counts as signed in on current daemons.
     expect(isAntigravitySignedIn([account('antigravity', 'unknown', { identity: { email: 'user@example.com' } })], false)).toBe(true)
     expect(isAntigravitySignedIn([account('antigravity', 'unknown', { identity: { email: 'user@example.com' } })], true)).toBe(false)
   })
 
-  test('keeps an uninstalled Antigravity clickable so it opens Agent providers instead of showing the signed-in reason', () => {
-    const providers = ALL_PROVIDERS.map((p) => (p.kind === 'antigravity' ? { ...p, available: false } : p))
-    const agy = accountPickerOptions(providers, [account('antigravity', 'signed_in')]).find((o) => o.kind === 'antigravity')!
-    expect(agy.available).toBe(false)
-    expect(agy.disabled).toBe(false)
-    expect(agy.disabledReason).toBeUndefined()
+  test('asks to update a daemon from before named accounts once this computer is signed in', () => {
+    const signedIn = [account('antigravity', 'signed_in')]
+    expect(antigravityAccountsBlocked(signedIn, false, true, 'fedora')).toBeUndefined()
+    expect(antigravityAccountsBlocked([account('antigravity', 'signed_out')], false, false, 'fedora')).toBeUndefined()
+    const reason = antigravityAccountsBlocked(signedIn, false, false, 'fedora')
+    expect(reason).toBe('Update Kybern on fedora to add another Antigravity account.')
+    const agy = accountPickerOptions(ALL_PROVIDERS, reason).find((o) => o.kind === 'antigravity')!
+    expect(agy.disabled).toBe(true)
+    expect(agy.disabledReason).toBe(reason)
+    // An uninstalled Antigravity stays clickable, so it opens Agent providers instead.
+    const uninstalled = ALL_PROVIDERS.map((p) => (p.kind === 'antigravity' ? { ...p, available: false } : p))
+    expect(accountPickerOptions(uninstalled, reason).find((o) => o.kind === 'antigravity')!.disabled).toBe(false)
   })
 })
 
 describe('PickStep Antigravity tile', () => {
-  test('renders Antigravity enabled when signed out, hides Advanced, and ignores clicks when signed in', () => {
+  test('renders Antigravity enabled and hides Advanced', () => {
     const h = harness()
     try {
       const picked: ProviderKind[] = []
-      const signedOutOptions = accountPickerOptions(ALL_PROVIDERS, [account('antigravity', 'signed_out')])
+      const options = accountPickerOptions(ALL_PROVIDERS)
       h.render(
         <ThemeProvider>
           <PickStep
-            providers={signedOutOptions}
+            providers={options}
             kind={undefined}
             onKind={(k) => picked.push(k)}
             folder=""
@@ -200,7 +204,6 @@ describe('PickStep Antigravity tile', () => {
       expect(h.style(tile).cursor).toBe('pointer')
       expect(h.style(tile).opacity).toBe(1)
       expect(h.listeners(tile).has('click')).toBe(true)
-      expect(h.textOf(tile)).not.toContain(ANTIGRAVITY_ONE_ACCOUNT_REASON)
       h.fire(tile, { eventType: 'click' })
       expect(picked).toEqual(['antigravity'])
 
@@ -208,7 +211,7 @@ describe('PickStep Antigravity tile', () => {
       h.render(
         <ThemeProvider>
           <PickStep
-            providers={signedOutOptions}
+            providers={options}
             kind="antigravity"
             onKind={(k) => picked.push(k)}
             folder=""
@@ -220,41 +223,12 @@ describe('PickStep Antigravity tile', () => {
         </ThemeProvider>,
       )
       expect(h.find('account-advanced')).toBeUndefined()
-
-      // When signed in, the tile is disabled, shows the one-line reason, and ignores clicks and keyboard activation.
-      picked.length = 0
-      const signedInOptions = accountPickerOptions(ALL_PROVIDERS, [account('antigravity', 'signed_in')])
-      h.render(
-        <ThemeProvider>
-          <PickStep
-            providers={signedInOptions}
-            kind={undefined}
-            onKind={(k) => picked.push(k)}
-            folder=""
-            onFolder={() => {}}
-            advancedOpen={false}
-            onAdvancedOpen={() => {}}
-            remote={false}
-          />
-        </ThemeProvider>,
-      )
-      const disabledTile = h.find('account-provider-antigravity')!
-      expect(disabledTile).toBeDefined()
-      expect(h.style(disabledTile).cursor).toBe('default')
-      expect(h.style(disabledTile).opacity).toBe(0.55)
-      expect(h.listeners(disabledTile).has('click')).toBe(false)
-      expect(h.listeners(disabledTile).has('keyDown')).toBe(false)
-      expect(h.textOf(disabledTile)).toContain(ANTIGRAVITY_ONE_ACCOUNT_REASON)
-      h.fire(disabledTile, { eventType: 'click' })
-      h.fire(disabledTile, { eventType: 'keyDown', key: 'enter' })
-      h.fire(disabledTile, { eventType: 'keyDown', key: 'space' })
-      expect(picked).toEqual([])
     } finally {
       h.close()
     }
   })
 
-  test('choosing Antigravity in Account routes through the one-time Google notice into single-account sign-in', () => {
+  test('choosing Antigravity on a signed-out computer routes through the one-time Google notice into its own login', () => {
     setNav({ providers: ALL_PROVIDERS, providersLoaded: true })
     const observed: { dialog: ReturnType<typeof useDialog> } = { dialog: null }
     function Observer() {

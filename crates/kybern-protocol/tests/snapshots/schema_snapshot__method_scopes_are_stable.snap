@@ -54,10 +54,18 @@ expression: scopes
   - "access:write"
 - - providers.accounts.login.finish
   - "access:write"
+- - providers.accounts.login.handoff
+  - "access:write"
+- - peer.accounts.login.peek
+  - "machine:logins"
+- - peer.accounts.login.callback
+  - "machine:logins"
 - - providers.accounts.update
   - "orchestration:operate"
 - - providers.accounts.sign_out
   - "access:write"
+- - accounts.offers
+  - "orchestration:read"
 - - providers.accounts.remove
   - "access:write"
 - - threads.target.get
@@ -414,6 +422,8 @@ expression: scopes
   - "machine:tools"
 - - peer.preferences.sync
   - "machine:settings"
+- - peer.accounts.sync
+  - "machine:settings"
 - - peer.groups.sync
   - "machine:settings"
 - - peer.groups.bundle
@@ -495,6 +505,8 @@ expression: scopes
 - - peer.git.bundle
   - "machine:delegate"
 - - peer.git.import
+  - "machine:delegate"
+- - peer.accounts.list
   - "machine:delegate"
 - - peer.thread.create
   - "machine:delegate"

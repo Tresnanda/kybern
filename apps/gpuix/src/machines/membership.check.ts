@@ -37,24 +37,6 @@ try {
       await Bun.sleep(300)
       await a.screenshot({ path: path.join(out, `${theme}-${width}-sidebar.png`) })
       await a.call('keystrokes', { keys: 'escape' })
-      await click('login-broker-machine')
-      await a.getByTestId('login-broker-machine-satya').waitFor()
-      await Bun.sleep(300)
-      await a.screenshot({ path: path.join(out, `${theme}-${width}-broker.png`) })
-      await a.call('keystrokes', { keys: 'escape' })
-      assert.equal(await text('login-broker-machine'), 'None')
-      assert.equal(await text('fixture-broker-changes'), 'Broker changes: 0')
-      // Merely considering a broker opens a confirmation; Escape cancels without changing credentials.
-      await a.call('keystrokes', { keys: 'enter' })
-      await a.getByTestId('login-broker-machine-satya').waitFor()
-      await click('login-broker-machine-satya')
-      await a.getByTestId('login-broker-move').waitFor()
-      await a.call('keystrokes', { keys: 'escape' })
-      await wait(async () => await a.getByTestId('login-broker-move').count() === 0, 'Escape closes confirmation')
-      assert.equal(await text('fixture-broker-changes'), 'Broker changes: 0')
-      await a.call('keystrokes', { keys: 'enter' })
-      await a.getByTestId('login-broker-machine-satya').waitFor()
-      await a.call('keystrokes', { keys: 'escape' })
       await click('fixture-join')
       await wait(async () => (await text('fixture-members')).includes('Later machine'), 'join notification updates members')
       await click('fixture-remove')
@@ -64,7 +46,7 @@ try {
       await click('fixture-enable')
       await wait(async () => (await text('fixture-members')).includes('MacBook Pro'), 'enable again promotes primary')
       await a.screenshot({ path: path.join(out, `${theme}-${width}-final.png`) })
-      console.log(`PASS ${theme} ${width}: live membership, sidebar, broker None/cancel, provision, joins/removals, disable/re-enable`)
+      console.log(`PASS ${theme} ${width}: live membership, sidebar, provision, joins/removals, disable/re-enable`)
     } catch (error) { console.error(f.diagnostics()); throw error }
     finally { await f.close(); rmSync(scratch, { recursive: true, force: true }) }
   }

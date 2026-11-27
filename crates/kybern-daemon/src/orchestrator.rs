@@ -22,6 +22,7 @@ use uuid::Uuid;
 use crate::config::Paths;
 use crate::settings::SettingsStore;
 
+mod account_switch;
 mod accounts;
 mod agent_items;
 mod antigravity_rules;
@@ -655,6 +656,8 @@ struct Inner {
     older_sweeps: older::OlderSweeps,
     /// Turns moving to a new session (a lost conversation, a rejected login, a poisoned Antigravity signature), so Stop ends them (`resend.rs`).
     resends: resend::Resends,
+    /// Probes, waits and automatic switches for threads that ran out of limit.
+    account_switch: account_switch::SwitchState,
 }
 
 struct LiveSession {
@@ -1114,6 +1117,7 @@ impl Orchestrator {
                 idle_compactions: Default::default(),
                 older_sweeps: Default::default(),
                 resends: Default::default(),
+                account_switch: Default::default(),
             }),
         }
     }
@@ -1443,6 +1447,7 @@ impl Orchestrator {
             self.update_thread(t)?;
         }
         self.delegation_recover_after_restart()?;
+        self.account_waits_recover_after_restart()?;
         self.messaging_recover_after_restart().await?;
         self.rotation_recover_after_restart().await?;
         Ok(())
@@ -2211,6 +2216,8 @@ impl Orchestrator {
     pub async fn send_client_message(&self, params: methods::ThreadsSendParams) -> Result<methods::ThreadsSendResult> {
         let retryable = params.message_id.is_some();
         let message_id = params.message_id.unwrap_or_else(Uuid::now_v7);
+        // An account that is not usable on this machine fails before anything starts, naming one to use instead.
+        self.ensure_account_available(params.thread_id)?;
         let (turn_id, message_id, admission) = self.send_with_id(params.thread_id, message_id, params.message, false, retryable).await?;
         Ok(methods::ThreadsSendResult { turn_id, message_id, queued: admission == Admission::Queued })
     }
@@ -2228,6 +2235,8 @@ impl Orchestrator {
         // when it may restore or work inside a managed worktree, or apply a permission change; otherwise another thread's
         // worktree removal or PR checkout would hold this message back for its whole git run. The thread's own admission
         // gate still orders the send against operations on this thread. Lock order stays workspace, then admission.
+        // A new message is the thread's next step: a wait for a limit reset no longer applies.
+        self.cancel_account_wait(thread_id, "Stopped waiting: a new message was sent.")?;
         let mut _workspace = None;
         let (_admission, current, selected_target, selected_mode) = loop {
             let admission = self.session_admission(thread_id).await.lock_owned().await;
@@ -3308,6 +3317,16 @@ impl Orchestrator {
     /// `cause` names who asked, for `daemon.log`.
     pub async fn stop_thread(&self, thread_id: ThreadId, cause: &str) -> Result<()> {
         tracing::info!(%thread_id, cause, "stopping the thread and its delegated agents");
+        // A thread waiting for a limit to reset has nothing running: Stop ends the wait.
+        if self.cancel_account_wait(thread_id, "Stopped waiting for the limit to reset.")?
+            && self
+                .inner
+                .store
+                .thread_get(thread_id)?
+                .is_some_and(|thread| !matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval))
+        {
+            return Ok(());
+        }
         // Interrupting a subagent thread stops that subagent, not its parent.
         if self.inner.store.thread_get(thread_id)?.is_some_and(|thread| thread.subagent.is_some()) {
             self.stop_runtime_task(thread_id, "").await?;
@@ -5811,6 +5830,7 @@ impl Orchestrator {
                     self.rotate_if_over_budget(thread_id, live.clone());
                 }
                 self.schedule_idle_compaction(thread_id);
+                self.after_settled_turn(thread_id);
             }
             DriverEvent::TurnFailed { error, problem } => {
                 let Some(turn) = turn_guard.as_mut() else { return Ok(()) };
@@ -5901,6 +5921,7 @@ impl Orchestrator {
                     self.inner.store.meta_set(&instructions_key(session_id), "1")?;
                 }
                 self.delegation_turn_finished(thread_id, turn_id, delegation::TurnOutcome::Failed(error));
+                self.after_settled_turn(thread_id);
             }
             DriverEvent::SessionMetadata { title, effort } => {
                 let mut thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?;
@@ -11443,6 +11464,7 @@ for line in sys.stdin:
     include!("orchestrator/lead_setup_tests.rs");
     include!("orchestrator/messaging_tests.rs");
     include!("orchestrator/account_tests.rs");
+    include!("orchestrator/account_switch_tests.rs");
     include!("orchestrator/worktree_tests.rs");
     include!("orchestrator/older_tests.rs");
     include!("orchestrator/subagent_messaging_tests.rs");

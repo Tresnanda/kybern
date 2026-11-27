@@ -30,6 +30,7 @@ mod integrations;
 mod lead_git;
 mod link_icon;
 mod link_metadata;
+mod login_handoff;
 mod login_service;
 mod maintenance;
 mod native_tools_mcp;
@@ -54,6 +55,8 @@ mod sync_tests;
 #[cfg(test)]
 mod test_support;
 // S3: the encrypted secret store. Its RPC, push transport and outbox hooks arrive with N3/R1.
+mod accounts_offers;
+mod accounts_shared;
 mod plugins;
 #[allow(dead_code)]
 mod secret_store;
@@ -355,6 +358,10 @@ async fn serve() -> Result<()> {
 
     // Discovery, the network listener and the sessions with other members. It opens the Tailscale
     // listener itself once the network is on and Tailscale is running (design §3.1).
+    // This machine's own default accounts, before the network worker can apply shared ones.
+    if let Err(error) = accounts_shared::snapshot_before_migration(&state) {
+        tracing::warn!(%error, "could not note this machine's accounts before sharing them");
+    }
     let network_worker = tokio::spawn(network::peers::run(state.clone()));
     // Delivery of work queued for machines that were offline, and the followers of agents that run
     // on other machines (they pick up where a restart left them).
@@ -368,6 +375,8 @@ async fn serve() -> Result<()> {
     let login_broker_worker = tokio::spawn(network::broker::run(state.clone()));
     // The universal clipboard: idle unless this machine's owner turned on "Share clipboard automatically".
     let clipboard_worker = tokio::spawn(network::clipboard::run(state.clone()));
+    // Accounts across machines: the first-run migration, then what this machine holds now and then.
+    let accounts_worker = tokio::spawn(accounts_shared::run(state.clone()));
     // "Keep this machine reachable when Kybern is closed": the login item follows membership and settings.
     let login_service_worker = tokio::spawn({
         let state = state.clone();
@@ -416,6 +425,7 @@ async fn serve() -> Result<()> {
     storage_worker.abort();
     let _ = network_worker.await;
     outbox_worker.abort();
+    accounts_worker.abort();
     repo_identity_worker.abort();
     follow_updates_worker.abort();
     login_broker_worker.abort();

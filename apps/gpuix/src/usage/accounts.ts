@@ -8,15 +8,12 @@ import {readAccounts} from '../requests/accounts.ts'
 // rail usage card, the Add account sheet) and after every change; an idle window never
 // polls, because a list asks the daemon to probe each account's identity.
 import { errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
-import { toastProblem } from '../problems/toast.ts'
 import { useEffect, useMemo, useSyncExternalStore } from 'react'
-import { accountFor, defaultAccountFor, isCliInstance, legacyAccounts } from '../shared/lib/accounts.ts'
-import { PROVIDER_NAMES } from '../shared/lib/providerUsage.ts'
+import { legacyAccounts } from '../shared/lib/accounts.ts'
 import { USAGE_LIMITS_CHANGED_NOTIFICATION, type AccountSummary, type ProviderInstance, type ProviderKind, type ProviderLimits, type ProviderSettings, type UsageLimitsParams, type UsageLimitsResult } from '../../../../packages/kybern-client/src/types.ts'
 import { useNav } from '../nav/store.ts'
-import { toast } from '../shell/toasts.tsx'
 import { getClient, useApp } from '../state.ts'
-import { setSettings, latestSettings, useSettings } from '../settings/store.ts'
+import { setSettings, useSettings } from '../settings/store.ts'
 import { refreshComposerAccounts } from '../composer/store.ts'
 
 interface State {
@@ -57,8 +54,9 @@ export function refreshAccounts({ probe = false }: { probe?: boolean } = {}): Pr
     try {
       const result = await readAccounts(client,probe)
       if (generation === at) {
-        emit({ accounts: result.accounts, legacy: false, loaded: true })
-        void refreshComposerAccounts(result.accounts)
+        const accounts = result.accounts ?? []
+        emit({ accounts, legacy: false, loaded: true })
+        void refreshComposerAccounts(accounts)
       }
       return true
     } catch (error) {
@@ -107,16 +105,6 @@ export function useAccounts(kind?: ProviderKind): AccountSummary[] {
   }, [list, legacy, providers, settings, kind])
 }
 
-export function useDefaultAccount(kind: ProviderKind | undefined): AccountSummary | undefined {
-  const accounts = useAccounts(kind)
-  return kind ? defaultAccountFor(accounts, kind) : undefined
-}
-
-export function useAccountFor(kind: ProviderKind | undefined, instance: string | null | undefined): AccountSummary | undefined {
-  const accounts = useAccounts(kind)
-  return kind ? accountFor(accounts, kind, instance) : undefined
-}
-
 let flashTimer: ReturnType<typeof setTimeout> | undefined
 /** Flash the row of a newly added account once (600 ms). */
 export function flashAccount(kind: ProviderKind, instance: string) {
@@ -128,31 +116,16 @@ export const useAccountFlash = (kind: ProviderKind, instance: string) => select(
 
 // ── Changing ─────────────────────────────────────────────────────────────────
 
-/**
- * Save a change to one agent's provider settings. Reads the settings first when no
- * surface has, and the settings store follows the daemon's answer. The error is thrown
- * for the caller to word.
+/** Save a change to one agent's provider settings. Start from the daemon's current
+ * document because accounts can change while the Settings page is closed.
  */
 export async function updateProviderSettings(kind: ProviderKind, change: (current: ProviderSettings) => ProviderSettings): Promise<void> {
   const client = getClient()
   if (!client) throw new Error('Not connected to kybernd')
-  const settings = latestSettings() ?? (await client.call('settings.get', {}))
+  const settings = await client.call('settings.get', {})
   const next = { ...settings, providers: { ...settings.providers, [kind]: change(settings.providers[kind] ?? { env: {} }) } }
   setSettings(await client.call('settings.update', { settings: next }))
   await refreshAccounts()
-}
-
-/** Make an account the default for its agent. The CLI account clears `default_account`, so "default" is never stored. */
-export async function makeDefaultAccount(account: AccountSummary): Promise<boolean> {
-  const { kind, instance } = account.provider
-  try {
-    await updateProviderSettings(kind, (current) => ({ ...current, default_account: isCliInstance(instance) ? null : instance }))
-    toast.success(`${account.name} is now the default for ${PROVIDER_NAMES[kind] ?? kind}. Running turns keep their account.`)
-    return true
-  } catch (error) {
-    toastProblem(error, { action: 'change the default account' })
-    return false
-  }
 }
 
 // ── Account limits ───────────────────────────────────────────────────────────

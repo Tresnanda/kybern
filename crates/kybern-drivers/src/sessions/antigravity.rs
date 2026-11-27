@@ -27,7 +27,11 @@ const CWD_SCAN_BYTES: u64 = 4 * 1024 * 1024;
 const TRUNCATED_NOTE: &str = "\n\n[Cut short in the original transcript.]";
 
 pub(super) fn root(context: &ProbeContext) -> Result<PathBuf> {
-    Ok(home(context)?.join(STORE))
+    // A named account keeps its conversations in its own profile.
+    match crate::antigravity::account::account_home(&context.env) {
+        Some(home) => Ok(home.join(STORE)),
+        None => Ok(home(context)?.join(STORE)),
+    }
 }
 
 pub(super) async fn list(context: &ProbeContext, cursor: Option<&str>, query: &str) -> Result<SessionsListResult> {

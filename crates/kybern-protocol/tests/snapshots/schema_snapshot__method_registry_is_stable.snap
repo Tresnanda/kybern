@@ -28,8 +28,12 @@ expression: names
 - providers.accounts.login.input
 - providers.accounts.login.cancel
 - providers.accounts.login.finish
+- providers.accounts.login.handoff
+- peer.accounts.login.peek
+- peer.accounts.login.callback
 - providers.accounts.update
 - providers.accounts.sign_out
+- accounts.offers
 - providers.accounts.remove
 - threads.target.get
 - threads.target.set
@@ -208,6 +212,7 @@ expression: names
 - network.cached_lists
 - peer.lists.snapshot
 - peer.preferences.sync
+- peer.accounts.sync
 - peer.groups.sync
 - peer.groups.bundle
 - network.status
@@ -249,6 +254,7 @@ expression: names
 - peer.delegation.cancel
 - peer.git.bundle
 - peer.git.import
+- peer.accounts.list
 - peer.thread.create
 - peer.thread.send
 - threads.fork_note

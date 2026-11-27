@@ -17,10 +17,6 @@ pub fn validate_color(color: &str) -> Result<()> {
     Ok(())
 }
 
-/// Antigravity signs in once per machine; there is nothing to isolate a second login in.
-pub const ANTIGRAVITY_ONE_ACCOUNT: &str =
-    "Antigravity has one account per machine. Sign in from Settings → Agents → Antigravity, or use a Gemini API key.";
-
 pub const GROK_BUILD_ONE_ACCOUNT: &str = "Grok Build has one account per machine. Sign in with `grok login` or set XAI_API_KEY.";
 
 /// The first color no other account of this agent uses, cycling once all are taken.
@@ -102,6 +98,12 @@ fn build_environment(settings: &ProviderSettings, kind: ProviderKind, instance: 
         }
         ProviderKind::Codex => {
             env.insert("CODEX_HOME".into(), account.directory.clone());
+            // Conversations live in Codex's databases as well as its session files: every account
+            // opens the terminal login's, so a thread resumes natively after a switch. The login stays
+            // in this account's `auth.json` (`provider_assets`).
+            if let Some(sqlite) = crate::provider_assets::codex_shared_sqlite_home(settings) {
+                env.entry("CODEX_SQLITE_HOME".into()).or_insert_with(|| sqlite.to_string_lossy().into_owned());
+            }
         }
         ProviderKind::Cursor => {
             env.insert("KYBERN_CURSOR_AUTH_FILE".into(), path("auth.json"));
@@ -122,8 +124,15 @@ fn build_environment(settings: &ProviderSettings, kind: ProviderKind, instance: 
             env.insert("XDG_STATE_HOME".into(), path("state"));
             env.insert("XDG_CACHE_HOME".into(), path("cache"));
         }
-        // `agy` has no supported config-root override, so a second account cannot be isolated.
-        ProviderKind::Antigravity => return Err(anyhow!(ANTIGRAVITY_ONE_ACCOUNT)),
+        // The account folder is `agy`'s home for this account: its profile is `<folder>/.gemini`
+        // (`kybern_drivers::antigravity::account`). The login stays a file there, out of the keyring.
+        ProviderKind::Antigravity => {
+            use kybern_drivers::antigravity::account;
+            env.insert(account::HOME_ENV.into(), account.directory.clone());
+            env.insert(account::FILE_STORAGE_ENV.into(), "1".into());
+            let ssh = std::env::var("SSH_CONNECTION").ok().filter(|value| !value.is_empty());
+            env.entry("SSH_CONNECTION".into()).or_insert_with(|| ssh.unwrap_or_else(|| account::SSH_MARKER.into()));
+        }
         // Grok Build uses XAI_API_KEY or grok login; one account per machine.
         ProviderKind::GrokBuild => return Err(anyhow!(GROK_BUILD_ONE_ACCOUNT)),
     }
@@ -132,7 +141,6 @@ fn build_environment(settings: &ProviderSettings, kind: ProviderKind, instance: 
 
 pub fn validate(settings: &Settings) -> Result<()> {
     for (kind, provider) in &settings.providers {
-        ensure!(*kind != ProviderKind::Antigravity || provider.accounts.is_empty(), "{ANTIGRAVITY_ONE_ACCOUNT}");
         ensure!(*kind != ProviderKind::GrokBuild || provider.accounts.is_empty(), "{GROK_BUILD_ONE_ACCOUNT}");
         for (id, account) in &provider.accounts {
             ensure!(
@@ -153,7 +161,6 @@ pub fn validate(settings: &Settings) -> Result<()> {
 }
 
 pub fn create(state: &AppState, params: AccountsCreateParams) -> Result<ProviderInstance> {
-    ensure!(params.kind != ProviderKind::Antigravity, "{ANTIGRAVITY_ONE_ACCOUNT}");
     ensure!(params.kind != ProviderKind::GrokBuild, "{GROK_BUILD_ONE_ACCOUNT}");
     ensure!(!params.name.trim().is_empty() && params.name.len() <= 120, "Enter an account name up to 120 characters.");
     let id = uuid::Uuid::now_v7().to_string();
@@ -234,10 +241,16 @@ pub fn sign_in(state: &AppState, instance: ProviderInstance) -> Result<TerminalI
             ProviderKind::Pi => &[],
             ProviderKind::Omp => &["auth-broker", "login"],
             ProviderKind::Cursor => unreachable!(),
-            ProviderKind::Antigravity => return Err(anyhow!(ANTIGRAVITY_ONE_ACCOUNT)),
+            // `agy acp --login` prints Google's page and reads the code back.
+            ProviderKind::Antigravity => &["acp", "--login"],
             ProviderKind::GrokBuild => return Err(anyhow!(GROK_BUILD_ONE_ACCOUNT)),
         };
-        std::iter::once(binary.to_string_lossy().into_owned()).chain(args.iter().map(|s| s.to_string())).collect()
+        let mut args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        if instance.kind == ProviderKind::Antigravity {
+            let profile = kybern_drivers::antigravity::account::acp_args(&context.env);
+            args.splice(1..1, profile.into_iter().map(|arg| arg.to_string_lossy().into_owned()));
+        }
+        std::iter::once(binary.to_string_lossy().into_owned()).chain(args).collect()
     };
     let terminal = state.terminals.create_with_env(
         None,
@@ -287,11 +300,29 @@ fn summarize(
     {
         identity = Some(AccountIdentity { email: account.email.clone(), plan: account.plan.clone(), organization: None });
     }
+    // A signed-out terminal login (or a Claude login read without running it, #107) still shows the email
+    // it was last seen with, so it stays on its account's row.
+    if instance == "default"
+        && identity.as_ref().is_none_or(|identity| identity.email.is_none())
+        && let Some(email) = crate::accounts_shared::terminal_email(&state.store, kind)
+    {
+        identity.get_or_insert_with(AccountIdentity::default).email = Some(email);
+    }
     let named = account.is_some();
+    let key = identity
+        .as_ref()
+        .and_then(|identity| identity.email.as_deref())
+        .filter(|_| crate::accounts_shared::has_identity(kind))
+        .map(|email| crate::accounts_shared::key(kind, email));
+    // Name and colour belong to the account, the same on every machine.
+    let profile = key.as_ref().and_then(|key| settings.accounts_shared.profiles.get(key));
     AccountSummary {
         provider: ProviderInstance { kind, instance: instance.to_string() },
-        name: account.map(|account| account.name.clone()).unwrap_or_else(|| CLI_ACCOUNT.to_string()),
-        color: account.and_then(|account| account.color.clone()),
+        name: profile
+            .map(|profile| profile.name.clone())
+            .or_else(|| account.map(|account| account.name.clone()))
+            .unwrap_or_else(|| CLI_ACCOUNT.to_string()),
+        color: profile.and_then(|profile| profile.color.clone()).or_else(|| account.and_then(|account| account.color.clone())),
         identity,
         status,
         is_default: resolve(&provider, None, None) == instance,
@@ -300,8 +331,10 @@ fn summarize(
         managed: account.is_some_and(|account| is_managed(state.settings.dir(), &account.directory)),
         can_sign_out: named
             && matches!(status, AccountStatus::SignedIn | AccountStatus::NeedsSignIn)
-            && matches!(kind, ProviderKind::ClaudeCode | ProviderKind::Codex | ProviderKind::Cursor),
+            && matches!(kind, ProviderKind::ClaudeCode | ProviderKind::Codex | ProviderKind::Cursor | ProviderKind::Antigravity),
         broker: None,
+        key,
+        terminal: instance == "default",
     }
 }
 
@@ -318,6 +351,10 @@ fn through_broker(state: &AppState, summary: &mut AccountSummary) {
         _ => AccountStatus::NeedsSignIn,
     };
     summary.can_sign_out = false;
+    // A borrowed login's folder is empty here: its key is the lender's account's.
+    if summary.key.is_none() && !view.machine_id.is_empty() {
+        summary.key = crate::network::accounts_sync::lender_key(state, &view.machine_id, summary.provider.kind, &view.broker_account);
+    }
     summary.broker = Some(view);
 }
 
@@ -342,7 +379,12 @@ pub async fn list(state: &AppState, params: AccountsListParams) -> Result<Accoun
             reads.push(async move { summary_for(state, kind, &instance, params.refresh).await });
         }
     }
-    Ok(AccountsListResult { accounts: futures::future::join_all(reads).await })
+    let accounts = futures::future::join_all(reads).await;
+    if params.kind.is_none() {
+        // What the other machines see of this one (offers, "signed in on fedora").
+        crate::network::accounts_sync::publish_holdings(state, &accounts);
+    }
+    Ok(AccountsListResult { accounts })
 }
 
 fn valid_name(name: &str) -> Result<String> {
@@ -380,6 +422,11 @@ async fn harness_sign_out(state: &AppState, instance: &ProviderInstance) -> Resu
         context.binary = None;
         return kybern_drivers::cursor::sign_out(&context).await.map_err(|error| anyhow!(kybern_drivers::cursor::reason(error)));
     }
+    if instance.kind == ProviderKind::Antigravity {
+        // ACP's `logout` on the account's own profile, as `/logout` in agy (and T3 Code) does.
+        let binary = kybern_drivers::binary::resolve(instance.kind, context.binary.as_ref()).map_err(|error| anyhow!(error.to_string()))?;
+        return kybern_drivers::antigravity::account::sign_out(&binary, &context.env).await.map_err(|sentence| anyhow!(sentence));
+    }
     let args = kybern_drivers::account_auth::sign_out_args(instance.kind, None).ok_or_else(|| {
         anyhow!("{} can't sign out from Kybern. Remove its credentials from the agent instead.", instance.kind.display_name())
     })?;
@@ -406,8 +453,39 @@ fn forget_account_caches(state: &AppState, instance: &ProviderInstance) {
     state.orchestrator.usage().forget_account(instance.kind, &instance.instance);
 }
 
-pub async fn sign_out(state: &AppState, instance: ProviderInstance) -> Result<AccountSummary> {
-    ensure!(instance.instance != "default", "Kybern can't sign out the CLI account. Sign out in your terminal instead.");
+/// Sign the terminal login out, after the user confirmed it on this machine. Kybern never does it on its own.
+async fn sign_out_terminal(state: &AppState, kind: ProviderKind) -> Result<AccountSummary> {
+    let instance = ProviderInstance::default_for(kind);
+    ensure!(
+        matches!(kind, ProviderKind::ClaudeCode | ProviderKind::Codex | ProviderKind::Cursor | ProviderKind::Antigravity),
+        "{} can't sign out from Kybern. Sign out in your terminal instead.",
+        kind.display_name()
+    );
+    let running = state.orchestrator.running_turns_on(&instance).await;
+    ensure!(
+        running == 0,
+        "The terminal login is running in {running} {}. Stop {}, then sign it out.",
+        if running == 1 { "thread" } else { "threads" },
+        if running == 1 { "it" } else { "them" }
+    );
+    harness_sign_out(state, &instance).await.map_err(|error| anyhow!("Couldn't sign the terminal login out. {error}"))?;
+    state.orchestrator.mark_account_signed_out(&instance, true)?;
+    forget_account_caches(state, &instance);
+    state.provider_catalogs.invalidate().await;
+    let mut summary = summary_for(state, kind, "default", true).await;
+    summary.status = AccountStatus::SignedOut;
+    Ok(summary)
+}
+
+pub async fn sign_out(state: &AppState, params: AccountsSignOutParams) -> Result<AccountSummary> {
+    if params.instance == "default" {
+        ensure!(
+            params.confirm_terminal,
+            "Signing out the terminal login also signs out your terminal on this machine. Confirm it, then sign out."
+        );
+        return sign_out_terminal(state, params.kind).await;
+    }
+    let instance = ProviderInstance { kind: params.kind, instance: params.instance };
     let name = state
         .settings
         .get()
@@ -460,11 +538,48 @@ pub async fn remove(state: &AppState, instance: ProviderInstance) -> Result<()> 
     state.settings.set(next)?;
     state.orchestrator.clear_account_overrides(&instance)?;
     if managed {
-        let _ = std::fs::remove_dir_all(&account.directory);
+        remove_account_folder(instance.kind, Path::new(&account.directory));
     }
     forget_account_caches(state, &instance);
     state.provider_catalogs.invalidate().await;
     Ok(())
+}
+
+/// Links a removed Codex account keeps: Codex's shared database records each conversation's
+/// file by the path it was written through (`<account>/sessions/…`), so those paths keep
+/// resolving for the other accounts after this one is gone.
+const CODEX_KEPT_LINKS: [&str; 2] = ["sessions", "archived_sessions"];
+
+/// Delete a Kybern-created account folder. Conversations are never in it (they are linked to the
+/// shared store, and removing a link leaves its target); a Codex folder keeps its conversation links.
+fn remove_account_folder(kind: ProviderKind, directory: &Path) {
+    let keep = |name: &std::ffi::OsStr, metadata: &std::fs::Metadata| {
+        kind == ProviderKind::Codex && metadata.file_type().is_symlink() && CODEX_KEPT_LINKS.iter().any(|kept| name == *kept)
+    };
+    let Ok(entries) = std::fs::read_dir(directory) else { return };
+    let mut kept = false;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else { continue };
+        if keep(&entry.file_name(), &metadata) {
+            kept = true;
+            continue;
+        }
+        let removed = if metadata.file_type().is_symlink() {
+            // A file link, a directory symlink or (Windows) a junction: only the link goes.
+            std::fs::remove_file(&path).or_else(|_| std::fs::remove_dir(&path))
+        } else if metadata.is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+        if let Err(error) = removed {
+            tracing::warn!(path = %path.display(), %error, "could not remove part of a removed account's folder");
+        }
+    }
+    if !kept {
+        let _ = std::fs::remove_dir(directory);
+    }
 }
 
 pub async fn catalog(state: &AppState, params: AccountsCatalogParams) -> Result<ProviderStatus> {
@@ -501,8 +616,8 @@ pub async fn usage(state: &AppState, instance: ProviderInstance) -> Result<Provi
         }
         ProviderKind::Codex => kybern_drivers::codex::read_account_limits(cwd, context.binary.as_ref(), &context.env).await,
         ProviderKind::Cursor => kybern_drivers::cursor::usage::read_account_usage(&context.env).await.map(|usage| usage.limits),
-        // One login per machine, under the user's home: read it as the usage monitor does, so both
-        // share one set of pauses and never start `agy` twice for the same account.
+        // Read as the usage monitor does, so both share one set of pauses and never start `agy`
+        // twice for the same account. A named account's environment names its own home.
         ProviderKind::Antigravity => {
             kybern_drivers::antigravity::read_account_usage(&crate::usage::user_home(), context.binary.as_ref(), &context.env)
                 .await
@@ -757,7 +872,7 @@ exit 2
         )
         .await;
         assert!(default.is_err());
-        assert!(sign_out(&fixture.state, claude("default")).await.is_err());
+        assert!(sign_out(&fixture.state, claude("default").into()).await.is_err());
         assert!(remove(&fixture.state, claude("default")).await.is_err());
     }
 
@@ -767,7 +882,7 @@ exit 2
         let work = fixture.root.join("data/accounts/claude/work");
         add(&fixture, "work", &work, None);
         std::fs::write(work.join(".signed-in"), "dev@arunika.co").unwrap();
-        let summary = sign_out(&fixture.state, claude("work")).await.unwrap();
+        let summary = sign_out(&fixture.state, claude("work").into()).await.unwrap();
         assert_eq!(summary.status, AccountStatus::SignedOut);
         assert!(!work.join(".signed-in").exists());
         assert!(fixture.state.orchestrator.admit_signed_out_for_test(&claude("work")));
@@ -799,6 +914,30 @@ exit 2
         assert!(outside.join("keep").exists(), "an existing folder stays");
         assert!(fixture.state.settings.get().providers[&ProviderKind::ClaudeCode].accounts.is_empty());
         assert!(remove(&fixture.state, claude("outside")).await.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn removing_an_account_folder_never_touches_shared_conversations() {
+        let root = std::env::temp_dir().join(format!("kybern-remove-test-{}", uuid::Uuid::now_v7()));
+        let shared = root.join("shared");
+        std::fs::create_dir_all(shared.join("sessions/2026")).unwrap();
+        std::fs::write(shared.join("sessions/2026/rollout.jsonl"), "conversation").unwrap();
+        std::fs::create_dir_all(shared.join("projects/-repo")).unwrap();
+        std::fs::write(shared.join("projects/-repo/session.jsonl"), "claude conversation").unwrap();
+        for (kind, name, link) in [(ProviderKind::Codex, "codex", "sessions"), (ProviderKind::ClaudeCode, "claude", "projects")] {
+            let account = root.join(name);
+            std::fs::create_dir_all(account.join("cache")).unwrap();
+            std::fs::write(account.join("auth.json"), "secret").unwrap();
+            std::os::unix::fs::symlink(shared.join(link), account.join(link)).unwrap();
+            remove_account_folder(kind, &account);
+            assert!(!account.join("auth.json").exists() && !account.join("cache").exists(), "{kind}");
+        }
+        // Codex keeps the link its database recorded paths through; Claude's folder is gone.
+        assert_eq!(std::fs::read_to_string(root.join("codex/sessions/2026/rollout.jsonl")).unwrap(), "conversation");
+        assert!(!root.join("claude").exists());
+        assert_eq!(std::fs::read_to_string(shared.join("projects/-repo/session.jsonl")).unwrap(), "claude conversation");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

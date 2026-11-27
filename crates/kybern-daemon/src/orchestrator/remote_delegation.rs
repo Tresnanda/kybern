@@ -183,6 +183,7 @@ pub(super) struct RemoteRequest {
     pub provider: Option<ProviderKind>,
     pub model: Option<String>,
     pub effort: Option<String>,
+    pub account: Option<String>,
     pub permission_mode: Option<PermissionMode>,
     pub workspace: DelegationWorkspace,
     pub owns: Vec<String>,
@@ -303,6 +304,42 @@ impl Orchestrator {
             .clone()
             .filter(|effort| !effort.trim().is_empty())
             .or_else(|| (same_kind && asked_model.is_none()).then(|| parent.effort.clone()).flatten());
+        // A named account must be signed in on the target. Checked now while it answers; a target
+        // that is offline checks when the task arrives. An older target cannot pin one at all.
+        if let Some(query) = request.account.as_deref()
+            && target.online
+        {
+            let answer =
+                tokio::time::timeout(Duration::from_secs(5), hub.call(&target.id, methods::PeerAccountsList::NAME, json!({}))).await;
+            match answer {
+                Ok(Ok(value)) => {
+                    let listed: methods::PeerAccountsListResult = serde_json::from_value(value)?;
+                    if !listed.accounts.iter().any(|account| account.provider == kind && Self::account_matches(account, query)) {
+                        let reason = format!("{} has no signed-in account \"{query}\" on {}.", kind.display_name(), target.name);
+                        let mut elsewhere = self.machines_with_account(kind, query).await;
+                        elsewhere.retain(|name| *name != target.name);
+                        if self.resolve_delegation_account(kind, query).await.is_ok() {
+                            elsewhere.insert(0, format!("{} (this machine)", hub.self_name()));
+                        }
+                        anyhow::bail!(
+                            "{reason} {}",
+                            if elsewhere.is_empty() {
+                                "Use an account the user named or omit account for the default.".to_string()
+                            } else {
+                                format!("It is signed in on {}.", elsewhere.join(", "))
+                            }
+                        );
+                    }
+                }
+                Ok(Err(CallFailure::Remote(error))) if error.code == codes::METHOD_NOT_FOUND => {
+                    anyhow::bail!(
+                        "{} runs an older Kybern that can't choose an account for a delegated agent. Omit account, or update Kybern there.",
+                        target.name
+                    )
+                }
+                _ => {}
+            }
+        }
         // The target checks the mode against its own harness (`receive_delegation`).
         let permission_mode =
             super::delegation::resolve_child_permission(parent.permission_mode, parent.provider.kind, kind, request.permission_mode)?;
@@ -357,6 +394,7 @@ impl Orchestrator {
             provider: Some(kind),
             model: model.clone(),
             effort,
+            account: request.account.clone(),
             permission_mode,
             workspace: request.workspace,
             owns: request.owns.clone(),
@@ -1257,6 +1295,9 @@ impl Orchestrator {
             PeerMoveCommit::NAME => to_value(self.accept_move_commit(from, from_value(params)?).await),
             PeerMoveGet::NAME => to_value(self.accept_move_status(from, from_value(params)?, false).await),
             PeerMoveAbort::NAME => to_value(self.accept_move_status(from, from_value(params)?, true).await),
+            methods::PeerAccountsList::NAME => {
+                to_value(Ok::<_, RpcError>(methods::PeerAccountsListResult { accounts: self.delegation_accounts().await }))
+            }
             _ => Err(RpcError::method_not_found(method)),
         }
     }
@@ -1322,7 +1363,16 @@ impl Orchestrator {
                 ),
             ));
         }
-        let provider = ProviderInstance::default_for(kind);
+        let pinned = match params.account.as_deref().map(str::trim).filter(|account| !account.is_empty()) {
+            Some(query) => Some(self.resolve_delegation_account(kind, query).await.map_err(|reason| {
+                RpcError::new(
+                    codes::PROVIDER_UNAVAILABLE,
+                    format!("{reason} Omit account to use the default account on {}.", hub.self_name()),
+                )
+            })?),
+            None => None,
+        };
+        let provider = pinned.clone().unwrap_or_else(|| ProviderInstance::default_for(kind));
         self.validate_provider_selection(project.id, &provider, params.model.as_deref(), params.effort.as_deref())
             .await
             .map_err(|error| RpcError::new(codes::PROVIDER_UNAVAILABLE, format!("{error:#}")))?;
@@ -1431,6 +1481,9 @@ impl Orchestrator {
         let event = self.emit(thread.id, None, EventPayload::ThreadCreated { thread: thread.clone() }).map_err(internal)?;
         let thread = Thread { last_seq: event.seq, ..thread };
         self.inner.store.thread_upsert(&thread).map_err(internal)?;
+        if let Some(account) = &pinned {
+            self.pin_account(thread.id, account).map_err(internal)?;
+        }
 
         let brief = remote_brief(&params, &from_name, branch.as_deref(), &task);
         let message_id = Uuid::now_v7();

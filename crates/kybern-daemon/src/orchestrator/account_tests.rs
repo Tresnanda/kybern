@@ -152,7 +152,7 @@ async fn successful_quota_report_does_not_authorize_switch_continue() {
             .orchestrator
             .switch_continue(methods::ThreadsSwitchContinueParams {
                 thread_id: thread.id,
-                provider: ProviderInstance { kind: thread.provider.kind, instance: "work".into() },
+                provider: Some(ProviderInstance { kind: thread.provider.kind, instance: "work".into() }),
                 message_id: Uuid::now_v7(),
             })
             .await
@@ -327,7 +327,7 @@ async fn quota_continuation_retry_uses_existing_admission_receipt_without_switch
             &format!("quota_continue:{message_id}"),
             &serde_json::to_string(&methods::ThreadsSwitchContinueParams {
                 thread_id: thread.id,
-                provider: ProviderInstance { kind: thread.provider.kind, instance: "missing".into() },
+                provider: Some(ProviderInstance { kind: thread.provider.kind, instance: "missing".into() }),
                 message_id,
             })
             .unwrap(),
@@ -337,7 +337,7 @@ async fn quota_continuation_retry_uses_existing_admission_receipt_without_switch
         .orchestrator
         .switch_continue(methods::ThreadsSwitchContinueParams {
             thread_id: thread.id,
-            provider: ProviderInstance { kind: thread.provider.kind, instance: "missing".into() },
+            provider: Some(ProviderInstance { kind: thread.provider.kind, instance: "missing".into() }),
             message_id,
         })
         .await
@@ -537,7 +537,7 @@ async fn stale_quota_failure_cannot_switch_a_newer_turn() {
         .unwrap();
     let request = methods::ThreadsSwitchContinueParams {
         thread_id: thread.id,
-        provider: ProviderInstance { kind: thread.provider.kind, instance: "work".into() },
+        provider: Some(ProviderInstance { kind: thread.provider.kind, instance: "work".into() }),
         message_id: Uuid::now_v7(),
     };
     assert!(fixture.orchestrator.switch_continue(request).await.is_err());
