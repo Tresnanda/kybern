@@ -13,7 +13,7 @@ import { legacyAccounts } from '../shared/lib/accounts.ts'
 import { USAGE_LIMITS_CHANGED_NOTIFICATION, type AccountSummary, type ProviderInstance, type ProviderKind, type ProviderLimits, type ProviderSettings, type UsageLimitsParams, type UsageLimitsResult } from '../../../../packages/kybern-client/src/types.ts'
 import { useNav } from '../nav/store.ts'
 import { getClient, useApp } from '../state.ts'
-import { setSettings, latestSettings, useSettings } from '../settings/store.ts'
+import { setSettings, useSettings } from '../settings/store.ts'
 import { refreshComposerAccounts } from '../composer/store.ts'
 
 interface State {
@@ -116,15 +116,13 @@ export const useAccountFlash = (kind: ProviderKind, instance: string) => select(
 
 // ── Changing ─────────────────────────────────────────────────────────────────
 
-/**
- * Save a change to one agent's provider settings. Reads the settings first when no
- * surface has, and the settings store follows the daemon's answer. The error is thrown
- * for the caller to word.
+/** Save a change to one agent's provider settings. Start from the daemon's current
+ * document because accounts can change while the Settings page is closed.
  */
 export async function updateProviderSettings(kind: ProviderKind, change: (current: ProviderSettings) => ProviderSettings): Promise<void> {
   const client = getClient()
   if (!client) throw new Error('Not connected to kybernd')
-  const settings = latestSettings() ?? (await client.call('settings.get', {}))
+  const settings = await client.call('settings.get', {})
   const next = { ...settings, providers: { ...settings.providers, [kind]: change(settings.providers[kind] ?? { env: {} }) } }
   setSettings(await client.call('settings.update', { settings: next }))
   await refreshAccounts()

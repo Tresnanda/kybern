@@ -1,13 +1,16 @@
 import { expect, mock, test } from 'bun:test'
+import type { Settings } from '../../../../packages/kybern-client/src/types.ts'
 
 // Settings writes are optimistic and queued (the scroll jump on click, #309's batch): the page shows a change at once, a
 // second change made while the first saves is not dropped, and a failure goes back to what the daemon last confirmed.
 type Doc = { generate_titles: boolean; worktrees_default: boolean; providers: Record<string, never> }
 const sent: Doc[] = []
 const answers: { resolve: (doc: Doc) => void; reject: (error: unknown) => void }[] = []
+let accountSettingsCall: ((method: string, params: unknown) => unknown) | undefined
 const client = {
   endpoint: { url: 'ws://127.0.0.1:1/ws', token: 'test' },
   call: (method: string, params: { settings: Doc }) => {
+    if (accountSettingsCall) return Promise.resolve(accountSettingsCall(method, params))
     if (method !== 'settings.update') return Promise.resolve({})
     sent.push(params.settings)
     return new Promise<Doc>((resolve, reject) => answers.push({ resolve, reject }))
@@ -52,4 +55,37 @@ test('a failed save goes back to the confirmed document and reports the failure'
   await write
   expect(doc()).toEqual({ generate_titles: true, worktrees_default: false, providers: {} })
   expect(latestError()?.action).toBe('save the settings')
+})
+
+test('a provider settings change can select an account added after Settings was last open', async () => {
+  const { updateProviderSettings } = await import('../usage/accounts.ts')
+  type AccountSettings = Pick<Settings, 'providers' | 'generate_titles'>
+  const existing = { name: 'Personal', directory: '/accounts/personal' }
+  const added = { name: 'Work', directory: '/accounts/work' }
+  const cached: AccountSettings = { providers: { 'claude-code': { env: {}, accounts: { personal: existing } } }, generate_titles: false }
+  let daemon: AccountSettings = {
+    ...cached,
+    generate_titles: true,
+    providers: { 'claude-code': { env: {}, accounts: { personal: existing, work: added } } },
+  }
+  setSettings(cached as Settings)
+  accountSettingsCall = (method, params) => {
+    if (method === 'settings.get') return daemon
+    if (method === 'providers.accounts.list') return { accounts: [] }
+    if (method !== 'settings.update') throw new Error(`Unexpected call ${method}`)
+    const next = (params as { settings: AccountSettings }).settings
+    const provider = next.providers['claude-code']
+    const account = provider?.default_account
+    if (account && !provider.accounts?.[account]) throw new Error(`Account '${account}' is unavailable. Choose another account in Settings.`)
+    daemon = next
+    return daemon
+  }
+  try {
+    await updateProviderSettings('claude-code', (provider) => ({ ...provider, default_account: 'work' }))
+    expect(daemon.providers['claude-code']).toEqual({ env: {}, accounts: { personal: existing, work: added }, default_account: 'work' })
+    expect(daemon.generate_titles).toBe(true)
+    expect(latestSettings()?.providers).toEqual(daemon.providers)
+  } finally {
+    accountSettingsCall = undefined
+  }
 })
