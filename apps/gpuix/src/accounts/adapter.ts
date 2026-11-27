@@ -5,10 +5,11 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
 import type { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
-import { ACCOUNTS_SHARED_FEATURE, LOGIN_HANDOFF_FEATURE, type AccountOffer, type AccountsShared, type LoginHandoffParams, type ProviderKind, type Settings } from '../../../../packages/kybern-client/src/types.ts'
+import { ACCOUNTS_SHARED_FEATURE, LOGIN_HANDOFF_FEATURE, type AccountOffer, type AccountsShared, type LoginBrokerStatus, type LoginHandoffParams, type MachineCard, type MachineId, type ProviderKind, type Settings } from '../../../../packages/kybern-client/src/types.ts'
 import { errorMessage } from '../../../../packages/kybern-client/src/problem.ts'
 import { configDir } from '../environments/registry.ts'
 import { setSettings } from '../settings/store.ts'
+import { lenderUsable } from './offers.ts'
 
 export const supportsShared = (features: readonly string[] | undefined | null) => !!features?.includes(ACCOUNTS_SHARED_FEATURE)
 export const featuresOf = (client: Pick<KybernClient, 'info'> | null | undefined): string[] => client?.info?.features ?? []
@@ -40,6 +41,42 @@ export const canHandoff = (kind: ProviderKind, computer: readonly string[] | nul
 
 /** Ask this computer's daemon to catch the redirect of a sign-in on another machine; returns the page to open here. */
 export const handoffSignIn = (computer: KybernClient, params: LoginHandoffParams) => computer.call('providers.accounts.login.handoff', params)
+
+// ── Sharing sign-ins ─────────────────────────────────────────────────────────
+
+/** The machine whose sign-ins the others can use. */
+export interface Sharing {
+  machineId: MachineId
+  machine: string
+  /** A machine being set up may borrow from it. Existing borrowers keep borrowing either way. */
+  usable: boolean
+  /** The daemon's own sentence for why it isn't. */
+  reason?: string
+}
+
+type LenderFields = { usable_for_new?: unknown; reason?: unknown }
+
+/** `usable_for_new` and `reason` of `login.broker.status`, on the lender or beside it. A daemon before 0.27.2 says neither. */
+export function lenderVerdict(status: LoginBrokerStatus | null | undefined): { usableForNew?: boolean; reason?: string } {
+  const whole = status as (LenderFields & { broker?: LenderFields | null }) | null | undefined
+  const said = [whole?.broker, whole].find((fields) => typeof fields?.usable_for_new === 'boolean')
+  if (!said) return {}
+  return { usableForNew: said.usable_for_new as boolean, ...(typeof said.reason === 'string' && said.reason ? { reason: said.reason } : {}) }
+}
+
+/** The sharing machine from `login.broker.status` and the members of `network.status`; null when nobody shares. */
+export function sharingFrom(status: LoginBrokerStatus | null | undefined, members: readonly Pick<MachineCard, 'machine_id' | 'name' | 'online_ratio_7d'>[]): Sharing | null {
+  const lender = status?.broker
+  if (!lender) return null
+  const member = members.find((m) => m.machine_id === lender.machine_id)
+  const verdict = lenderVerdict(status)
+  return {
+    machineId: lender.machine_id,
+    machine: lender.name ?? member?.name ?? 'your other machine',
+    usable: lenderUsable(verdict.usableForNew, member?.online_ratio_7d),
+    ...(verdict.reason ? { reason: verdict.reason } : {}),
+  }
+}
 
 // ── Shared preferences ───────────────────────────────────────────────────────
 

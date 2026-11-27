@@ -1,6 +1,7 @@
 // The machine chips of an account row: where it is signed in, which shell uses it, what it borrows, and where it can be
 // added. They answer "which account is fedora using, and does it touch my shell?" at a glance. Pure.
 import { withoutSignIn } from '../shared/lib/accounts.ts'
+import { LENDABLE_KINDS, LOGIN_SHARING_FEATURE } from './offers.ts'
 import { standings, type MachineAccounts, type MachineStanding, type UnifiedAccount } from './unified.ts'
 
 /** `terminal_out`: the account works on that machine, but its shell's own login of it is signed out. */
@@ -14,6 +15,16 @@ export interface AccountChip {
   terminal: boolean
   label: string
   standing?: MachineStanding
+  /** The other machines can use this sign-in: the machine is the one that shares. */
+  lender?: boolean
+}
+
+/** What a machine's menu offers about its sign-ins: share them, stop sharing them, or nothing (a lone, offline or older
+ *  machine, or a window whose own daemon can't choose). `machines` starts with this window's. */
+export function sharingAction(machine: Pick<MachineAccounts, 'machineId' | 'online' | 'features'>, machines: readonly Pick<MachineAccounts, 'features'>[], sharing: string | null | undefined): 'share' | 'stop' | null {
+  const able = (m: Pick<MachineAccounts, 'features'> | undefined) => !!m?.features.includes(LOGIN_SHARING_FEATURE)
+  if (machines.length < 2 || !machine.online || !able(machine) || !able(machines[0])) return null
+  return machine.machineId === sharing ? 'stop' : 'share'
 }
 
 const stateOf = (standing: MachineStanding): ChipState => {
@@ -47,7 +58,7 @@ function label(machine: string, state: ChipState, standing: MachineStanding | un
   return `${machine} · ${state === 'borrowed' ? rest.replace(/^From/, 'from') : rest}`
 }
 
-export function chipsFor(account: UnifiedAccount, machines: readonly MachineAccounts[]): AccountChip[] {
+export function chipsFor(account: UnifiedAccount, machines: readonly MachineAccounts[], sharing?: string | null): AccountChip[] {
   const several = machines.length > 1
   const there = new Map(standings(account).map((standing) => [standing.machineId, standing]))
   const addable = !!account.key && !withoutSignIn(account.kind)
@@ -61,7 +72,8 @@ export function chipsFor(account: UnifiedAccount, machines: readonly MachineAcco
     const state = stateOf(standing)
     // On a lone machine a plain sign-in needs no chip: the row itself says it.
     if (!several && state === 'signed_in' && !standing.terminal) continue
-    chips.push({ machineId: machine.machineId, machine: machine.name, state, terminal: standing.terminal, label: label(machine.name, state, standing, several), standing })
+    const lender = several && machine.machineId === sharing && standing.state === 'signed_in' && LENDABLE_KINDS.includes(account.kind)
+    chips.push({ machineId: machine.machineId, machine: machine.name, state, terminal: standing.terminal, label: label(machine.name, state, standing, several), standing, ...(lender ? { lender } : {}) })
   }
   return chips
 }

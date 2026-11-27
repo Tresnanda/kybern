@@ -14,7 +14,7 @@ import { useNav } from '../nav/store.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { getClient, useApp } from '../state.ts'
 import { askAccountLimits, mergeAccountLimits, refreshAccounts, useAccountLimitEntries, useAccounts, useAccountsFeed, useAccountsLegacy, useAccountsLoaded } from '../usage/accounts.ts'
-import { featuresOf, fetchDaemonOffers, readShared, supportsShared } from './adapter.ts'
+import { featuresOf, fetchDaemonOffers, readShared, sharingFrom, supportsShared, type Sharing } from './adapter.ts'
 import { applyAnswers, computeOffers, LOGIN_SHARING_FEATURE, type Offer } from './offers.ts'
 import { unifyAccounts, type HarnessGroup, type MachineAccounts } from './unified.ts'
 import type { LendableAccount } from '../../../../packages/kybern-client/src/types.ts'
@@ -28,7 +28,7 @@ export interface RemoteSnapshot {
   features: string[]
 }
 
-export interface Sharing { machineId: MachineId; machine: string }
+export type { Sharing }
 
 interface State {
   remote: Readonly<Record<MachineId, RemoteSnapshot>>
@@ -142,12 +142,11 @@ export function refreshOfferInputs(): Promise<void> {
       ])
       if (getClient() !== client) { extrasAgain = true; continue }
       const members = network.status === 'fulfilled' ? network.value?.members ?? [] : []
-      const broker = sharing.status === 'fulfilled' ? sharing.value?.broker : undefined
       emit({
         ...(settings.status === 'fulfilled' ? { settings: settings.value } : {}),
         daemonOffers: offers.status === 'fulfilled' ? offers.value : state.daemonOffers,
         ratios: Object.fromEntries(members.map((member) => [member.machine_id, member.online_ratio_7d])),
-        sharing: broker ? { machineId: broker.machine_id, machine: broker.name ?? members.find((m) => m.machine_id === broker.machine_id)?.name ?? 'your other machine' } : null,
+        sharing: sharing.status === 'fulfilled' ? sharingFrom(sharing.value, members) : null,
         extrasRead: true,
       })
     } while (extrasAgain)

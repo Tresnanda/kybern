@@ -122,16 +122,30 @@ export async function signOutTerminalOn(kind: ProviderKind, machineId: MachineId
   }
 }
 
-/** Borrow a shared sign-in into a local account: reuse the machine's account of that email, else make one. */
-export async function borrow(view: UnifiedView, item: SignInItem): Promise<void> {
+/** Borrow a shared sign-in into a local account: reuse the machine's account of that email, else make one. A refused
+ *  borrow takes the account it made away again, so trying again or signing in there starts clean. */
+export async function borrow(view: UnifiedView, item: SignInItem, connect = clientOf): Promise<void> {
   const lender = item.lender
   if (!lender) throw new Error('There is no sign-in to borrow')
-  const client = clientOf(item.machineId)
+  const client = connect(item.machineId)
   const machine = view.machines.find((m) => m.machineId === item.machineId)
-  const instance = (item.instance && item.instance !== 'default' ? item.instance : existingFor(machine?.accounts ?? [], item.kind, item.email)?.provider.instance)
-    ?? (await client.call('providers.accounts.create', { kind: item.kind, name: item.name ?? item.email ?? lender.account })).instance
-  await client.call('login.broker.bind', { provider: item.kind, instance, broker_account: lender.account })
+  const existing = item.instance && item.instance !== 'default' ? item.instance : existingFor(machine?.accounts ?? [], item.kind, item.email)?.provider.instance
+  const instance = existing ?? (await client.call('providers.accounts.create', { kind: item.kind, name: item.name ?? item.email ?? lender.account })).instance
+  try {
+    await client.call('login.broker.bind', { provider: item.kind, instance, broker_account: lender.account })
+  } catch (error) {
+    // The refusal is what the person needs to see, even if tidying up fails too.
+    if (!existing) await client.call('providers.accounts.remove', { kind: item.kind, instance }).catch(() => {})
+    throw error
+  }
   await reread(item.machineId)
+}
+
+/** Before a login signs in itself: one that borrows would keep borrowing afterwards, so it stops first. */
+export async function stopBorrowing(view: UnifiedView, item: Pick<SignInItem, 'machineId' | 'kind' | 'instance'>, connect = clientOf): Promise<void> {
+  const login = view.machines.find((m) => m.machineId === item.machineId)?.accounts.find((a) => a.provider.kind === item.kind && a.provider.instance === item.instance)
+  if (!login?.broker || login.broker.state === 'lending') return
+  await connect(item.machineId).call('login.broker.bind', { provider: item.kind, instance: login.provider.instance, broker_account: null })
 }
 
 /** Open the sign-in queue for these steps. */
@@ -169,7 +183,8 @@ export async function shareSignIns(machineId: MachineId | null, name: string) {
   try {
     const client = getClient()
     if (!client) throw new Error('Not connected to kybernd')
-    await client.call('login.broker.set', { machine_id: machineId })
+    // Choosing or clearing the sharing machine never signs the previous one out of its own accounts.
+    await client.call('login.broker.set', { machine_id: machineId, sign_out_old: false })
     await refreshAllAccounts()
     toast.success(machineId ? `Your machines can use ${name}’s sign-ins` : `${name} stopped sharing its sign-ins`)
     return true

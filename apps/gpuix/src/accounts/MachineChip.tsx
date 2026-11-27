@@ -1,8 +1,8 @@
 // One machine on an account row: a `StatusChip`-sized control that says where the account stands there and does the one
 // thing that state allows (sign in, or open the actions for that machine).
 import { glyph, Icon } from '../icons.tsx'
-import { Link01Icon } from '@hugeicons/core-free-icons'
-import { Menu, MenuItem, MenuLabel } from '../nav/overlay.tsx'
+import { Link01Icon, Share08Icon } from '@hugeicons/core-free-icons'
+import { Menu, MenuItem, MenuLabel, MenuSeparator } from '../nav/overlay.tsx'
 import { N } from '../nav/glyphs.ts'
 import { S } from '../settings/glyphs.ts'
 import { alpha } from '../transcript/kit.tsx'
@@ -11,14 +11,15 @@ import { RADIUS, useControls } from '../kit/controls.ts'
 import type { ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
 import { copyText } from '../transcript/store.ts'
 import { toast } from '../shell/toasts.tsx'
-import type { AccountChip } from './chips.ts'
+import { sharingAction, type AccountChip } from './chips.ts'
 import { planOnMachine } from './queue.ts'
-import { canSignInTerminal, signIn, signInInstead, signInOn, signInTerminals } from './actions.ts'
+import { canSignInTerminal, shareSignIns, signIn, signInInstead, signInOn, signInTerminals } from './actions.ts'
 import type { UnifiedView } from './store.ts'
 import { supportsShared } from './adapter.ts'
 import type { UnifiedAccount } from './unified.ts'
 
 const LINK = glyph(Link01Icon)
+const SHARE = glyph(Share08Icon)
 
 /** What a person types in that machine's terminal, for a daemon that can't do it from the app. */
 export const TERMINAL_COMMANDS: Partial<Record<ProviderKind, { signIn: string; signOut: string }>> = {
@@ -45,6 +46,11 @@ export function MachineChip({ chip, account, view, actions }: { chip: AccountChi
   const target = { machineId: chip.machineId, name: chip.machine }
   const commands = TERMINAL_COMMANDS[account.kind]
   const copy = (command: string) => { void copyText(command); toast.success(`Copied ${command}`) }
+  const share = sharingAction(machine, view.machines, view.sharing?.machineId)
+  const shareItem = (separated: boolean) => share && <>
+    {separated && <MenuSeparator />}
+    <MenuItem id="share" testId={`chip-${share}-${id}`} label={share === 'stop' ? 'Stop sharing' : 'Share this machine’s sign-ins'} onSelect={() => void shareSignIns(share === 'stop' ? null : chip.machineId, chip.machine)} />
+  </>
 
   if (chip.state === 'offline' || (chip.state === 'unknown' && !standing?.terminal)) return <Chip id={id} chip={chip} />
   if (chip.state === 'add') return <Chip id={id} chip={chip} label={`Add to ${chip.machine}`} onClick={() => signInOn(account, target)} />
@@ -53,9 +59,11 @@ export function MachineChip({ chip, account, view, actions }: { chip: AccountChi
     if (canSignInTerminal(account.kind, machine.features)) return <Chip id={id} chip={chip} label={`Sign in the terminal on ${chip.machine}`} onClick={inTerminal} />
     return <ChipMenu id={id} chip={chip}>
       {commands && <><MenuLabel>{`Sign in from a terminal on ${chip.machine}`}</MenuLabel><MenuItem id="copy" testId={`chip-copy-${id}`} label={`Copy ${commands.signIn}`} onSelect={() => copy(commands.signIn)} /></>}
+      {shareItem(!!commands)}
     </ChipMenu>
   }
   // Signed in, borrowed, or a borrowed sign-in whose machine is away.
+  const hasActions = chip.state === 'terminal_out' || !!standing?.lender || !!named || terminal?.state === 'signed_in'
   return <ChipMenu id={id} chip={chip}>
     {chip.state === 'terminal_out' && (canSignInTerminal(account.kind, machine.features)
       ? <MenuItem id="signin-terminal" testId={`chip-signin-terminal-${id}`} label="Sign in the terminal" onSelect={inTerminal} />
@@ -66,6 +74,7 @@ export function MachineChip({ chip, account, view, actions }: { chip: AccountChi
     {terminal && terminal.state === 'signed_in' && (shared
       ? <MenuItem id="signout-terminal" testId={`chip-signout-terminal-${id}`} label={named ? 'Sign out of the terminal…' : 'Sign out…'} onSelect={() => actions.signOutTerminal(account, chip.machineId, chip.machine)} />
       : commands && <><MenuLabel>{`Sign out in a terminal on ${chip.machine}`}</MenuLabel><MenuItem id="copy-out" testId={`chip-copy-out-${id}`} label={`Copy ${commands.signOut}`} onSelect={() => copy(commands.signOut)} /></>)}
+    {shareItem(hasActions)}
   </ChipMenu>
 }
 
@@ -85,13 +94,16 @@ function Chip({ id, chip, onClick, open, menu, label }: { id: string; chip: Acco
   const hover = warning ? alpha(t.warning, 0.2) : `rgba(${base}, 0.1)`
   const source = chip.state === 'add' ? N.plus : warning ? S.triangleAlert : chip.state === 'borrowed' ? LINK : chip.terminal ? S.terminal : null
   const color = warning ? t.warning : quiet ? t.textTertiary : t.textSecondary
+  const name = `${label ?? chip.label}${chip.lender ? ', shares its sign-ins' : ''}`
   return <div
     testId={`chip-${id}`}
-    {...(interactive ? { role: 'button', tabIndex: 0, 'aria-label': label ?? chip.label } : { 'aria-label': chip.label })}
+    {...(interactive ? { role: 'button', tabIndex: 0 } : {})}
+    aria-label={name}
     {...(onClick ? { onClick, onKeyDown: (e: { key?: string }) => { if (e.key === 'enter' || e.key === 'space') onClick() } } : {})}
     style={{ display: 'flex', alignItems: 'center', gap: 5, height: 24, paddingLeft: source ? 6 : 8, paddingRight: 8, borderRadius: RADIUS.sm - 2, borderWidth: 1, borderColor: chip.state === 'add' ? t.border : 'transparent', backgroundColor: open ? hover : fill, flexShrink: 0, maxWidth: '100%', ...(interactive ? { cursor: 'pointer', hover: { backgroundColor: hover }, focusVisible: { borderColor: c.accent } } : {}) }}
   >
     {source ? <Icon source={source} size={13} color={color} /> : <div style={{ width: 6, height: 6, marginRight: 1, borderRadius: 3, flexShrink: 0, backgroundColor: chip.state === 'signed_in' ? t.v('--success') : t.textTertiary }} />}
     <Label color={quiet ? t.textSecondary : t.text} size={12} lineHeight={16} weight={500} truncate>{chip.label}</Label>
+    {chip.lender && <div testId={`chip-lender-${id}`} style={{ display: 'flex', flexShrink: 0 }}><Icon source={SHARE} size={12} color={t.textSecondary} /></div>}
   </div>
 }

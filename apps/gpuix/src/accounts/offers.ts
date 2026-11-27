@@ -17,6 +17,10 @@ export const TERMINAL_SIGN_IN_KINDS: readonly ProviderKind[] = ['claude-code', '
 export const ALWAYS_ON_RATIO = 0.9
 export const LOGIN_SHARING_FEATURE = 'login.broker.v1'
 
+/** Whether a machine being set up may borrow from the sharing machine: the daemon's word, else only an always-on one. */
+export const lenderUsable = (said: boolean | undefined, onlineRatio: number | null | undefined): boolean =>
+  said ?? (onlineRatio ?? 0) >= ALWAYS_ON_RATIO
+
 const installed = (machine: MachineAccounts, kind: ProviderKind) => {
   const status = machine.providers?.find((provider) => provider.kind === kind)
   // Unknown is not installed: an offer must not ask someone to sign in to an agent a machine may not have.

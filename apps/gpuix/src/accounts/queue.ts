@@ -2,6 +2,8 @@
 // gets its own login (a copied login breaks both), or borrows a shared one where that is possible. Pure: planning and the
 // queue's state; `dialogs/Account.tsx` runs the steps.
 import { initialLoginMode } from '../shared/lib/accounts.ts'
+import { problemOf } from '../../../../packages/kybern-client/src/problem.ts'
+import type { ProblemView } from '../../../../packages/kybern-client/src/problems.ts'
 import type { AccountLogin, AccountLoginMode, AccountSummary, LendableAccount, MachineId, ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
 import { LENDABLE_KINDS } from './offers.ts'
 import { keyOf, standings, isUsable, type MachineAccounts, type UnifiedAccount } from './unified.ts'
@@ -89,9 +91,10 @@ export function planOnMachine(account: UnifiedAccount, machine: Pick<MachineAcco
   return item
 }
 
-/** The shared sign-in that can stand in for `account` on another machine, if the sharing machine has it. */
-export function lenderFor(account: Pick<UnifiedAccount, 'kind' | 'email' | 'presences'>, sharing: { machineId: MachineId; machine: string; lendable: readonly LendableAccount[] } | null, target: MachineId): SignInItem['lender'] | undefined {
-  if (!sharing || sharing.machineId === target || !LENDABLE_KINDS.includes(account.kind) || !account.email) return
+/** The shared sign-in that can stand in for `account` on another machine: only from a sharing machine that is usable for
+ *  new set-ups and has it. */
+export function lenderFor(account: Pick<UnifiedAccount, 'kind' | 'email' | 'presences'>, sharing: { machineId: MachineId; machine: string; usable: boolean; lendable: readonly LendableAccount[] } | null, target: MachineId): SignInItem['lender'] | undefined {
+  if (!sharing?.usable || sharing.machineId === target || !LENDABLE_KINDS.includes(account.kind) || !account.email) return
   const wanted = account.email.toLowerCase()
   const offered = sharing.lendable.find((a) => a.provider === account.kind && a.email?.toLowerCase() === wanted)
   return offered ? { machine: sharing.machine, account: offered.account } : undefined
@@ -115,6 +118,14 @@ export function existingFor(accounts: readonly AccountSummary[], kind: ProviderK
   if (!email) return
   const key = `${kind}:${email.toLowerCase()}`
   return accounts.find((a) => a.provider.kind === kind && a.provider.instance !== 'default' && keyOf(a) === key)
+}
+
+/** The primary action of a failed borrow's card, whatever failed: this machine signs in itself. The daemon names it
+ *  `sign_in_here` and words it; an error without it gets the same button. */
+export function signInHereAction(error: unknown, view: Pick<ProblemView, 'action' | 'secondary'>, machine: string): { id: 'sign_in_here'; label: string } {
+  const problem = problemOf(error)
+  const named = [view.action, view.secondary, problem?.action, problem?.secondary].find((action) => action?.id === 'sign_in_here')
+  return { id: 'sign_in_here', label: named?.label || `Sign in on ${machine} instead` }
 }
 
 // ── The queue ────────────────────────────────────────────────────────────────

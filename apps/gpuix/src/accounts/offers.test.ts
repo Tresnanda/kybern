@@ -101,10 +101,10 @@ describe('sign-in queue', () => {
   })
   test('sets a machine up by borrowing where possible and signing in the rest after', () => {
     const accounts = unifyAccounts([mac(), fedora()]).flatMap((g) => g.accounts)
-    const items = planSetup(accounts, { machineId: 'fedora', name: 'fedora' }, { machineId: 'mac', machine: 'MacBook', lendable: [{ provider: 'claude-code', account: 'a1', name: 'Work', email: 'W@x.com' }] })
+    const items = planSetup(accounts, { machineId: 'fedora', name: 'fedora' }, { machineId: 'mac', machine: 'MacBook', usable: true, lendable: [{ provider: 'claude-code', account: 'a1', name: 'Work', email: 'W@x.com' }] })
     expect(items.map((i) => [i.kind, i.method, i.lender?.account])).toEqual([['claude-code', 'borrow', 'a1'], ['codex', 'sign_in', undefined]])
     // The sharing machine itself signs in directly.
-    expect(planSetup(accounts, { machineId: 'mac', name: 'MacBook' }, { machineId: 'mac', machine: 'MacBook', lendable: [] }).every((i) => i.method === 'sign_in')).toBe(true)
+    expect(planSetup(accounts, { machineId: 'mac', name: 'MacBook' }, { machineId: 'mac', machine: 'MacBook', usable: true, lendable: [] }).every((i) => i.method === 'sign_in')).toBe(true)
   })
   test('Authorize only needs both daemons; otherwise a code', () => {
     const item = { kind: 'claude-code' as const }

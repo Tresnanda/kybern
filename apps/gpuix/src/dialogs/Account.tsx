@@ -28,9 +28,9 @@ import { Rise } from '../motion/kit.tsx'
 import { N } from '../nav/glyphs.ts'
 import { Dialog } from '../nav/overlay.tsx'
 import { setNav } from '../nav/store.ts'
-import { problemLine } from '../problems/describe.ts'
+import { describe, problemLine } from '../problems/describe.ts'
 import { toastProblem } from '../problems/toast.ts'
-import { plainSentence } from '../../../../packages/kybern-client/src/problems.ts'
+import { plainSentence, type ProblemView } from '../../../../packages/kybern-client/src/problems.ts'
 import { useNav } from '../nav/store.ts'
 import { Button } from '../kit/Button.tsx'
 import { Checkbox } from '../kit/Checkbox.tsx'
@@ -53,9 +53,9 @@ import { AccountAvatar } from '../usage/AccountMark.tsx'
 import { flashAccount, refreshAccounts, useAccounts, useAccountsLegacy } from '../usage/accounts.ts'
 import { useAccountLogin } from './useAccountLogin.ts'
 import { SuccessCheck } from '../motion/SuccessCheck.tsx'
-import { advance, fallbackModeFor, isOneAccount, loginModeFor, mismatch, planAdd, resolvedItem, startQueue, type ItemResult, type QueueState, type Settled, type SignInItem } from '../accounts/queue.ts'
+import { advance, fallbackModeFor, isOneAccount, loginModeFor, mismatch, planAdd, resolvedItem, signInHereAction, startQueue, type ItemResult, type QueueState, type Settled, type SignInItem } from '../accounts/queue.ts'
 import { clientOf, computerId, readMachine, refreshAllAccounts, refreshOfferInputs, useAccountsEverywhere, type UnifiedView } from '../accounts/store.ts'
-import { borrow, makeDefault } from '../accounts/actions.ts'
+import { borrow, makeDefault, stopBorrowing } from '../accounts/actions.ts'
 import { canHandoff, featuresOf, handoffSignIn } from '../accounts/adapter.ts'
 import type { MachineAccounts } from '../accounts/unified.ts'
 
@@ -264,7 +264,9 @@ function SignInStep({ item, view, multiple, onResult, dismiss, close }: { item: 
   const target = reauth ? accountFor(accounts, kind, item.instance) : undefined
   const [method, setMethod] = useState(item.method)
   const targetName = item.name ?? (reauth ? accountDisplayName(item.instance, target?.name) : agent)
-  const [borrowError, setBorrowError] = useState<string | null>(null)
+  /** A borrow that failed: the problem's words, and signing this machine in itself. */
+  const [borrowError, setBorrowError] = useState<{ view: ProblemView; action: string } | null>(null)
+  const [unbindError, setUnbindError] = useState<ProblemView | null>(null)
   const [finishError, setFinishError] = useState<string | null>(null)
   const [otherEmail, setOtherEmail] = useState<string | null>(null)
   const [code, setCode] = useState('')
@@ -273,7 +275,8 @@ function SignInStep({ item, view, multiple, onResult, dismiss, close }: { item: 
   useEffect(() => { setCode('') }, [api.wrongCodes])
 
   const startLogin = async (patch: { mode?: AccountLoginMode } = {}) => {
-    setFinishError(null); setOtherEmail(null)
+    setFinishError(null); setOtherEmail(null); setUnbindError(null)
+    try { await stopBorrowing(view, item) } catch (error) { setUnbindError(describe(error, { action: `sign in on ${item.machine}` })); return }
     const mode = patch.mode ?? loginModeFor(item, remote, handoff)
     if (reauth && legacy) { await api.signInLegacy({ kind, instance: item.instance! }); return }
     await api.start({
@@ -286,7 +289,13 @@ function SignInStep({ item, view, multiple, onResult, dismiss, close }: { item: 
       ...(!reauth && !own && item.directory ? { directory: item.directory } : {}),
     })
   }
-  const startBorrow = () => { setBorrowError(null); void borrow(view, item).then(() => onResult('borrowed', { email: item.email }), (error) => setBorrowError(problemLine(error, { action: `use ${item.lender?.machine}’s sign-in` }))) }
+  const startBorrow = () => {
+    setBorrowError(null)
+    void borrow(view, item).then(() => onResult('borrowed', { email: item.email }), (error) => {
+      const problem = describe(error, { action: `use ${item.lender?.machine}’s sign-in` })
+      setBorrowError({ view: problem, action: signInHereAction(error, problem, item.machine).label })
+    })
+  }
 
   const started = useRef(false)
   useEffect(() => {
@@ -419,9 +428,12 @@ function SignInStep({ item, view, multiple, onResult, dismiss, close }: { item: 
     footer = <><Button size="lg" testId="account-cancel" variant="ghost" onClick={cancel}>Cancel</Button>{multiple && <Button size="lg" testId="account-skip" variant="primary" onClick={skip}>Skip</Button>}</>
   } else if (method === 'borrow') {
     body = borrowError
-      ? <ErrorBody title={`Couldn’t use ${item.lender?.machine}’s sign-in`} message={borrowError} />
+      ? <ErrorBody title={borrowError.view.title} message={borrowError.view.body} />
       : <Body align="center" top={20}><MatrixLoader variant="orbit" dot={3} gap={2} /><Title center>{`Using ${item.lender?.machine}’s sign-in on ${item.machine}…`}</Title></Body>
-    footer = <>{footerLead}{borrowError && <><Button size="lg" testId="account-sign-in-instead" onClick={signInInstead}>Sign in instead</Button><Button size="lg" testId="account-retry" variant="primary" onClick={tryAgain}>Try again</Button></>}</>
+    footer = <>{footerLead}{borrowError && <><Button size="lg" testId="account-retry" onClick={tryAgain}>Try again</Button><Button size="lg" testId="account-sign-in-instead" variant="primary" onClick={signInInstead}>{borrowError.action}</Button></>}</>
+  } else if (unbindError) {
+    body = <ErrorBody title={unbindError.title} message={unbindError.body} />
+    footer = <>{footerLead}<Button size="lg" testId="account-retry" variant="primary" onClick={() => void startLogin()}>Try again</Button></>
   } else if (otherEmail && login) {
     body = <Body align="center" top={16} gap={8}>
       <AccountAvatar kind={kind} size={32} />
@@ -508,7 +520,7 @@ function SignInStep({ item, view, multiple, onResult, dismiss, close }: { item: 
     body = <Body><Title pe>{`Sign in to ${agent}${onMachine}`}</Title><div style={{ height: 64, marginTop: 12, borderRadius: 6, backgroundColor: t.buttonSecondary }} /></Body>
   }
   return <>
-    <Rise key={`${step ?? 'none'}:${otherEmail ?? ''}:${finishError ?? borrowError ?? ''}`} kind="row">{body}</Rise>
+    <Rise key={`${step ?? 'none'}:${otherEmail ?? ''}:${finishError ?? borrowError?.view.title ?? unbindError?.title ?? ''}`} kind="row">{body}</Rise>
     <Footer>{footer}</Footer>
   </>
 }
@@ -560,8 +572,9 @@ export function CloseX({ onClose }: { onClose: () => void }) {
   return <IconButton testId="dialog-close" icon={N.x} label="Close" size="lg" onClick={onClose} style={{ position: 'absolute', top: 8, right: 8 }} />
 }
 
+/** Wraps, so a button naming a long machine drops to its own line instead of leaving the sheet. */
 function Footer({ children }: { children: ReactNode }) {
-  return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, paddingLeft: 16, paddingRight: 16, paddingTop: 12, paddingBottom: 12 }}>{children}</div>
+  return <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', gap: 8, paddingLeft: 16, paddingRight: 16, paddingTop: 12, paddingBottom: 12 }}>{children}</div>
 }
 /** `BODY_CLASS`: `px-4 pt-4 pb-4`, gap per step. */
 function Body({ children, gap = 12, align, top }: { children: ReactNode; gap?: number; align?: 'center'; top?: number }) {

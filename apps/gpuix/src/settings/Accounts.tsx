@@ -189,7 +189,7 @@ function AccountRow({ account, first, view, onPending, chipActions }: { account:
     projects > 0 ? (projects === 1 ? '1 project' : `${projects} projects`) : null,
     compaction ? idleCompactionDetail(compaction) : null,
   ].filter(Boolean).join(' · ')
-  const chips = chipsFor(account, view.machines)
+  const chips = chipsFor(account, view.machines, view.sharing?.machineId)
   const instance = here && !here.terminal ? here.instance : 'default'
   return <div testId={`account-row-${account.id}`} style={{ position: 'relative', display: 'flex', alignItems: 'flex-start', gap: 12, paddingLeft: 18, paddingRight: 12, paddingTop: 14, paddingBottom: 14, borderTopWidth: first ? 0 : 1, borderColor: t.v('--app-settings-card-border') }}>
     {flash && <FlashOverlay />}
