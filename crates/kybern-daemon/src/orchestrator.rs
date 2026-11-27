@@ -8886,6 +8886,8 @@ mod tests {
     #[tokio::test]
     async fn steer_fallback_queues_followup_and_delivers_on_next_turn() {
         assert!(super::delegation::harness_supports_steer(ProviderKind::Cursor));
+        // agy acp takes a message inside a running turn; its -p fallback answers with this same queued path.
+        assert!(super::delegation::harness_supports_steer(ProviderKind::Antigravity));
         let fixture = Fixture::new();
         let thread = fixture.thread(ThreadStatus::Idle);
         let messages = Arc::new(Mutex::new(Vec::new()));
