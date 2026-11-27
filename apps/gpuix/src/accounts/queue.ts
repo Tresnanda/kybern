@@ -4,6 +4,7 @@
 import { initialLoginMode } from '../shared/lib/accounts.ts'
 import { problemOf } from '../../../../packages/kybern-client/src/problem.ts'
 import type { ProblemView } from '../../../../packages/kybern-client/src/problems.ts'
+import { versionAtLeast } from '../../../../packages/kybern-client/src/newChat.ts'
 import { ACCOUNTS_WRITE_FEATURE, type AccountLogin, type AccountLoginMode, type AccountsShared, type AccountSummary, type DaemonUpdate, type LendableAccount, type MachineId, type ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
 import { LENDABLE_KINDS } from './offers.ts'
 import { keyOf, standings, isUsable, type MachineAccounts, type UnifiedAccount } from './unified.ts'
@@ -124,6 +125,16 @@ export function planSetup(accounts: readonly UnifiedAccount[], machine: Pick<Mac
   return [...items.filter((item) => item.method === 'borrow'), ...items.filter((item) => item.method === 'sign_in')]
 }
 
+// ── Signing an account in again as someone else ──────────────────────────────
+
+/** The first daemon that changes nothing about an account signed in again as another email until `login.finish` keeps it
+ *  (#13). Older ones save the new email as the sign-in finishes, and refuse the call. */
+const HOLDS_FOR_KEEP_VERSION = '0.27.2'
+
+/** Whether "Keep" on this sign-in still has to tell its machine to save it. */
+export const awaitsKeep = (login: Pick<AccountLogin, 'instance' | 'previous_email' | 'duplicate_of'>, daemonVersion: string | null | undefined): boolean =>
+  !!login.instance && login.instance !== 'default' && !!login.previous_email && !login.duplicate_of && versionAtLeast(daemonVersion, HOLDS_FOR_KEEP_VERSION)
+
 /** The local account on a machine that already has this email, to borrow into rather than create another. */
 export function existingFor(accounts: readonly AccountSummary[], kind: ProviderKind, email: string | undefined): AccountSummary | undefined {
   if (!email) return
@@ -211,9 +222,9 @@ export function advance(state: QueueState, result: ItemResult, settled: Settled 
   const item = currentItem(state)
   if (!item) return state
   const next: QueueState = { ...state, index: state.index + 1, results: { ...state.results, [item.id]: result } }
-  // One account added to several machines keeps the first sign-in's email, name and colour.
-  const sameAccount = isOneAccount(state.items)
-  if (sameAccount) {
+  // One account added to several machines keeps the first sign-in's email, name and colour. A lone sign-in keeps what
+  // it ended on, which "Keep" can make another email than the one asked for.
+  if (isOneAccount(state.items) || state.items.length === 1) {
     next.email = state.email ?? settled.email
     next.name = state.name ?? settled.name
     next.color = state.color ?? settled.color

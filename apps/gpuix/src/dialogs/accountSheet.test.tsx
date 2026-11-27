@@ -2,7 +2,7 @@
 // on a sign-in that is gone, keeps the default every machine shares, and lets a handoff's port go when it closes.
 import { afterAll, afterEach, describe, expect, mock, test } from 'bun:test'
 import { RpcCallError } from '../../../../packages/kybern-client/src/client.ts'
-import type { AccountLogin, AccountsShared, DaemonUpdate } from '../../../../packages/kybern-client/src/types.ts'
+import type { AccountLogin, AccountsShared, AccountSummary, DaemonUpdate } from '../../../../packages/kybern-client/src/types.ts'
 import type { SignInItem } from '../accounts/queue.ts'
 import type { MachineAccounts } from '../accounts/unified.ts'
 import { harness } from './gpuixHarness.tsx'
@@ -32,7 +32,9 @@ const NEW = { features: ['accounts.write.v1', 'antigravity.accounts.v1', 'accoun
 const machineAccounts = (machineId: string, features: string[] | undefined): MachineAccounts => ({ machineId, name: machineId, isLocal: machineId === 'mac', online: !!features, state: features ? 'ready' : 'unreachable', accounts: [], providers: null, limits: [], globalLimits: [], features: features ?? [] })
 
 interface World {
-  info: Record<string, { features: string[]; scopes: string[] }>
+  /** The accounts the other machine lists. */
+  accounts?: AccountSummary[]
+  info: Record<string, { features: string[]; scopes: string[]; version?: string }>
   clients: Record<string, ReturnType<typeof fakeClient>>
   own: ReturnType<typeof fakeClient>
 }
@@ -50,7 +52,7 @@ mock.module('../accounts/store.ts', () => ({
   refreshOfferInputs: async () => {},
   refreshAllAccounts: async () => {},
   useAccountsEverywhere: () => {
-    const machines = [machineAccounts('mac', ['accounts.shared.v1']), machineAccounts('fedora', world.info.fedora?.features)]
+    const machines = [machineAccounts('mac', ['accounts.shared.v1']), { ...machineAccounts('fedora', world.info.fedora?.features), accounts: world.accounts ?? [] }]
     return { machines, groups: [], shared: {}, supportsShared: true, primaryId: 'mac', legacy: false, loaded: true, sharing: null }
   },
 }))
@@ -159,6 +161,71 @@ describe('the default', () => {
   })
   test('with no shared default yet, it becomes it', async () => {
     expect(await finished({})).toMatchObject({ id: 'l1', make_default: true })
+  })
+})
+
+describe('a sign-in again that went to another account', () => {
+  const account = (instance: string, name: string, email: string, color: string): AccountSummary => ({ provider: { kind: 'claude-code', instance }, name, color, identity: { email }, status: 'signed_in', is_default: false, projects: [], managed: true, can_sign_out: true })
+  const again: SignInItem = { ...item, id: 'fedora:claude-code:a1', instance: 'a1', email: 'w@x.com' }
+  const done = login({ phase: 'signed_in', instance: 'a1', identity: { email: 'me@x.com' }, previous_email: 'w@x.com' })
+  const signedIn = async ({ version = '0.27.2', patch = {}, handlers = {} }: { version?: string; patch?: Partial<AccountLogin>; handlers?: Handlers } = {}) => {
+    const fedora = fakeClient({
+      'providers.accounts.login.start': () => ({ ...done, ...patch }),
+      'providers.accounts.login.finish': () => ({ kind: 'claude-code', instance: 'a1' }),
+      ...handlers,
+    })
+    world = { accounts: [account('a1', 'Work', 'w@x.com', 'green'), account('a2', 'Home', 'me@x.com', 'blue')], info: { fedora: { ...NEW, version } }, clients: { fedora }, own: fakeClient() }
+    const sheet = open([again])
+    await settle()
+    expect(sheet.h.text()).toContain('fedora signed in as me@x.com')
+    return { ...sheet, fedora, finishes: () => fedora.calls.filter(([method]) => method === 'providers.accounts.login.finish').map(([, params]) => params) }
+  }
+
+  test('Keep tells the machine to save it, under the account’s own name and colour', async () => {
+    const sheet = await signedIn()
+    expect(sheet.finishes()).toEqual([])
+    sheet.click('account-keep')
+    await settle()
+    expect(sheet.finishes()).toEqual([{ id: 'l1', name: 'Work', color: 'green', make_default: false }])
+    expect(sheet.h.text()).toContain('Signed in as me@x.com')
+    sheet.h.close()
+    mounted = null
+    expect(sheet.fedora.methods()).not.toContain('providers.accounts.login.cancel')
+  })
+
+  test('on an older daemon, which saved it already, Keep calls nothing', async () => {
+    const sheet = await signedIn({ version: '0.27.1' })
+    sheet.click('account-keep')
+    await settle()
+    expect(sheet.finishes()).toEqual([])
+    expect(sheet.h.text()).toContain('Signed in as me@x.com')
+  })
+
+  test('a Keep that fails says so, and Try again keeps it', async () => {
+    let tries = 0
+    const sheet = await signedIn({ handlers: { 'providers.accounts.login.finish': () => { if (!tries++) throw new Error('boom'); return { kind: 'claude-code', instance: 'a1' } } } })
+    sheet.click('account-keep')
+    await settle()
+    expect(sheet.h.text()).toContain('Couldn’t save the account')
+    sheet.click('account-retry')
+    await settle()
+    expect(sheet.finishes()).toHaveLength(2)
+    expect(sheet.h.text()).toContain('Signed in as me@x.com')
+  })
+
+  test('Try again drops it and starts over', async () => {
+    const sheet = await signedIn()
+    sheet.click('account-retry')
+    await settle()
+    expect(sheet.fedora.methods().filter((method) => method.startsWith('providers.accounts.login.'))).toEqual(['providers.accounts.login.start', 'providers.accounts.login.cancel', 'providers.accounts.login.start'])
+    expect(sheet.finishes()).toEqual([])
+  })
+
+  test('an account that is already added can’t be kept', async () => {
+    const sheet = await signedIn({ patch: { duplicate_of: 'a2' } })
+    expect(sheet.h.text()).toContain('It’s already added as Home.')
+    expect(sheet.h.find('account-keep')).toBeUndefined()
+    expect(sheet.h.find('account-retry')).toBeDefined()
   })
 })
 

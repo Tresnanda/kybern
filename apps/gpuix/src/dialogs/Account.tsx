@@ -54,7 +54,7 @@ import { AccountAvatar } from '../usage/AccountMark.tsx'
 import { flashAccount, refreshAccounts, useAccounts, useAccountsLegacy } from '../usage/accounts.ts'
 import { useAccountLogin } from './useAccountLogin.ts'
 import { SuccessCheck } from '../motion/SuccessCheck.tsx'
-import { advance, fallbackModeFor, isOneAccount, loginModeFor, makesDefault, mismatch, needsAccountsUpdate, planAdd, resolvedItem, signInHereAction, signInNeedsUpdate, startQueue, updateLine, type ItemResult, type QueueState, type Settled, type SignInItem } from '../accounts/queue.ts'
+import { advance, awaitsKeep, fallbackModeFor, isOneAccount, loginModeFor, makesDefault, mismatch, needsAccountsUpdate, planAdd, resolvedItem, signInHereAction, signInNeedsUpdate, startQueue, updateLine, type ItemResult, type QueueState, type Settled, type SignInItem } from '../accounts/queue.ts'
 import { clientOf, computerId, infoOf, readMachine, refreshAllAccounts, refreshOfferInputs, useAccountsEverywhere, type UnifiedView } from '../accounts/store.ts'
 import { borrow, discardBorrow, makeDefault, stopBorrowing, updateMachine } from '../accounts/actions.ts'
 import { canHandoff, featuresOf, handoffSignIn } from '../accounts/adapter.ts'
@@ -396,13 +396,21 @@ function SignInStep({ item, view, multiple, onResult, dismiss, close, reconnect 
   const reread = async () => { void refreshOfferInputs(); await (local ? refreshAccounts({ probe: true }) : readMachine(item.machineId, { probe: true })) }
   /** Nothing to save: the agent's own login, or an account signed in again. */
   const alreadySaved = (finished: AccountLogin) => own || !!finished.instance
+  /** "Keep" on an account signed in again as someone else: its machine saves nothing until it is told to. The account
+   *  keeps its name and colour. */
+  const keep = async (finished: AccountLogin) => {
+    const result = await client!.call('providers.accounts.login.finish', { id: finished.id, name: target?.name ?? targetName, color: target?.color ?? item.color ?? null, make_default: false })
+    if (local) flashAccount(result.kind, result.instance)
+    return { name: item.name, color: item.color }
+  }
   const settle = async (finished: AccountLogin) => {
     const email = finished.identity?.email
     if (finished.duplicate_of && !reauth) return onResult('already', { email })
     kept.current = true
-    if (!reauth && !alreadySaved(finished)) {
+    const held = awaitsKeep(finished, infoOf(item.machineId)?.version)
+    if (held || (!reauth && !alreadySaved(finished))) {
       try {
-        const values = await save(finished)
+        const values = held ? await keep(finished) : await save(finished)
         void reread()
         return onResult('signed_in', { email, name: values.name, color: values.color })
       } catch (error) {
@@ -525,12 +533,14 @@ function SignInStep({ item, view, multiple, onResult, dismiss, close, reconnect 
     body = <ErrorBody title={unbindError.title} message={unbindError.body} />
     footer = <>{footerLead}<Button size="lg" testId="account-retry" variant="primary" onClick={() => void startLogin()}>Try again</Button></>
   } else if (otherEmail && login) {
+    // An account that is already added can't be kept a second time: only another sign-in helps.
+    const addedAs = login.duplicate_of ? (login.duplicate_of === 'default' ? 'the terminal login' : accountDisplayName(login.duplicate_of, accountFor(accounts, kind, login.duplicate_of)?.name)) : null
     body = <Body align="center" top={16} gap={8}>
       <AccountAvatar kind={kind} size={32} />
       <Title center>{`${item.machine} signed in as ${otherEmail}`}</Title>
-      <Desc center>{item.email ? `This sign-in is for ${item.email}.` : `${targetName} was ${login.previous_email}.`}</Desc>
+      <Desc center>{addedAs ? `It’s already added as ${addedAs}.` : item.email ? `This sign-in is for ${item.email}.` : `${targetName} was ${login.previous_email}.`}</Desc>
     </Body>
-    footer = <>{footerLead}<Button size="lg" testId="account-keep" onClick={() => { setOtherEmail(null); void settle(login) }}>Keep</Button><Button size="lg" testId="account-retry" variant="primary" onClick={() => { handled.current = null; setOtherEmail(null); void api.restart({}) }}>Try again</Button></>
+    footer = <>{footerLead}{!addedAs && <Button size="lg" testId="account-keep" onClick={() => { setOtherEmail(null); void settle(login) }}>Keep</Button>}<Button size="lg" testId="account-retry" variant="primary" onClick={() => { handled.current = null; setOtherEmail(null); void api.restart({}) }}>Try again</Button></>
   } else if (finishError) {
     body = <ErrorBody title="Couldn’t save the account" message={finishError} />
     footer = <>{footerLead}{login && <Button size="lg" testId="account-retry" variant="primary" onClick={() => { setFinishError(null); void settle(login) }}>Try again</Button>}</>
