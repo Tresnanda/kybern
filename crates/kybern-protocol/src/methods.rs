@@ -829,6 +829,11 @@ pub struct AccountOffer {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct AccountsOffersResult {
     pub offers: Vec<AccountOffer>,
+    /// The machine that shares its sign-ins and whether a new machine's setup may borrow from it
+    /// (0.27.2+). When `usable_for_new` is false, plan a sign-in on the new machine instead of a borrow
+    /// and show `reason`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lender: Option<LenderStatus>,
 }
 method!(AccountsOffers, "accounts.offers", Some(Scope::OrchestrationRead), Empty, AccountsOffersResult);
 method!(AccountsRemove, "providers.accounts.remove", Some(Scope::AccountsWrite), ProviderInstance, Empty);

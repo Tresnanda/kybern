@@ -994,8 +994,11 @@ pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, para
 /// The `peer.login.*` methods. Only the machine the register names serves a borrow, a usage read or a
 /// release-all; only the broker may push a rotated credential, so a push from any other member is refused.
 async fn serve_login(state: &AppState, link: &Arc<PeerLink>, method: &str, params: Value) -> Result<Value, RpcError> {
-    let broker =
-        state.orchestrator.login_broker().cloned().ok_or_else(|| RpcError::new(codes::NOT_AVAILABLE, "no login broker on this machine"))?;
+    let broker = state
+        .orchestrator
+        .login_broker()
+        .cloned()
+        .ok_or_else(|| RpcError::new(codes::NOT_AVAILABLE, "That machine can't share sign-ins."))?;
     match method {
         PeerLoginBorrow::NAME => ok(broker.serve_borrow(state, &link.machine_id, parse(params)?).await?),
         PeerLoginRelease::NAME => {
@@ -1029,6 +1032,27 @@ pub fn effective_scopes(network: &Network, link: &PeerLink) -> Vec<Scope> {
             policy.iter().copied().filter(|scope| *scope == Scope::MachineClipboardAuto || link.scopes.contains(scope)).collect()
         }
     }
+}
+
+/// The refusal of a call the caller's scopes don't cover. A borrow refused because Logins is off for the caller
+/// names both machines and what to do; the code stays `FORBIDDEN`, which older borrowers read.
+fn refused(network: &Network, link: &PeerLink, scope: Scope) -> RpcError {
+    if scope != Scope::MachineLogins {
+        return RpcError::forbidden(scope.as_str());
+    }
+    let names = network.membership().map(|membership| {
+        let projection = membership.projection();
+        let name = |id: &str| projection.entry(id).map(|entry| entry.descriptor.name.clone());
+        (name(&membership.machine_id()), name(&link.machine_id))
+    });
+    let (me, caller) = match names {
+        Some((Some(me), Some(caller))) => (me, caller),
+        _ => ("This machine".to_string(), "that machine".to_string()),
+    };
+    let message = format!("{me} doesn't let other machines, {caller} included, use its sign-ins. Turn on Logins in {me}'s settings.");
+    RpcError::new(codes::FORBIDDEN, message.clone()).with_problem(
+        &kybern_protocol::rpc::Problem::new(kybern_protocol::rpc::ProblemKind::Permission, message).with_subject(super::broker::LOGINS_OFF),
+    )
 }
 
 /// How long a request may wait for one of a session's [`MAX_INBOUND_REQUESTS`] places: no longer than its caller waits
@@ -1067,7 +1091,7 @@ pub async fn inbound(state: &AppState, link: &Arc<PeerLink>, text: &str) {
                 if effective_scopes(&state.network, &link).contains(&scope) {
                     dispatch(&state, &link, &method, params).await
                 } else {
-                    Err(RpcError::forbidden(scope.as_str()))
+                    Err(refused(&state.network, &link, scope))
                 }
             }
             _ => Err(RpcError::method_not_found(&method)),

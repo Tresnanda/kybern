@@ -75,6 +75,14 @@ impl BorrowedLogin {
     }
 }
 
+/// The `Problem::subject` of every failure to use another machine's sign-in (binding an account to the
+/// lender, or a session borrowing from it). Its `hint` is the sentence to show, and its `action` is
+/// [`SIGN_IN_HERE_ACTION`] with `{ "machine_id", "provider", "instance"? }`: the machine to sign in on
+/// instead (the borrower), the harness, and the local account when there is one.
+pub const LOGIN_BORROW_SUBJECT: &str = "login_borrow";
+/// "Sign in on <machine> instead": stop borrowing and sign the account in on that machine itself.
+pub const SIGN_IN_HERE_ACTION: &str = "sign_in_here";
+
 /// Which harnesses the broker can lend a login for.
 pub fn broker_supports(kind: ProviderKind) -> bool {
     matches!(kind, ProviderKind::ClaudeCode | ProviderKind::Codex | ProviderKind::Omp)
@@ -290,6 +298,77 @@ pub struct LoginBrokerStatus {
     /// Loans this machine lent (empty unless it is the broker).
     #[serde(default)]
     pub loans: Vec<BrokerLoanView>,
+    /// The current lender and whether a new setup may borrow from it. Absent when no machine shares its
+    /// sign-ins, and from daemons before 0.27.2 (`login.broker.choice.v1`): a client then treats the lender
+    /// in `broker` as usable, as those daemons do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lender: Option<LenderStatus>,
+    /// Every member, and whether it could be picked with "Share this machine's sign-ins"
+    /// (`login.broker.set`). Empty from daemons before 0.27.2.
+    #[serde(default)]
+    pub lenders: Vec<LenderCandidate>,
+}
+
+// ---- choosing the lender (0.27.2) ----
+
+/// How the lender was chosen with `login.broker.set`. Recorded in the network-wide `broker.choice`
+/// register next to `broker`, so every member knows the choice was deliberate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LenderVia {
+    /// "Share this machine's sign-ins", picked by hand.
+    Manual,
+    /// The `always_on` offer was accepted.
+    AlwaysOn,
+}
+
+/// The current lender (the machine the `broker` register names), as a new setup sees it.
+///
+/// A lender someone chose with `login.broker.set` on Kybern 0.27.2 or newer is always usable. A
+/// *legacy* lender (`chosen` absent: the register was set before 0.27.2, or by an older daemon) is
+/// usable only while it is always on (online at least 90% of the last week, as this daemon saw it).
+/// Otherwise `usable_for_new` is false: `login.broker.bind` refuses to bind a new account to it, and
+/// `reason` is the sentence to show. Accounts already bound keep borrowing from it either way.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct LenderStatus {
+    pub machine_id: MachineId,
+    pub name: String,
+    /// How it was chosen; absent for a legacy lender.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chosen: Option<LenderVia>,
+    /// Whether it was online at least 90% of the last week; absent until there is a day of samples.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub always_on: Option<bool>,
+    /// A machine being set up may bind its accounts to this lender.
+    #[serde(default = "yes")]
+    pub usable_for_new: bool,
+    /// Why not, in words a person acts on ("MacBook shares its sign-ins from an older setup …").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// One member, for "Share this machine's sign-ins".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct LenderCandidate {
+    pub machine_id: MachineId,
+    pub name: String,
+    #[serde(default)]
+    pub is_self: bool,
+    /// Online now (this machine is always online to itself).
+    pub online: bool,
+    /// It runs a Kybern that can lend (`login.broker.v1`). Unknown, so false, while it is offline.
+    pub supported: bool,
+    /// Online at least 90% of the last week; absent until there is a day of samples.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub always_on: Option<bool>,
+    /// It is the current lender.
+    #[serde(default)]
+    pub is_lender: bool,
+    /// It can be picked now. `login.broker.set` still refuses a machine that has nothing signed in to lend.
+    pub can_share: bool,
+    /// Why it can't, when it can't ("fedora is offline. Bring it online first.").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// `login.broker.bind`: make a local account sign in through the broker (or stop).
@@ -309,9 +388,14 @@ pub struct LoginBrokerSetParams {
     /// The new broker, or `None` for no broker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine_id: Option<MachineId>,
-    /// After the members re-borrowed from the new broker, ask the old one to sign out. Default true.
-    #[serde(default = "yes")]
+    /// After the members re-borrowed from the new lender, ask the old one to sign out of the accounts it
+    /// lent. Default false (0.27.2): moving or stopping sharing never signs a machine out unless asked.
+    #[serde(default)]
     pub sign_out_old: bool,
+    /// How the lender was chosen; absent means `manual`. Setting the lender that is already the broker
+    /// records the choice, so a legacy lender picked again by hand becomes usable for new setups.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<LenderVia>,
 }
 
 fn yes() -> bool {
@@ -346,4 +430,29 @@ pub struct AccountBroker {
     pub state: BrokerLoginState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn moving_or_stopping_sharing_signs_nothing_out_unless_asked() {
+        let params: LoginBrokerSetParams = serde_json::from_value(serde_json::json!({ "machine_id": "vps" })).unwrap();
+        assert!(!params.sign_out_old);
+        assert_eq!(params.via, None);
+        let params: LoginBrokerSetParams =
+            serde_json::from_value(serde_json::json!({ "machine_id": null, "sign_out_old": true, "via": "always_on" })).unwrap();
+        assert!(params.sign_out_old);
+        assert_eq!(params.via, Some(LenderVia::AlwaysOn));
+    }
+
+    #[test]
+    fn a_lender_status_from_an_older_shape_reads_as_usable() {
+        let lender: LenderStatus = serde_json::from_value(serde_json::json!({ "machine_id": "vps", "name": "vps" })).unwrap();
+        assert!(lender.usable_for_new);
+        assert_eq!((lender.chosen, lender.reason), (None, None));
+        let status: LoginBrokerStatus = serde_json::from_value(serde_json::json!({ "is_broker": false, "providers": [] })).unwrap();
+        assert!(status.lender.is_none() && status.lenders.is_empty());
+    }
 }

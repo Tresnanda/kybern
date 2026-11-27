@@ -41,7 +41,8 @@ impl Orchestrator {
         let Some(broker) = self.login_broker() else { return Ok(None) };
         let (kind, instance) = (thread.provider.kind, thread.provider.instance.as_str());
         let Some(account) = broker.binding(kind, instance) else { return Ok(None) };
-        let source = broker.acquire(kind, instance, &account).await.map_err(|text| anyhow!(text))?;
+        // The refusal keeps its `login_borrow` problem, so the failed turn offers "Sign in on <machine> instead".
+        let source = broker.acquire_or_problem(kind, instance, &account).await.map_err(anyhow::Error::new)?;
         if kind == ProviderKind::Omp {
             let login = source.current().await.map_err(|text| anyhow!(text))?;
             for (key, value) in login_lend::omp_env(&login).unwrap_or_default() {

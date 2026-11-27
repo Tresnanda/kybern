@@ -3153,6 +3153,12 @@ export interface AccountsShared {
 }
 export type AccountOfferKind = "always_on" | "new_machine" | "terminal_login" | "migration_clash";
 export interface AccountOfferClash { kind: ProviderKind; machine_id: MachineId; was: string; now: string }
+/** `accounts.offers`. `lender` (0.27.2+): the machine that shares sign-ins and whether a new machine's setup may borrow
+ * from it; when `usable_for_new` is false, plan sign-ins on the new machine and show `reason`. */
+export interface AccountsOffersResult {
+  offers: AccountOffer[];
+  lender?: LenderStatus;
+}
 /** One offer card (`accounts.offers`). Dismissed ones are returned too, so the Accounts page can list them. */
 export interface AccountOffer {
   /** Stable: `always_on:<machine>`, `new_machine:<machine>`, `terminal_login:<machine>:<kind>`, `clash:<kind>:<machine>`. */
@@ -5025,7 +5031,7 @@ export interface Methods {
   "providers.accounts.update": [{ kind: ProviderKind; instance: string; name?: string | null; color?: string | null }, AccountSummary];
   /** `confirm_terminal` signs the terminal login (`default`) out; without it the daemon refuses that instance. */
   "providers.accounts.sign_out": [ProviderInstance & { confirm_terminal?: boolean }, AccountSummary];
-  "accounts.offers": [Empty, { offers: AccountOffer[] }];
+  "accounts.offers": [Empty, AccountsOffersResult];
   "providers.accounts.remove": [ProviderInstance, Empty];
   "providers.accounts.catalog": [{ provider: ProviderInstance; project_id?: ProjectId | null; force_refresh?: boolean }, ProviderStatus];
   "threads.target.get": [{ thread_id: ThreadId }, ThreadTargetState];
@@ -5333,6 +5339,45 @@ export interface LoginBrokerStatus {
   is_broker: boolean;
   providers: BrokerProviderStatus[];
   loans: BrokerLoanView[];
+  /** The current lender and whether a new setup may borrow from it. Absent with no lender, and from daemons before
+   * 0.27.2 (`LOGIN_BROKER_CHOICE_FEATURE`): treat the lender in `broker` as usable then, as those daemons do. */
+  lender?: LenderStatus;
+  /** Every member, and whether "Share this machine's sign-ins" can pick it. Absent before 0.27.2. */
+  lenders?: LenderCandidate[];
+}
+/** `login.broker.status` / `accounts.offers` carry `lender` and `lenders`, `login.broker.set` takes `via`, and a failed
+ * borrow carries a `login_borrow` problem with a `sign_in_here` action. */
+export const LOGIN_BROKER_CHOICE_FEATURE = "login.broker.choice.v1";
+/** How the lender was chosen: by hand, or by accepting the `always_on` offer. */
+export type LenderVia = "manual" | "always_on";
+/**
+ * The machine that shares its sign-ins, as a new setup sees it. A lender chosen with `login.broker.set` on 0.27.2+ is
+ * always usable. A legacy one (`chosen` absent) only while it is always on; otherwise `usable_for_new` is false,
+ * `login.broker.bind` refuses new accounts, and `reason` is the sentence to show. Accounts already bound keep working.
+ */
+export interface LenderStatus {
+  machine_id: MachineId;
+  name: string;
+  chosen?: LenderVia;
+  /** Online at least 90% of the last week; absent until there is a day of samples. */
+  always_on?: boolean;
+  usable_for_new: boolean;
+  reason?: string;
+}
+/** One member, for "Share this machine's sign-ins". */
+export interface LenderCandidate {
+  machine_id: MachineId;
+  name: string;
+  is_self: boolean;
+  online: boolean;
+  /** Runs a Kybern that can lend (`login.broker.v1`); false while offline (unknown). */
+  supported: boolean;
+  always_on?: boolean;
+  is_lender: boolean;
+  /** It can be picked now; `login.broker.set` still refuses one with nothing signed in to lend. */
+  can_share: boolean;
+  /** Why it can't ("fedora is offline. Bring it online first."). */
+  reason?: string;
 }
 export interface LoginBrokerBindParams {
   provider: ProviderKind;
@@ -5343,8 +5388,10 @@ export interface LoginBrokerBindParams {
 export interface LoginBrokerSetParams {
   /** The new broker; absent clears it. */
   machine_id?: MachineId | null;
-  /** After the members re-borrowed, ask the old broker to sign out. Default true. */
+  /** After the members re-borrowed, ask the old lender to sign out of what it lent. Default false (0.27.2; before, true). */
   sign_out_old?: boolean;
+  /** How the lender was chosen; absent means "manual". Setting the current lender again records the choice. */
+  via?: LenderVia;
 }
 export interface LoginBrokerSetResult {
   status: LoginBrokerStatus;

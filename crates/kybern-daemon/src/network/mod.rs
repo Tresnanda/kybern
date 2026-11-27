@@ -441,6 +441,7 @@ impl Network {
             features::ACCOUNTS_WRITE_V1.to_string(),
             features::SECRETS_STORE_V1.to_string(),
             features::LOGIN_BROKER_V1.to_string(),
+            features::LOGIN_BROKER_CHOICE_V1.to_string(),
             features::UPDATE_V1.to_string(),
             features::UPDATE_PROGRESS_V1.to_string(),
             features::APP_UPDATE_V1.to_string(),

@@ -215,7 +215,9 @@ fn inputs(state: &AppState) -> Inputs {
 }
 
 pub fn offers(state: &AppState) -> AccountsOffersResult {
-    AccountsOffersResult { offers: compute(&inputs(state)) }
+    // A legacy lender that isn't always on is reported as not usable for new setups, with the reason.
+    let lender = state.orchestrator.login_broker().and_then(|broker| broker.lender_status());
+    AccountsOffersResult { offers: compute(&inputs(state)), lender }
 }
 
 #[cfg(test)]

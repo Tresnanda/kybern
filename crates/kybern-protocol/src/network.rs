@@ -100,12 +100,16 @@ pub mod features {
     /// Understands the `accounts:write` scope: a device token minted for this machine may carry it.
     /// Older daemons can't parse a scope list that names it, so it is left out of theirs.
     pub const ACCOUNTS_WRITE_V1: &str = "accounts.write.v1";
+    /// The lender is a deliberate choice: `login.broker.status` and `accounts.offers` carry `lender`
+    /// (with `usable_for_new` and `reason`) and `lenders`, `login.broker.set` takes `via`, and a borrow
+    /// that fails carries a `login_borrow` problem with a `sign_in_here` action.
+    pub const LOGIN_BROKER_CHOICE_V1: &str = "login.broker.choice.v1";
     /// Authorize-only sign-in for another machine: `providers.accounts.login.handoff` here and
     /// `peer.accounts.login.peek` / `peer.accounts.login.callback` on the machine being signed in.
     pub const ACCOUNTS_LOGIN_HANDOFF_V1: &str = "accounts.login.handoff.v1";
 
     /// Every feature the network design names, in design order.
-    pub const ALL: [&str; 35] = [
+    pub const ALL: [&str; 36] = [
         NETWORK_V1,
         SPACES_SYNC_V1,
         RELAY_V1,
@@ -141,6 +145,7 @@ pub mod features {
         ACCOUNTS_SYNC_V1,
         ACCOUNTS_LOGIN_HANDOFF_V1,
         ACCOUNTS_WRITE_V1,
+        LOGIN_BROKER_CHOICE_V1,
     ];
 }
 

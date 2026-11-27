@@ -100,6 +100,19 @@ fn expiry_of(login: &BorrowedLogin) -> Option<DateTime<Utc>> {
 
 // ---- why a borrow did not work ----
 
+/// The register, next to `broker`, that records the lender was chosen deliberately (0.27.2+):
+/// `{ "machine_id": <the lender>, "via": "manual" | "always_on" }`. A `broker` without a matching
+/// choice is a legacy lender (set before 0.27.2, or by an older daemon).
+pub const CHOICE_REGISTER: &str = "broker.choice";
+
+/// Which machine a failed borrow was asked of, and which machine asked. Named in every sentence, so a
+/// person knows where to fix it ("kdi-vps doesn't let MacBook use its sign-ins …").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Parties {
+    pub lender: String,
+    pub here: String,
+}
+
 /// What went wrong asking the broker. [`BrokerError::message`] is the sentence a person reads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrokerError {
@@ -113,8 +126,17 @@ pub enum BrokerError {
     NotSignedIn(String),
     /// The broker runs a Kybern without the login broker.
     Unsupported(String),
-    /// The broker refused (`machine:logins` is off for this machine).
-    Refused(String),
+    /// The broker refused: `allow.<broker>.logins` is off for this machine.
+    Refused(Parties),
+    /// This machine is paused in the network, so no member serves it.
+    Paused(Parties),
+    /// The machine this one takes for the broker says it no longer is (the register moved, or the two
+    /// machines have not synced yet).
+    NotLender(Parties),
+    /// The broker does not know this machine yet (membership has not synced there).
+    UnknownMachine(Parties),
+    /// A legacy lender that isn't always on: a new account does not bind to it. The text is the reason.
+    NotForNew(String),
     /// This machine is not in a network now: it was removed, or the network is turned off here.
     Left,
     Failed(String),
@@ -135,23 +157,173 @@ impl BrokerError {
         let harness = kind.display_name();
         match self {
             BrokerError::NoBroker => format!(
-                "{harness} signs in through a login broker, but no machine is set as one. Choose one in Settings → Machines, or sign in here."
+                "{harness} uses another machine's sign-in, but no machine shares its sign-ins now. Choose a machine to share them, or sign in here."
             ),
-            BrokerError::IsSelf => format!("This machine is the login broker. Sign in to {harness} here."),
+            BrokerError::IsSelf => format!("This machine shares its own sign-ins. Sign in to {harness} here."),
             BrokerError::Offline(name) => format!("{harness} signs in through {name}, which is offline · Sign in here instead"),
             BrokerError::NotSignedIn(detail) => detail.clone(),
             BrokerError::Unsupported(name) => {
                 format!("{name} needs a newer Kybern to share its {harness} sign-in. Update it from Settings → Machines.")
             }
-            BrokerError::Refused(name) => format!(
-                "{name} does not let this machine borrow its logins. Turn Logins on for this machine in Settings → Machines on {name}."
+            BrokerError::Refused(Parties { lender, here }) => format!(
+                "{lender} doesn't let other machines use its sign-ins. Turn on Logins in {lender}'s settings (Settings → Machines), or sign in on {here} instead."
             ),
+            BrokerError::Paused(Parties { lender, here }) => format!(
+                "{here} is paused, so {lender} won't share its sign-ins with it. Resume {here} in Settings → Machines, or sign in on {here} instead."
+            ),
+            BrokerError::NotLender(Parties { lender, here }) => {
+                format!("{lender} no longer shares its sign-ins. Choose the machine that shares them, or sign in on {here} instead.")
+            }
+            BrokerError::UnknownMachine(Parties { lender, here }) => format!(
+                "{lender} doesn't know {here} yet. Wait a minute for your machines to sync and try again, or sign in on {here} instead."
+            ),
+            BrokerError::NotForNew(reason) => reason.clone(),
             BrokerError::Left => format!(
-                "This machine is not connected to your other machines, so {harness} cannot sign in through the login broker. Sign in here instead."
+                "This machine is not connected to your other machines, so {harness} can't use their sign-ins. Sign in here instead."
             ),
             BrokerError::Failed(reason) => reason.clone(),
         }
     }
+
+    fn lender(&self) -> Option<&str> {
+        match self {
+            BrokerError::Offline(name) | BrokerError::Unsupported(name) => Some(name),
+            BrokerError::Refused(parties)
+            | BrokerError::Paused(parties)
+            | BrokerError::NotLender(parties)
+            | BrokerError::UnknownMachine(parties) => Some(&parties.lender),
+            _ => None,
+        }
+    }
+
+    fn problem_kind(&self) -> ProblemKind {
+        match self {
+            BrokerError::Offline(_) | BrokerError::Left => ProblemKind::Offline,
+            BrokerError::NotSignedIn(_) => ProblemKind::SignedOut,
+            BrokerError::Unsupported(_) => ProblemKind::UpdateNeeded,
+            BrokerError::IsSelf => ProblemKind::InvalidInput,
+            BrokerError::Failed(_) => ProblemKind::Internal,
+            BrokerError::NoBroker
+            | BrokerError::Refused(_)
+            | BrokerError::Paused(_)
+            | BrokerError::NotLender(_)
+            | BrokerError::UnknownMachine(_)
+            | BrokerError::NotForNew(_) => ProblemKind::Permission,
+        }
+    }
+
+    /// The `login_borrow` problem: the sentence as its hint, and "Sign in on <here> instead" as its action.
+    pub fn problem(&self, kind: ProviderKind, here: &Borrower) -> Problem {
+        let message = self.message(kind);
+        let title = match self.lender() {
+            Some(lender) => format!("Couldn't use {lender}'s sign-in"),
+            None => "Couldn't use the shared sign-in".to_string(),
+        };
+        let mut params = json!({ "machine_id": here.machine_id, "provider": kind.as_str() });
+        if let Some(instance) = &here.instance {
+            params["instance"] = json!(instance);
+        }
+        let mut problem = Problem::new(self.problem_kind(), message.clone())
+            .with_subject(LOGIN_BORROW_SUBJECT)
+            .with_copy(title, message)
+            .with_action(ProblemAction::new(SIGN_IN_HERE_ACTION, format!("Sign in on {} instead", here.name)).with_params(params));
+        if matches!(self, BrokerError::Offline(_) | BrokerError::UnknownMachine(_)) {
+            problem = problem.with_secondary(ProblemAction::retry("Try again"));
+        }
+        problem
+    }
+
+    /// This error as an RPC error carrying [`BrokerError::problem`].
+    pub fn rpc_error(&self, kind: ProviderKind, here: &Borrower) -> RpcError {
+        let code = match self.problem_kind() {
+            ProblemKind::Permission => codes::FORBIDDEN,
+            ProblemKind::InvalidInput => codes::INVALID_PARAMS,
+            ProblemKind::Internal => codes::INTERNAL_ERROR,
+            _ => codes::NOT_AVAILABLE,
+        };
+        RpcError::new(code, self.message(kind)).with_problem(&self.problem(kind, here))
+    }
+
+    /// Whether binding an account should stop here. An offline lender is not: the account borrows once it is back.
+    fn refuses_binding(&self) -> bool {
+        !matches!(self, BrokerError::Offline(_))
+    }
+}
+
+/// The machine a borrow is for: the one to sign in on instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Borrower {
+    pub machine_id: String,
+    pub name: String,
+    /// The local account bound to the lender, when there is one.
+    pub instance: Option<String>,
+}
+
+/// A borrow that did not work, as an error a session start returns: its `Display` is the sentence, and
+/// `crate::problem::typed` reads its [`Problem`] so the failed turn carries the `sign_in_here` action.
+#[derive(Debug, Clone)]
+pub struct BorrowRefusal {
+    pub message: String,
+    pub problem: Box<Problem>,
+}
+
+impl std::fmt::Display for BorrowRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for BorrowRefusal {}
+
+/// What the lender says when it won't lend, so the borrower can tell which refusal it was.
+const NOT_LENDER: &str = "not_lender";
+const UNKNOWN_MACHINE: &str = "unknown_machine";
+/// The subject of the refusal a lender sends when `machine:logins` is off for the caller (`peers.rs`).
+pub const LOGINS_OFF: &str = "logins_off";
+
+/// The borrower's reading of a lender's refusal. A 0.27.2+ lender names it with a problem subject; an older one
+/// only with its code and text.
+fn refusal_of(error: &RpcError, lender: &str, parties: impl Fn() -> Parties, paused_here: bool) -> BrokerError {
+    let subject = error.problem().and_then(|problem| problem.subject);
+    match (error.code, subject.as_deref()) {
+        (_, Some(NOT_LENDER)) => BrokerError::NotLender(parties()),
+        (_, Some(UNKNOWN_MACHINE)) => BrokerError::UnknownMachine(parties()),
+        (codes::METHOD_NOT_FOUND, _) => BrokerError::Unsupported(lender.to_string()),
+        (codes::FORBIDDEN, _) if paused_here => BrokerError::Paused(parties()),
+        // An older lender refused a machine it doesn't know with the bare peer scope.
+        (codes::FORBIDDEN, _) if error.message.contains("machine:peer") => BrokerError::UnknownMachine(parties()),
+        (codes::FORBIDDEN, _) => BrokerError::Refused(parties()),
+        (codes::NOT_AVAILABLE, _) if error.message.contains("is not the login broker") => BrokerError::NotLender(parties()),
+        (codes::NOT_AVAILABLE, _) => BrokerError::NotSignedIn(error.message.clone()),
+        _ => BrokerError::Failed(error.message.clone()),
+    }
+}
+
+/// Whether a new setup may bind an account to the lender, and why not. A lender chosen deliberately (0.27.2+) is
+/// always usable; a legacy one only while it is always on.
+pub fn usable_for_new(name: &str, chosen: Option<LenderVia>, ratio: Option<f32>, is_self: bool) -> (bool, Option<String>) {
+    if is_self || chosen.is_some() || ratio.is_some_and(|ratio| ratio >= crate::accounts_offers::ALWAYS_ON_RATIO) {
+        return (true, None);
+    }
+    let why = match ratio {
+        None => "Kybern can't tell yet whether it stays on",
+        Some(_) => "it isn't always on",
+    };
+    (
+        false,
+        Some(format!(
+            "{name} shared its sign-ins before Kybern 0.27.2, and {why}, so new machines sign in themselves. Choose a machine that stays on to share sign-ins."
+        )),
+    )
+}
+
+/// How the lender was chosen, from the `broker.choice` register: only when it names the current lender.
+fn chosen_in(projection: &super::ops::Projection, lender: &str) -> Option<LenderVia> {
+    let value = &projection.register(CHOICE_REGISTER)?.value;
+    if value.get("machine_id").and_then(Value::as_str) != Some(lender) {
+        return None;
+    }
+    serde_json::from_value(value.get("via")?.clone()).ok()
 }
 
 // ---- borrower: leases ----
@@ -264,7 +436,7 @@ impl LoginBroker {
             .target(id)
             .map(|target| target.name)
             .or_else(|| (id == self.self_id()).then(|| self.hub.self_name()))
-            .unwrap_or_else(|| "the login broker".into())
+            .unwrap_or_else(|| "the machine that shares sign-ins".into())
     }
 
     // ---- bindings ----
@@ -304,15 +476,104 @@ impl LoginBroker {
     /// The login source for a session of a bound account, borrowing now when the lease is empty.
     /// The error is the sentence to show ("Claude signs in through the VPS, which is offline · …").
     pub async fn acquire(self: &Arc<Self>, kind: ProviderKind, instance: &str, account: &str) -> Result<Arc<dyn LoginSource>, String> {
+        self.acquire_or_problem(kind, instance, account).await.map_err(|refusal| refusal.message)
+    }
+
+    /// [`LoginBroker::acquire`] with the refusal's `login_borrow` problem, for a session start.
+    pub async fn acquire_or_problem(
+        self: &Arc<Self>,
+        kind: ProviderKind,
+        instance: &str,
+        account: &str,
+    ) -> Result<Arc<dyn LoginSource>, BorrowRefusal> {
+        let refusal = |error: BrokerError| BorrowRefusal {
+            message: error.message(kind),
+            problem: Box::new(error.problem(kind, &self.borrower(Some(instance)))),
+        };
         if !self.in_network() {
-            return Err(BrokerError::Left.message(kind));
+            return Err(refusal(BrokerError::Left));
         }
         let lease = self.lease_for(kind, instance, account);
         let held = lock(&lease.state).login.is_some();
         if !held {
-            self.borrow(&lease, false).await.map_err(|error| error.message(kind))?;
+            self.borrow(&lease, false).await.map_err(refusal)?;
         }
         Ok(Arc::new(LeaseSource { broker: self.clone(), lease }))
+    }
+
+    /// This machine, as the one to sign in on instead.
+    fn borrower(&self, instance: Option<&str>) -> Borrower {
+        Borrower { machine_id: self.self_id(), name: self.hub.self_name(), instance: instance.map(str::to_string) }
+    }
+
+    fn parties(&self, lender: &str) -> Parties {
+        Parties { lender: lender.to_string(), here: self.hub.self_name() }
+    }
+
+    /// Whether this machine is paused in its network: no member serves it then.
+    fn paused_here(&self) -> bool {
+        self.network.membership().is_some_and(|membership| membership.projection().entry(&self.self_id()).is_some_and(|entry| entry.paused))
+    }
+
+    // ---- the lender, as setup sees it ----
+
+    /// The current lender and whether a new setup may borrow from it (`usable_for_new`, `reason`).
+    pub fn lender_status(&self) -> Option<LenderStatus> {
+        let id = self.broker_id()?;
+        let membership = self.network.membership()?;
+        let projection = membership.projection();
+        let me = self.self_id();
+        let name = self.member_name(&id);
+        let chosen = chosen_in(&projection, &id);
+        let ratio = (id != me).then(|| super::online::ratio(&self.store, &id, &me, Utc::now())).flatten();
+        let always_on = if id == me { None } else { ratio.map(|ratio| ratio >= crate::accounts_offers::ALWAYS_ON_RATIO) };
+        let (usable, reason) = usable_for_new(&name, chosen, ratio, id == me);
+        Some(LenderStatus { machine_id: id, name, chosen, always_on, usable_for_new: usable, reason })
+    }
+
+    /// Every member, and whether "Share this machine's sign-ins" can pick it now.
+    pub fn lender_candidates(&self) -> Vec<LenderCandidate> {
+        let lender = self.broker_id();
+        let me = self.self_id();
+        let now = Utc::now();
+        let mut candidates: Vec<LenderCandidate> = self
+            .hub
+            .members()
+            .into_iter()
+            .map(|member| {
+                let online = member.is_self || member.status == "online";
+                let paused = member.status == "paused";
+                let supported =
+                    member.is_self || member.features.iter().any(|feature| feature == kybern_protocol::features::LOGIN_BROKER_V1);
+                let always_on = if member.is_self {
+                    None
+                } else {
+                    super::online::ratio(&self.store, &member.id, &me, now).map(|ratio| ratio >= crate::accounts_offers::ALWAYS_ON_RATIO)
+                };
+                let reason = if paused {
+                    Some(format!("{} is paused. Resume it in Settings → Machines first.", member.name))
+                } else if !online {
+                    Some(format!("{} is offline. Bring it online first.", member.name))
+                } else if !supported {
+                    Some(format!("{} needs a newer Kybern to share its sign-ins. Update it from Settings → Machines.", member.name))
+                } else {
+                    None
+                };
+                LenderCandidate {
+                    is_lender: lender.as_deref() == Some(member.id.as_str()),
+                    machine_id: member.id,
+                    name: member.name,
+                    is_self: member.is_self,
+                    online,
+                    supported,
+                    always_on,
+                    can_share: reason.is_none(),
+                    reason,
+                }
+            })
+            .collect();
+        candidates.sort_by(|a, b| b.is_self.cmp(&a.is_self).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+        candidates
     }
 
     /// Ask the broker for the lease's login (`peer.login.borrow`) and keep it in memory.
@@ -348,16 +609,14 @@ impl LoginBroker {
         let value = self.hub.call(&broker_id, PeerLoginBorrow::NAME, serde_json::to_value(&params).unwrap_or_default()).await.map_err(
             |failure| match failure {
                 CallFailure::Offline(_) | CallFailure::Gone(_) => BrokerError::Offline(name.clone()),
-                CallFailure::Remote(error) => match error.code {
-                    codes::METHOD_NOT_FOUND => BrokerError::Unsupported(name.clone()),
-                    codes::FORBIDDEN => BrokerError::Refused(name.clone()),
-                    codes::NOT_AVAILABLE => BrokerError::NotSignedIn(error.message),
-                    _ => BrokerError::Failed(error.message),
-                },
+                CallFailure::Remote(error) => refusal_of(&error, &name, || self.parties(&name), self.paused_here()),
             },
         )?;
-        let result: PeerLoginBorrowResult = serde_json::from_value(value)
-            .map_err(|_| BrokerError::Failed("The login broker answered with something unreadable.".into()))?;
+        let result: PeerLoginBorrowResult = serde_json::from_value(value).map_err(|_| {
+            BrokerError::Failed(format!(
+                "{name} answered with something Kybern can't read. Update Kybern on both machines, then try again."
+            ))
+        })?;
         let membership = self.network.membership().ok_or(BrokerError::NoBroker)?;
         let login = open_login(&membership.keys(), &login_context(&result.loan_id, &broker_id, &me, lease.kind), &result.sealed)
             .map_err(|error| BrokerError::Failed(format!("The lent login could not be opened: {error:#}")))?;
@@ -424,7 +683,7 @@ impl LoginBroker {
         let broker_id = self.broker_id();
         let (machine_id, machine_name) = match &broker_id {
             Some(id) => (id.clone(), self.member_name(id)),
-            None => (String::new(), "the login broker".into()),
+            None => (String::new(), "the machine that shares sign-ins".into()),
         };
         let lease = lock(&self.leases).get(&(kind, instance.to_string())).cloned();
         let error = lease.as_ref().and_then(|lease| lock(&lease.state).last_error.clone());
@@ -486,18 +745,26 @@ impl LoginBroker {
         lendable
     }
 
+    /// Only the lender serves a borrow. The refusal names it (`not_lender`) so a borrower that has not heard of a move
+    /// says so instead of "not signed in". Older borrowers read the code and show the sentence.
     fn ensure_broker(&self) -> Result<(), RpcError> {
         if self.broker_id().as_deref() == Some(self.self_id().as_str()) {
             Ok(())
         } else {
-            Err(RpcError::new(codes::NOT_AVAILABLE, "This machine is not the login broker."))
+            let name = self.hub.self_name();
+            let message = format!("{name} no longer shares its sign-ins. Choose the machine that shares them, or sign in on this machine.");
+            Err(RpcError::new(codes::NOT_AVAILABLE, message.clone())
+                .with_problem(&Problem::new(ProblemKind::Permission, message).with_subject(NOT_LENDER)))
         }
     }
 
     /// Read (and when it is about to die, refresh) the login of one of this machine's accounts.
     async fn lend(&self, state: &AppState, kind: ProviderKind, account: &str) -> Result<(BorrowedLogin, Option<String>), RpcError> {
         if self.binding(kind, account).is_some() {
-            return Err(RpcError::new(codes::NOT_AVAILABLE, "That account signs in through a broker itself and cannot be lent on."));
+            return Err(RpcError::new(
+                codes::NOT_AVAILABLE,
+                "That account uses another machine's sign-in itself, so it can't be shared on.",
+            ));
         }
         let unavailable = |text: String| RpcError::new(codes::NOT_AVAILABLE, text);
         let instance = ProviderInstance { kind, instance: account.to_string() };
@@ -568,7 +835,14 @@ impl LoginBroker {
             .entry(requester)
             .filter(|entry| entry.removed.is_none())
             .map(|entry| entry.descriptor.sealing_key.clone())
-            .ok_or_else(|| RpcError::forbidden("machine:peer"))?;
+            .ok_or_else(|| {
+                let message = format!(
+                    "{} doesn't know that machine yet. Wait a minute for your machines to sync, then try again.",
+                    self.hub.self_name()
+                );
+                RpcError::new(codes::NOT_FOUND, message.clone())
+                    .with_problem(&Problem::new(ProblemKind::Permission, message).with_subject(UNKNOWN_MACHINE))
+            })?;
         let (login, plan) = self.lend(state, params.provider, &params.account).await?;
         let expires_at = expiry_of(&login);
         // A renewal keeps its loan; anything else is a new one.
@@ -742,9 +1016,17 @@ impl LoginBroker {
         let env = crate::provider_accounts::environment(&provider, ProviderKind::Omp, "default").map_err(|error| error.to_string())?;
         let binary = kybern_drivers::binary::resolve(ProviderKind::Omp, provider.binary.clone().map(std::path::PathBuf::from).as_ref())
             .map_err(|error| error.to_string())?;
-        let status =
-            self.network.tailscale.status().await.map_err(|_| "omp's broker needs Tailscale running on this machine.".to_string())?;
-        let ip = status.self_node.as_ref().and_then(|node| node.ip()).ok_or("omp's broker needs a Tailscale address on this machine.")?;
+        let status = self
+            .network
+            .tailscale
+            .status()
+            .await
+            .map_err(|_| "Sharing omp's sign-in needs Tailscale running on the machine that shares it.".to_string())?;
+        let ip = status
+            .self_node
+            .as_ref()
+            .and_then(|node| node.ip())
+            .ok_or("Sharing omp's sign-in needs a Tailscale address on the machine that shares it.")?;
         let url = format!("http://{ip}:{OMP_BROKER_PORT}");
         {
             let mut running = self.omp.lock().await;
@@ -762,7 +1044,7 @@ impl LoginBroker {
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
                     .kill_on_drop(false);
-                *running = Some(command.spawn().map_err(|error| format!("Could not start omp's login broker: {error}"))?);
+                *running = Some(command.spawn().map_err(|error| format!("Could not start omp's sign-in sharing: {error}"))?);
             }
         }
         let mut command = {
@@ -772,11 +1054,11 @@ impl LoginBroker {
         command.args(["auth-broker", "token"]).envs(&env).stdin(std::process::Stdio::null());
         let output = tokio::time::timeout(Duration::from_secs(10), command.output())
             .await
-            .map_err(|_| "omp did not print its broker token in time.".to_string())?
+            .map_err(|_| "omp did not hand over its sign-in in time. Try again.".to_string())?
             .map_err(|error| error.to_string())?;
         let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if !output.status.success() || token.is_empty() {
-            return Err("omp's login broker has no token. Run `omp auth-broker login` on this machine first.".into());
+            return Err("omp has no sign-in to share. Run `omp auth-broker login` on this machine first.".into());
         }
         Ok(BorrowedLogin::Omp { url, token })
     }
@@ -871,7 +1153,7 @@ impl LoginBroker {
         } else {
             Vec::new()
         };
-        LoginBrokerStatus { broker, is_broker, providers, loans }
+        LoginBrokerStatus { broker, is_broker, providers, loans, lender: self.lender_status(), lenders: self.lender_candidates() }
     }
 
     /// `login.broker.bind`.
@@ -884,7 +1166,7 @@ impl LoginBroker {
         }
         if params.instance == "default" {
             return Err(RpcError::invalid_params(
-                "The CLI account keeps its own sign-in. Create a named account to sign in through the broker.",
+                "The CLI account keeps its own sign-in. Create a named account to use another machine's sign-in.",
             ));
         }
         let exists =
@@ -892,10 +1174,34 @@ impl LoginBroker {
         if !exists {
             return Err(RpcError::not_found("account"));
         }
-        if params.broker_account.is_some() && self.broker_id().is_none() {
-            return Err(RpcError::new(codes::NOT_AVAILABLE, BrokerError::NoBroker.message(params.provider)));
+        let here = self.borrower(Some(&params.instance));
+        let previous = self.binding(params.provider, &params.instance);
+        if let Some(account) = &params.broker_account {
+            let refuse = |error: BrokerError| error.rpc_error(params.provider, &here);
+            let lender = self.lender_status().ok_or_else(|| refuse(BrokerError::NoBroker))?;
+            if lender.machine_id == self.self_id() {
+                return Err(refuse(BrokerError::IsSelf));
+            }
+            // Accounts already bound keep borrowing; a new one binds only to a lender someone chose, or one that is always on.
+            if previous.is_none() && !lender.usable_for_new {
+                return Err(refuse(BrokerError::NotForNew(lender.reason.unwrap_or_default())));
+            }
+            self.set_binding(params.provider, &params.instance, Some(account)).map_err(RpcError::internal)?;
+            // Borrow once now, so a lender that refuses says so while the account is being set up, not at its
+            // first message. An offline lender is not a refusal: the account borrows once it is back.
+            let lease = self.lease_for(params.provider, &params.instance, account);
+            if let Err(error) = self.borrow(&lease, false).await
+                && error.refuses_binding()
+            {
+                let _ = self.set_binding(params.provider, &params.instance, previous.as_deref());
+                if previous.as_deref() != Some(account.as_str()) {
+                    lock(&self.leases).remove(&(params.provider, params.instance.clone()));
+                }
+                return Err(refuse(error));
+            }
+        } else {
+            self.set_binding(params.provider, &params.instance, None).map_err(RpcError::internal)?;
         }
-        self.set_binding(params.provider, &params.instance, params.broker_account.as_deref()).map_err(RpcError::internal)?;
         if params.broker_account.is_none() {
             // Unbinding: let go of the loan and the cached token.
             let removed = lock(&self.leases).remove(&(params.provider, params.instance.clone()));
@@ -1130,7 +1436,21 @@ pub async fn set_broker(state: &AppState, params: LoginBrokerSetParams) -> Resul
         network.membership().ok_or_else(|| RpcError::new(codes::NOT_AVAILABLE, "The machine network is unavailable on this machine."))?;
     let me = broker.self_id();
     let old = broker.broker_id();
+    let via = params.via.unwrap_or(LenderVia::Manual);
+    // The choice is recorded next to the register: a lender picked here (0.27.2+) is deliberate, so new setups
+    // borrow from it; a `broker` without it is a legacy lender (see `usable_for_new`).
+    let choice = |machine_id: &Option<MachineId>| match machine_id {
+        Some(id) => json!({ "machine_id": id, "via": via }),
+        None => json!({}),
+    };
     if old == params.machine_id {
+        // Picking the current lender again by hand makes a legacy one deliberate.
+        let recorded = old.as_ref().and_then(|id| chosen_in(&membership.projection(), id));
+        if old.is_some() && recorded != Some(via) {
+            let op = membership.set(CHOICE_REGISTER, choice(&old)).map_err(|error| RpcError::new(codes::CONFLICT, error.to_string()))?;
+            network.publish_ops(vec![op]);
+            network.wake();
+        }
         return Ok(LoginBrokerSetResult { status: broker.status(state).await, ..Default::default() });
     }
     // The new broker must be able to lend something, or every member would lose its sign-in.
@@ -1138,35 +1458,41 @@ pub async fn set_broker(state: &AppState, params: LoginBrokerSetParams) -> Resul
         if !membership.projection().is_member(target) {
             return Err(RpcError::not_found("machine"));
         }
+        let name = broker.member_name(target);
         let lendable = if *target == me {
             broker.lendable(state).await
         } else {
+            let offline = || {
+                let message = format!("{name} did not answer. Bring it online, then share its sign-ins.");
+                RpcError::new(codes::NOT_AVAILABLE, message.clone())
+                    .with_problem(&Problem::new(ProblemKind::Offline, message).with_subject(name.clone()))
+            };
             let value = tokio::time::timeout(STATUS_WAIT, broker.hub.call(target, PeerLoginStatusMethod::NAME, Value::Null))
                 .await
-                .map_err(|_| {
-                    RpcError::new(codes::NOT_AVAILABLE, "That machine did not answer. Bring it online, then move the login broker.")
-                })?
+                .map_err(|_| offline())?
                 .map_err(|failure| match failure {
-                    CallFailure::Remote(error) if error.code == codes::METHOD_NOT_FOUND => RpcError::new(
-                        codes::NOT_AVAILABLE,
-                        "That machine needs a newer Kybern to be the login broker. Update it from Settings → Machines.",
-                    ),
+                    CallFailure::Remote(error) if error.code == codes::METHOD_NOT_FOUND => {
+                        let message = format!("{name} needs a newer Kybern to share its sign-ins. Update it from Settings → Machines.");
+                        RpcError::new(codes::NOT_AVAILABLE, message.clone()).with_problem(&Problem::new(ProblemKind::UpdateNeeded, message))
+                    }
+                    CallFailure::Offline(_) | CallFailure::Gone(_) => offline(),
                     other => RpcError::new(codes::NOT_AVAILABLE, other.to_string()),
                 })?;
             serde_json::from_value::<PeerLoginStatus>(value).map(|status| status.lendable).unwrap_or_default()
         };
         if lendable.is_empty() {
-            let name = broker.member_name(target);
             return Err(RpcError::new(
                 codes::NOT_AVAILABLE,
-                format!("{name} is not signed in to anything it could lend. Sign in on {name} first, then move the login broker."),
+                format!("{name} is not signed in to anything it could share. Sign in on {name} first, then share its sign-ins."),
             ));
         }
     }
     let op = membership
         .set("broker", params.machine_id.clone().map_or(Value::String(String::new()), Value::String))
         .map_err(|error| RpcError::new(codes::CONFLICT, error.to_string()))?;
-    network.publish_ops(vec![op]);
+    let chosen =
+        membership.set(CHOICE_REGISTER, choice(&params.machine_id)).map_err(|error| RpcError::new(codes::CONFLICT, error.to_string()))?;
+    network.publish_ops(vec![op, chosen]);
     network.wake();
 
     let mut result = LoginBrokerSetResult::default();
@@ -1209,9 +1535,9 @@ pub async fn set_broker(state: &AppState, params: LoginBrokerSetParams) -> Resul
         // The old broker signs out only after the others re-borrowed, and only once it has heard of the move itself.
         let heard = old == me || result.rebound.contains(&old);
         if !heard {
-            result.note = Some("The old broker kept its sign-in: it was offline, or had not heard of the move yet.".into());
+            result.note = Some("The old machine kept its sign-ins: it was offline, or had not heard of the change yet.".into());
         } else if result.rebound.is_empty() && members.iter().any(|id| *id != old) && !result.offline.is_empty() {
-            result.note = Some("The old broker kept its sign-in because no member had borrowed from the new one yet.".into());
+            result.note = Some("The old machine kept its sign-ins because no machine had borrowed from the new one yet.".into());
         } else if old == me {
             let released = broker.serve_release_all(state, PeerLoginReleaseAllParams { sign_out: true }).await;
             result.old_signed_out = released.signed_out;
@@ -1221,7 +1547,7 @@ pub async fn set_broker(state: &AppState, params: LoginBrokerSetParams) -> Resul
                     result.old_signed_out =
                         serde_json::from_value::<PeerLoginReleaseAllResult>(value).map(|released| released.signed_out).unwrap_or_default();
                 }
-                Err(failure) => result.note = Some(format!("The old broker was not asked to sign out: {failure}")),
+                Err(failure) => result.note = Some(format!("The old machine was not asked to sign out: {failure}")),
             }
         }
     }
@@ -1364,7 +1690,7 @@ impl crate::usage::BoundUsage for LoginBroker {
         let account = self.binding(kind, instance)?;
         let unread = |detail: String| kybern_drivers::claude::UsageUnread { reason: LimitsStale::Unavailable, retry_at: None, detail };
         let Some(broker_id) = self.broker_id().filter(|id| *id != self.self_id()) else {
-            return Some(Err(unread("no login broker".into())));
+            return Some(Err(unread("no machine shares its sign-ins".into())));
         };
         let params = serde_json::to_value(PeerLoginUsageParams { provider: kind, account: account.clone() }).unwrap_or_default();
         let value = match self.hub.call(&broker_id, PeerLoginUsage::NAME, params).await {
@@ -1379,7 +1705,7 @@ impl crate::usage::BoundUsage for LoginBroker {
             .or_else(|| result.providers.into_iter().next());
         Some(match entry {
             Some(entry) if !entry.limits.is_empty() => Ok((entry.limits, entry.plan)),
-            _ => Err(unread("the login broker has no limits for this account yet".into())),
+            _ => Err(unread("the machine that shares this sign-in has no limits for this account yet".into())),
         })
     }
 }
@@ -1402,12 +1728,134 @@ mod tests {
         let offline = BrokerError::Offline("VPS".into());
         assert_eq!(offline.message(ProviderKind::ClaudeCode), "Claude Code signs in through VPS, which is offline · Sign in here instead");
         assert_eq!(offline.state(), BrokerLoginState::BrokerOffline);
-        assert!(BrokerError::NoBroker.message(ProviderKind::Codex).contains("Settings → Machines"));
+        assert!(BrokerError::NoBroker.message(ProviderKind::Codex).contains("Choose a machine to share them"));
         assert!(BrokerError::Unsupported("VPS".into()).message(ProviderKind::Codex).contains("Update it"));
         assert_eq!(
             BrokerError::NotSignedIn("Claude is not signed in on VPS. Sign in on VPS first.".into()).state(),
             BrokerLoginState::BrokerNotSignedIn
         );
+    }
+
+    #[test]
+    fn a_legacy_lender_is_usable_for_new_setups_only_while_it_is_always_on() {
+        // Chosen by hand or through the always-on offer: always usable, whatever its week looked like.
+        assert_eq!(usable_for_new("MacBook", Some(LenderVia::Manual), Some(0.2), false), (true, None));
+        assert_eq!(usable_for_new("MacBook", Some(LenderVia::AlwaysOn), None, false), (true, None));
+        // Legacy and always on: still usable.
+        assert_eq!(usable_for_new("vps", None, Some(0.95), false), (true, None));
+        // Legacy, a laptop that sleeps, or not seen long enough: not for new setups, and the reason says so.
+        let (usable, reason) = usable_for_new("MacBook", None, Some(0.4), false);
+        assert!(!usable);
+        let reason = reason.unwrap();
+        assert!(reason.starts_with("MacBook shared its sign-ins before Kybern 0.27.2, and it isn't always on"), "{reason}");
+        assert!(!reason.contains("broker") && reason.len() < 240, "{reason}");
+        let (usable, reason) = usable_for_new("MacBook", None, None, false);
+        assert!(!usable && reason.unwrap().contains("can't tell yet whether it stays on"));
+        // This machine lending to itself is never refused here.
+        assert_eq!(usable_for_new("pc", None, None, true), (true, None));
+    }
+
+    #[test]
+    fn a_lenders_refusal_reads_as_which_refusal_it_was() {
+        let parties = || Parties { lender: "kdi-vps".into(), here: "MacBook".into() };
+        let with = |code, message: &str, subject: Option<&str>| {
+            let error = RpcError::new(code, message);
+            match subject {
+                Some(subject) => error.with_problem(&Problem::new(ProblemKind::Permission, message).with_subject(subject)),
+                None => error,
+            }
+        };
+        assert_eq!(
+            refusal_of(&with(codes::FORBIDDEN, "missing scope: machine:logins", None), "kdi-vps", parties, false),
+            BrokerError::Refused(parties())
+        );
+        assert_eq!(refusal_of(&with(codes::FORBIDDEN, "x", Some(LOGINS_OFF)), "kdi-vps", parties, false), BrokerError::Refused(parties()));
+        assert_eq!(
+            refusal_of(&with(codes::FORBIDDEN, "missing scope: machine:logins", None), "kdi-vps", parties, true),
+            BrokerError::Paused(parties())
+        );
+        // Older lenders: a machine they don't know, and "not the broker".
+        assert_eq!(
+            refusal_of(&with(codes::FORBIDDEN, "missing scope: machine:peer", None), "kdi-vps", parties, false),
+            BrokerError::UnknownMachine(parties())
+        );
+        assert_eq!(
+            refusal_of(&with(codes::NOT_AVAILABLE, "This machine is not the login broker.", None), "kdi-vps", parties, false),
+            BrokerError::NotLender(parties())
+        );
+        // Newer lenders name it.
+        assert_eq!(
+            refusal_of(&with(codes::NOT_AVAILABLE, "kdi-vps no longer …", Some(NOT_LENDER)), "kdi-vps", parties, false),
+            BrokerError::NotLender(parties())
+        );
+        assert_eq!(
+            refusal_of(&with(codes::NOT_FOUND, "…", Some(UNKNOWN_MACHINE)), "kdi-vps", parties, false),
+            BrokerError::UnknownMachine(parties())
+        );
+        assert_eq!(
+            refusal_of(&with(codes::METHOD_NOT_FOUND, "method not found: peer.login.borrow", None), "kdi-vps", parties, false),
+            BrokerError::Unsupported("kdi-vps".into())
+        );
+        assert_eq!(
+            refusal_of(
+                &with(codes::NOT_AVAILABLE, "Claude is not signed in on kdi-vps. Sign in on kdi-vps first.", None),
+                "kdi-vps",
+                parties,
+                false
+            ),
+            BrokerError::NotSignedIn("Claude is not signed in on kdi-vps. Sign in on kdi-vps first.".into())
+        );
+    }
+
+    #[test]
+    fn a_failed_borrow_names_both_machines_and_offers_signing_in_here() {
+        let here = Borrower { machine_id: "m-mac".into(), name: "MacBook".into(), instance: Some("a1".into()) };
+        let refused = BrokerError::Refused(Parties { lender: "kdi-vps".into(), here: "MacBook".into() });
+        assert_eq!(
+            refused.message(ProviderKind::ClaudeCode),
+            "kdi-vps doesn't let other machines use its sign-ins. Turn on Logins in kdi-vps's settings (Settings → Machines), or sign in on MacBook instead."
+        );
+        let error = refused.rpc_error(ProviderKind::ClaudeCode, &here);
+        assert_eq!(error.code, codes::FORBIDDEN);
+        let problem = error.problem().unwrap();
+        assert_eq!((problem.kind, problem.subject.as_deref()), (ProblemKind::Permission, Some(LOGIN_BORROW_SUBJECT)));
+        assert_eq!(problem.title.as_deref(), Some("Couldn't use kdi-vps's sign-in"));
+        assert_eq!(problem.hint.as_deref(), Some(error.message.as_str()));
+        let action = problem.action.unwrap();
+        assert_eq!((action.id.as_str(), action.label.as_str()), (SIGN_IN_HERE_ACTION, "Sign in on MacBook instead"));
+        assert_eq!(action.params.unwrap(), json!({ "machine_id": "m-mac", "provider": "claude-code", "instance": "a1" }));
+        // Offline is retried; it doesn't undo a bind.
+        let offline = BrokerError::Offline("kdi-vps".into());
+        assert_eq!(offline.problem(ProviderKind::Codex, &here).secondary.map(|action| action.id), Some("retry".into()));
+        assert!(!offline.refuses_binding() && refused.refuses_binding());
+        // No sentence on this path says "broker".
+        let parties = Parties { lender: "kdi-vps".into(), here: "MacBook".into() };
+        for error in [
+            BrokerError::NoBroker,
+            BrokerError::IsSelf,
+            BrokerError::Offline("kdi-vps".into()),
+            BrokerError::Unsupported("kdi-vps".into()),
+            BrokerError::Refused(parties.clone()),
+            BrokerError::Paused(parties.clone()),
+            BrokerError::NotLender(parties.clone()),
+            BrokerError::UnknownMachine(parties),
+            BrokerError::Left,
+        ] {
+            let message = error.message(ProviderKind::ClaudeCode);
+            assert!(!message.to_lowercase().contains("broker"), "{message}");
+        }
+    }
+
+    #[test]
+    fn the_choice_counts_only_for_the_lender_it_names() {
+        let mut projection = super::super::ops::Projection::default();
+        let register = |value: Value| super::super::ops::Register { value, lamport: 1, signer: "m1".into(), op_id: "op".into() };
+        assert_eq!(chosen_in(&projection, "vps"), None);
+        projection.registers.insert(CHOICE_REGISTER.into(), register(json!({ "machine_id": "vps", "via": "always_on" })));
+        assert_eq!(chosen_in(&projection, "vps"), Some(LenderVia::AlwaysOn));
+        assert_eq!(chosen_in(&projection, "mac"), None, "a choice of another machine is not this lender's");
+        projection.registers.insert(CHOICE_REGISTER.into(), register(json!({})));
+        assert_eq!(chosen_in(&projection, "vps"), None);
     }
 
     #[test]
